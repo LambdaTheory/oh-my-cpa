@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 )
 
 func TestMCPStdioHelper(t *testing.T) {
@@ -192,6 +194,90 @@ func TestOperationStatusWaitsForTheDecision(t *testing.T) {
 	for _, arguments := range []map[string]any{{"operation_id": "../capabilities"}, {"operation_id": operationID, "wait_seconds": MAX_STATUS_WAIT_SECONDS + 1}} {
 		if refused := status(arguments); !refused.IsError {
 			t.Fatalf("accepted %v", arguments)
+		}
+	}
+}
+
+// operationsBackend serves the real registry OMC declares, so the schema checks below
+// cover every tool an MCP client is actually offered.
+type operationsBackend struct{ definitions []*capability.Definition }
+
+func (backend operationsBackend) Catalog(context.Context) ([]*capability.Definition, error) {
+	return backend.definitions, nil
+}
+func (backend operationsBackend) Invoke(context.Context, string, json.RawMessage) (capability.Result, error) {
+	return capability.Result{}, nil
+}
+func (backend operationsBackend) Operation(context.Context, string) (capability.Operation, error) {
+	return capability.Operation{}, nil
+}
+
+// assertObjectProperties walks a serialized tool schema and fails on any entry under a
+// `properties` object that is not itself a JSON object. MCP 2025-11-25 defines each
+// property value as a schema object; strict clients such as @modelcontextprotocol/sdk
+// reject the whole tools/list response when they meet the boolean schema `true` that a
+// Go field typed `any` infers.
+func assertObjectProperties(t *testing.T, toolName, path string, node any) {
+	t.Helper()
+	switch value := node.(type) {
+	case map[string]any:
+		for key, child := range value {
+			if key == "properties" {
+				properties, ok := child.(map[string]any)
+				if !ok {
+					t.Errorf("tool %s: %s.properties is %T, want a JSON object", toolName, path, child)
+					continue
+				}
+				for field, property := range properties {
+					fieldPath := path + "properties." + field
+					if _, isObject := property.(map[string]any); !isObject {
+						raw, _ := json.Marshal(property)
+						t.Errorf("tool %s field %s: schema is %T %s, want a JSON object", toolName, fieldPath, property, raw)
+					}
+					assertObjectProperties(t, toolName, fieldPath+".", property)
+				}
+				continue
+			}
+			assertObjectProperties(t, toolName, path+key+".", child)
+		}
+	case []any:
+		for index, item := range value {
+			assertObjectProperties(t, toolName, fmt.Sprintf("%s[%d].", path, index), item)
+		}
+	}
+}
+
+// TestMCPToolSchemasAreJSONObjects protects the MCP wire contract for the complete
+// catalog: every tool's input and output schema, after serialization, must carry only
+// object-valued property schemas.
+func TestMCPToolSchemasAreJSONObjects(t *testing.T) {
+	registry := capability.NewRegistry()
+	if err := (&operations.Service{}).Register(registry); err != nil {
+		t.Fatal(err)
+	}
+	definitions := registry.List(capability.Principal{Adapter: "mcp", IsAdmin: true})
+	if len(definitions) == 0 {
+		t.Fatal("no MCP tools to check")
+	}
+	session := connectFixture(t, operationsBackend{definitions: definitions})
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range result.Tools {
+		for label, schema := range map[string]any{"inputSchema": tool.InputSchema, "outputSchema": tool.OutputSchema} {
+			if schema == nil {
+				continue
+			}
+			raw, err := json.Marshal(schema)
+			if err != nil {
+				t.Fatalf("tool %s %s: %v", tool.Name, label, err)
+			}
+			var decoded any
+			if json.Unmarshal(raw, &decoded) != nil {
+				t.Fatalf("tool %s %s is not JSON: %s", tool.Name, label, raw)
+			}
+			assertObjectProperties(t, tool.Name+" "+label, "", decoded)
 		}
 	}
 }
