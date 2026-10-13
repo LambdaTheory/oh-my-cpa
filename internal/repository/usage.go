@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/usage"
 )
@@ -236,6 +238,20 @@ func (r *Repository) CommitUsageDecoded(ctx context.Context, decoded []UsageDeco
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Observations are deduplicated against the newest row per credential and
+	// window, so a batch with more than one event for a credential must be
+	// processed oldest first: a newer reading written before an older one would
+	// make the older one look like the newest and misplace the next heartbeat.
+	sort.SliceStable(decoded, func(i, j int) bool {
+		return decoded[i].Event.TimestampMS < decoded[j].Event.TimestampMS
+	})
+
+	observationWriter, err := newQuotaObservationWriter(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	defer observationWriter.close()
+
 	insert, err := tx.PrepareContext(ctx, `
 		INSERT INTO usage_events (
 			instance_id, event_key, api_group_key, api_group_label, api_key_mask, provider, endpoint, auth_type, request_id,
@@ -285,6 +301,14 @@ func (r *Repository) CommitUsageDecoded(ctx context.Context, decoded []UsageDeco
 		}
 		if _, errExec := mark.ExecContext(ctx, event.EventKey, createdMS, item.InboxID); errExec != nil {
 			return 0, fmt.Errorf("mark usage inbox %d: %w", item.InboxID, errExec)
+		}
+		// The header observation lives in the same transaction as the record it
+		// came from, so a request can never be stored without the quota reading
+		// its own headers published.
+		for _, observation := range quota.ObservationsFromHeaders(event) {
+			if errObs := observationWriter.write(ctx, observation, createdMS); errObs != nil {
+				return 0, errObs
+			}
 		}
 		committed++
 	}
