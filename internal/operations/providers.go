@@ -34,6 +34,15 @@ func (s *Service) FindProvider(ctx context.Context, id string) (Provider, error)
 	}
 	return Provider{}, errors.New("resource_missing")
 }
+
+// maskProviderForCaller redacts an email-shaped provider name for a read-only caller. CPA
+// names some providers after the account, so the labels are masked like credential names.
+func maskProviderForCaller(ctx context.Context, provider Provider) Provider {
+	provider.Name = accountLabelForCaller(ctx, provider.Name)
+	provider.UpstreamName = accountLabelForCaller(ctx, provider.UpstreamName)
+	return provider
+}
+
 func (s *Service) registerProviders(registry *capability.Registry) error {
 	type List struct {
 		Items []Provider `json:"items"`
@@ -43,6 +52,9 @@ func (s *Service) registerProviders(registry *capability.Registry) error {
 		if len(items) > 100 {
 			return List{}, errors.New("tool_result_too_large")
 		}
+		for index := range items {
+			items[index] = maskProviderForCaller(ctx, items[index])
+		}
 		return List{items}, err
 	}); err != nil {
 		return err
@@ -50,7 +62,11 @@ func (s *Service) registerProviders(registry *capability.Registry) error {
 	if err := read(registry, "providers_get", "Read one API provider by id: display and upstream name, status, model mappings and revision, without credentials.", func(ctx context.Context, input struct {
 		ID string `json:"id"`
 	}) (Provider, error) {
-		return s.FindProvider(ctx, input.ID)
+		provider, err := s.FindProvider(ctx, input.ID)
+		if err != nil {
+			return provider, err
+		}
+		return maskProviderForCaller(ctx, provider), nil
 	}); err != nil {
 		return err
 	}

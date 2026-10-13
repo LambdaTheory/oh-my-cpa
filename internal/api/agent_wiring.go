@@ -34,6 +34,7 @@ type agentState struct {
 	catalog     *clientKeyCatalog
 	mcpMu       sync.Mutex
 	mcp         http.Handler
+	mcpReadOnly http.Handler
 }
 
 // clientKeyCatalog is the fingerprint-to-key join, held for a moment.
@@ -411,7 +412,9 @@ func (h *Handler) ensureAgent() error {
 			return
 		}
 		store := repository.AgentStore{Repo: h.repo, Cipher: h.cipher}
-		executor := &capability.Executor{Registry: registry, Store: store, Authorize: func(_ context.Context, id, _ string) bool { return h.auth != nil && id == h.auth.CapabilityIdentity() }, VerifyHuman: h.verifyAgentOAuth}
+		executor := &capability.Executor{Registry: registry, Store: store, Authorize: func(_ context.Context, id, _ string) bool {
+			return h.auth != nil && (id == h.auth.CapabilityIdentity() || id == readOnlyCapabilityIdentity)
+		}, VerifyHuman: h.verifyAgentOAuth}
 		h.agent.executor = executor
 		h.agent.runtime = &agent.Runtime{Executor: executor, Store: store, Location: h.repo.Timezone().Location, Slots: h.playgroundSlots, Client: func(ctx context.Context, fingerprint string) (agent.ModelClient, error) {
 			return h.inferenceClient(ctx, fingerprint)

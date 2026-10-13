@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -28,9 +29,48 @@ func (h *Handler) mcpPrincipal() capability.Principal {
 	}
 	return principal
 }
+
+// readOnlyPrincipal is the authority of a caller holding the read-only key: only the
+// capabilities declared read, never a write or destructive tool, and never approval. Its
+// identity is distinct from an operator's, so it can read no operation it did not prepare.
+func (h *Handler) readOnlyPrincipal() capability.Principal {
+	principal := capability.Principal{ID: readOnlyCapabilityIdentity, Adapter: "mcp", IsReadOnly: true, Allowed: map[string]bool{}}
+	for _, definition := range h.agent.executor.Registry.List(capability.Principal{Adapter: "mcp", IsAdmin: true}) {
+		if definition.Permission == "read" {
+			principal.Allowed[definition.Name] = true
+		}
+	}
+	return principal
+}
+
+// readOnlyCapabilityIdentity identifies the read-only MCP caller. It is a fixed, non-secret
+// value: the credential itself is a bearer token, and this only separates the read-only
+// caller's prepared operations from the management caller's.
+const readOnlyCapabilityIdentity = "mcp-readonly"
+
+// readOnlyBearer reports whether the request presented the configured read-only key. A short
+// or absent key never matches, and the comparison is constant-time.
+func (h *Handler) readOnlyBearer(request *http.Request) bool {
+	key := h.cfg.MCPReadOnlyKey
+	if len(key) < 16 {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")), []byte(key)) == 1
+}
+
 func (h *Handler) capabilityPrincipal(request *http.Request) (capability.Principal, bool) {
 	if authorization := request.Header.Get("Authorization"); authorization != "" {
-		if h.cfg.IsDemoMode || !strings.HasPrefix(authorization, "Bearer ") || len(authorization) > 8192 || h.auth == nil || !h.auth.KeyMatches(strings.TrimPrefix(authorization, "Bearer ")) {
+		if h.cfg.IsDemoMode || !strings.HasPrefix(authorization, "Bearer ") || len(authorization) > 8192 || h.auth == nil {
+			return capability.Principal{}, false
+		}
+		token := strings.TrimPrefix(authorization, "Bearer ")
+		if h.readOnlyBearer(request) {
+			if h.ensureAgent() != nil {
+				return capability.Principal{}, false
+			}
+			return h.readOnlyPrincipal(), true
+		}
+		if !h.auth.KeyMatches(token) {
 			return capability.Principal{}, false
 		}
 		if h.ensureAgent() != nil {

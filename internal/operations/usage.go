@@ -172,7 +172,9 @@ func (s *Service) registerUsage(registry *capability.Registry) error {
 		page, err := s.Repo.ListUsageEvents(ctx, filter)
 		output := RequestPage{Items: []RequestItem{}, NextCursor: page.NextCursor, HasMore: page.HasMore}
 		for _, row := range page.Items {
-			output.Items = append(output.Items, projectRequest(row))
+			item := projectRequest(row)
+			item.Provider = accountLabelForCaller(ctx, item.Provider)
+			output.Items = append(output.Items, item)
 		}
 		return output, err
 	}); err != nil {
@@ -182,7 +184,9 @@ func (s *Service) registerUsage(registry *capability.Registry) error {
 		ID int64 `json:"id"`
 	}) (RequestItem, error) {
 		row, err := s.Repo.GetUsageEvent(ctx, input.ID)
-		return projectRequest(row), err
+		item := projectRequest(row)
+		item.Provider = accountLabelForCaller(ctx, item.Provider)
+		return item, err
 	}); err != nil {
 		return err
 	}
