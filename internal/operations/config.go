@@ -63,8 +63,11 @@ func (s *Service) registerConfig(registry *capability.Registry) error {
 		return err
 	}
 	type Input struct {
-		Key   string `json:"key"`
-		Value any    `json:"value"`
+		Key string `json:"key"`
+		// The description keeps the inferred `any` schema a JSON object: an unannotated
+		// empty schema serializes as the boolean `true`, which strict MCP clients reject.
+		// The value itself stays unconstrained; ValidateScalarValue owns its type.
+		Value any `json:"value" jsonschema:"new value for the key, validated against the setting's expected type"`
 	}
 	metadata := Meta("config_set", "Change one allowlisted routing or retry setting after confirmation.", "write", "high")
 	metadata.Invalidates = []string{"management-config", "management-config-source"}
