@@ -73,9 +73,16 @@ a message naming the variable.
 | `OMCPA_OMC_REPO` / `OMCPA_CPA_REPO` | `WizisCool/oh-my-cpa` / `router-for-me/CLIProxyAPI` | `owner/name` the checks read, for a fork |
 | `OMCPA_DEMO_MODE` | `false` | Serve the console from the built-in fixture; see [Demo mode](#demo-mode) |
 
+### MCP read-only key
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_MCP_READONLY_KEY` | unset | Optional second bearer credential for the remote MCP endpoint. When set it reaches only read capabilities and masks email-shaped account labels in its results; it cannot sign in, approve, or run a write tool. Must be at least 16 characters and different from `OMCPA_CPA_MANAGEMENT_KEY`, or start-up fails |
+
 The MCP stdio bridge (`oh-my-cpa mcp`) reads `OMCPA_SERVER_URL`,
 `OMCPA_CPA_MANAGEMENT_KEY` and the optional `OMCPA_VERSION` only; the remote MCP
-endpoint has no setting of its own. See [Agent and MCP](#agent-and-mcp).
+endpoint accepts `OMCPA_CPA_MANAGEMENT_KEY` and, when configured,
+`OMCPA_MCP_READONLY_KEY` as bearer tokens. See [Agent and MCP](#agent-and-mcp).
 
 ## Deployment constraints
 
@@ -223,7 +230,10 @@ loopback addresses, refuses redirects, opens no data directory, and prints its u
 
 There is no separate external credential: holding the management key is
 administrator-equivalent, so an external agent can prepare an operation and read its
-status but cannot approve it, submit secrets, or complete OAuth. A prepared change
+status but cannot approve it, submit secrets, or complete OAuth. A deployment that wants a
+lesser credential sets `OMCPA_MCP_READONLY_KEY`; that credential reaches only read
+capabilities, masks email-shaped account labels in its results, and cannot sign in or approve.
+A prepared change
 returns `status: "pending"` with a link to `<console URL>/authorize/<id>`, a
 standalone authorization screen where the signed-in operator (signing in first if
 needed) allows or denies that one operation; `omc_operation_status` reads the

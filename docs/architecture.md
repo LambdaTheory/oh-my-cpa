@@ -106,9 +106,9 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/cpa/gateway` | Fixed-endpoint CPA client for the Playground, Agent and Model Square: client-key auth, model directory, bounded SSE lines, and complete tool-call assembly for the Agent loop | — |
 | `internal/cpa/discovery` | Normalize CPA resources into the local identity model | `management`, `crypto`, `domain`, `security` |
 | `internal/cpa/configyaml` | The masked configuration view and per-value secret restoration, v8 file detection, and the plugin-system settings edit | — |
-| `internal/repository` | SQLite schema, migrations, queries, transactional invariants | `iconasset`, `crypto`, `domain`, `pricing`, `security`, `usage` |
-| `internal/usage/ingest` | Collector loop, decode processor, usage-fact fold and data-lifecycle maintenance | `repository`, `management`, `security`, `usage` |
-| `internal/quota` | Per-provider quota probes and normalization | `management` |
+| `internal/repository` | SQLite schema, migrations, queries, transactional invariants | `iconasset`, `crypto`, `domain`, `pricing`, `quota`, `security`, `usage` |
+| `internal/usage/ingest` | Collector loop, decode processor, usage-fact fold, passive-observation backfill and data-lifecycle maintenance | `repository`, `management`, `security`, `usage` |
+| `internal/quota` | Per-provider quota probes, normalization, and the passive response-header parser | `management`, `security`, `usage` |
 | `internal/release` | Published-version observation: version comparison, the release feed client, the stored index, and the project's star count for the header link | `repository` |
 | `internal/demo` | The publication fixture: an in-process CPA stand-in, the seeded history, and the capture state the console renders | `domain`, `pricing`, `quota`, `repository`, `security`, `usage`, `usage/ingest` |
 | `internal/capability` | Agent capability declarations, JSON Schema validation, permission/risk rules, pending-operation store, executor audit | `repository`, `crypto` |
@@ -1997,6 +1997,17 @@ reach the provider's own usage endpoint. Targets are restricted to
 the resulting snapshot is normalized and stored in `quota_snapshots`. This is the
 only place Oh My CPA uses CPA as a request proxy, and it is server-initiated:
 there is no user-supplied URL or generic `/api-call` surface.
+
+Beside that refresh path, the rate-limit headers an upstream already publishes on every
+response are read without any probe. `internal/quota/passive.go` parses them, and
+`repository.CommitUsageDecoded` writes the resulting windows into `quota_observations`
+(migration 041) in the same transaction as the request record; a malformed or missing window
+writes nothing. Rows deduplicate per credential and window (write on a changed percentage or
+reset, or every fifteen minutes). The maintenance loop backfills retained request records
+through a `quota_observations` watermark in `usage_aggregation_checkpoints`, and the table
+rolls at a fixed 365-day horizon through `TABLE_LIFECYCLES`, independent of request-record
+retention. `quota_snapshots` remains the current normalized reading; `quota_observations` is
+append-only history (ADR 0094).
 
 Kimi international credentials use the single allowlisted
 `https://api.kimi.ai/coding/v1/usages` endpoint rather than the domestic Kimi host.

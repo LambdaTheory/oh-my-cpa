@@ -397,6 +397,8 @@ export const MS: Readonly<Record<string, string>> = {
   "agent.capability.quota_clear_cooldown.description": "Mengosongkan tempoh bertenang tempatan dan CPA bagi satu kelayakan; ia tidak memulihkan kuota penyedia.",
   "agent.capability.quota_list": "Baca kuota",
   "agent.capability.quota_list.description": "Membaca nama dan tahap pelan langganan, tetingkap kuota dan masa pemerhatiannya; pemerhatian yang tiada atau lapuk bukan kuota sifar.",
+  "agent.capability.quota_observations_list": "Baca sejarah pemerhatian kuota",
+  "agent.capability.quota_observations_list.description": "Membaca tetingkap kuota yang diterbitkan hulu pada pengepala respons permintaan, daripada yang paling lama. Setiap baris ialah satu bacaan, bukan baki semasa; tetingkap muncul semula apabila ia berubah atau setiap lima belas minit semasa stabil. Tapis mengikut kelayakan, pembekal, tetingkap atau julat masa.",
   "agent.capability.quota_redeem_credit": "Tebus kredit tetapan semula",
   "agent.capability.quota_redeem_credit.description": "Menggunakan satu kredit tetapan semula Codex yang tersedia untuk satu kelayakan.",
   "agent.capability.quota_refresh": "Segarkan kuota",

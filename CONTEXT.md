@@ -31,7 +31,7 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **Capability Operation**: The server-side record of one capability invocation that needed a decision or produced a durable outcome: its normalized arguments, structured preview, target revision, status, and result. Destructive or otherwise high-risk calls wait for one allow-or-deny operator decision bound to that preview (ADR 0035), made on a card under the call that raised it (ADR 0043); an `ask_question` call waits for the operator's answer instead. An operation is consumed once, expires after 10 minutes if undecided (24 hours for a question), and terminal records are retained for 7 days.
 - **Operator question**: An `ask_question` call: 1-4 questions the Agent asks the operator mid-turn, each with optional labelled choices and a typed answer always available. The turn waits for the answer; skipping it is a rejection the model is told of.
 - **Readable table**: A database table `database_query` may read, with the columns it hides. Every table is classified readable or hidden (ADR 0036); a table a migration adds is unreadable until classified. Raw query rows belong to the Agent's investigation, not to a console preview; the model still receives them and may use them in its answer or an explicit display.
-- **MCP endpoint**: `<base path>/api/mcp`, the capability registry served to external agents as MCP tools over Streamable HTTP by the console itself (ADR 0070). It accepts the CPA management key as a bearer token and nothing else, keeps no session, and cannot approve, submit secrets, or complete OAuth.
+- **MCP endpoint**: `<base path>/api/mcp`, the capability registry served to external agents as MCP tools over Streamable HTTP by the console itself (ADR 0070). It accepts the CPA management key as a bearer token and nothing else, keeps no session, and cannot approve, submit secrets, or complete OAuth. When `OMCPA_MCP_READONLY_KEY` is configured, that key is a second bearer credential reaching only `read` capabilities, with email-shaped account labels masked in its results and no sign-in or approval; see **Read-only MCP key**.
 - **MCP bridge**: `oh-my-cpa mcp`, a stdio process that serves the same tool definitions by forwarding to the capability HTTP endpoints, for clients that only speak stdio. Like the endpoint it carries no business logic and no approval policy.
 - **Approval link**: `<console>/authorize/<id>`, returned to an external agent with a prepared operation. It opens the **authorization screen**: a consent screen outside the console's shell, behind the sign-in gate, that states who is asking, on which deployment and for what, and offers Deny and Allow. The address only names the operation; the signed-in operator who opens it decides, through the same decision endpoint as the built-in Agent's approvals.
 
@@ -365,7 +365,9 @@ and the places it deliberately differs from the hand-tuned values it replaced.
 - **Request Record retention**: Request Records, and the captured payloads they
   were decoded from, are detail: they are kept for a configured number of days
   and then deleted in the background. Deleting them never changes a dashboard
-  number. A request record is never deleted before Usage Facts hold it.
+  number. A request record is never deleted before Usage Facts hold it. Passive
+  Quota Observations do not follow this retention: they are kept for a fixed 365 days
+  because they are the only record of a quota window once its request has rolled.
 - **Detail horizon**: The instant before which Request Records have been
   deleted. A dashboard window that reaches behind it is widened to whole
   fifteen-minute buckets and drawn no finer than that; the response reports the
@@ -399,6 +401,16 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   reports no usage, or, when every window reports usage below 100 because
   upstream rounds, the most used one. Pinning every window would show the weekly
   quota as spent whenever the 5-hour window runs out.
+- **Passive Quota Observation**: A quota window read from the rate-limit headers an
+  upstream already publishes on a response (Codex `x-codex-*`, Anthropic
+  `anthropic-ratelimit-unified-*`), stored as append-only history beside the request
+  record it arrived with. It is evidence about the instant the request was answered, not
+  a current balance, and it differs from a Quota Snapshot, which is the last normalized
+  reading a refresh overwrites. A reading is recorded only when the percentage or reset
+  instant changed, or every fifteen minutes while steady; a malformed or missing window
+  produces no observation, and an absent window is unknown, never zero. Observations are
+  kept for a fixed 365 days, independent of Request Record retention, and the
+  `quota_observations_list` read capability exposes them (ADR 0094).
 - **Unpublished Quota Reading**: A quota observation a provider answered without
   publishing any window — the endpoint replied successfully, and the document
   carried nothing this deployment can meter. It is recorded and preserved as its
