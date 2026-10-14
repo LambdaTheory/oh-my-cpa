@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/usage"
 )
 
@@ -179,5 +180,101 @@ func TestListQuotaObservationsReportsOverflow(t *testing.T) {
 	}
 	if rows[0].Provider != "codex" || rows[0].WindowKind != "weekly" || rows[0].WindowMinutes != 10080 {
 		t.Fatalf("row = %+v", rows[0])
+	}
+}
+
+func TestRecordActiveQuotaObservationsWritesTheTimeline(t *testing.T) {
+	repo := usageTestRepository(t)
+	ctx := context.Background()
+	fiveHours, weekly, used := 5.0, 168.0, 52.0
+	value := &quota.NormalizedQuota{
+		AuthIndex:    "cl-1",
+		Provider:     "claude",
+		ObservedAtMS: 1_700_000_000_000,
+		Windows: []quota.QuotaWindow{
+			{ID: "five_hour", Scope: "standard", UsedPercent: &used, PeriodHours: &fiveHours},
+			{ID: "seven_day", Scope: "standard", UsedPercent: &used, PeriodHours: &weekly},
+			{ID: "seven_day_sonnet", Kind: "model_scoped", Scope: "model", Model: "claude-3-5-sonnet", UsedPercent: &used, PeriodHours: &weekly},
+		},
+	}
+	recorded, err := repo.RecordActiveQuotaObservations(ctx, value)
+	if err != nil || recorded != 3 {
+		t.Fatalf("recorded = %d (%v), want 3", recorded, err)
+	}
+	var active, passive int
+	if err := repo.SQL().QueryRow(`SELECT SUM(source = 'active'), SUM(source = 'passive') FROM quota_observations`).Scan(&active, &passive); err != nil {
+		t.Fatal(err)
+	}
+	if active != 3 || passive != 0 {
+		t.Fatalf("sources = active %d passive %d, want 3/0", active, passive)
+	}
+	var scopedScope, scopedModel, kind string
+	if err := repo.SQL().QueryRow(`SELECT scope, model, window_kind FROM quota_observations WHERE window_kind = 'model_scoped'`).Scan(&scopedScope, &scopedModel, &kind); err != nil {
+		t.Fatal(err)
+	}
+	if scopedScope != "model" || scopedModel != "claude-3-5-sonnet" || kind != "model_scoped" {
+		t.Fatalf("model window identity = %q/%q/%q", scopedScope, scopedModel, kind)
+	}
+	// A repeated write at the same instant is idempotent.
+	if _, err := repo.RecordActiveQuotaObservations(ctx, value); err != nil {
+		t.Fatal(err)
+	}
+	if count, _ := repo.CountQuotaObservations(ctx); count != 3 {
+		t.Fatalf("after a repeated write count = %d, want 3", count)
+	}
+}
+
+func TestLatestStandardPassiveObservationsPrefersNewestPerKind(t *testing.T) {
+	repo := usageTestRepository(t)
+	ctx := context.Background()
+	insert := func(eventKey, authIndex, kind, source string, used float64, atMS int64) {
+		t.Helper()
+		if _, err := repo.SQL().Exec(`INSERT INTO quota_observations (auth_index, provider, window_kind, scope, model, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source)
+			VALUES (?, 'claude', ?, 'standard', '', 10080, ?, NULL, '', ?, ?, 0, ?)`, authIndex, kind, used, atMS, eventKey, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("p1", "cl-1", "five_hour", "passive", 10, 1000)
+	insert("p2", "cl-1", "five_hour", "passive", 20, 2000)
+	insert("a1", "cl-1", "five_hour", "active", 99, 3000)
+	insert("p3", "cl-1", "weekly", "passive", 30, 1500)
+	insert("p4", "cl-2", "weekly", "passive", 40, 1200)
+
+	result, err := repo.LatestStandardPassiveObservations(ctx, []string{"cl-1", "cl-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result["cl-1"]["five_hour"].UsedPercent != 20 || result["cl-1"]["five_hour"].ObservedAtMS != 2000 {
+		t.Fatalf("cl-1 five_hour = %+v", result["cl-1"]["five_hour"])
+	}
+	if result["cl-1"]["weekly"].UsedPercent != 30 {
+		t.Fatalf("cl-1 weekly = %+v", result["cl-1"]["weekly"])
+	}
+	if result["cl-2"]["weekly"].UsedPercent != 40 {
+		t.Fatalf("cl-2 weekly = %+v", result["cl-2"]["weekly"])
+	}
+}
+
+func TestCountUsageEventsByAuthIndexGroupsAndFilters(t *testing.T) {
+	repo := usageTestRepository(t)
+	ctx := context.Background()
+	insert := func(eventKey, authIndex string, atMS int64) {
+		t.Helper()
+		if _, err := repo.SQL().Exec(`INSERT INTO usage_events (instance_id, event_key, api_group_key, auth_index, timestamp_ms, created_at_ms)
+			VALUES ('default', ?, 'group', ?, ?, 0)`, eventKey, authIndex, atMS); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("e1", "c-1", 5000)
+	insert("e2", "c-1", 8000)
+	insert("e3", "c-2", 9000)
+	insert("e4", "c-1", 100) // outside the window
+
+	counts, err := repo.CountUsageEventsByAuthIndex(ctx, "default", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["c-1"] != 2 || counts["c-2"] != 1 {
+		t.Fatalf("counts = %+v", counts)
 	}
 }

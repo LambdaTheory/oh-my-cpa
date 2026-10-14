@@ -66,6 +66,11 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_PUBLIC_URL", "OMCPA_VERSION", "OMCPA_CPA_BASE_URL", "OMCPA_CPA_USAGE_ADDR",
 		"OMCPA_CPA_MANAGEMENT_KEY", "OMCPA_TRUSTED_PROXY_CIDRS", DemoModeEnv, "PORT",
 		"OMCPA_UPDATE_CHECK_ENABLED", "OMCPA_OMC_REPO", "OMCPA_CPA_REPO", "OMCPA_MCP_READONLY_KEY",
+		"OMCPA_QUOTA_SCHEDULER_ENABLED", "OMCPA_QUOTA_WATCH_INTERVAL", "OMCPA_QUOTA_ACTIVE_INTERVAL",
+		"OMCPA_QUOTA_NORMAL_INTERVAL", "OMCPA_QUOTA_IDLE_INTERVAL", "OMCPA_QUOTA_WATCH_USED_PERCENT",
+		"OMCPA_QUOTA_WATCH_WINDOW", "OMCPA_QUOTA_NORMAL_WINDOW", "OMCPA_QUOTA_WINDOW_END_MARGIN",
+		"OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL", "OMCPA_QUOTA_CREDENTIAL_FLOOR", "OMCPA_QUOTA_REFRESH_CONCURRENCY",
+		"OMCPA_QUOTA_BACKOFF_BASE", "OMCPA_QUOTA_BACKOFF_MAX", "OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER",
 	} {
 		t.Setenv(name, "")
 	}
@@ -361,5 +366,114 @@ func TestLoadValidatesTheReadOnlyMCPKey(t *testing.T) {
 	cfg, err = Load()
 	if err != nil || cfg.MCPReadOnlyKey != "read-only-key-value-16" {
 		t.Fatalf("valid read-only key = %q (%v)", cfg.MCPReadOnlyKey, err)
+	}
+}
+
+func TestLoadQuotaSchedulerDefaultsAndOverrides(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != DefaultQuotaWatchInterval || cfg.Quota.IdleInterval != DefaultQuotaIdleInterval || cfg.Quota.GlobalConcurrency != DefaultQuotaGlobalConcurrency {
+		t.Fatalf("defaults = %+v", cfg.Quota)
+	}
+	t.Setenv("OMCPA_QUOTA_SCHEDULER_ENABLED", "false")
+	t.Setenv("OMCPA_QUOTA_WATCH_INTERVAL", "90s")
+	t.Setenv("OMCPA_QUOTA_WATCH_USED_PERCENT", "75")
+	t.Setenv("OMCPA_QUOTA_REFRESH_CONCURRENCY", "2")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != 90*time.Second || cfg.Quota.WatchUsedPercent != 75 || cfg.Quota.GlobalConcurrency != 2 {
+		t.Fatalf("overrides = %+v", cfg.Quota)
+	}
+}
+
+func TestLoadRejectsBadQuotaSchedulerSettings(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_WATCH_INTERVAL", "not-a-duration")
+	if _, err := Load(); err == nil {
+		t.Fatal("a malformed tier interval was accepted")
+	}
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_REFRESH_CONCURRENCY", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("a zero concurrency was accepted")
+	}
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_WATCH_USED_PERCENT", "150")
+	if _, err := Load(); err == nil {
+		t.Fatal("an out-of-range watch percent was accepted")
+	}
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_BACKOFF_BASE", "1h")
+	t.Setenv("OMCPA_QUOTA_BACKOFF_MAX", "5m")
+	if _, err := Load(); err == nil {
+		t.Fatal("a backoff maximum below its base was accepted")
+	}
+}
+
+func TestDemoModeDisablesTheQuotaScheduler(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv(DemoModeEnv, "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.SchedulerEnabled {
+		t.Fatal("demo mode left the quota scheduler on")
+	}
+}
+
+// TestLoadCredentialFloorByProvider pins the per-provider floor map: the
+// documented defaults stand, an explicit map overrides only the providers it
+// names, and the shared fallback stays the floor for everyone else.
+func TestLoadCredentialFloorByProvider(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.CredentialFloor != DefaultQuotaCredentialFloor {
+		t.Fatalf("fallback floor = %v, want %v", cfg.Quota.CredentialFloor, DefaultQuotaCredentialFloor)
+	}
+	if cfg.Quota.CredentialFloorByProvider["claude"] != 10*time.Minute ||
+		cfg.Quota.CredentialFloorByProvider["codex"] != 5*time.Minute ||
+		cfg.Quota.CredentialFloorByProvider["antigravity"] != 5*time.Minute {
+		t.Fatalf("default per-provider floors = %+v", cfg.Quota.CredentialFloorByProvider)
+	}
+
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER", "codex=7m,claude=20m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.CredentialFloorByProvider["codex"] != 7*time.Minute ||
+		cfg.Quota.CredentialFloorByProvider["claude"] != 20*time.Minute {
+		t.Fatalf("overridden per-provider floors = %+v", cfg.Quota.CredentialFloorByProvider)
+	}
+	// A provider the map does not name keeps its default rather than being dropped.
+	if cfg.Quota.CredentialFloorByProvider["antigravity"] != 5*time.Minute {
+		t.Fatalf("untouched provider floor = %v, want the default 5m", cfg.Quota.CredentialFloorByProvider["antigravity"])
+	}
+}
+
+func TestLoadRejectsBadCredentialFloorByProvider(t *testing.T) {
+	for _, raw := range []string{
+		"codex",           // no separator
+		"codex=",          // empty value
+		"codex=soon",      // unparsable duration
+		"codex=-5m",       // non-positive duration
+		"=5m",             // empty provider
+		"codex=5m,claude", // one malformed entry poisons the map
+	} {
+		clearConfigEnv(t)
+		t.Setenv("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER", raw)
+		if _, err := Load(); err == nil {
+			t.Fatalf("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER=%q was accepted", raw)
+		}
 	}
 }

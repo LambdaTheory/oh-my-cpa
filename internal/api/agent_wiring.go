@@ -200,6 +200,9 @@ func (h *Handler) operationsService() *operations.Service {
 		}
 		for _, file := range files.Files {
 			if file.AuthIndex == authIndex {
+				if blocked, until := h.quotaBackoffBlocked(authIndex); blocked {
+					return operations.Quota{}, quotaBackoffError(until)
+				}
 				h.agent.refreshMu.Lock()
 				if time.Since(h.agent.lastRefresh[authIndex]) < 30*time.Second {
 					h.agent.refreshMu.Unlock()
@@ -213,6 +216,7 @@ func (h *Handler) operationsService() *operations.Service {
 
 				value, err := quota.NewService(client).RefreshCredentialQuota(ctx, file, h.loadPriorNormalizedQuota(ctx, authIndex))
 				if err != nil {
+					h.recordQuotaRateLimit(authIndex, quota.DetectProvider(file.Type, file.Provider), err)
 					return operations.Quota{}, err
 				}
 				if value.Status != "error" && value.Status != "stale" {
@@ -220,6 +224,7 @@ func (h *Handler) operationsService() *operations.Service {
 						return operations.Quota{}, err
 					}
 				}
+				h.clearQuotaRateLimit(authIndex, quota.DetectProvider(file.Type, file.Provider))
 				h.attachWindowCapacity(ctx, value, h.now().UnixMilli())
 				return operations.SafeQuota(value), nil
 			}

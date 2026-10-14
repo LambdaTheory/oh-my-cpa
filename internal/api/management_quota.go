@@ -94,13 +94,24 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 			writeAuditFailure(writer, "quota refresh attempt could not be audited")
 			return
 		}
+		if blocked, until := h.quotaBackoffBlocked(targetIndex); blocked {
+			writeQuotaRateLimited(writer, until)
+			return
+		}
 		prior := h.loadPriorNormalizedQuota(ctx, targetIndex)
 		svc := quota.NewService(client)
 		refreshed, err := svc.RefreshCredentialQuota(ctx, file, prior)
 		if err != nil {
+			if h.recordQuotaRateLimit(targetIndex, quota.DetectProvider(file.Type, file.Provider), err) {
+				if blocked, until := h.quotaBackoffBlocked(targetIndex); blocked {
+					writeQuotaRateLimited(writer, until)
+					return
+				}
+			}
 			writeError(writer, http.StatusBadGateway, fmt.Sprintf("refresh quota failed: %v", err))
 			return
 		}
+		h.clearQuotaRateLimit(targetIndex, quota.DetectProvider(file.Type, file.Provider))
 
 		// Persist snapshot to DB only when successful (healthy, warning, or exhausted), never stale or error
 		if h.repo != nil && refreshed.Status != "error" && refreshed.Status != "stale" {
@@ -167,13 +178,21 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			if blocked, _ := h.quotaBackoffBlocked(authIdx); blocked {
+				return
+			}
 			prior := h.loadPriorNormalizedQuota(ctx, authIdx)
 			refreshed, rErr := svc.RefreshCredentialQuota(ctx, f, prior)
-			if rErr == nil && refreshed != nil {
+			if rErr != nil {
+				h.recordQuotaRateLimit(authIdx, quota.DetectProvider(f.Type, f.Provider), rErr)
+				return
+			}
+			if refreshed != nil {
 				results[index] = refreshed
 				if h.repo != nil && refreshed.Status != "error" && refreshed.Status != "stale" {
 					_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
 				}
+				h.clearQuotaRateLimit(authIdx, quota.DetectProvider(f.Type, f.Provider))
 			}
 		}(i, cleanIdx, file)
 	}
@@ -306,7 +325,7 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		}
 	}
 
-	return h.repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{
+	if err := h.repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{
 		AuthIndex:        q.AuthIndex,
 		Provider:         q.Provider,
 		Status:           q.Status,
@@ -317,7 +336,17 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		ResetCreditsJSON: creditsJSON,
 		ResetGrantsJSON:  grantsJSON,
 		ObservedAtMS:     q.ObservedAtMS,
-	})
+	}); err != nil {
+		return err
+	}
+	// The same successful refresh that produced the snapshot is recorded in the
+	// observation timeline, so a manual refresh, an MCP refresh and the scheduler
+	// all leave the same history. A recording failure is not a snapshot failure:
+	// the snapshot is already durable, and the timeline is best-effort history.
+	if _, err := h.repo.RecordActiveQuotaObservations(ctx, q); err != nil && h.logger != nil {
+		h.logger.Warn("record active quota observations", "auth_index", q.AuthIndex, "error", err)
+	}
+	return nil
 }
 
 // planFromSnapshot rebuilds the full normalized plan (including subscription
@@ -509,6 +538,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 
 	quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 	h.attachWindowCapacity(ctx, &normalized, nowMS)
+	h.overlayPassiveObservations(ctx, &normalized)
 
 	var history []repository.QuotaSnapshotRecord
 	if h.repo != nil {
@@ -645,6 +675,7 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 		h.attachWindowCapacity(ctx, &normalized, nowMS)
+		h.overlayPassiveObservations(ctx, &normalized)
 
 		switch normalized.Status {
 		case "healthy":

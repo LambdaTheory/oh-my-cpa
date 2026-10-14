@@ -549,6 +549,12 @@ No new capability or permission is needed: listing remains a read and refreshing
 remains a low-risk write. Their tool descriptions identify these as estimates rather
 than balances or routing instructions.
 
+A standard five-hour or weekly window whose request headers published a reading newer than the
+stored snapshot is presented from that reading, marked with `observed_at_ms` and
+`source='passive'`; the `capacity` estimate still comes from the snapshot. An agent must
+describe such a window's `used_percent` as a header reading at that instant rather than as a
+refreshed balance.
+
 A credential's `status` is `unpublished` when the provider answered without
 publishing a window. That is a reading, not a failure and not an unread credential:
 it says the read happened and the provider reported nothing to meter, so an agent
@@ -577,20 +583,33 @@ rounding only and must not be presented as statistical confidence. See ADR 0059.
 ### Passive quota observations
 
 `quota_observations_list` is a low-risk read exposed to the Agent and MCP. It returns the
-quota windows upstreams published on request response headers (Codex `x-codex-*`, Anthropic
-`anthropic-ratelimit-unified-*`), oldest first, each row one reading at one instant rather
-than a current balance. It accepts optional `auth_index`, `provider` (`codex` or `claude`),
-`window_kind` (`five_hour` or `weekly`), an inclusive `from_ms`/`to_ms` window (default the
-last seven days) and a `limit` (default 200, maximum 1000). A limit above 1000 is
-`invalid_parameters`; a matching history larger than the limit is refused with
-`tool_result_too_large` and a detail telling the caller to narrow the window, never truncated.
-`event_key` is not projected.
+quota windows an upstream published on request response headers (Codex `x-codex-*`, Anthropic
+`anthropic-ratelimit-unified-*`) and the windows an active refresh this deployment performed,
+oldest first, each row one reading at one instant rather than a current balance. It accepts
+optional `auth_index`, `provider`, `window_kind`, `source` (`passive` or `active`), an inclusive
+`from_ms`/`to_ms` window (default the last seven days) and a `limit` (default 200, maximum 1000).
+A limit above 1000 is `invalid_parameters`; a matching history larger than the limit is refused
+with `tool_result_too_large` and a detail telling the caller to narrow the window, never
+truncated. Each row names its `source`, its `scope` (`standard`, `model` or `group`) and its
+`model` (empty for a standard window). `event_key` is not projected.
 
-The rows come from `quota_observations` (ADR 0094), an append-only history written in the same
-transaction as the request record. A window is recorded only when its percentage or reset
-changed, or every fifteen minutes while steady, and it rolls at a fixed 365-day horizon
-independent of request-record retention. A malformed or missing upstream reading produces no
-row: an absent window is unknown, never zero.
+The rows come from `quota_observations` (ADR 0094, ADR 0095), an append-only history. A passive
+row is written in the same transaction as the request record: a window is recorded only when its
+percentage or reset changed, or every fifteen minutes while steady, under `source='passive'` and
+`scope='standard'`. An active row is the result of a completed refresh, recorded for each window
+that states a period and a used share under `source='active'`; the source, scope and model
+distinguish the two. The table rolls at a fixed 365-day horizon independent of request-record
+retention. A malformed or missing upstream reading produces no row: an absent window is unknown,
+never zero.
+
+### Quota refresh scheduling and backoff
+
+The deployment reads each refreshable credential's quota on its own cadence (ADR 0095); an agent
+does not need to drive it. A refresh that reaches an upstream which answered 429 is refused with
+`rate_limited_backoff` and a detail naming the retry time, and the credential and its provider are
+parked until then; the manual endpoint and the `quota_refresh` tool share that state, so a
+rate-limited credential is not probed again from any path until its park expires. An agent should
+report the wait rather than retry immediately.
 
 ### Read-only MCP key
 

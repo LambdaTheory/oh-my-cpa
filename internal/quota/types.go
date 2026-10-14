@@ -21,6 +21,13 @@ type QuotaWindow struct {
 	HasMidCycleReset     bool `json:"has_mid_cycle_reset,omitempty"`
 	HasIncompleteHistory bool `json:"has_incomplete_history,omitempty"`
 
+	// ObservedAtMS and Source are set only when a fresher passive observation
+	// replaced the stored reading at read time: they name when that reading was
+	// taken and that it came from a request's response headers rather than a
+	// refresh. A window still backed by the snapshot carries neither.
+	ObservedAtMS *int64 `json:"observed_at_ms,omitempty"`
+	Source       string `json:"source,omitempty"`
+
 	// The three fields below are joined from recorded usage when a quota is
 	// read and are never part of a stored snapshot: usage keeps arriving after
 	// an observation, and a persisted figure would freeze whatever had been

@@ -27,26 +27,49 @@ const QuotaObservationRetentionDays = 365
 // history, because only changes were written.
 const quotaObservationHeartbeatMS = 15 * 60 * 1000
 
-// quotaObservationRow is one stored passive observation.
+// quotaObservationRow is one stored observation.
 type quotaObservationRow struct {
 	AuthIndex     string
 	Provider      string
 	WindowKind    string
+	Scope         string
+	Model         string
 	WindowMinutes int
 	UsedPercent   float64
 	ResetAtMS     *int64
 	Status        string
 	ObservedAtMS  int64
+	Source        string
 }
 
-// QuotaObservationFilter narrows a passive-observation read.
+// QuotaObservationFilter narrows an observation read.
 type QuotaObservationFilter struct {
 	AuthIndex  string
 	Provider   string
 	WindowKind string
+	// Source restricts to "passive" or "active"; empty reads both.
+	Source string
 	// FromMS and ToMS are inclusive bounds on observed_at_ms.
 	FromMS int64
 	ToMS   int64
+}
+
+// quotaObservationInsert is one row the writer may store. It carries the full
+// identity of a window (kind, scope, model) so the passive and active sources
+// deduplicate against the same key.
+type quotaObservationInsert struct {
+	AuthIndex     string
+	Provider      string
+	WindowKind    string
+	Scope         string
+	Model         string
+	WindowMinutes int
+	UsedPercent   float64
+	ResetAtMS     *int64
+	Status        string
+	ObservedAtMS  int64
+	EventKey      string
+	Source        string
 }
 
 // quotaObservationWriter writes deduplicated observations inside one
@@ -60,17 +83,18 @@ type quotaObservationWriter struct {
 func newQuotaObservationWriter(ctx context.Context, tx *sql.Tx) (*quotaObservationWriter, error) {
 	insert, err := tx.PrepareContext(ctx, `
 		INSERT OR IGNORE INTO quota_observations (
-			auth_index, provider, window_kind, window_minutes, used_percent,
-			reset_at_ms, status, observed_at_ms, event_key, created_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			auth_index, provider, window_kind, scope, model, window_minutes, used_percent,
+			reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return nil, fmt.Errorf("prepare quota observation insert: %w", err)
 	}
 	// The index on (auth_index, window_kind, observed_at_ms) serves this probe
-	// directly, so a batch of events costs one index seek per window.
+	// directly; scope and model are filtered from the same index prefix, so a
+	// batch of events costs one index seek per window.
 	recent, err := tx.PrepareContext(ctx, `
 		SELECT used_percent, reset_at_ms, observed_at_ms FROM quota_observations
-		WHERE auth_index = ? AND window_kind = ?
+		WHERE auth_index = ? AND window_kind = ? AND scope = ? AND model = ?
 		ORDER BY observed_at_ms DESC, id DESC LIMIT 1`)
 	if err != nil {
 		insert.Close()
@@ -88,12 +112,12 @@ func (writer *quotaObservationWriter) close() {
 }
 
 // write records one observation unless it repeats what the newest row for the
-// same credential and window already says.
-func (writer *quotaObservationWriter) write(ctx context.Context, observation quota.PassiveObservation, createdAtMS int64) error {
+// same credential, window, scope and model already says.
+func (writer *quotaObservationWriter) write(ctx context.Context, observation quotaObservationInsert, createdAtMS int64) error {
 	var recentUsedPercent float64
 	var recentResetAt sql.NullInt64
 	var recentObservedAt int64
-	err := writer.recent.QueryRowContext(ctx, observation.AuthIndex, observation.WindowKind).
+	err := writer.recent.QueryRowContext(ctx, observation.AuthIndex, observation.WindowKind, observation.Scope, observation.Model).
 		Scan(&recentUsedPercent, &recentResetAt, &recentObservedAt)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("probe newest quota observation: %w", err)
@@ -101,10 +125,14 @@ func (writer *quotaObservationWriter) write(ctx context.Context, observation quo
 	if err == nil && !shouldRecordQuotaObservation(observation, recentUsedPercent, recentResetAt, recentObservedAt) {
 		return nil
 	}
+	source := observation.Source
+	if source == "" {
+		source = quota.ObservationSourcePassive
+	}
 	if _, err := writer.insert.ExecContext(ctx,
-		observation.AuthIndex, observation.Provider, observation.WindowKind, observation.WindowMinutes,
-		observation.UsedPercent, quotaObservationResetValue(observation.ResetAtMS), observation.Status,
-		observation.ObservedAtMS, observation.EventKey, createdAtMS); err != nil {
+		observation.AuthIndex, observation.Provider, observation.WindowKind, observation.Scope, observation.Model,
+		observation.WindowMinutes, observation.UsedPercent, quotaObservationResetValue(observation.ResetAtMS),
+		observation.Status, observation.ObservedAtMS, observation.EventKey, createdAtMS, source); err != nil {
 		return fmt.Errorf("insert quota observation %s/%s: %w", observation.EventKey, observation.WindowKind, err)
 	}
 	return nil
@@ -113,7 +141,7 @@ func (writer *quotaObservationWriter) write(ctx context.Context, observation quo
 // shouldRecordQuotaObservation is the dedup rule: a reading that repeats the
 // newest one is dropped, but a changed percentage, a changed reset instant, or a
 // heartbeat interval since the newest reading is kept.
-func shouldRecordQuotaObservation(observation quota.PassiveObservation, recentUsedPercent float64, recentResetAt sql.NullInt64, recentObservedAt int64) bool {
+func shouldRecordQuotaObservation(observation quotaObservationInsert, recentUsedPercent float64, recentResetAt sql.NullInt64, recentObservedAt int64) bool {
 	if observation.UsedPercent != recentUsedPercent {
 		return true
 	}
@@ -135,6 +163,24 @@ func quotaObservationResetValue(value *int64) any {
 		return nil
 	}
 	return *value
+}
+
+// passiveObservationInsert converts a parsed header reading into a storable row.
+func passiveObservationInsert(observation quota.PassiveObservation) quotaObservationInsert {
+	return quotaObservationInsert{
+		AuthIndex:     observation.AuthIndex,
+		Provider:      observation.Provider,
+		WindowKind:    observation.WindowKind,
+		Scope:         quota.ObservationScopeStandard,
+		Model:         "",
+		WindowMinutes: observation.WindowMinutes,
+		UsedPercent:   observation.UsedPercent,
+		ResetAtMS:     observation.ResetAtMS,
+		Status:        observation.Status,
+		ObservedAtMS:  observation.ObservedAtMS,
+		EventKey:      observation.EventKey,
+		Source:        quota.ObservationSourcePassive,
+	}
 }
 
 // BackfillQuotaObservations folds retained request records that predate the
@@ -199,7 +245,7 @@ func (r *Repository) BackfillQuotaObservations(ctx context.Context, batchSize in
 		}
 		event := usage.Event{AuthIndex: authIndex, EventKey: eventKey, TimestampMS: observedAt, ResponseHeaders: storedHeaders}
 		for _, observation := range quota.ObservationsFromHeaders(event) {
-			if err := writer.write(ctx, observation, createdMS); err != nil {
+			if err := writer.write(ctx, passiveObservationInsert(observation), createdMS); err != nil {
 				rows.Close()
 				return 0, err
 			}
@@ -251,9 +297,13 @@ func (r *Repository) ListQuotaObservations(ctx context.Context, filter QuotaObse
 		conditions = append(conditions, "window_kind = ?")
 		arguments = append(arguments, filter.WindowKind)
 	}
+	if filter.Source != "" {
+		conditions = append(conditions, "source = ?")
+		arguments = append(arguments, filter.Source)
+	}
 	arguments = append(arguments, limit+1)
 	rows, err := r.SQL().QueryContext(ctx, `
-		SELECT auth_index, provider, window_kind, window_minutes, used_percent, reset_at_ms, status, observed_at_ms
+		SELECT auth_index, provider, window_kind, scope, model, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, source
 		FROM quota_observations
 		WHERE `+strings.Join(conditions, " AND ")+`
 		ORDER BY observed_at_ms ASC, id ASC
@@ -267,7 +317,8 @@ func (r *Repository) ListQuotaObservations(ctx context.Context, filter QuotaObse
 		var observation quotaObservationRow
 		var resetAt sql.NullInt64
 		if err := rows.Scan(&observation.AuthIndex, &observation.Provider, &observation.WindowKind,
-			&observation.WindowMinutes, &observation.UsedPercent, &resetAt, &observation.Status, &observation.ObservedAtMS); err != nil {
+			&observation.Scope, &observation.Model, &observation.WindowMinutes, &observation.UsedPercent,
+			&resetAt, &observation.Status, &observation.ObservedAtMS, &observation.Source); err != nil {
 			return nil, false, fmt.Errorf("scan quota observation: %w", err)
 		}
 		if resetAt.Valid {
@@ -297,4 +348,141 @@ func (r *Repository) CountQuotaObservations(ctx context.Context) (int64, error) 
 		return 0, fmt.Errorf("count quota observations: %w", err)
 	}
 	return count, nil
+}
+
+// RecordActiveQuotaObservations writes the windows a completed refresh produced
+// into the observation timeline, one transaction for the batch.
+//
+// It is called from the same persistence step as the snapshot, so a manual
+// refresh, an MCP refresh and the scheduler all leave the same evidence. Rows
+// are inserted with OR IGNORE, so re-running a refresh at the same instant is
+// idempotent through the synthetic event key.
+func (r *Repository) RecordActiveQuotaObservations(ctx context.Context, value *quota.NormalizedQuota) (int, error) {
+	if r == nil || r.SQL() == nil {
+		return 0, errors.New("repository is not initialized")
+	}
+	active := quota.ActiveObservationsFromQuota(value)
+	if len(active) == 0 {
+		return 0, nil
+	}
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin active observation write: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	writer, err := newQuotaObservationWriter(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	defer writer.close()
+	createdMS := time.Now().UnixMilli()
+	for _, observation := range active {
+		row := quotaObservationInsert{
+			AuthIndex:     observation.AuthIndex,
+			Provider:      observation.Provider,
+			WindowKind:    observation.WindowKind,
+			Scope:         observation.Scope,
+			Model:         observation.Model,
+			WindowMinutes: observation.WindowMinutes,
+			UsedPercent:   observation.UsedPercent,
+			ResetAtMS:     observation.ResetAtMS,
+			ObservedAtMS:  observation.ObservedAtMS,
+			EventKey:      observation.EventKey,
+			Source:        quota.ObservationSourceActive,
+		}
+		if err := writer.write(ctx, row, createdMS); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit active observations: %w", err)
+	}
+	return len(active), nil
+}
+
+// LatestStandardPassiveObservations returns, per auth index and passive window
+// kind, the newest standard passive row. It is the read the window overlay and
+// the scheduler's passive-freshness check share.
+func (r *Repository) LatestStandardPassiveObservations(ctx context.Context, authIndexes []string) (map[string]map[string]quotaObservationRow, error) {
+	result := map[string]map[string]quotaObservationRow{}
+	if r == nil || r.SQL() == nil || len(authIndexes) == 0 {
+		return result, nil
+	}
+	valid := make([]string, 0, len(authIndexes))
+	for _, authIndex := range authIndexes {
+		if trimmed := strings.TrimSpace(authIndex); trimmed != "" {
+			valid = append(valid, trimmed)
+		}
+	}
+	if len(valid) == 0 {
+		return result, nil
+	}
+	placeholders := strings.Repeat("?,", len(valid))
+	placeholders = placeholders[:len(placeholders)-1]
+	arguments := make([]any, 0, len(valid))
+	for _, authIndex := range valid {
+		arguments = append(arguments, authIndex)
+	}
+	rows, err := r.SQL().QueryContext(ctx, `
+		SELECT auth_index, provider, window_kind, scope, model, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, source
+		FROM quota_observations
+		WHERE source = '`+quota.ObservationSourcePassive+`' AND scope = '`+quota.ObservationScopeStandard+`'
+		  AND window_kind IN (?, ?) AND auth_index IN (`+placeholders+`)
+		ORDER BY observed_at_ms DESC, id DESC`,
+		append([]any{quota.PassiveWindowFiveHour, quota.PassiveWindowWeekly}, arguments...)...)
+	if err != nil {
+		return result, fmt.Errorf("query latest passive observations: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var observation quotaObservationRow
+		var resetAt sql.NullInt64
+		if err := rows.Scan(&observation.AuthIndex, &observation.Provider, &observation.WindowKind,
+			&observation.Scope, &observation.Model, &observation.WindowMinutes, &observation.UsedPercent,
+			&resetAt, &observation.Status, &observation.ObservedAtMS, &observation.Source); err != nil {
+			return result, fmt.Errorf("scan latest passive observation: %w", err)
+		}
+		if resetAt.Valid {
+			value := resetAt.Int64
+			observation.ResetAtMS = &value
+		}
+		byKind, ok := result[observation.AuthIndex]
+		if !ok {
+			byKind = map[string]quotaObservationRow{}
+			result[observation.AuthIndex] = byKind
+		}
+		// The query is ordered newest-first, so the first row seen for a kind is
+		// the one to keep.
+		if _, exists := byKind[observation.WindowKind]; !exists {
+			byKind[observation.WindowKind] = observation
+		}
+	}
+	return result, rows.Err()
+}
+
+// CountUsageEventsByAuthIndex counts the requests each credential served since an
+// instant, in one grouped read. The scheduler uses it to tier credentials without
+// one query per credential.
+func (r *Repository) CountUsageEventsByAuthIndex(ctx context.Context, instanceID string, sinceMS int64) (map[string]int64, error) {
+	result := map[string]int64{}
+	if r == nil || r.SQL() == nil {
+		return result, nil
+	}
+	rows, err := r.SQL().QueryContext(ctx, `
+		SELECT auth_index, COUNT(1) FROM usage_events
+		WHERE instance_id = ? AND auth_index <> '' AND timestamp_ms >= ?
+		GROUP BY auth_index`, strings.TrimSpace(instanceID), sinceMS)
+	if err != nil {
+		return result, fmt.Errorf("count usage events by auth index: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var authIndex string
+		var count int64
+		if err := rows.Scan(&authIndex, &count); err != nil {
+			return result, fmt.Errorf("scan usage event count: %w", err)
+		}
+		result[authIndex] = count
+	}
+	return result, rows.Err()
 }

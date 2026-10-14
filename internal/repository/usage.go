@@ -306,7 +306,7 @@ func (r *Repository) CommitUsageDecoded(ctx context.Context, decoded []UsageDeco
 		// came from, so a request can never be stored without the quota reading
 		// its own headers published.
 		for _, observation := range quota.ObservationsFromHeaders(event) {
-			if errObs := observationWriter.write(ctx, observation, createdMS); errObs != nil {
+			if errObs := observationWriter.write(ctx, passiveObservationInsert(observation), createdMS); errObs != nil {
 				return 0, errObs
 			}
 		}
