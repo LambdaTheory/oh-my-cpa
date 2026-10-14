@@ -538,6 +538,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 
 	quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 	h.attachWindowCapacity(ctx, &normalized, nowMS)
+	h.overlayPassiveObservations(ctx, &normalized)
 
 	var history []repository.QuotaSnapshotRecord
 	if h.repo != nil {
@@ -674,6 +675,7 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 		h.attachWindowCapacity(ctx, &normalized, nowMS)
+		h.overlayPassiveObservations(ctx, &normalized)
 
 		switch normalized.Status {
 		case "healthy":
