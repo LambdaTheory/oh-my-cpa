@@ -4,6 +4,8 @@ services:
     container_name: ${OMCPA_CONTAINER_NAME:-oh-my-cpa}
     user: "10001:10001"
     read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true
     cap_drop:
