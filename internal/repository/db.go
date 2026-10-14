@@ -454,7 +454,10 @@ func RestoreBackupSmoke(ctx context.Context, backupPath string, cipher *appcrypt
 	if err != nil {
 		return fmt.Errorf("decrypt backup: %w", err)
 	}
-	temporaryDirectory, err := os.MkdirTemp("", "oh-my-cpa-restore-")
+	// Restore beside the backup rather than in the system temp directory: the
+	// container runs with a read-only root filesystem, and the backup directory
+	// is on the writable data volume that already passed the free-space check.
+	temporaryDirectory, err := os.MkdirTemp(filepath.Dir(backupPath), ".restore-")
 	if err != nil {
 		return fmt.Errorf("create restore directory: %w", err)
 	}
