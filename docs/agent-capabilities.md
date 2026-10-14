@@ -372,6 +372,12 @@ path, and it is refused in demo mode. The Agent page's **Connect** action opens 
 deployment's own address with configuration for Claude Code, Codex and JSON-configured
 clients.
 
+A deployment that has set `OMCPA_MCP_READONLY_KEY` may present it the same way
+(`--header "Authorization: Bearer $OMCPA_MCP_READONLY_KEY"`). It reaches a second server that
+lists and runs only `read` capabilities, masks email-shaped account labels in its results, and
+cannot sign in to the console, approve an operation, or run a write tool. See
+[Read-only MCP key](#read-only-mcp-key).
+
 **Local, over stdio.** For clients that only speak stdio, the binary bridges to the
 capability HTTP endpoints:
 
@@ -419,10 +425,19 @@ can also log in to the console. Use MCP only with agents and hosts you would tru
 the console itself, serve the console over HTTPS before connecting one remotely, and
 rotate the key if that trust changes.
 
+`OMCPA_MCP_READONLY_KEY` covers the opposite case: an agent that should read fleet
+analytics but not administer. It is a separate bearer credential for the same endpoint,
+holds no session and approves nothing, lists and runs only `read` capabilities, and its
+results mask the local part of email-shaped account labels. See
+[Read-only MCP key](#read-only-mcp-key) (ADR 0094).
+
 Tests: `internal/mcpbridge/bridge_test.go` (stdio round trip, transport refusals,
-approval link, status wait, refusal codes), `internal/api/agent_mcp_test.go` (the
-endpoint end to end: credentials, catalogue, read, prepare, status) and the
-`agent-external` browser scenario (authorization screen and guide).
+approval link, status wait, refusal codes, the complete tool schema),
+`internal/api/agent_mcp_test.go` (the endpoint end to end: credentials, catalogue, read,
+prepare, status), `internal/api/agent_readonly_test.go` (the read-only key's read-only
+catalogue and write refusal), `internal/quota/passive_test.go` and
+`internal/repository/quota_observations_test.go` (the parser and the observation store) and
+the `agent-external` browser scenario (authorization screen and guide).
 
 ### Pricing provider membership
 
@@ -558,6 +573,36 @@ history and unavailable usage return `scope_unknown`, `history_unavailable` and
 history, changed scopes/periods and early-reset cycles do not produce one. Costs use
 request-time prices and require 95% priced-request coverage; error percentages describe
 rounding only and must not be presented as statistical confidence. See ADR 0059.
+
+### Passive quota observations
+
+`quota_observations_list` is a low-risk read exposed to the Agent and MCP. It returns the
+quota windows upstreams published on request response headers (Codex `x-codex-*`, Anthropic
+`anthropic-ratelimit-unified-*`), oldest first, each row one reading at one instant rather
+than a current balance. It accepts optional `auth_index`, `provider` (`codex` or `claude`),
+`window_kind` (`five_hour` or `weekly`), an inclusive `from_ms`/`to_ms` window (default the
+last seven days) and a `limit` (default 200, maximum 1000). A limit above 1000 is
+`invalid_parameters`; a matching history larger than the limit is refused with
+`tool_result_too_large` and a detail telling the caller to narrow the window, never truncated.
+`event_key` is not projected.
+
+The rows come from `quota_observations` (ADR 0094), an append-only history written in the same
+transaction as the request record. A window is recorded only when its percentage or reset
+changed, or every fifteen minutes while steady, and it rolls at a fixed 365-day horizon
+independent of request-record retention. A malformed or missing upstream reading produces no
+row: an absent window is unknown, never zero.
+
+### Read-only MCP key
+
+A deployment may set `OMCPA_MCP_READONLY_KEY` as a second bearer credential for the remote MCP
+endpoint. Holding it reaches only capabilities declared `read`; write and destructive tools are
+not listed and are refused with `capability_forbidden`, and the holder can neither sign in to
+the console nor approve an operation. Its principal is distinct from the operator's, so it
+cannot read an operation the management key prepared. For such callers the tool output masks the
+local part of an email-shaped account label in credential and provider display names (for
+example `vinsprite78@gmail.com` becomes `vin***@gmail.com`); `auth_index` is unchanged. The
+console and the management key keep seeing the real labels. The key must be at least sixteen
+characters and differ from the CPA management key, or start-up fails.
 
 ### Available model directory
 

@@ -574,6 +574,11 @@ const DICT: Record<string, [string, string]> = {
     "读取各凭据的套餐名称、档位、配额窗口与观测时间；缺失或过期的观测不代表额度为零。",
     "Reads subscription plan names and tiers, quota windows and when they were observed; a missing or stale observation is not zero quota.",
   ],
+  'agent.capability.quota_observations_list': ["查看配额观测历史", "Read quota observation history"],
+  'agent.capability.quota_observations_list.description': [
+    "按时间顺序读取上游在请求响应头中发布的配额窗口；每条是一次观测而非当前余额，窗口变动或每十五分钟心跳时会再次出现。可按凭据、提供方、窗口与时间范围筛选。",
+    "Reads the quota windows upstreams published on request response headers, oldest first. Each row is one reading, not a current balance; a window appears again whenever it moved or every fifteen minutes while steady. Filter by credential, provider, window or time window.",
+  ],
   'agent.capability.quota_redeem_credit': ["兑换重置额度", "Redeem a reset credit"],
   'agent.capability.quota_redeem_credit.description': [
     "为一个凭据消耗一次可用的 Codex 重置额度。",

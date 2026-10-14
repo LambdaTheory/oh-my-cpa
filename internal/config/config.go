@@ -32,6 +32,11 @@ type Config struct {
 	RequestTimeout time.Duration
 	TLSSkipVerify  bool
 	Release        ReleaseConfig
+	// MCPReadOnlyKey, when set, is a second bearer credential the MCP endpoint
+	// accepts: it reaches read capabilities only and sees account labels masked.
+	// Empty disables it. It must be at least 16 characters and differ from the
+	// management key.
+	MCPReadOnlyKey string
 	// TrustedProxyCIDRs are the direct peer networks whose forwarding headers
 	// may be used for per-client login throttling. Empty means trust none.
 	TrustedProxyCIDRs []string
@@ -223,6 +228,20 @@ func Load() (Config, error) {
 		// wants; a deployment sets it.
 	}
 
+	readOnlyKey := strings.TrimSpace(os.Getenv("OMCPA_MCP_READONLY_KEY"))
+	if readOnlyKey != "" {
+		// A read-only key that a typo made identical to the management key, or
+		// that is short enough to guess, would silently become a full-authority
+		// credential. Refusing to start is the only safe reading of "optional
+		// but set": the deployment asked for it, so it must mean what it says.
+		if len(readOnlyKey) < 16 {
+			return Config{}, fmt.Errorf("OMCPA_MCP_READONLY_KEY must be at least 16 characters")
+		}
+		if readOnlyKey == strings.TrimSpace(os.Getenv("OMCPA_CPA_MANAGEMENT_KEY")) {
+			return Config{}, fmt.Errorf("OMCPA_MCP_READONLY_KEY must differ from the CPA management key")
+		}
+	}
+
 	usage, err := loadUsageConfig()
 	if err != nil {
 		return Config{}, err
@@ -267,6 +286,7 @@ func Load() (Config, error) {
 		DataDir:           dataDir,
 		DatabasePath:      databasePath,
 		MasterKey:         masterKey,
+		MCPReadOnlyKey:    readOnlyKey,
 		PublicURL:         publicURL,
 		Version:           envOr("OMCPA_VERSION", BuildVersion),
 		RequestTimeout:    timeout,

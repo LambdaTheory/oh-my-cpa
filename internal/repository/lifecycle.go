@@ -33,6 +33,9 @@ const (
 const (
 	// LifecycleUsageInbox rolls captured payloads once they have been decoded.
 	LifecycleUsageInbox = "usage_inbox"
+	// LifecycleQuotaObservations rolls passive quota observations at their own
+	// fixed horizon, which is longer than request-record retention.
+	LifecycleQuotaObservations = "quota_observations"
 )
 
 // LifecycleRule deletes one kind of row from a rolling table.
@@ -79,8 +82,9 @@ var TABLE_LIFECYCLES = map[string]TableLifecycle{
 			{Policy: LifecycleUsageDetail, Expired: `status = '` + InboxDiscarded + `' AND popped_at < ?`},
 		}},
 
-	"usage_facts_15m":               {Kind: LifecyclePermanent, Reason: "the dashboard's history; about one row per active dimension tuple per quarter hour"},
-	"usage_facts_daily":             {Kind: LifecyclePermanent, Reason: "the dashboard's history at the daily grain"},
+	"quota_observations": {Kind: LifecycleRolling, Reason: "passive quota windows, read as history beside request records",
+		Rules: []LifecycleRule{{Policy: LifecycleQuotaObservations, Expired: `observed_at_ms < ?`}}},
+	"usage_facts_15m": {Kind: LifecyclePermanent, Reason: "the dashboard's history; about one row per active dimension tuple per quarter hour"}, "usage_facts_daily": {Kind: LifecyclePermanent, Reason: "the dashboard's history at the daily grain"},
 	"audit_events":                  {Kind: LifecyclePermanent, Reason: "the audit trail grows with operator actions, not traffic"},
 	"model_price_versions":          {Kind: LifecyclePermanent, Reason: "every stored request cost references the version it was locked against"},
 	"pricing_channel_versions":      {Kind: LifecyclePermanent, Reason: "every stored request cost references the multiplier it was locked against"},

@@ -156,7 +156,7 @@ func (s *Service) registerOAuth(registry *capability.Registry) error {
 			return output, errors.New("tool_result_too_large")
 		}
 		for _, file := range files.Files {
-			output.Items = append(output.Items, Credential{safeLabel(file.Name), file.AuthIndex, file.Provider, file.Status, file.Disabled, s.revision(file)})
+			output.Items = append(output.Items, Credential{accountLabelForCaller(ctx, safeLabel(file.Name)), file.AuthIndex, file.Provider, file.Status, file.Disabled, s.revision(file)})
 		}
 		return output, err
 	}); err != nil {

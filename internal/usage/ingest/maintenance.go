@@ -44,7 +44,9 @@ type Maintenance struct {
 type MaintenanceStatus struct {
 	Running bool `json:"running"`
 	// Folded counts request records absorbed into the usage facts.
-	Folded      int64      `json:"folded"`
+	Folded int64 `json:"folded"`
+	// Observed counts request records swept for passive quota observations.
+	Observed    int64      `json:"observed"`
 	Purged      int64      `json:"purged"`
 	LastError   string     `json:"last_error,omitempty"`
 	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
@@ -104,6 +106,11 @@ func (m *Maintenance) Run(ctx context.Context) error {
 	// an upgrade that is the whole stored history.
 	m.aggregateOnce(ctx)
 
+	// Sweep the retained request records for passive quota observations. The
+	// stream began writing them live at its own migration, so this is what makes
+	// the history before it readable.
+	m.backfillQuotaOnce(ctx)
+
 	// isRetentionUnfinished carries a pass that stopped at its batch budget over to
 	// the next fold tick, so a backlog drains in minutes instead of one batch
 	// budget per hour.
@@ -114,6 +121,7 @@ func (m *Maintenance) Run(ctx context.Context) error {
 			return nil
 		case <-aggregate.C:
 			m.aggregateOnce(ctx)
+			m.backfillQuotaOnce(ctx)
 			if isRetentionUnfinished {
 				isRetentionUnfinished = !m.purgeOnce(ctx)
 			}
@@ -143,6 +151,29 @@ func (m *Maintenance) aggregateOnce(ctx context.Context) {
 	}
 }
 
+// backfillQuotaOnce sweeps retained request records for passive quota
+// observations, one bounded id range at a time, until it reaches the live tail.
+// A startup sweep is what makes the history before this stream's migration
+// readable; later sweeps pick up the remaining tail.
+func (m *Maintenance) backfillQuotaOnce(ctx context.Context) {
+	for ctx.Err() == nil {
+		observed, err := m.store.BackfillQuotaObservations(ctx, m.aggregateBatch)
+		if err != nil {
+			m.recordError(fmt.Errorf("backfill quota observations: %w", err))
+			return
+		}
+		if observed == 0 {
+			return
+		}
+		m.mu.Lock()
+		m.status.Observed += int64(observed)
+		m.mu.Unlock()
+		if observed < m.aggregateBatch {
+			return
+		}
+	}
+}
+
 // lifecycleCutoffs turns the configured retention into the instant each policy
 // deletes to.
 func (m *Maintenance) lifecycleCutoffs() map[string]int64 {
@@ -154,6 +185,10 @@ func (m *Maintenance) lifecycleCutoffs() map[string]int64 {
 		// entirely backed by request records or not at all.
 		cutoffs[repository.LifecycleUsageDetail] = (cutoff / repository.DayBucketMS) * repository.DayBucketMS
 	}
+	// Passive observations follow their own fixed horizon rather than the
+	// operator's request-record retention: they are the only record of a quota
+	// window once its request has rolled, so they are kept for a year.
+	cutoffs[repository.LifecycleQuotaObservations] = now.Add(-time.Duration(repository.QuotaObservationRetentionDays) * 24 * time.Hour).UnixMilli()
 	switch {
 	case m.inboxRetentionDays > 0:
 		cutoffs[repository.LifecycleUsageInbox] = now.Add(-time.Duration(m.inboxRetentionDays) * 24 * time.Hour).UnixMilli()

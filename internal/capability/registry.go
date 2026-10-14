@@ -20,7 +20,11 @@ type Principal struct {
 	ID      string
 	Adapter string
 	IsAdmin bool
-	Allowed map[string]bool
+	// IsReadOnly carries a caller that may run only read capabilities and sees
+	// account labels masked. It never grants anything: Allowed still lists the
+	// capabilities the caller may run.
+	IsReadOnly bool
+	Allowed    map[string]bool
 }
 
 func (p Principal) Allows(name string) bool { return p.IsAdmin || p.Allowed[name] }

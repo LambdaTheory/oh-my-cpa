@@ -18,16 +18,19 @@ import (
 const MCP_CONSOLE_URL_HEADER = "X-Omc-Console-Url"
 
 // executorBackend is the in-process side of the MCP endpoint: the same executor calls the
-// capability HTTP endpoints make, without a second HTTP hop.
-type executorBackend struct{ handler *Handler }
+// capability HTTP endpoints make, without a second HTTP hop. The principal is fixed when the
+// server is built, so a read-only server can list only the tools a read-only caller may run.
+type executorBackend struct {
+	handler   *Handler
+	principal capability.Principal
+}
 
 func (backend executorBackend) Catalog(context.Context) ([]*capability.Definition, error) {
-	h := backend.handler
-	return h.agent.executor.Registry.List(capability.Principal{Adapter: "mcp", IsAdmin: true}), nil
+	return backend.handler.agent.executor.Registry.List(backend.principal), nil
 }
 func (backend executorBackend) Invoke(ctx context.Context, name string, arguments json.RawMessage) (capability.Result, error) {
 	h := backend.handler
-	result, err := h.agent.executor.Invoke(ctx, h.mcpPrincipal(), name, arguments, "")
+	result, err := h.agent.executor.Invoke(ctx, backend.principal, name, arguments, "")
 	if err != nil {
 		return result, errors.New(capability.ErrorCode(err))
 	}
@@ -35,7 +38,7 @@ func (backend executorBackend) Invoke(ctx context.Context, name string, argument
 }
 func (backend executorBackend) Operation(ctx context.Context, id string) (capability.Operation, error) {
 	h := backend.handler
-	operation, err := h.agent.executor.Get(ctx, h.mcpPrincipal(), id)
+	operation, err := h.agent.executor.Get(ctx, backend.principal, id)
 	if err != nil {
 		return operation, errors.New("operation_not_found")
 	}
@@ -54,13 +57,21 @@ func (h *Handler) consoleURL(request *http.Request) string {
 	return scheme + "://" + request.Host + strings.TrimRight(h.cfg.BasePath, "/")
 }
 
-func (h *Handler) mcpHandler() (http.Handler, error) {
+func (h *Handler) mcpHandler(isReadOnly bool) (http.Handler, error) {
 	h.agent.mcpMu.Lock()
 	defer h.agent.mcpMu.Unlock()
-	if h.agent.mcp != nil {
-		return h.agent.mcp, nil
+	handler := h.agent.mcp
+	if isReadOnly {
+		handler = h.agent.mcpReadOnly
 	}
-	server, err := mcpbridge.NewServer(context.Background(), executorBackend{handler: h}, mcpbridge.Options{Version: h.cfg.Version, ConsoleURL: func(request *mcp.CallToolRequest) string {
+	if handler != nil {
+		return handler, nil
+	}
+	principal := h.mcpPrincipal()
+	if isReadOnly {
+		principal = h.readOnlyPrincipal()
+	}
+	server, err := mcpbridge.NewServer(context.Background(), executorBackend{handler: h, principal: principal}, mcpbridge.Options{Version: h.cfg.Version, ConsoleURL: func(request *mcp.CallToolRequest) string {
 		if request.Extra == nil {
 			return ""
 		}
@@ -69,14 +80,20 @@ func (h *Handler) mcpHandler() (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	h.agent.mcp = mcpbridge.NewHTTPHandler(func(*http.Request) *mcp.Server { return server })
-	return h.agent.mcp, nil
+	handler = mcpbridge.NewHTTPHandler(func(*http.Request) *mcp.Server { return server })
+	if isReadOnly {
+		h.agent.mcpReadOnly = handler
+	} else {
+		h.agent.mcp = handler
+	}
+	return handler, nil
 }
 
 // serveMCP is the capability registry as a Streamable HTTP MCP endpoint (ADR 0070).
 //
 // It accepts the management key as a bearer token and nothing else: a session cookie is not
-// an MCP credential, so a page open in the operator's browser cannot drive the endpoint.
+// an MCP credential, so a page open in the operator's browser cannot drive the endpoint. A
+// configured read-only key reaches a second server that offers only read tools.
 func (h *Handler) serveMCP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	if request.Header.Get("Authorization") == "" {
@@ -87,7 +104,7 @@ func (h *Handler) serveMCP(writer http.ResponseWriter, request *http.Request) {
 	if !h.authenticateBearer(writer, request) {
 		return
 	}
-	handler, err := h.mcpHandler()
+	handler, err := h.mcpHandler(h.readOnlyBearer(request))
 	if err != nil {
 		writePlaygroundError(writer, 503, "capability_unavailable")
 		return

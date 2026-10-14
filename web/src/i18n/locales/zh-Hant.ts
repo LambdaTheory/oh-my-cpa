@@ -404,6 +404,8 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "agent.capability.quota_clear_cooldown.description": "清除一個憑證的本機冷卻紀錄與 CPA 冷卻；不會恢復提供方額度。",
   "agent.capability.quota_list": "查看配額",
   "agent.capability.quota_list.description": "讀取各憑證的方案名稱、等級、配額視窗與觀測時間；缺失或過期的觀測不代表額度為零。",
+  "agent.capability.quota_observations_list": "查看配額觀測歷史",
+  "agent.capability.quota_observations_list.description": "按時間順序讀取上游在請求回應標頭中發布的配額視窗；每筆是一次觀測而非目前餘額，視窗變動或每十五分鐘心跳時會再次出現。可依憑證、提供方、視窗與時間範圍篩選。",
   "agent.capability.quota_redeem_credit": "兌換重置額度",
   "agent.capability.quota_redeem_credit.description": "為一個憑證消耗一次可用的 Codex 重置額度。",
   "agent.capability.quota_refresh": "重新整理配額",

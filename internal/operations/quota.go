@@ -50,6 +50,7 @@ func (s *Service) registerQuota(registry *capability.Registry) error {
 		output := Output{Items: []Quota{}}
 		for _, item := range items {
 			if input.AuthIndex == "" || item.AuthIndex == input.AuthIndex {
+				item.Name = accountLabelForCaller(ctx, item.Name)
 				output.Items = append(output.Items, item)
 			}
 		}

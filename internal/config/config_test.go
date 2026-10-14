@@ -65,7 +65,7 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_BASE_PATH", "OMCPA_DATA_DIR", "OMCPA_LISTEN_ADDR", "OMCPA_MASTER_KEY",
 		"OMCPA_PUBLIC_URL", "OMCPA_VERSION", "OMCPA_CPA_BASE_URL", "OMCPA_CPA_USAGE_ADDR",
 		"OMCPA_CPA_MANAGEMENT_KEY", "OMCPA_TRUSTED_PROXY_CIDRS", DemoModeEnv, "PORT",
-		"OMCPA_UPDATE_CHECK_ENABLED", "OMCPA_OMC_REPO", "OMCPA_CPA_REPO",
+		"OMCPA_UPDATE_CHECK_ENABLED", "OMCPA_OMC_REPO", "OMCPA_CPA_REPO", "OMCPA_MCP_READONLY_KEY",
 	} {
 		t.Setenv(name, "")
 	}
@@ -338,5 +338,28 @@ func TestLoadUsesBuildVersionUnlessOperatorOverridesIt(t *testing.T) {
 	}
 	if loaded.Version != "v0.2.0-fork" {
 		t.Fatalf("version = %q, want operator override", loaded.Version)
+	}
+}
+
+func TestLoadValidatesTheReadOnlyMCPKey(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_CPA_MANAGEMENT_KEY", "cpa-management-key-value")
+	// An absent key disables the feature.
+	cfg, err := Load()
+	if err != nil || cfg.MCPReadOnlyKey != "" {
+		t.Fatalf("absent read-only key = %q (%v), want disabled", cfg.MCPReadOnlyKey, err)
+	}
+	t.Setenv("OMCPA_MCP_READONLY_KEY", "too-short")
+	if _, err := Load(); err == nil {
+		t.Fatal("a short read-only key was accepted")
+	}
+	t.Setenv("OMCPA_MCP_READONLY_KEY", "cpa-management-key-value")
+	if _, err := Load(); err == nil {
+		t.Fatal("a read-only key equal to the management key was accepted")
+	}
+	t.Setenv("OMCPA_MCP_READONLY_KEY", "read-only-key-value-16")
+	cfg, err = Load()
+	if err != nil || cfg.MCPReadOnlyKey != "read-only-key-value-16" {
+		t.Fatalf("valid read-only key = %q (%v)", cfg.MCPReadOnlyKey, err)
 	}
 }

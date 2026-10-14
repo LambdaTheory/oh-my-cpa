@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func read[I, O any](registry *capability.Registry, name, description string, han
 	return capability.Register(registry, Meta(name, description, "read", "low"), nil, func(ctx context.Context, input I, _, _ string) (O, error) { return handler(ctx, input) })
 }
 func (s *Service) Register(registry *capability.Registry) error {
-	registrations := []func(*capability.Registry) error{s.registerUsage, s.registerKeys, s.registerConfig, s.registerProviders, s.registerProviderMutations, s.registerOAuth, s.registerQuota, s.registerQuotaActions, s.registerSystem, s.registerPricing, s.registerDatabase, s.registerTimezone, s.registerTpsCalculation, s.registerCustomIcons, s.registerModelSquare}
+	registrations := []func(*capability.Registry) error{s.registerUsage, s.registerKeys, s.registerConfig, s.registerProviders, s.registerProviderMutations, s.registerOAuth, s.registerQuota, s.registerQuotaObservations, s.registerQuotaActions, s.registerSystem, s.registerPricing, s.registerDatabase, s.registerTimezone, s.registerTpsCalculation, s.registerCustomIcons, s.registerModelSquare}
 	for _, register := range registrations {
 		if err := register(registry); err != nil {
 			return err
@@ -95,6 +96,38 @@ func safeLabel(value string) string {
 		value = value[:256]
 	}
 	return value
+}
+
+// accountEmailPattern matches an email-shaped account label. CPA names auth files after the
+// account, so a credential's display name often carries the operator's address.
+var accountEmailPattern = regexp.MustCompile(`([A-Za-z0-9._%+\-]+)@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})`)
+
+// accountLabelForCaller masks an email-shaped account label for a read-only caller. A
+// full-authority caller and the console keep seeing the real label; only the low-trust key's
+// tool results are redacted.
+func accountLabelForCaller(ctx context.Context, value string) string {
+	if !capability.IsReadOnly(ctx) {
+		return value
+	}
+	return maskAccountLabel(value)
+}
+
+// maskAccountLabel keeps the first three characters of the local part and the domain, enough
+// for an operator to recognize the account without the model reading the full address.
+func maskAccountLabel(value string) string {
+	return accountEmailPattern.ReplaceAllStringFunc(value, func(match string) string {
+		at := strings.LastIndex(match, "@")
+		if at <= 0 {
+			return match
+		}
+		local := []rune(match[:at])
+		if len(local) > 3 {
+			local = local[:3]
+		} else if len(local) > 1 {
+			local = local[:1]
+		}
+		return string(local) + "***@" + match[at+1:]
+	})
 }
 func queryContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, 10*time.Second)

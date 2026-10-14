@@ -249,7 +249,9 @@ func (e *Executor) execute(ctx context.Context, p Principal, definition *Definit
 		result.Code = "audit_write_failed"
 		return result
 	}
-	value, err := definition.Execute(ctx, args, revision, humanInput)
+	// A read-only caller's call is marked on the context so a read handler can
+	// withhold the account labels a full-authority caller still sees.
+	value, err := definition.Execute(WithReadOnly(ctx, p.IsReadOnly), args, revision, humanInput)
 	if err != nil {
 		result.Code = ErrorCode(err)
 		result.Detail = ErrorDetail(err)
