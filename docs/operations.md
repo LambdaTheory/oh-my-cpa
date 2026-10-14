@@ -64,6 +64,37 @@ a message naming the variable.
 | `OMCPA_USAGE_RETENTION_DAYS` | `90` | Days of request records (the request list and its detail) kept, `0` to keep them all. Ninety matches the request list's longest preset. Dashboard statistics do not depend on it: they are kept permanently as usage facts |
 | `OMCPA_USAGE_INBOX_RETENTION_DAYS` | `7` | Days a captured payload is kept after it was decoded into a request record, `0` to keep it as long as the record. Payloads are the largest part of the database and nothing reads them once decoded except a re-decode after a decoder fix |
 
+### Quota refresh scheduler
+
+The scheduler actively reads each refreshable credential's quota from its provider on a
+per-account cadence. A credential is watched, active, normal or idle according to how recently
+it served a request, and a window at or above the watch threshold is read most often. A
+credential whose standard window is already current through the passive observation stream is
+read no faster than `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL`, because its own request headers
+already carry the reading.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_QUOTA_SCHEDULER_ENABLED` | `true` | Run the background quota refresh scheduler. Off in demo mode |
+| `OMCPA_QUOTA_WATCH_INTERVAL` | `5m` | Interval for a credential with recent traffic and a window at or above `OMCPA_QUOTA_WATCH_USED_PERCENT` |
+| `OMCPA_QUOTA_ACTIVE_INTERVAL` | `15m` | Interval for a credential with recent traffic below the watch threshold |
+| `OMCPA_QUOTA_NORMAL_INTERVAL` | `30m` | Interval for a credential seen within `OMCPA_QUOTA_NORMAL_WINDOW` |
+| `OMCPA_QUOTA_IDLE_INTERVAL` | `2h` | Interval for a quiet credential |
+| `OMCPA_QUOTA_WATCH_USED_PERCENT` | `80` | Window share (0–100) that promotes an active credential to watched |
+| `OMCPA_QUOTA_WATCH_WINDOW` | `15m` | How recently a request counts as recent traffic for the watch and active tiers |
+| `OMCPA_QUOTA_NORMAL_WINDOW` | `2h` | How recently a request keeps a credential out of the idle tier |
+| `OMCPA_QUOTA_WINDOW_END_MARGIN` | `15m` | How close to a window's reset a read is forced so the next cycle has a previous-cycle reading |
+| `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL` | `60m` | Floor an interval is widened to when a fresh passive observation already covers the standard window |
+| `OMCPA_QUOTA_CREDENTIAL_FLOOR` | `10m` | Shortest time between two active reads of the same credential, whatever the tier says |
+| `OMCPA_QUOTA_REFRESH_CONCURRENCY` | `4` | Maximum simultaneous active reads; a single provider is always serialized at one |
+| `OMCPA_QUOTA_BACKOFF_BASE` | `5m` | First wait after an upstream 429 that carried no `Retry-After`; it doubles up to the maximum |
+| `OMCPA_QUOTA_BACKOFF_MAX` | `6h` | Ceiling on the 429 backoff. Must be at least the base |
+
+An upstream 429 parks the credential and its provider for the `Retry-After` (or the
+exponential wait) and is shared by the manual refresh endpoint and the MCP `quota_refresh`
+tool: while parked, both refuse with `rate_limited_backoff` and a retry time instead of
+probing the upstream again. The state is in memory only, so a restart clears it.
+
 ### Update checks and demo
 
 | Variable | Default | Purpose |

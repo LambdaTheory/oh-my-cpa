@@ -108,7 +108,7 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/cpa/configyaml` | The masked configuration view and per-value secret restoration, v8 file detection, and the plugin-system settings edit | — |
 | `internal/repository` | SQLite schema, migrations, queries, transactional invariants | `iconasset`, `crypto`, `domain`, `pricing`, `quota`, `security`, `usage` |
 | `internal/usage/ingest` | Collector loop, decode processor, usage-fact fold, passive-observation backfill and data-lifecycle maintenance | `repository`, `management`, `security`, `usage` |
-| `internal/quota` | Per-provider quota probes, normalization, and the passive response-header parser | `management`, `security`, `usage` |
+| `internal/quota` | Per-provider quota probes, normalization, the passive response-header parser, the active-observation projection, and the per-account refresh scheduler with its 429 backoff | `management`, `security`, `usage` |
 | `internal/release` | Published-version observation: version comparison, the release feed client, the stored index, and the project's star count for the header link | `repository` |
 | `internal/demo` | The publication fixture: an in-process CPA stand-in, the seeded history, and the capture state the console renders | `domain`, `pricing`, `quota`, `repository`, `security`, `usage`, `usage/ingest` |
 | `internal/capability` | Agent capability declarations, JSON Schema validation, permission/risk rules, pending-operation store, executor audit | `repository`, `crypto` |
@@ -2001,13 +2001,16 @@ there is no user-supplied URL or generic `/api-call` surface.
 Beside that refresh path, the rate-limit headers an upstream already publishes on every
 response are read without any probe. `internal/quota/passive.go` parses them, and
 `repository.CommitUsageDecoded` writes the resulting windows into `quota_observations`
-(migration 041) in the same transaction as the request record; a malformed or missing window
-writes nothing. Rows deduplicate per credential and window (write on a changed percentage or
-reset, or every fifteen minutes). The maintenance loop backfills retained request records
-through a `quota_observations` watermark in `usage_aggregation_checkpoints`, and the table
-rolls at a fixed 365-day horizon through `TABLE_LIFECYCLES`, independent of request-record
-retention. `quota_snapshots` remains the current normalized reading; `quota_observations` is
-append-only history (ADR 0094).
+(migration 041, extended by 042 with `source`, `scope` and `model`) in the same transaction as
+the request record; a malformed or missing window writes nothing. Rows deduplicate per
+credential, window, scope and model (write on a changed percentage or reset, or every fifteen
+minutes), and a completed active refresh records its windows under `source='active'`. The
+maintenance loop backfills retained request records through a `quota_observations` watermark in
+`usage_aggregation_checkpoints`, and the table rolls at a fixed 365-day horizon through
+`TABLE_LIFECYCLES`, independent of request-record retention. At read time, a standard five-hour
+or weekly window with a newer passive observation is shown from that reading, marked with its
+instant and source, while the capacity estimate stays on the snapshot. `quota_snapshots` remains
+the current normalized reading; `quota_observations` is append-only history (ADR 0094, ADR 0095).
 
 Kimi international credentials use the single allowlisted
 `https://api.kimi.ai/coding/v1/usages` endpoint rather than the domestic Kimi host.
@@ -2182,6 +2185,7 @@ fix a defect with a new migration, never by editing `schema_migrations`
 | HTTP server | `app.Run` | Fatal; shutdown drains 10s |
 | Usage pipeline | `app.Run` → `ingest.Pipeline` | Fatal; a stopped collector must not serve silently stale numbers. `Run` returns only after every stage has stopped, and `app.Run` waits for it before the database closes, whichever loop ended first |
 | Pricing sync | `app.Run` → `pricing.Service` | Best effort; prices go stale, capture continues |
+| Quota refresh scheduler | `app.Run` → `quota.Scheduler` | Best effort; readings go stale, capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0095) |
 | Release sweep | `app.Run` → `release.Service` | Best effort; the stored index and its timestamps go stale, and the page says so. Every six hours, first run delayed by one interval so a restart loop cannot become a request loop |
 | Usage-fact fold + data lifecycle | `ingest.Maintenance` inside the pipeline | Retried on its own interval; errors surface in ingest status |
 | Database maintenance | `repository.MaintenanceService`, started by an operator request | Never started automatically; a job's outcome is retained in process memory and recorded on the audit trail. The retained record is served by both reads, and the console shows only a job it observed rather than that record — see §11 |

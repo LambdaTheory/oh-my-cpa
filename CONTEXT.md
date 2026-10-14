@@ -411,6 +411,24 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   produces no observation, and an absent window is unknown, never zero. Observations are
   kept for a fixed 365 days, independent of Request Record retention, and the
   `quota_observations_list` read capability exposes them (ADR 0094).
+- **Active Quota Observation**: A quota window recorded from a refresh this deployment
+  performed, stored in the same timeline as a Passive Quota Observation but under
+  `source='active'`, with the window's scope and model. A refresh records one for each
+  window that states a period and a used share; a refresh that failed records none. It is
+  how a quiet credential, a model-scoped window or a closed cycle becomes part of the
+  history the passive stream cannot describe (ADR 0095).
+- **Quota Refresh Tier**: The per-account cadence the background scheduler reads a
+  credential at: watched, active, normal or idle, chosen by how recently it served a
+  request and the highest used share among its windows. A credential whose standard window
+  is already current through the passive stream is read no faster than the passive floor.
+  A window whose reset has just passed is read once, and a window close to its reset with
+  traffic but no recorded reading is read so the next cycle has a previous-cycle figure
+  (ADR 0095).
+- **Quota Refresh Backoff**: The park applied after an upstream answers 429, for its
+  `Retry-After` or a doubling wait when none is given. It is shared by the scheduler, the
+  manual refresh endpoint and the `quota_refresh` capability: while parked, each refuses
+  with `rate_limited_backoff` and a retry time instead of probing the upstream. It is held
+  in memory only, so a restart clears it (ADR 0095).
 - **Unpublished Quota Reading**: A quota observation a provider answered without
   publishing any window — the endpoint replied successfully, and the document
   carried nothing this deployment can meter. It is recorded and preserved as its
