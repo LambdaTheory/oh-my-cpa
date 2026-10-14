@@ -399,6 +399,25 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
+	// The quota scheduler actively refreshes each credential on a per-account
+	// cadence. It is best-effort like pricing: losing it leaves quota readings
+	// stale, but never breaks request capture or the HTTP server. It performs
+	// outbound probes, so a demo never runs it.
+	if !a.cfg.IsDemoMode && a.cfg.Quota.SchedulerEnabled {
+		if scheduler := a.handler.QuotaScheduler(a.logger); scheduler != nil {
+			go func() {
+				a.logger.Info("quota refresh scheduler started",
+					"watch_interval", a.cfg.Quota.WatchInterval.String(),
+					"active_interval", a.cfg.Quota.ActiveInterval.String(),
+					"normal_interval", a.cfg.Quota.NormalInterval.String(),
+					"idle_interval", a.cfg.Quota.IdleInterval.String())
+				if err := scheduler.Run(runCtx); err != nil {
+					a.logger.Warn("quota refresh scheduler stopped", "error", err)
+				}
+			}()
+		}
+	}
+
 	// The release sweep is best-effort in the same way and for the same reason: a
 	// version that was not checked is stale information, not a broken deployment.
 	// OMCPA_UPDATE_CHECK_ENABLED=false switches it off while leaving the page's own

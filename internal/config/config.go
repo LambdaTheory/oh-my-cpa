@@ -27,6 +27,7 @@ type Config struct {
 	CPA            CPAConfig
 	MasterKey      string
 	Usage          UsageConfig
+	Quota          QuotaConfig
 	PublicURL      string
 	Version        string
 	RequestTimeout time.Duration
@@ -112,6 +113,68 @@ type UsageConfig struct {
 	// CollectErrors also subscribes to CPA's push-only errors channel.
 	CollectErrors bool
 }
+
+// QuotaConfig controls the background per-account quota refresh scheduler. It
+// decides how often each credential's quota is actively read from its provider
+// based on how recently it served traffic; the console and MCP keep working
+// without it and refresh on demand.
+type QuotaConfig struct {
+	// SchedulerEnabled gates the background loop only.
+	SchedulerEnabled bool
+	// Tier intervals. A credential that served a request in WatchWindow and has
+	// a window at or above WatchUsedPercent is watched most often; a credential
+	// with recent traffic is active; one seen within NormalWindow is normal; and
+	// a quiet credential is idle.
+	WatchInterval  time.Duration
+	ActiveInterval time.Duration
+	NormalInterval time.Duration
+	IdleInterval   time.Duration
+	// WatchUsedPercent is the window share that promotes an active credential to
+	// watched.
+	WatchUsedPercent float64
+	// WatchWindow is how recently a request counts as recent traffic; the same
+	// window decides watch and active.
+	WatchWindow time.Duration
+	// NormalWindow is how recently a request keeps a credential out of idle.
+	NormalWindow time.Duration
+	// WindowEndMargin is how close to a window's reset a refresh is forced so the
+	// next cycle has a previous-cycle reading to estimate from.
+	WindowEndMargin time.Duration
+	// PassiveFreshInterval is the floor an interval is widened to when a fresh
+	// passive observation already covers the standard window.
+	PassiveFreshInterval time.Duration
+	// CredentialFloor is the shortest time between two active queries of the same
+	// credential, whatever the tier says.
+	CredentialFloor time.Duration
+	// GlobalConcurrency bounds simultaneous active refreshes; a single provider is
+	// always serialized at one.
+	GlobalConcurrency int
+	// BackoffBase and BackoffMax shape the exponential fallback used when an
+	// upstream answers 429 without a Retry-After.
+	BackoffBase time.Duration
+	BackoffMax  time.Duration
+}
+
+// Quota scheduler defaults. The tiers are deliberately slower than the passive
+// stream: a credential's own request headers already keep an active window
+// fresh, so the active probes exist for quiet credentials and for the cycles the
+// passive stream cannot close.
+const (
+	DefaultQuotaWatchInterval       = 5 * time.Minute
+	DefaultQuotaActiveInterval      = 15 * time.Minute
+	DefaultQuotaNormalInterval      = 30 * time.Minute
+	DefaultQuotaIdleInterval        = 2 * time.Hour
+	DefaultQuotaWatchUsedPercent    = 80.0
+	DefaultQuotaWatchWindow         = 15 * time.Minute
+	DefaultQuotaNormalWindow        = 2 * time.Hour
+	DefaultQuotaWindowEndMargin     = 15 * time.Minute
+	DefaultQuotaPassiveFresh        = 60 * time.Minute
+	DefaultQuotaCredentialFloor     = 10 * time.Minute
+	DefaultQuotaGlobalConcurrency   = 4
+	DefaultQuotaBackoffBase         = 5 * time.Minute
+	DefaultQuotaBackoffMax          = 6 * time.Hour
+	DefaultQuotaResetLookbackWindow = time.Hour
+)
 
 type CPAConfig struct {
 	BaseURL       string
@@ -246,6 +309,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	quotaConfig, err := loadQuotaConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	releaseConfig, err := loadReleaseConfig()
 	if err != nil {
 		return Config{}, err
@@ -256,6 +323,9 @@ func Load() (Config, error) {
 		// exist and overwrite the fixture with nothing.
 		usage.Enabled = false
 		usage.Mode = "off"
+		// A demonstration must not reach any upstream. The scheduler is a network
+		// loop, so it is switched off here rather than left to the fixture to absorb.
+		quotaConfig.SchedulerEnabled = false
 	}
 
 	cpa := CPAConfig{
@@ -282,6 +352,7 @@ func Load() (Config, error) {
 	return Config{
 		ListenAddr:        listenAddr,
 		Usage:             usage,
+		Quota:             quotaConfig,
 		BasePath:          basePath,
 		DataDir:           dataDir,
 		DatabasePath:      databasePath,
@@ -478,4 +549,107 @@ func loadUsageConfig() (UsageConfig, error) {
 		InboxRetentionDays: inboxRetentionDays,
 		CollectErrors:      collectErrors,
 	}, nil
+}
+
+// loadQuotaConfig reads the background quota scheduler settings. Every interval
+// and threshold the tier rules use is overridable, because the right cadence
+// depends on how many credentials a deployment holds and how tightly its
+// providers meter.
+func loadQuotaConfig() (QuotaConfig, error) {
+	enabled, err := parseBoolEnv("OMCPA_QUOTA_SCHEDULER_ENABLED", true)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	watchInterval, err := parseDurationEnv("OMCPA_QUOTA_WATCH_INTERVAL", DefaultQuotaWatchInterval)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	activeInterval, err := parseDurationEnv("OMCPA_QUOTA_ACTIVE_INTERVAL", DefaultQuotaActiveInterval)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	normalInterval, err := parseDurationEnv("OMCPA_QUOTA_NORMAL_INTERVAL", DefaultQuotaNormalInterval)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	idleInterval, err := parseDurationEnv("OMCPA_QUOTA_IDLE_INTERVAL", DefaultQuotaIdleInterval)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	watchWindow, err := parseDurationEnv("OMCPA_QUOTA_WATCH_WINDOW", DefaultQuotaWatchWindow)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	normalWindow, err := parseDurationEnv("OMCPA_QUOTA_NORMAL_WINDOW", DefaultQuotaNormalWindow)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	windowEndMargin, err := parseDurationEnv("OMCPA_QUOTA_WINDOW_END_MARGIN", DefaultQuotaWindowEndMargin)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	passiveFresh, err := parseDurationEnv("OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL", DefaultQuotaPassiveFresh)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	credentialFloor, err := parseDurationEnv("OMCPA_QUOTA_CREDENTIAL_FLOOR", DefaultQuotaCredentialFloor)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	backoffBase, err := parseDurationEnv("OMCPA_QUOTA_BACKOFF_BASE", DefaultQuotaBackoffBase)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	backoffMax, err := parseDurationEnv("OMCPA_QUOTA_BACKOFF_MAX", DefaultQuotaBackoffMax)
+	if err != nil {
+		return QuotaConfig{}, err
+	}
+	if backoffMax < backoffBase {
+		return QuotaConfig{}, fmt.Errorf("OMCPA_QUOTA_BACKOFF_MAX must be at least OMCPA_QUOTA_BACKOFF_BASE: %q < %q", backoffMax, backoffBase)
+	}
+	watchUsedPercent := DefaultQuotaWatchUsedPercent
+	if raw := strings.TrimSpace(os.Getenv("OMCPA_QUOTA_WATCH_USED_PERCENT")); raw != "" {
+		parsed, parseErr := strconv.ParseFloat(raw, 64)
+		if parseErr != nil || parsed < 0 || parsed > 100 {
+			return QuotaConfig{}, fmt.Errorf("OMCPA_QUOTA_WATCH_USED_PERCENT must be between 0 and 100: %q", raw)
+		}
+		watchUsedPercent = parsed
+	}
+	concurrency := DefaultQuotaGlobalConcurrency
+	if raw := strings.TrimSpace(os.Getenv("OMCPA_QUOTA_REFRESH_CONCURRENCY")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 32 {
+			return QuotaConfig{}, fmt.Errorf("OMCPA_QUOTA_REFRESH_CONCURRENCY must be between 1 and 32: %q", raw)
+		}
+		concurrency = parsed
+	}
+	return QuotaConfig{
+		SchedulerEnabled:     enabled,
+		WatchInterval:        watchInterval,
+		ActiveInterval:       activeInterval,
+		NormalInterval:       normalInterval,
+		IdleInterval:         idleInterval,
+		WatchUsedPercent:     watchUsedPercent,
+		WatchWindow:          watchWindow,
+		NormalWindow:         normalWindow,
+		WindowEndMargin:      windowEndMargin,
+		PassiveFreshInterval: passiveFresh,
+		CredentialFloor:      credentialFloor,
+		GlobalConcurrency:    concurrency,
+		BackoffBase:          backoffBase,
+		BackoffMax:           backoffMax,
+	}, nil
+}
+
+// parseDurationEnv reads a positive duration, or the fallback when it is unset.
+func parseDurationEnv(name string, fallback time.Duration) (time.Duration, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("%s must be a positive duration: %q", name, raw)
+	}
+	return parsed, nil
 }

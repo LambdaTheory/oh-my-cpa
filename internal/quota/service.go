@@ -209,7 +209,18 @@ func (s *Service) SafeApiCall(ctx context.Context, authIndex, method, targetURL 
 		Data:      data,
 	}
 
-	return s.client.ApiCall(ctx, req)
+	resp, err := s.client.ApiCall(ctx, req)
+	if err != nil {
+		return resp, err
+	}
+	// A 429 is not a generic failure: it names how long the credential must not
+	// be probed again. It is turned into a typed error here so every caller can
+	// park the credential instead of retrying into the same refusal.
+	if resp.StatusCode == http.StatusTooManyRequests {
+		retryAfter, hasRetryAfter := parseRetryAfter(resp.Header)
+		return resp, &RateLimitError{AuthIndex: strings.TrimSpace(authIndex), RetryAfter: retryAfter, HasRetryAfter: hasRetryAfter}
+	}
+	return resp, nil
 }
 
 // sanitizeError keeps the operator-facing text short. CPA error bodies are not a
@@ -409,6 +420,17 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 			result.ResetCredits = prior.ResetCredits
 		} else {
 			result.Status = "error"
+		}
+		// A 429 is propagated as a typed error on top of the stale/error result:
+		// callers park the credential for RetryAfter, while the result still
+		// carries the prior reading so the console does not lose it.
+		if rateErr := rateLimitFrom(fetchErr); rateErr != nil {
+			rateErr.Provider = stdProvider
+			if rateErr.AuthIndex == "" {
+				rateErr.AuthIndex = authIndex
+			}
+			EvaluateStatusAndRecommendation(result, nowMS)
+			return result, rateErr
 		}
 	} else if len(result.Windows) == 0 {
 		// The read succeeded and the provider published no window. Recording that separately is
@@ -752,6 +774,12 @@ func (s *Service) fetchXaiQuota(ctx context.Context, file management.AuthFile, n
 	// Neither document carried a plan and the paid probe did not recognise the credential either,
 	// so the reason to report is whichever read actually failed. A billing read that answered is
 	// not that reason, which is why the status test comes before the transport one.
+	if rateErr := rateLimitFrom(err); rateErr != nil {
+		return nil, nil, rateErr
+	}
+	if rateErr := rateLimitFrom(creditsErr); rateErr != nil {
+		return nil, nil, rateErr
+	}
 	if resp.StatusCode != 0 && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		normBody, _ := resp.NormalizedBody()
 		return nil, nil, errors.New(sanitizeError(resp.StatusCode, normBody))

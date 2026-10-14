@@ -66,6 +66,11 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_PUBLIC_URL", "OMCPA_VERSION", "OMCPA_CPA_BASE_URL", "OMCPA_CPA_USAGE_ADDR",
 		"OMCPA_CPA_MANAGEMENT_KEY", "OMCPA_TRUSTED_PROXY_CIDRS", DemoModeEnv, "PORT",
 		"OMCPA_UPDATE_CHECK_ENABLED", "OMCPA_OMC_REPO", "OMCPA_CPA_REPO", "OMCPA_MCP_READONLY_KEY",
+		"OMCPA_QUOTA_SCHEDULER_ENABLED", "OMCPA_QUOTA_WATCH_INTERVAL", "OMCPA_QUOTA_ACTIVE_INTERVAL",
+		"OMCPA_QUOTA_NORMAL_INTERVAL", "OMCPA_QUOTA_IDLE_INTERVAL", "OMCPA_QUOTA_WATCH_USED_PERCENT",
+		"OMCPA_QUOTA_WATCH_WINDOW", "OMCPA_QUOTA_NORMAL_WINDOW", "OMCPA_QUOTA_WINDOW_END_MARGIN",
+		"OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL", "OMCPA_QUOTA_CREDENTIAL_FLOOR", "OMCPA_QUOTA_REFRESH_CONCURRENCY",
+		"OMCPA_QUOTA_BACKOFF_BASE", "OMCPA_QUOTA_BACKOFF_MAX",
 	} {
 		t.Setenv(name, "")
 	}
@@ -361,5 +366,63 @@ func TestLoadValidatesTheReadOnlyMCPKey(t *testing.T) {
 	cfg, err = Load()
 	if err != nil || cfg.MCPReadOnlyKey != "read-only-key-value-16" {
 		t.Fatalf("valid read-only key = %q (%v)", cfg.MCPReadOnlyKey, err)
+	}
+}
+
+func TestLoadQuotaSchedulerDefaultsAndOverrides(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != DefaultQuotaWatchInterval || cfg.Quota.IdleInterval != DefaultQuotaIdleInterval || cfg.Quota.GlobalConcurrency != DefaultQuotaGlobalConcurrency {
+		t.Fatalf("defaults = %+v", cfg.Quota)
+	}
+	t.Setenv("OMCPA_QUOTA_SCHEDULER_ENABLED", "false")
+	t.Setenv("OMCPA_QUOTA_WATCH_INTERVAL", "90s")
+	t.Setenv("OMCPA_QUOTA_WATCH_USED_PERCENT", "75")
+	t.Setenv("OMCPA_QUOTA_REFRESH_CONCURRENCY", "2")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != 90*time.Second || cfg.Quota.WatchUsedPercent != 75 || cfg.Quota.GlobalConcurrency != 2 {
+		t.Fatalf("overrides = %+v", cfg.Quota)
+	}
+}
+
+func TestLoadRejectsBadQuotaSchedulerSettings(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_WATCH_INTERVAL", "not-a-duration")
+	if _, err := Load(); err == nil {
+		t.Fatal("a malformed tier interval was accepted")
+	}
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_REFRESH_CONCURRENCY", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("a zero concurrency was accepted")
+	}
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_WATCH_USED_PERCENT", "150")
+	if _, err := Load(); err == nil {
+		t.Fatal("an out-of-range watch percent was accepted")
+	}
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_BACKOFF_BASE", "1h")
+	t.Setenv("OMCPA_QUOTA_BACKOFF_MAX", "5m")
+	if _, err := Load(); err == nil {
+		t.Fatal("a backoff maximum below its base was accepted")
+	}
+}
+
+func TestDemoModeDisablesTheQuotaScheduler(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv(DemoModeEnv, "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.SchedulerEnabled {
+		t.Fatal("demo mode left the quota scheduler on")
 	}
 }

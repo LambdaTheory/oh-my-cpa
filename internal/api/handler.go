@@ -28,6 +28,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	appcrypto "github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/web"
@@ -81,6 +82,10 @@ type Handler struct {
 	// providerKeyMasks caches the auth index to provider key mask mapping the
 	// request list needs; see usage_provider_key_masks.go.
 	providerKeyMasks *providerKeyMaskCache
+	// quotaBackoff parks a credential after an upstream 429. Manual, MCP and the
+	// background scheduler share it, so a limit seen by one path is respected by
+	// the others. It is in memory only: a restart clears it.
+	quotaBackoff *quota.Backoff
 }
 
 // now is the handler's view of the clock.
@@ -115,6 +120,7 @@ func NewHandler(cfg config.Config, repo *repository.Repository, cipher *appcrypt
 		providerKeyMasks: newProviderKeyMaskCache(),
 		pluginLogos:      newPluginLogoFetcher(),
 		pluginIdentities: newPluginIdentityCache(),
+		quotaBackoff:     quota.NewBackoff(cfg.Quota.BackoffBase, cfg.Quota.BackoffMax),
 	}
 	if handler.logger == nil {
 		// A handler built without a logger - which several tests do - must still be able
