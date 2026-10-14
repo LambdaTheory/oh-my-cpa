@@ -21,16 +21,16 @@ func quotaObservationFixture(t *testing.T) (*capability.Executor, context.Contex
 	t.Cleanup(func() { _ = database.Close() })
 	repo := repository.New(database)
 	now := time.Now().UnixMilli()
-	insert := func(eventKey string, atMS int64) {
+	insert := func(eventKey, source string, atMS int64) {
 		t.Helper()
-		if _, err := repo.SQL().Exec(`INSERT INTO quota_observations (auth_index, provider, window_kind, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, event_key, created_at_ms)
-			VALUES ('c-1', 'codex', 'weekly', 10080, 10, NULL, '', ?, ?, 0)`, atMS, eventKey); err != nil {
+		if _, err := repo.SQL().Exec(`INSERT INTO quota_observations (auth_index, provider, window_kind, scope, model, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source)
+			VALUES ('c-1', 'codex', 'weekly', 'standard', '', 10080, 10, NULL, '', ?, ?, 0, ?)`, atMS, eventKey, source); err != nil {
 			t.Fatal(err)
 		}
 	}
-	insert("b", now-1000)
-	insert("a", now-2000)
-	insert("c", now-500)
+	insert("b", "passive", now-1000)
+	insert("a", "passive", now-2000)
+	insert("c", "active", now-500)
 	registry := capability.NewRegistry()
 	if err := (&Service{Repo: repo}).registerQuotaObservations(registry); err != nil {
 		t.Fatal(err)
@@ -66,16 +66,38 @@ func TestQuotaObservationsListReadsAscending(t *testing.T) {
 			t.Fatalf("items are not ascending: %+v", output.Items)
 		}
 	}
-	if output.Items[0].Provider != "codex" || output.Items[0].WindowKind != "weekly" || output.Items[0].WindowMinutes != 10080 || output.Items[0].UsedPercent != 10 {
-		t.Fatalf("row = %+v", output.Items[0])
+	first := output.Items[0]
+	if first.Provider != "codex" || first.WindowKind != "weekly" || first.WindowMinutes != 10080 || first.UsedPercent != 10 || first.Scope != "standard" {
+		t.Fatalf("row = %+v", first)
+	}
+	// The oldest row is passive; the newest is the active one, and the source is
+	// exposed so an agent can tell a header reading from a refresh.
+	if first.Source != "passive" || output.Items[2].Source != "active" {
+		t.Fatalf("sources = %+v", output.Items)
+	}
+}
+
+func TestQuotaObservationsListFiltersBySource(t *testing.T) {
+	executor, ctx := quotaObservationFixture(t)
+	result := invokeQuotaObservations(t, executor, ctx, `{"source":"active"}`)
+	if result.Status != "success" {
+		t.Fatalf("result = %+v", result)
+	}
+	var output QuotaObservationList
+	if err := json.Unmarshal(result.Data, &output); err != nil {
+		t.Fatal(err)
+	}
+	if len(output.Items) != 1 || output.Items[0].Source != "active" {
+		t.Fatalf("active items = %+v", output.Items)
 	}
 }
 
 func TestQuotaObservationsListRefusesBadInput(t *testing.T) {
 	executor, ctx := quotaObservationFixture(t)
 	for _, arguments := range []string{
-		`{"provider":"openai"}`,
-		`{"window_kind":"daily"}`,
+		`{"provider":"OpenAI"}`,
+		`{"window_kind":"daily!"}`,
+		`{"source":"synthetic"}`,
 		`{"limit":1001}`,
 		`{"from_ms":5000,"to_ms":1000}`,
 	} {

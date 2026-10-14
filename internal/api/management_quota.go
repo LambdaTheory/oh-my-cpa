@@ -306,7 +306,7 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		}
 	}
 
-	return h.repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{
+	if err := h.repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{
 		AuthIndex:        q.AuthIndex,
 		Provider:         q.Provider,
 		Status:           q.Status,
@@ -317,7 +317,17 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		ResetCreditsJSON: creditsJSON,
 		ResetGrantsJSON:  grantsJSON,
 		ObservedAtMS:     q.ObservedAtMS,
-	})
+	}); err != nil {
+		return err
+	}
+	// The same successful refresh that produced the snapshot is recorded in the
+	// observation timeline, so a manual refresh, an MCP refresh and the scheduler
+	// all leave the same history. A recording failure is not a snapshot failure:
+	// the snapshot is already durable, and the timeline is best-effort history.
+	if _, err := h.repo.RecordActiveQuotaObservations(ctx, q); err != nil && h.logger != nil {
+		h.logger.Warn("record active quota observations", "auth_index", q.AuthIndex, "error", err)
+	}
+	return nil
 }
 
 // planFromSnapshot rebuilds the full normalized plan (including subscription

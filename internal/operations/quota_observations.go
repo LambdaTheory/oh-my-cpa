@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"errors"
+	"regexp"
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
@@ -14,7 +15,8 @@ import (
 type QuotaObservationInput struct {
 	AuthIndex  string `json:"auth_index,omitempty" jsonschema:"Credential auth index; omit for every credential"`
 	Provider   string `json:"provider,omitempty" jsonschema:"codex or claude; omit for both"`
-	WindowKind string `json:"window_kind,omitempty" jsonschema:"five_hour or weekly; omit for both"`
+	WindowKind string `json:"window_kind,omitempty" jsonschema:"five_hour, weekly, model_scoped or another stored kind; omit for all"`
+	Source     string `json:"source,omitempty" jsonschema:"passive (read from request headers) or active (a refresh this deployment performed); omit for both"`
 	FromMS     int64  `json:"from_ms,omitempty" jsonschema:"Inclusive epoch milliseconds; defaults to seven days before to_ms"`
 	ToMS       int64  `json:"to_ms,omitempty" jsonschema:"Inclusive epoch milliseconds; defaults to now"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum observations to return, 1 to 1000; defaults to 200. Narrow the window instead of paging."`
@@ -26,10 +28,13 @@ type QuotaObservation struct {
 	AuthIndex     string  `json:"auth_index"`
 	Provider      string  `json:"provider"`
 	WindowKind    string  `json:"window_kind"`
+	Scope         string  `json:"scope"`
+	Model         string  `json:"model,omitempty"`
 	WindowMinutes int     `json:"window_minutes"`
 	UsedPercent   float64 `json:"used_percent"`
 	ResetAtMS     *int64  `json:"reset_at_ms,omitempty"`
 	Status        string  `json:"status"`
+	Source        string  `json:"source"`
 	ObservedAtMS  int64   `json:"observed_at_ms"`
 }
 
@@ -72,19 +77,27 @@ func (s *Service) registerQuotaObservations(registry *capability.Registry) error
 		for _, row := range rows {
 			output.Items = append(output.Items, QuotaObservation{
 				AuthIndex: row.AuthIndex, Provider: row.Provider, WindowKind: row.WindowKind,
+				Scope: row.Scope, Model: row.Model,
 				WindowMinutes: row.WindowMinutes, UsedPercent: row.UsedPercent, ResetAtMS: row.ResetAtMS,
-				Status: row.Status, ObservedAtMS: row.ObservedAtMS,
+				Status: row.Status, Source: row.Source, ObservedAtMS: row.ObservedAtMS,
 			})
 		}
 		return output, nil
 	})
 }
 
+// quotaObservationToken bounds a provider, window-kind or source filter to a
+// safe identifier: the stored values are provider vocabulary, never free text.
+var quotaObservationToken = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
+
 func quotaObservationFilter(ctx context.Context, input QuotaObservationInput) (repository.QuotaObservationFilter, error) {
-	if input.Provider != "" && input.Provider != "codex" && input.Provider != "claude" {
+	if input.Provider != "" && !quotaObservationToken.MatchString(input.Provider) {
 		return repository.QuotaObservationFilter{}, errors.New("invalid_parameters")
 	}
-	if input.WindowKind != "" && input.WindowKind != "five_hour" && input.WindowKind != "weekly" {
+	if input.WindowKind != "" && !quotaObservationToken.MatchString(input.WindowKind) {
+		return repository.QuotaObservationFilter{}, errors.New("invalid_parameters")
+	}
+	if input.Source != "" && input.Source != "passive" && input.Source != "active" {
 		return repository.QuotaObservationFilter{}, errors.New("invalid_parameters")
 	}
 	toMS := input.ToMS
@@ -98,7 +111,7 @@ func quotaObservationFilter(ctx context.Context, input QuotaObservationInput) (r
 	if fromMS < 1 || toMS < fromMS || toMS-fromMS > int64(quotaObservationMaxDays*24*time.Hour/time.Millisecond) || toMS > time.Now().Add(time.Minute).UnixMilli() {
 		return repository.QuotaObservationFilter{}, errors.New("invalid_window")
 	}
-	return repository.QuotaObservationFilter{AuthIndex: input.AuthIndex, Provider: input.Provider, WindowKind: input.WindowKind, FromMS: fromMS, ToMS: toMS}, nil
+	return repository.QuotaObservationFilter{AuthIndex: input.AuthIndex, Provider: input.Provider, WindowKind: input.WindowKind, Source: input.Source, FromMS: fromMS, ToMS: toMS}, nil
 }
 
 func quotaObservationLimit(limit int) (int, error) {
