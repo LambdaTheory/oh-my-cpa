@@ -51,10 +51,33 @@ type SchedulerConfig struct {
 	NormalWindow         time.Duration
 	WindowEndMargin      time.Duration
 	PassiveFreshInterval time.Duration
-	CredentialFloor      time.Duration
-	GlobalConcurrency    int
-	ResetGrace           time.Duration
-	ResetLookback        time.Duration
+	// CredentialFloor is the fallback shortest time between two active reads of
+	// the same credential. CredentialFloorByProvider overrides it for the
+	// providers it names.
+	CredentialFloor time.Duration
+	// CredentialFloorByProvider holds a provider-specific floor keyed by the
+	// normalized provider key. A provider absent from the map uses
+	// CredentialFloor.
+	CredentialFloorByProvider map[string]time.Duration
+	GlobalConcurrency         int
+	ResetGrace                time.Duration
+	ResetLookback             time.Duration
+}
+
+// CredentialFloorFor returns the shortest time between two active reads of a
+// credential of the given provider. A provider with its own floor uses it; every
+// other provider, including an unknown one, uses the shared fallback.
+func (c SchedulerConfig) CredentialFloorFor(provider string) time.Duration {
+	if floor, ok := c.CredentialFloorByProvider[normalizeProviderKey(provider)]; ok && floor > 0 {
+		return floor
+	}
+	return c.CredentialFloor
+}
+
+// normalizeProviderKey lowercases and trims a provider name so a configured floor
+// matches the key DetectProvider produces.
+func normalizeProviderKey(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
 }
 
 // RefreshPlan is the planner's decision for one credential.
@@ -74,8 +97,9 @@ type RefreshPlan struct {
 // current and the active probe is only there for the model-scoped windows and
 // the plan. A window within WindowEndMargin of its reset, with traffic this
 // cycle and no recorded reading yet, forces a read so the next cycle has a
-// previous-cycle figure to estimate from.
-func PlanRefresh(state SchedulerState, cfg SchedulerConfig, now time.Time, lastRefresh time.Time) RefreshPlan {
+// previous-cycle figure to estimate from. The provider's own credential floor
+// (CredentialFloorFor) caps how often any of these rules may read.
+func PlanRefresh(state SchedulerState, cfg SchedulerConfig, provider string, now time.Time, lastRefresh time.Time) RefreshPlan {
 	interval := cfg.IdleInterval
 	switch {
 	case state.RequestsWatchWindow > 0:
@@ -93,7 +117,7 @@ func PlanRefresh(state SchedulerState, cfg SchedulerConfig, now time.Time, lastR
 	}
 
 	sinceLast := now.Sub(lastRefresh)
-	if sinceLast < cfg.CredentialFloor {
+	if sinceLast < cfg.CredentialFloorFor(provider) {
 		return RefreshPlan{Interval: interval}
 	}
 
@@ -256,12 +280,12 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 			s.Logger.Warn("quota scheduler: state read failed", "auth_index", authIndex, "error", err)
 			continue
 		}
-		plan := PlanRefresh(state, s.Config, now, s.lastQueryAt(authIndex))
-		resetKey, resetDue := s.resetDue(authIndex, state, now)
+		plan := PlanRefresh(state, s.Config, provider, now, s.lastQueryAt(authIndex))
+		resetKey, resetDue := s.resetDue(authIndex, provider, state, now)
 		if !plan.ShouldRefresh && !resetDue {
 			continue
 		}
-		if plan.ShouldRefresh && now.Sub(s.lastQueryAt(authIndex)) < s.Config.CredentialFloor {
+		if plan.ShouldRefresh && now.Sub(s.lastQueryAt(authIndex)) < s.Config.CredentialFloorFor(provider) {
 			continue
 		}
 		wait.Add(1)
@@ -286,7 +310,7 @@ func (s *Scheduler) query(ctx context.Context, file management.AuthFile, provide
 	if blocked, _ := s.Backoff.Blocked(provider, authIndex, now); blocked {
 		return
 	}
-	if since := now.Sub(s.lastQueryAt(authIndex)); since < s.Config.CredentialFloor {
+	if since := now.Sub(s.lastQueryAt(authIndex)); since < s.Config.CredentialFloorFor(provider) {
 		return
 	}
 	s.markQuery(authIndex, now)
@@ -323,8 +347,8 @@ func (s *Scheduler) markQuery(authIndex string, at time.Time) {
 // resetDue reports whether a window's reset has passed recently and has not been
 // followed by a read yet. The key is scoped to the credential and the exact reset
 // instant, so each reset is read once and a later cycle is not mistaken for it.
-func (s *Scheduler) resetDue(authIndex string, state SchedulerState, now time.Time) (string, bool) {
-	if now.Sub(s.lastQueryAt(authIndex)) < s.Config.CredentialFloor {
+func (s *Scheduler) resetDue(authIndex, provider string, state SchedulerState, now time.Time) (string, bool) {
+	if now.Sub(s.lastQueryAt(authIndex)) < s.Config.CredentialFloorFor(provider) {
 		return "", false
 	}
 	for _, window := range state.Windows {

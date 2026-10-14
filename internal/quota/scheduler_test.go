@@ -45,7 +45,7 @@ func TestPlanRefreshTiers(t *testing.T) {
 		{"idle not due", SchedulerState{}, now.Add(-1 * time.Hour), false, 2 * time.Hour},
 	}
 	for _, test := range cases {
-		plan := PlanRefresh(test.state, cfg, now, test.last)
+		plan := PlanRefresh(test.state, cfg, "codex", now, test.last)
 		if plan.ShouldRefresh != test.wantDue || plan.Interval != test.wantWindow {
 			t.Fatalf("%s: plan = %+v, want due=%v interval=%v", test.name, plan, test.wantDue, test.wantWindow)
 		}
@@ -62,7 +62,7 @@ func TestPlanRefreshWidensToThePassiveFreshFloor(t *testing.T) {
 		LatestPassiveAtMS:   now.Add(-30 * time.Second).UnixMilli(),
 		Windows:             []SchedulerWindow{{UsedPercent: &usedHigh}},
 	}
-	plan := PlanRefresh(state, cfg, now, now.Add(-6*time.Minute))
+	plan := PlanRefresh(state, cfg, "claude", now, now.Add(-6*time.Minute))
 	if plan.Interval != cfg.PassiveFreshInterval {
 		t.Fatalf("interval = %v, want the passive floor %v", plan.Interval, cfg.PassiveFreshInterval)
 	}
@@ -75,7 +75,7 @@ func TestPlanRefreshWidensToThePassiveFreshFloor(t *testing.T) {
 	stale := state
 	stale.LastSnapshotAtMS = now.Add(-25 * time.Minute).UnixMilli()
 	stale.LatestPassiveAtMS = now.Add(-20 * time.Minute).UnixMilli()
-	stalePlan := PlanRefresh(stale, cfg, now, now.Add(-11*time.Minute))
+	stalePlan := PlanRefresh(stale, cfg, "claude", now, now.Add(-11*time.Minute))
 	if stalePlan.Interval != cfg.WatchInterval || !stalePlan.ShouldRefresh {
 		t.Fatalf("stale passive plan = %+v, want the watch interval to apply", stalePlan)
 	}
@@ -96,7 +96,7 @@ func TestPlanRefreshForcesAReadNearTheWindowEnd(t *testing.T) {
 			HasRecentEnoughSnapshot: false,
 		}},
 	}
-	plan := PlanRefresh(state, cfg, now, now.Add(-31*time.Minute))
+	plan := PlanRefresh(state, cfg, "claude", now, now.Add(-31*time.Minute))
 	if !plan.ShouldRefresh || plan.Reason != "window_end" {
 		t.Fatalf("plan = %+v, want a window_end read", plan)
 	}
@@ -155,5 +155,113 @@ func TestSchedulerLoopRefreshesAndRespectsBackoff(t *testing.T) {
 	scheduler.runOnce(ctx)
 	if refreshes != 2 {
 		t.Fatalf("refreshes=%d, want the parked credential skipped", refreshes)
+	}
+}
+
+// TestSchedulerConfigCredentialFloorIsPerProvider pins the lookup: a provider
+// with its own floor uses it, a provider named with stray case or spacing still
+// matches, and every other provider uses the shared fallback.
+func TestSchedulerConfigCredentialFloorIsPerProvider(t *testing.T) {
+	cfg := testSchedulerConfig()
+	cfg.CredentialFloor = 10 * time.Minute
+	cfg.CredentialFloorByProvider = map[string]time.Duration{
+		"codex":  5 * time.Minute,
+		"claude": 10 * time.Minute,
+	}
+	if got := cfg.CredentialFloorFor("codex"); got != 5*time.Minute {
+		t.Fatalf("codex floor = %v, want 5m", got)
+	}
+	if got := cfg.CredentialFloorFor("  CODEX  "); got != 5*time.Minute {
+		t.Fatalf("normalized codex floor = %v, want 5m", got)
+	}
+	if got := cfg.CredentialFloorFor("antigravity"); got != 10*time.Minute {
+		t.Fatalf("unknown provider floor = %v, want the fallback 10m", got)
+	}
+}
+
+// newWatchScheduler builds a single-credential scheduler parked in the watched
+// tier, with every read counted through the returned pointer.
+func newWatchScheduler(t *testing.T, cfg SchedulerConfig, file management.AuthFile, now *time.Time, refreshes *int) *Scheduler {
+	t.Helper()
+	scheduler := NewScheduler(cfg, nil, NewBackoff(time.Minute, time.Hour))
+	scheduler.Now = func() time.Time { return *now }
+	scheduler.ListFiles = func(context.Context) ([]management.AuthFile, error) {
+		return []management.AuthFile{file}, nil
+	}
+	scheduler.RequestCounts = func(context.Context, int64) (map[string]int64, error) {
+		return map[string]int64{}, nil
+	}
+	scheduler.Prior = func(context.Context, string) *NormalizedQuota { return nil }
+	usedHigh := 90.0
+	scheduler.State = func(context.Context, management.AuthFile, *NormalizedQuota, int64, int64) (SchedulerState, error) {
+		return SchedulerState{
+			RequestsWatchWindow: 4,
+			Windows:             []SchedulerWindow{{UsedPercent: &usedHigh}},
+		}, nil
+	}
+	scheduler.Refresh = func(context.Context, management.AuthFile, *NormalizedQuota) (*NormalizedQuota, error) {
+		*refreshes++
+		return &NormalizedQuota{AuthIndex: file.AuthIndex, Provider: file.AuthIndex, ObservedAtMS: now.UnixMilli()}, nil
+	}
+	scheduler.Persist = func(context.Context, *NormalizedQuota) error { return nil }
+	return scheduler
+}
+
+// TestSchedulerAppliesPerProviderCredentialFloor is the user-visible claim: a
+// watched codex credential refreshes on its five-minute floor, a watched claude
+// credential is held to ten minutes, and an unlisted provider falls back to the
+// shared floor.
+func TestSchedulerAppliesPerProviderCredentialFloor(t *testing.T) {
+	cfg := testSchedulerConfig()
+	cfg.CredentialFloor = 10 * time.Minute
+	cfg.CredentialFloorByProvider = map[string]time.Duration{
+		"claude":      10 * time.Minute,
+		"codex":       5 * time.Minute,
+		"antigravity": 5 * time.Minute,
+	}
+
+	cases := []struct {
+		name        string
+		fileType    string
+		provider    string
+		refreshAt5m bool
+	}{
+		{"codex watch refreshes at five minutes", "codex", "codex", true},
+		{"antigravity watch refreshes at five minutes", "antigravity", "antigravity", true},
+		{"claude watch waits ten minutes", "claude", "claude", false},
+		{"a provider absent from the map uses the shared floor", "kimi", "kimi", false},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			now := time.Now()
+			refreshes := 0
+			file := management.AuthFile{AuthIndex: "c-1", Type: test.fileType, Provider: test.provider}
+			scheduler := newWatchScheduler(t, cfg, file, &now, &refreshes)
+			ctx := context.Background()
+
+			// The first tick reads the credential once.
+			scheduler.runOnce(ctx)
+			if refreshes != 1 {
+				t.Fatalf("first pass refreshes=%d, want 1", refreshes)
+			}
+
+			// Five minutes in, only a provider whose floor is five minutes may read again.
+			now = now.Add(5 * time.Minute)
+			scheduler.runOnce(ctx)
+			wantAfterFive := 1
+			if test.refreshAt5m {
+				wantAfterFive = 2
+			}
+			if refreshes != wantAfterFive {
+				t.Fatalf("after five minutes refreshes=%d, want %d", refreshes, wantAfterFive)
+			}
+
+			// Ten minutes in, every provider's floor has elapsed, so one more read lands.
+			now = now.Add(5 * time.Minute)
+			scheduler.runOnce(ctx)
+			if refreshes != wantAfterFive+1 {
+				t.Fatalf("after ten minutes refreshes=%d, want %d", refreshes, wantAfterFive+1)
+			}
+		})
 	}
 }

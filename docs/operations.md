@@ -71,7 +71,9 @@ per-account cadence. A credential is watched, active, normal or idle according t
 it served a request, and a window at or above the watch threshold is read most often. A
 credential whose standard window is already current through the passive observation stream is
 read no faster than `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL`, because its own request headers
-already carry the reading.
+already carry the reading. The credential floor is the hard minimum between two active reads
+of one credential; it is resolved per provider, so the watched tier's five minutes is
+reachable for Codex and Antigravity while Claude stays at ten minutes.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -85,7 +87,8 @@ already carry the reading.
 | `OMCPA_QUOTA_NORMAL_WINDOW` | `2h` | How recently a request keeps a credential out of the idle tier |
 | `OMCPA_QUOTA_WINDOW_END_MARGIN` | `15m` | How close to a window's reset a read is forced so the next cycle has a previous-cycle reading |
 | `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL` | `60m` | Floor an interval is widened to when a fresh passive observation already covers the standard window |
-| `OMCPA_QUOTA_CREDENTIAL_FLOOR` | `10m` | Shortest time between two active reads of the same credential, whatever the tier says |
+| `OMCPA_QUOTA_CREDENTIAL_FLOOR` | `10m` | Fallback shortest time between two active reads of the same credential, for a provider `OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER` does not name |
+| `OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER` | `claude=10m,codex=5m,antigravity=5m` | Per-provider credential floors as `provider=duration` entries, overriding the named defaults. A provider not named keeps its default; an unnamed provider falls back to `OMCPA_QUOTA_CREDENTIAL_FLOOR`. A malformed entry refuses startup |
 | `OMCPA_QUOTA_REFRESH_CONCURRENCY` | `4` | Maximum simultaneous active reads; a single provider is always serialized at one |
 | `OMCPA_QUOTA_BACKOFF_BASE` | `5m` | First wait after an upstream 429 that carried no `Retry-After`; it doubles up to the maximum |
 | `OMCPA_QUOTA_BACKOFF_MAX` | `6h` | Ceiling on the 429 backoff. Must be at least the base |

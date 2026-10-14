@@ -66,19 +66,20 @@ func quotaBackoffError(until time.Time) error {
 // schedulerConfig maps the process configuration onto the scheduler's rules.
 func (h *Handler) schedulerConfig() quota.SchedulerConfig {
 	return quota.SchedulerConfig{
-		WatchInterval:        h.cfg.Quota.WatchInterval,
-		ActiveInterval:       h.cfg.Quota.ActiveInterval,
-		NormalInterval:       h.cfg.Quota.NormalInterval,
-		IdleInterval:         h.cfg.Quota.IdleInterval,
-		WatchUsedPercent:     h.cfg.Quota.WatchUsedPercent,
-		WatchWindow:          h.cfg.Quota.WatchWindow,
-		NormalWindow:         h.cfg.Quota.NormalWindow,
-		WindowEndMargin:      h.cfg.Quota.WindowEndMargin,
-		PassiveFreshInterval: h.cfg.Quota.PassiveFreshInterval,
-		CredentialFloor:      h.cfg.Quota.CredentialFloor,
-		GlobalConcurrency:    h.cfg.Quota.GlobalConcurrency,
-		ResetGrace:           time.Minute,
-		ResetLookback:        h.cfg.Quota.IdleInterval,
+		WatchInterval:             h.cfg.Quota.WatchInterval,
+		ActiveInterval:            h.cfg.Quota.ActiveInterval,
+		NormalInterval:            h.cfg.Quota.NormalInterval,
+		IdleInterval:              h.cfg.Quota.IdleInterval,
+		WatchUsedPercent:          h.cfg.Quota.WatchUsedPercent,
+		WatchWindow:               h.cfg.Quota.WatchWindow,
+		NormalWindow:              h.cfg.Quota.NormalWindow,
+		WindowEndMargin:           h.cfg.Quota.WindowEndMargin,
+		PassiveFreshInterval:      h.cfg.Quota.PassiveFreshInterval,
+		CredentialFloor:           h.cfg.Quota.CredentialFloor,
+		CredentialFloorByProvider: h.cfg.Quota.CredentialFloorByProvider,
+		GlobalConcurrency:         h.cfg.Quota.GlobalConcurrency,
+		ResetGrace:                time.Minute,
+		ResetLookback:             h.cfg.Quota.IdleInterval,
 	}
 }
 

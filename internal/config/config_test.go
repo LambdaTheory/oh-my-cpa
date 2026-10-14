@@ -70,7 +70,7 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_QUOTA_NORMAL_INTERVAL", "OMCPA_QUOTA_IDLE_INTERVAL", "OMCPA_QUOTA_WATCH_USED_PERCENT",
 		"OMCPA_QUOTA_WATCH_WINDOW", "OMCPA_QUOTA_NORMAL_WINDOW", "OMCPA_QUOTA_WINDOW_END_MARGIN",
 		"OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL", "OMCPA_QUOTA_CREDENTIAL_FLOOR", "OMCPA_QUOTA_REFRESH_CONCURRENCY",
-		"OMCPA_QUOTA_BACKOFF_BASE", "OMCPA_QUOTA_BACKOFF_MAX",
+		"OMCPA_QUOTA_BACKOFF_BASE", "OMCPA_QUOTA_BACKOFF_MAX", "OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER",
 	} {
 		t.Setenv(name, "")
 	}
@@ -424,5 +424,56 @@ func TestDemoModeDisablesTheQuotaScheduler(t *testing.T) {
 	}
 	if cfg.Quota.SchedulerEnabled {
 		t.Fatal("demo mode left the quota scheduler on")
+	}
+}
+
+// TestLoadCredentialFloorByProvider pins the per-provider floor map: the
+// documented defaults stand, an explicit map overrides only the providers it
+// names, and the shared fallback stays the floor for everyone else.
+func TestLoadCredentialFloorByProvider(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.CredentialFloor != DefaultQuotaCredentialFloor {
+		t.Fatalf("fallback floor = %v, want %v", cfg.Quota.CredentialFloor, DefaultQuotaCredentialFloor)
+	}
+	if cfg.Quota.CredentialFloorByProvider["claude"] != 10*time.Minute ||
+		cfg.Quota.CredentialFloorByProvider["codex"] != 5*time.Minute ||
+		cfg.Quota.CredentialFloorByProvider["antigravity"] != 5*time.Minute {
+		t.Fatalf("default per-provider floors = %+v", cfg.Quota.CredentialFloorByProvider)
+	}
+
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER", "codex=7m,claude=20m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Quota.CredentialFloorByProvider["codex"] != 7*time.Minute ||
+		cfg.Quota.CredentialFloorByProvider["claude"] != 20*time.Minute {
+		t.Fatalf("overridden per-provider floors = %+v", cfg.Quota.CredentialFloorByProvider)
+	}
+	// A provider the map does not name keeps its default rather than being dropped.
+	if cfg.Quota.CredentialFloorByProvider["antigravity"] != 5*time.Minute {
+		t.Fatalf("untouched provider floor = %v, want the default 5m", cfg.Quota.CredentialFloorByProvider["antigravity"])
+	}
+}
+
+func TestLoadRejectsBadCredentialFloorByProvider(t *testing.T) {
+	for _, raw := range []string{
+		"codex",           // no separator
+		"codex=",          // empty value
+		"codex=soon",      // unparsable duration
+		"codex=-5m",       // non-positive duration
+		"=5m",             // empty provider
+		"codex=5m,claude", // one malformed entry poisons the map
+	} {
+		clearConfigEnv(t)
+		t.Setenv("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER", raw)
+		if _, err := Load(); err == nil {
+			t.Fatalf("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER=%q was accepted", raw)
+		}
 	}
 }

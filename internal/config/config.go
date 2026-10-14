@@ -144,8 +144,13 @@ type QuotaConfig struct {
 	// passive observation already covers the standard window.
 	PassiveFreshInterval time.Duration
 	// CredentialFloor is the shortest time between two active queries of the same
-	// credential, whatever the tier says.
+	// credential, whatever the tier says. It is the fallback for a provider that
+	// CredentialFloorByProvider does not name.
 	CredentialFloor time.Duration
+	// CredentialFloorByProvider overrides CredentialFloor for the providers it
+	// names, keyed by the normalized provider key the credential resolution
+	// produces. A provider absent from the map uses CredentialFloor.
+	CredentialFloorByProvider map[string]time.Duration
 	// GlobalConcurrency bounds simultaneous active refreshes; a single provider is
 	// always serialized at one.
 	GlobalConcurrency int
@@ -175,6 +180,18 @@ const (
 	DefaultQuotaBackoffMax          = 6 * time.Hour
 	DefaultQuotaResetLookbackWindow = time.Hour
 )
+
+// DefaultQuotaCredentialFloorByProvider is the documented per-provider floor: the
+// providers whose own limits meter tightly are read sooner than the shared
+// fallback, so the watched tier's five minutes is actually reachable for them.
+// Claude keeps the shared ten minutes; a provider not named here uses
+// DefaultQuotaCredentialFloor. OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER overrides
+// the entries it names.
+var DefaultQuotaCredentialFloorByProvider = map[string]time.Duration{
+	"claude":      10 * time.Minute,
+	"codex":       5 * time.Minute,
+	"antigravity": 5 * time.Minute,
+}
 
 type CPAConfig struct {
 	BaseURL       string
@@ -596,6 +613,10 @@ func loadQuotaConfig() (QuotaConfig, error) {
 	if err != nil {
 		return QuotaConfig{}, err
 	}
+	credentialFloors, err := parseCredentialFloorByProvider()
+	if err != nil {
+		return QuotaConfig{}, err
+	}
 	backoffBase, err := parseDurationEnv("OMCPA_QUOTA_BACKOFF_BASE", DefaultQuotaBackoffBase)
 	if err != nil {
 		return QuotaConfig{}, err
@@ -624,20 +645,21 @@ func loadQuotaConfig() (QuotaConfig, error) {
 		concurrency = parsed
 	}
 	return QuotaConfig{
-		SchedulerEnabled:     enabled,
-		WatchInterval:        watchInterval,
-		ActiveInterval:       activeInterval,
-		NormalInterval:       normalInterval,
-		IdleInterval:         idleInterval,
-		WatchUsedPercent:     watchUsedPercent,
-		WatchWindow:          watchWindow,
-		NormalWindow:         normalWindow,
-		WindowEndMargin:      windowEndMargin,
-		PassiveFreshInterval: passiveFresh,
-		CredentialFloor:      credentialFloor,
-		GlobalConcurrency:    concurrency,
-		BackoffBase:          backoffBase,
-		BackoffMax:           backoffMax,
+		SchedulerEnabled:          enabled,
+		WatchInterval:             watchInterval,
+		ActiveInterval:            activeInterval,
+		NormalInterval:            normalInterval,
+		IdleInterval:              idleInterval,
+		WatchUsedPercent:          watchUsedPercent,
+		WatchWindow:               watchWindow,
+		NormalWindow:              normalWindow,
+		WindowEndMargin:           windowEndMargin,
+		PassiveFreshInterval:      passiveFresh,
+		CredentialFloor:           credentialFloor,
+		CredentialFloorByProvider: credentialFloors,
+		GlobalConcurrency:         concurrency,
+		BackoffBase:               backoffBase,
+		BackoffMax:                backoffMax,
 	}, nil
 }
 
@@ -652,4 +674,47 @@ func parseDurationEnv(name string, fallback time.Duration) (time.Duration, error
 		return 0, fmt.Errorf("%s must be a positive duration: %q", name, raw)
 	}
 	return parsed, nil
+}
+
+// parseCredentialFloorByProvider reads the per-provider floor overrides as a
+// comma-separated list of provider=duration entries. The documented defaults are
+// the starting map and an entry overrides the provider it names, so naming one
+// provider leaves every other default in place. A malformed entry is reported
+// rather than ignored, matching every other setting in this file.
+func parseCredentialFloorByProvider() (map[string]time.Duration, error) {
+	floors := make(map[string]time.Duration, len(DefaultQuotaCredentialFloorByProvider))
+	for provider, floor := range DefaultQuotaCredentialFloorByProvider {
+		floors[provider] = floor
+	}
+	raw := strings.TrimSpace(os.Getenv("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER"))
+	if raw == "" {
+		return floors, nil
+	}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		provider, value, found := strings.Cut(entry, "=")
+		if !found {
+			return nil, fmt.Errorf("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER entry %q must be provider=duration", entry)
+		}
+		provider = normalizeProviderKey(provider)
+		if provider == "" {
+			return nil, fmt.Errorf("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER entry %q must name a provider", entry)
+		}
+		parsed, err := time.ParseDuration(strings.TrimSpace(value))
+		if err != nil || parsed <= 0 {
+			return nil, fmt.Errorf("OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER entry %q must be a positive duration", entry)
+		}
+		floors[provider] = parsed
+	}
+	return floors, nil
+}
+
+// normalizeProviderKey lowercases and trims a provider name so a configured
+// override matches the key credential resolution produces. It mirrors
+// quota.DetectProvider's normalization without importing that package.
+func normalizeProviderKey(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
 }

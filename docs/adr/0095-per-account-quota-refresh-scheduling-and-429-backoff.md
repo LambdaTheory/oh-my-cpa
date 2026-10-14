@@ -44,7 +44,11 @@ above five percent is read so the next cycle has a previous-cycle figure.
 The "recent request" test is one grouped read over `usage_events` per window, not
 one query per credential. A single provider is serialized to one active read at a
 time and a global budget (default four) bounds the fleet; a credential is never
-read twice inside a configurable floor (default ten minutes).
+read twice inside its provider's credential floor. The floor defaults to ten
+minutes for Claude, five minutes for Codex and Antigravity, and the shared
+`OMCPA_QUOTA_CREDENTIAL_FLOOR` (ten minutes) for every other provider.
+`OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER` overrides the named defaults as a
+`provider=duration` list.
 
 When a credential is Claude or Codex and its standard window already has a passive
 observation newer than its snapshot, the interval is widened to a floor (default
@@ -84,9 +88,14 @@ can do is probe a rate-limited upstream once more before it is parked again - an
 acceptable cost against holding a second piece of durable state that a single
 replica can reconstruct.
 
-The interval floor can make the watched tier's five minutes unreachable at its
-default: the floor is the hard "at least this long between two reads" rule, and a
-deployment that wants the watched cadence lowers `OMCPA_QUOTA_CREDENTIAL_FLOOR`.
+The credential floor is the hard "at least this long between two reads" rule, so a
+floor above the watched tier's five minutes makes that cadence unreachable. The
+floor is therefore resolved per provider. Codex and Antigravity default to five
+minutes, so their watched tier actually reaches its five-minute cadence; Claude
+keeps the shared ten minutes, so its watched tier degrades to a ten-minute read;
+and a provider the map does not name falls back to
+`OMCPA_QUOTA_CREDENTIAL_FLOOR` (ten minutes). `OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER`
+overrides the named defaults, and a provider it does not name keeps its default.
 Both are configuration, not code.
 
 `quota_snapshots` remains the current normalized reading and the basis of the
