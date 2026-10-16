@@ -8,6 +8,8 @@
 
 ## 1. One-Sentence Project Summary
 
+Fork issue coordination follows [`docs/agents/orchestration.md`](docs/agents/orchestration.md).
+
 CLIProxyAPI (CPA) handles protocol adaptation, credential execution, and proxying requests; Oh My CPA provides **user-owned identity, naming, organization, a management facade, and usage observability** above it. Both are co-deployed in the same stack. Oh My CPA is a single-replica Go modular monolith + embedded React SPA + SQLite WAL, operating completely offline with zero CDN dependencies.
 
 Read these three documents before doing substantive work, and `docs/testing.md` before writing or changing any test:

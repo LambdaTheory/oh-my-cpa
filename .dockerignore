@@ -10,6 +10,12 @@
 !web/**
 !scripts/
 !scripts/**
+!.git/
+!.git/HEAD
+!.git/packed-refs
+!.git/refs/
+!.git/refs/heads/
+!.git/refs/heads/**
 !cmd/
 !cmd/**
 !internal/

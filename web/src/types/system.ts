@@ -179,8 +179,16 @@ export interface SystemRuntimeInfo {
   num_gc: number;
 }
 
+/** Embedded source observations, independent of upstream release comparisons. */
+export interface SystemBuildIdentity {
+  version: string;
+  revision: string;
+  ref: string;
+}
+
 /** The whole page, in one response. */
 export interface SystemInfoResponse {
+  build_identity: SystemBuildIdentity;
   omc_version: SystemProductVersion;
   cpa_version: SystemProductVersion;
   /**

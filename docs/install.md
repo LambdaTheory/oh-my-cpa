@@ -496,6 +496,23 @@ such as systemd keeps it running. Variables in the environment win over `.env`, 
 itself as `v0.1.0-dev`. For hot reload while developing, see
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
+## Dokploy fork source builds
+
+Use a Dokploy Compose service with Compose Path `./deploy/dokploy/compose.yml`.
+This tracked service builds the repository root with its Dockerfile. Keep the
+checkout's Git HEAD/ref metadata in the build context: the Docker allowlist admits
+only those ref files, not Git configuration, objects or credentials.
+System Information shows the actual source commit and available branch/ref as an
+OMC fork build, separately from upstream OMC and CPA update observations.
+
+No per-deployment SHA entry is required. A detached checkout has an unknown ref;
+a source archive without metadata has unknown identity. Builders providing trusted
+source metadata can use Docker build arguments `REVISION` and `BUILD_REF`.
+Set `OMCPA_BUILD_VERSION` only to an actual fork build tag; otherwise the page uses
+`dev+<12-character SHA>`. The Compose build keeps the upstream comparison version
+at `fork`. Do not use `OMCPA_VERSION` to manufacture source identity. See
+`docs/releasing.md` for the build contract.
+
 ## Verifying the install
 
 ```bash

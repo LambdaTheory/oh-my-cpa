@@ -38,6 +38,7 @@ export function systemFixtures() {
     [
       (url) => url.pathname.endsWith('/management/system'),
       () => ({
+        build_identity: { version: 'dev+abcdef012345', revision: 'abcdef0123456789abcdef0123456789abcdef01', ref: 'refs/heads/fixture' },
         omc_version: {
           product: 'omc',
           running_version: 'v0.1.0-dev',
@@ -224,6 +225,12 @@ export async function systemInformationPage({ base, page, check }) {
   const pageText = await page.locator('.system-page').innerText();
   check('the page states the running gateway version', versionsShown, pageText.slice(0, 200));
   check('the page states the published gateway version', pageText.includes('v7.3.7'));
+  const buildIdentity = page.locator('[data-testid="sys-build-identity"]');
+  check('fork identity remains distinct from both upstream products',
+    (await buildIdentity.innerText()).includes('dev+abcdef012345') &&
+    (await buildIdentity.innerText()).includes('refs/heads/fixture') &&
+    !(await buildIdentity.innerText()).includes('v0.2.0') &&
+    (await page.locator('[data-testid="sys-product-omc"]').innerText()).includes('v0.2.0'));
 
   // ── the change log renders the untrusted body ──────────────────────────────
   // The toggle is the only control that brings the body into the document.

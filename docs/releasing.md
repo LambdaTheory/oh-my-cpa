@@ -90,6 +90,34 @@ maintainers with repository rules; a version tag is a publishing authority.
 - Publish a new version for changed application content. Do not move a published tag
   or intentionally rebuild its identity with different source.
 
+## Fork source identity
+
+System Information displays `build_identity` separately from the upstream release
+comparison. Docker builds resolve the checked-out commit and symbolic HEAD
+automatically through `scripts/build-identity.mjs`; the Docker context admits only
+`.git/HEAD`, `.git/packed-refs` and loose branch refs, not Git configuration or
+objects. The builder injects `BuildRevision`, `BuildRef` and optional `BuildTag`
+alongside the existing `BuildVersion`. When no separate tag is supplied, an existing
+non-generic `BuildVersion` injection supplies the identity's tag. Partial Git metadata is not a Go VCS database,
+so Docker compilation explicitly uses `-buildvcs=false`.
+
+`REVISION`, `BUILD_REF` and `BUILD_TAG` are optional Docker build arguments for
+builders without checkout metadata. A supplied revision/ref that conflicts with
+the checkout fails the build. Detached HEAD has a known commit and unknown ref;
+an archive without metadata has unknown fields. A linked worktree's `.git` pointer
+cannot be followed outside the Docker context; use explicit trusted build arguments
+or a normal checkout for that build. A known commit without a tag is
+displayed as `dev+` followed by twelve commit characters. Native `go build` can
+recover its revision from Go's embedded VCS metadata; it cannot infer a branch.
+
+The tracked Dokploy Compose service builds the repository context with the root
+Dockerfile. It does not depend on undocumented Dokploy variables or manual SHA
+entry: the checkout's ref files provide identity. `OMCPA_BUILD_VERSION` is an
+optional actual fork tag passed as `BUILD_TAG`; the separate `VERSION` stays `fork`
+so stable-looking fork tags cannot be compared as upstream OMC releases. Runtime
+`OMCPA_VERSION` never rewrites embedded source identity. Upstream publication,
+image naming and update-feed selection are unchanged.
+
 ## Prepare and publish
 
 Version-specific changes and upgrade notes are kept under `docs/releases/`; see

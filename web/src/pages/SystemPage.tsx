@@ -53,6 +53,7 @@ import styles from './SystemPage.module.css';
 import { LoadFailure, Notice, useToast } from '../components/feedback';
 import { AppDrawer } from '../components/common/AppDrawer';
 import { Panel } from '../components/common/Panel';
+import { BuildIdentity } from '../components/system/BuildIdentity';
 
 const { Text, Paragraph } = Typography;
 
@@ -572,8 +573,11 @@ export const SystemPage: React.FC = () => {
           {updateCheckError && <Notice tone="warning" title={t('sys.check_failed')} description={updateCheckError} />}
           {sysInfo && (
             <>
+              <div className={styles['product-block']}>
+                <BuildIdentity identity={sysInfo.build_identity} />
+              </div>
               <ProductBlock
-                productTitle={t('sys.omc_version')}
+                productTitle={t('sys.upstream_omc_version')}
                 version={sysInfo.omc_version}
                 isChecking={isCheckingUpdates}
                 onOpenChangelog={() => setExpandedProduct('omc')}

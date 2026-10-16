@@ -33,6 +33,7 @@ type Config struct {
 	Ollama         OllamaConfig
 	PublicURL      string
 	Version        string
+	BuildIdentity  BuildIdentity
 	RequestTimeout time.Duration
 	TLSSkipVerify  bool
 	Release        ReleaseConfig
@@ -502,6 +503,7 @@ func Load() (Config, error) {
 		MCPReadOnlyKey:    readOnlyKey,
 		PublicURL:         publicURL,
 		Version:           envOr("OMCPA_VERSION", BuildVersion),
+		BuildIdentity:     readBuildIdentity(),
 		RequestTimeout:    timeout,
 		TLSSkipVerify:     tlsSkipVerify,
 		TrustedProxyCIDRs: trustedProxyCIDRs,

@@ -221,6 +221,22 @@ go build -trimpath -o bin/oh-my-cpa ./cmd/oh-my-cpa
 
 It runs in the foreground. Offer a systemd unit or similar only if the user wants one.
 
+### Dokploy fork source build
+
+For the tracked fork deployment, use a Dokploy Compose service with Compose Path
+`./deploy/dokploy/compose.yml`; it builds the repository root's Dockerfile.
+Preserve checkout HEAD/ref files so the Docker metadata reader can inject the
+actual source commit and symbolic ref automatically. Its allowlist excludes Git
+configuration, objects and credentials. Do not inspect secrets to recover identity.
+
+Verify the OMC fork build in System Information separately from upstream OMC/CPA.
+An untagged source has `dev+<12-character SHA>`. Detached HEAD has no known branch;
+an archive without metadata has unknown identity. Trusted builders without checkout
+metadata can supply Docker arguments `REVISION` and `BUILD_REF`. An actual fork tag
+may be set as `OMCPA_BUILD_VERSION`; the Compose comparison version remains `fork`,
+so the tag is not treated as an upstream release. Leave runtime `OMCPA_VERSION`
+unset. Do not invent missing metadata. See `docs/releasing.md`.
+
 ## 4. Verify
 
 ```bash
