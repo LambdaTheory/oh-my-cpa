@@ -3054,6 +3054,8 @@ export const MS: Readonly<Record<string, string>> = {
   "models.modality.video": "Video",
   "models.modality.pdf": "PDF",
   "agent.capability.models_list.description": "Baca model CPA dan rujukan models.dev; tiada inferens.",
+  "agent.capability.model_advice": "Cadangan model",
+  "agent.capability.model_advice.description": "Susun model mengikut bacaan kuota tersimpan tanpa menyegar semula kuota.",
   "nav.model_square": "Dataran Model",
   "nav.account_automation": "Automasi Akaun",
   "nav.ollama": "Pemantauan Ollama",

@@ -2990,6 +2990,8 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "plugin.auth_header_invalid": "請輸入合法的請求標頭名稱",
   "plugin.auth_allow_insecure": "允許透過 HTTP 傳送憑證",
   "agent.capability.models_list": "檢視已接入模型",
+  "agent.capability.model_advice": "模型建議",
+  "agent.capability.model_advice.description": "依已記錄的配額資訊排序可用模型；不重新讀取額度。",
   "models.group_count": "{count} 個模型",
   "models.summary_line": "{models} 個模型 · {makers} 個廠商 · models.dev 資料 {date}",
   "models.showing": "顯示 {shown} / {total}",

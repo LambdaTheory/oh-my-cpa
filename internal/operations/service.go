@@ -31,6 +31,9 @@ type Service struct {
 	ListProviders              func(context.Context) ([]Provider, error)
 	SetProviderStatus          func(context.Context, ProviderStatus, string) error
 	Quotas                     func(context.Context) ([]Quota, error)
+	AdviceDirectory            func(context.Context) (ModelSquareDirectory, error)
+	AdviceCredentials          func(context.Context) ([]AdviceCredential, error)
+	AdviceBlocked              func(string, string) bool
 	ActOnQuota                 func(context.Context, CredentialTarget, string, string) error
 	RefreshQuota               func(context.Context, string) (Quota, error)
 	OAuthModelAliases          func(context.Context) (map[string][]OAuthModelAlias, string, error)
@@ -92,7 +95,7 @@ func read[I, O any](registry *capability.Registry, name, description string, han
 	return capability.Register(registry, Meta(name, description, "read", "low"), nil, func(ctx context.Context, input I, _, _ string) (O, error) { return handler(ctx, input) })
 }
 func (s *Service) Register(registry *capability.Registry) error {
-	registrations := []func(*capability.Registry) error{s.registerUsage, s.registerKeys, s.registerConfig, s.registerProviders, s.registerProviderMutations, s.registerOAuth, s.registerQuota, s.registerQuotaObservations, s.registerQuotaActions, s.registerSystem, s.registerPricing, s.registerDatabase, s.registerTimezone, s.registerTpsCalculation, s.registerCustomIcons, s.registerModelSquare, s.registerAccountAutomation, s.registerOllama, s.registerFeishu}
+	registrations := []func(*capability.Registry) error{s.registerUsage, s.registerKeys, s.registerConfig, s.registerProviders, s.registerProviderMutations, s.registerOAuth, s.registerQuota, s.registerModelAdvice, s.registerQuotaObservations, s.registerQuotaActions, s.registerSystem, s.registerPricing, s.registerDatabase, s.registerTimezone, s.registerTpsCalculation, s.registerCustomIcons, s.registerModelSquare, s.registerAccountAutomation, s.registerOllama, s.registerFeishu}
 	for _, register := range registrations {
 		if err := register(registry); err != nil {
 			return err

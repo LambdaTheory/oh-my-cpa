@@ -33,6 +33,9 @@ plus weight links and direct models.dev, OpenRouter and pi.dev lookups. Referenc
 are bundled for offline use; absent or ambiguous data stays unknown. Listing a model
 does not provision it or certify inference availability. The safe directory and metadata
 are also available through the read-only `models_list` capability.
+The read-only `model_advice` capability ranks client-requested model names from
+relevant quota readings and eligible credentials for Agent/MCP callers; unknown
+route or reading evidence stays unknown, and the advice does not choose a route.
 
 ## Product Purpose
 
