@@ -283,6 +283,17 @@ func (h *Handler) operationsService() *operations.Service {
 		}
 		return result, nil
 	}
+	service.AdviceDirectory = func(ctx context.Context) (operations.ModelSquareDirectory, error) {
+		return service.ListModelSquare(ctx, operations.ModelSquareQuery{})
+	}
+	service.AdviceCredentials = service.ListAdviceCredentials
+	service.AdviceBlocked = func(provider, authIndex string) bool {
+		if h.quotaBackoff == nil {
+			return false
+		}
+		blocked, _ := h.quotaBackoff.Blocked(provider, authIndex, h.now())
+		return blocked
+	}
 	service.RefreshQuota = func(ctx context.Context, authIndex string) (operations.Quota, error) {
 		client, err := h.capabilityClient(ctx)
 		if err != nil {

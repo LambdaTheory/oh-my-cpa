@@ -572,6 +572,8 @@ const DICT: Record<string, [string, string]> = {
     "Clears one credential's local and CPA cooldown; it does not restore provider quota.",
   ],
   'agent.capability.quota_list': ["查看配额", "Read quotas"],
+  'agent.capability.model_advice': ["模型建议", "Model advice"],
+  'agent.capability.model_advice.description': ["按已记录的配额信息排序可用模型；不刷新额度。", "Rank models from recorded quota readings without refreshing them."],
   'agent.capability.quota_list.description': [
     "读取各凭据的套餐名称、档位、配额窗口与观测时间；缺失或过期的观测不代表额度为零。",
     "Reads subscription plan names and tiers, quota windows and when they were observed; a missing or stale observation is not zero quota.",

@@ -52,6 +52,24 @@ func capacityModelFamily(model string) string {
 	return ""
 }
 
+// IsWindowRelevant applies only scope metadata OMC has actually resolved.
+func IsWindowRelevant(window QuotaWindow, upstreamModel string) bool {
+	switch window.Scope {
+	case "standard":
+		return true
+	case "model":
+		return window.Model != "" && window.Model == upstreamModel
+	case "group":
+		family := capacityModelFamily(normalizeCapacityModel(upstreamModel))
+		for _, candidate := range window.ModelFamilies {
+			if family != "" && candidate == family {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // AntigravityModelFamilies accepts only known, complete provider group names.
 // A new or compound label must be reviewed rather than guessed from substrings.
 func AntigravityModelFamilies(groupName string) []string {

@@ -3324,6 +3324,19 @@ bounded to 120 rows. External links go to
 models.dev's canonical detail, OpenRouter lookup or pi.dev's `name` search; they open
 only on the operator's explicit action. All brand artwork is served locally.
 
+### Model advice
+
+`model_advice` uses the same route projection from `operations.Service.ListModelSquare`
+to associate client names with upstream models and providers. It joins CPA's
+credential model membership, stored quota readings, classified collection outcomes
+and the existing quota backoff
+state inside `internal/operations`; only directory and credential management reads
+reach CPA. Relevant standard, exact-model and reviewed-family quota windows are
+reevaluated per model with `quota.EvaluateStatusAndRecommendation`, so an unrelated
+exhausted window does not block a different model. Ambiguous routes and unavailable
+credential membership are unknown. No new route, store, or upstream quota query is
+introduced.
+
 ### Price and request linkage
 
 The directory also shows each model's price and recent requests, and hands off to the

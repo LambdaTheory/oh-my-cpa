@@ -538,6 +538,33 @@ See [ADR 0044](adr/0044-browser-connections-subscribe-to-server-owned-runs.md).
 
 ## Quota capacity output
 
+### Model advice
+
+`model_advice` is a low-risk `read` on Agent and MCP, including the read-only MCP
+key. Optional `models` names at most twenty client-requested call points; without
+it, the tool ranks all names in the configured directory and returns the first
+fifty, with `omitted` counting the remainder. `recommended` is the leading
+`ok` or `caution` model, or null when neither exists even if `avoid` models have
+ranks. Each item reports `ok`, `caution`, `avoid`, or `unknown`,
+its continuous rank (null for unknown), bounded reason codes, the tightest
+relevant window's label/kind/used share/reset, eligible and usable credential
+counts, and the selected reading's age. The result also carries
+`generated_at_ms` and fits the capability's 32 KiB result budget.
+
+The route projection used by `models_list` supplies provider and upstream
+identity. Exact model-scope and reviewed family-scope windows are applied only
+to their target; standard windows apply to the credential. The existing quota
+recommendation computes healthy, warning and exhaustion on those relevant
+windows, with a parked or cooling credential blocked. The best measured,
+unblocked credential decides the model verdict. Stale, unpublished and idle
+readings are not zeros. A newer classified collection failure makes the retained
+successful snapshot unmeasured. Missing credential model membership is counted as
+unmeasured, not silently dropped. Missing or ambiguous route provenance and absent
+credential membership remain unknown, rather than being assigned a provider.
+The tool reads the CPA directory and credential list but never probes an
+upstream quota endpoint. It returns no credential identity, account label,
+address, key or path, regardless of caller authority. See ADR 0097.
+
 `quota_list` and `quota_refresh` expose the same safe window results as the console.
 Their `plan` projection contains only `plan_type`, `plan_label`, `tier` and optional
 `subscription_active`; false denotes an explicit inactive subscription, while an
