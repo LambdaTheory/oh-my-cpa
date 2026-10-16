@@ -246,6 +246,9 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
 	{http.MethodPut, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
 	{http.MethodDelete, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
+	// The collector is never started in a demo, so an explicit refresh would be the
+	// one route here that scrapes ollama.com with a stored cookie.
+	{http.MethodPost, "/api/v1/ollama/accounts/{id}/refresh", demoRefuse, "refreshing an Ollama account is disabled: it would call ollama.com"},
 	{http.MethodGet, "/api/v1/ollama/quota", demoAllow, ""},
 
 	// Feishu settings and status (lane C). The long connection and the sender are

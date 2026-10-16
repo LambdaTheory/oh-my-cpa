@@ -248,24 +248,34 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
 
       {/* 6. Controls & Actions */}
       <div className={styles['record-actions']}>
-        {!isOllama && (
-          <Tooltip title={t('common.details')}>
-            <Button
-              size="small"
-              icon={<ProfileOutlined />}
-              disabled={busy}
-              onClick={onShowDetails}
-              aria-label={`${t('common.details')}: ${file.name}`}
-              className={styles['btn-details']}
-            >
-              <span className={styles['btn-details-text']}>{t('common.details')}</span>
-            </Button>
-          </Tooltip>
-        )}
+        <Tooltip title={t('common.details')}>
+          <Button
+            size="small"
+            icon={<ProfileOutlined />}
+            disabled={busy}
+            onClick={onShowDetails}
+            aria-label={`${t('common.details')}: ${file.name}`}
+            className={styles['btn-details']}
+          >
+            <span className={styles['btn-details-text']}>{t('common.details')}</span>
+          </Button>
+        </Tooltip>
         <Dropdown
           trigger={['click']}
           menu={{
             items: isOllama ? [
+              {
+                key: 'details',
+                icon: <ProfileOutlined />,
+                label: t('common.details'),
+                disabled: busy,
+              },
+              {
+                key: 'refresh-quota',
+                icon: <SyncOutlined spin={isRefreshingQuota} />,
+                label: t('quota.btn_refresh_quota'),
+                disabled: busy || isRefreshingQuota || isDemo,
+              },
               {
                 key: 'edit',
                 icon: <EditOutlined />,
@@ -321,6 +331,10 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
               },
             ],
             onClick: ({ key }) => {
+              if (key === 'details') {
+                onShowDetails();
+                return;
+              }
               if (key === 'models') {
                 onShowModels();
                 return;

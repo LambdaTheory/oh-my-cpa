@@ -47,6 +47,9 @@ type OllamaAccountSecret struct {
 	Nonce           []byte
 	NextAttemptAtMS *int64
 	AttemptCount    int
+	// CookieUpdatedAtMS is the version of this cookie. A collection result carries
+	// it back so a scrape that read an older cookie cannot overwrite a newer one.
+	CookieUpdatedAtMS int64
 }
 
 // OllamaAccountCreate is the input to CreateOllamaAccount. An empty ID mints a
@@ -83,6 +86,14 @@ type OllamaCollectionResult struct {
 	ErrorAtMS       int64
 	NextAttemptAtMS *int64
 	AttemptCount    int
+	// CookieUpdatedAtMS, when set, gates the write: a result whose cookie version no
+	// longer matches the stored one is dropped instead of overwriting a reading of
+	// the newer cookie. Nil writes unconditionally.
+	CookieUpdatedAtMS *int64
+	// Auto marks a result produced by the periodic pass or a create/update trigger.
+	// An automatic result is dropped while the account is disabled; a manual refresh
+	// of a paused account passes Auto false and is still written.
+	Auto bool
 }
 
 // ollamaAccountColumns is the explicit metadata projection. It never names the
@@ -206,6 +217,7 @@ func (r *Repository) UpdateOllamaAccount(ctx context.Context, id string, input O
 	if nowMS <= 0 {
 		nowMS = time.Now().UnixMilli()
 	}
+	// updated_at_ms is ordinary metadata: when the account row was last changed.
 	assignments := []string{"updated_at_ms = ?"}
 	arguments := []any{nowMS}
 	if input.Label != nil {
@@ -222,7 +234,9 @@ func (r *Repository) UpdateOllamaAccount(ctx context.Context, id string, input O
 		}
 	}
 	if input.SetCookie {
-		assignments = append(assignments, "cookie_ciphertext = ?", "cookie_nonce = ?", "cookie_updated_at_ms = ?")
+		// The cookie version is raised strictly so a scrape that read an older cookie
+		// can never pass the cookie guard because two writes shared a millisecond.
+		assignments = append(assignments, "cookie_ciphertext = ?", "cookie_nonce = ?", "cookie_updated_at_ms = MAX(cookie_updated_at_ms + 1, ?)")
 		arguments = append(arguments, input.Ciphertext, input.Nonce, nowMS)
 	}
 	arguments = append(arguments, id)
@@ -258,7 +272,7 @@ func (r *Repository) ListEnabledOllamaAccountSecrets(ctx context.Context) ([]Oll
 		return nil, errors.New("repository is not initialized")
 	}
 	rows, err := r.SQL().QueryContext(ctx, `
-		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, next_attempt_at_ms, attempt_count
+		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms, next_attempt_at_ms, attempt_count
 		FROM ollama_accounts WHERE enabled = 1 ORDER BY created_at_ms ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list ollama account secrets: %w", err)
@@ -270,7 +284,7 @@ func (r *Repository) ListEnabledOllamaAccountSecrets(ctx context.Context) ([]Oll
 		var enabled int
 		var nextAttempt sql.NullInt64
 		if err := rows.Scan(&secret.ID, &secret.Label, &enabled, &secret.Ciphertext, &secret.Nonce,
-			&nextAttempt, &secret.AttemptCount); err != nil {
+			&secret.CookieUpdatedAtMS, &nextAttempt, &secret.AttemptCount); err != nil {
 			return nil, fmt.Errorf("scan ollama account secret: %w", err)
 		}
 		secret.Enabled = enabled != 0
@@ -278,6 +292,32 @@ func (r *Repository) ListEnabledOllamaAccountSecrets(ctx context.Context) ([]Oll
 		secrets = append(secrets, secret)
 	}
 	return secrets, rows.Err()
+}
+
+// GetOllamaAccountSecret reads one account's encryption material by id, enabled or
+// not. The manual and triggered refresh paths reload through it so a queued scrape
+// always reads the newest cookie rather than one captured before an update.
+func (r *Repository) GetOllamaAccountSecret(ctx context.Context, id string) (OllamaAccountSecret, bool, error) {
+	if r == nil || r.SQL() == nil {
+		return OllamaAccountSecret{}, false, errors.New("repository is not initialized")
+	}
+	var secret OllamaAccountSecret
+	var enabled int
+	var nextAttempt sql.NullInt64
+	err := r.SQL().QueryRowContext(ctx, `
+		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms, next_attempt_at_ms, attempt_count
+		FROM ollama_accounts WHERE id = ?`, strings.TrimSpace(id)).
+		Scan(&secret.ID, &secret.Label, &enabled, &secret.Ciphertext, &secret.Nonce,
+			&secret.CookieUpdatedAtMS, &nextAttempt, &secret.AttemptCount)
+	if errors.Is(err, sql.ErrNoRows) {
+		return OllamaAccountSecret{}, false, nil
+	}
+	if err != nil {
+		return OllamaAccountSecret{}, false, fmt.Errorf("read ollama account secret: %w", err)
+	}
+	secret.Enabled = enabled != 0
+	secret.NextAttemptAtMS = nullInt64Ptr(nextAttempt)
+	return secret, true, nil
 }
 
 // RecordOllamaResult writes one scrape outcome. A success advances last_success and
@@ -311,6 +351,20 @@ func (r *Repository) RecordOllamaResult(ctx context.Context, result OllamaCollec
 	if result.NextAttemptAtMS != nil {
 		nextAttempt = *result.NextAttemptAtMS
 	}
+	// A result carrying a cookie version is applied only while the stored cookie is
+	// still that version: a scrape that was reading an old cookie cannot overwrite
+	// the reading of a cookie the operator has since replaced.
+	cookieVersion := any(nil)
+	if result.CookieUpdatedAtMS != nil {
+		cookieVersion = *result.CookieUpdatedAtMS
+	}
+	// An automatic result never writes to a disabled account. A manual refresh of a
+	// paused account passes Auto false and still lands, because reading a paused
+	// account once is exactly what that path is for.
+	autoFlag := 0
+	if result.Auto {
+		autoFlag = 1
+	}
 	if _, err := r.SQL().ExecContext(ctx, `
 		UPDATE ollama_accounts SET
 			status = ?,
@@ -323,12 +377,15 @@ func (r *Repository) RecordOllamaResult(ctx context.Context, result OllamaCollec
 			next_attempt_at_ms = ?,
 			attempt_count = ?,
 			updated_at_ms = ?
-		WHERE id = ?`,
+		WHERE id = ?
+			AND (? = 0 OR enabled = 1)
+			AND (? IS NULL OR cookie_updated_at_ms = ?)`,
 		result.Status, observedAt, result.IsSuccess, observedAt,
 		newestError, newestErrorAt,
 		hasSnapshot, result.SnapshotJSON,
 		hasSnapshot, observedAt,
-		nextAttempt, result.AttemptCount, nowMS, id); err != nil {
+		nextAttempt, result.AttemptCount, nowMS, id,
+		autoFlag, cookieVersion, cookieVersion); err != nil {
 		return OllamaAccount{}, false, fmt.Errorf("record ollama result: %w", err)
 	}
 	return r.GetOllamaAccount(ctx, id)

@@ -126,7 +126,11 @@ with each account's session cookie to read its quota. The cookie is encrypted at
 and never returned. Ollama is not in CPA's control chain: the switch below stops the
 scraper, never inference. Accounts live in the console under `/api/v1/ollama/accounts`
 and the newest reading under `/api/v1/ollama/quota`; the collector never runs in demo
-mode.
+mode. Adding an enabled account, or changing its cookie, or bringing a paused account
+back on, triggers a scrape at once instead of waiting for the cadence, and the console
+can force one account with `POST /api/v1/ollama/accounts/{id}/refresh`. Every one of
+those paths shares the same per-account lock, global concurrency cap and persisted
+backoff, so none can bypass another's rate limit.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

@@ -258,14 +258,12 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 
 	// The Ollama collector scrapes ollama.com with each account's cookie, so a demo
 	// never builds it. An operator may also switch it off without removing accounts.
+	// The same instance is handed to the handler, so the console's manual refresh and
+	// the create/update triggers share its lock, concurrency cap and backoff.
 	var ollamaCollector *ollama.Collector
 	if !cfg.IsDemoMode && cfg.Ollama.CollectorEnabled {
 		ollamaCollector = handler.BuildOllamaService()
-		if ollamaCollector != nil {
-			ollamaCollector.Interval = cfg.Ollama.Interval
-			ollamaCollector.BackoffBase = cfg.Ollama.BackoffBase
-			ollamaCollector.BackoffMax = cfg.Ollama.BackoffMax
-		}
+		handler.SetOllamaService(ollamaCollector)
 	}
 
 	var feishuService *feishu.Service
@@ -427,6 +425,21 @@ func (a *App) Handler() http.Handler {
 }
 
 func (a *App) Run(ctx context.Context) error {
+	// Background loops run under a context this function owns, so every way out -
+	// a signal, a failed pipeline, a failed listener - stops them the same way.
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	// The Ollama collector's process lifetime context is installed BEFORE the
+	// listener accepts anything. A request that arrives in the first instant then
+	// finds a started service; without this it would reach a collector that has no
+	// lifecycle context yet and either fall back to the request context (which ends
+	// with the request, truncating a scrape and its persistence) or refuse. Starting
+	// here makes the pre-listener window impossible rather than merely unlikely.
+	if a.ollama != nil {
+		a.ollama.Start(runCtx)
+	}
+
 	a.httpServer = &http.Server{
 		Addr:              a.cfg.ListenAddr,
 		Handler:           a.Handler(),
@@ -440,11 +453,6 @@ func (a *App) Run(ctx context.Context) error {
 		a.logger.Info("HTTP server listening", "addr", a.cfg.ListenAddr, "base_path", a.cfg.BasePath)
 		serverErrors <- a.httpServer.ListenAndServe()
 	}()
-
-	// Background loops run under a context this function owns, so every way out -
-	// a signal, a failed pipeline, a failed listener - stops them the same way.
-	runCtx, stop := context.WithCancel(ctx)
-	defer stop()
 
 	pipelineErrors := make(chan error, 1)
 	if a.pipeline != nil {

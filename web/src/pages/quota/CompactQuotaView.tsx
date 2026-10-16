@@ -51,6 +51,13 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   const planText = item.plan?.plan_label;
   const cooldownDiagnostic = compactCooldownDiagnostic(item);
   const availableCredits = item.reset_credits?.available_count ?? 0;
+  const hasCreditBalance = Boolean(
+    item.plan?.credits?.unlimited
+      || (item.plan?.credits?.balance !== undefined && item.plan?.credits?.balance !== null && item.plan?.credits?.balance !== ''),
+  );
+  const creditBalanceText = item.plan?.credits?.unlimited
+    ? t('quota.credits_unlimited')
+    : item.plan?.credits?.balance != null ? String(item.plan.credits.balance) : undefined;
 
   return (
     <div
@@ -65,6 +72,15 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
         {planText && <span className={styles.plan}>{planText}</span>}
         {item.plan?.subscription_active === false && (
           <span className={styles.plan} data-subscription-inactive="true">{t('quota.subscription_inactive')}</span>
+        )}
+        {hasCreditBalance && creditBalanceText !== undefined && (
+          <span
+            className={styles.credit}
+            data-credit-balance="true"
+            title={`${t('quota.col_credit_balance')}: ${creditBalanceText}`}
+          >
+            {t('quota.col_credit_balance')}: {creditBalanceText}
+          </span>
         )}
         {availableCredits > 0 && (
           <span className={styles.credit} title={t('omc.quota_credit_available_hint')}>

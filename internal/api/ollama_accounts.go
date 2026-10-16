@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/ollama"
@@ -25,6 +26,10 @@ const (
 	ollamaRequestLimit = 32 << 10
 	ollamaLabelLimit   = 120
 	ollamaCookieLimit  = 8 << 10
+	// ollamaRefreshTimeout bounds how long the synchronous manual refresh waits. The
+	// underlying scrape already carries its own client timeout; this only stops a
+	// caller from being held open indefinitely behind an in-flight periodic pass.
+	ollamaRefreshTimeout = 20 * time.Second
 )
 
 // errOllamaCipherUnavailable is returned when a cookie write is attempted without a
@@ -45,6 +50,12 @@ type ollamaAccountDTO struct {
 	AttemptCount     int    `json:"attempt_count"`
 	CreatedAtMS      int64  `json:"created_at_ms"`
 	UpdatedAtMS      int64  `json:"updated_at_ms"`
+	// Refreshing is true while a scrape for this account is in flight, so the
+	// console can show progress instead of offering a second refresh.
+	Refreshing bool `json:"refreshing"`
+	// RetryAtMS is the earliest instant a refresh is allowed again, driven by a
+	// persisted backoff or the manual minimum gap. Absent when nothing is pending.
+	RetryAtMS *int64 `json:"retry_at_ms,omitempty"`
 }
 
 type ollamaAccountWriteDTO struct {
@@ -70,6 +81,18 @@ type ollamaQuotaResponse struct {
 	Accounts []ollamaQuotaDTO `json:"accounts"`
 }
 
+// ollamaRefreshResponse is the manual refresh contract. The account reflects the
+// stored metadata after the attempt (so a failure is readable through its status
+// and newest_error), quota is the newest stored safe snapshot - never a raw body -
+// and refreshed says whether a scrape actually ran for this request. retry_at_ms is
+// set when the request was suppressed by a backoff or the manual gap.
+type ollamaRefreshResponse struct {
+	Account   ollamaAccountDTO `json:"account"`
+	Quota     json.RawMessage  `json:"quota,omitempty"`
+	Refreshed bool             `json:"refreshed"`
+	RetryAtMS *int64           `json:"retry_at_ms,omitempty"`
+}
+
 // RegisterOllamaRoutes installs the Ollama account routes on the authenticated v1
 // router. It is called inside the /api/v1 group in handler.go.
 func RegisterOllamaRoutes(router chi.Router, h *Handler) {
@@ -78,13 +101,16 @@ func RegisterOllamaRoutes(router chi.Router, h *Handler) {
 	router.Get("/ollama/accounts/{id}", h.getOllamaAccount)
 	router.Put("/ollama/accounts/{id}", h.updateOllamaAccount)
 	router.Delete("/ollama/accounts/{id}", h.deleteOllamaAccount)
+	router.Post("/ollama/accounts/{id}/refresh", h.refreshOllamaAccount)
 	router.Get("/ollama/quota", h.getOllamaQuota)
 }
 
 // BuildOllamaService builds the collector the background loop runs. It adapts the
 // repository and the cipher to the collector's narrow view, keeping the ollama
 // package free of the HTTP and repository layers. The application starts it with
-// Run in the same place the account-automation manager runs.
+// Run in the same place the account-automation manager runs, and hands the same
+// instance back through SetOllamaService so the manual refresh and the triggers
+// share its lock, concurrency cap and backoff.
 func (h *Handler) BuildOllamaService() *ollama.Collector {
 	if h.repo == nil {
 		return nil
@@ -93,10 +119,23 @@ func (h *Handler) BuildOllamaService() *ollama.Collector {
 	if timeout <= 0 {
 		timeout = ollama.DefaultTimeout
 	}
+	interval := h.cfg.Ollama.Interval
+	if interval <= 0 {
+		interval = ollama.DefaultInterval
+	}
+	backoffBase := h.cfg.Ollama.BackoffBase
+	if backoffBase <= 0 {
+		backoffBase = ollama.DefaultBackoffBase
+	}
+	backoffMax := h.cfg.Ollama.BackoffMax
+	if backoffMax < backoffBase {
+		backoffMax = backoffBase
+	}
 	client := ollama.NewClient(timeout)
 	return &ollama.Collector{
-		Accounts: h.ollamaAccountsForCollection,
-		Save:     h.saveOllamaResult,
+		Accounts:    h.ollamaAccountsForCollection,
+		AccountByID: h.ollamaAccountSecretByID,
+		Save:        h.saveOllamaResult,
 		Decrypt: func(ciphertext, nonce []byte) ([]byte, error) {
 			if h.cipher == nil {
 				return nil, errOllamaCipherUnavailable
@@ -110,11 +149,13 @@ func (h *Handler) BuildOllamaService() *ollama.Collector {
 		Audit: func(ctx context.Context, action, result, targetID string, details map[string]any) {
 			h.recordAuditWithoutRequest(action, "ollama_account", targetID, result, details)
 		},
-		Logger:      h.logger,
-		Now:         h.now,
-		Interval:    ollama.DefaultInterval,
-		BackoffBase: ollama.DefaultBackoffBase,
-		BackoffMax:  ollama.DefaultBackoffMax,
+		Logger:         h.logger,
+		Now:            h.now,
+		Interval:       interval,
+		BackoffBase:    backoffBase,
+		BackoffMax:     backoffMax,
+		Concurrency:    ollama.DefaultConcurrency,
+		RefreshTimeout: ollamaRefreshTimeout,
 	}
 }
 
@@ -136,11 +177,37 @@ func (h *Handler) ollamaAccountsForCollection(ctx context.Context) ([]ollama.Sto
 				NextAttemptAtMS: secret.NextAttemptAtMS,
 				AttemptCount:    secret.AttemptCount,
 			},
-			Ciphertext: secret.Ciphertext,
-			Nonce:      secret.Nonce,
+			Ciphertext:        secret.Ciphertext,
+			Nonce:             secret.Nonce,
+			CookieUpdatedAtMS: secret.CookieUpdatedAtMS,
 		})
 	}
 	return accounts, nil
+}
+
+// ollamaAccountSecretByID loads the newest stored secret for one account, enabled or
+// not. It is the reload the refresh paths use so a queued scrape reads the cookie as
+// it is now, not as it was when the account was listed.
+func (h *Handler) ollamaAccountSecretByID(ctx context.Context, id string) (ollama.StoredAccount, bool, error) {
+	if h.repo == nil {
+		return ollama.StoredAccount{}, false, errors.New("repository is not initialized")
+	}
+	secret, found, err := h.repo.GetOllamaAccountSecret(ctx, id)
+	if err != nil || !found {
+		return ollama.StoredAccount{}, found, err
+	}
+	return ollama.StoredAccount{
+		Account: ollama.Account{
+			ID:              secret.ID,
+			Label:           secret.Label,
+			Enabled:         secret.Enabled,
+			NextAttemptAtMS: secret.NextAttemptAtMS,
+			AttemptCount:    secret.AttemptCount,
+		},
+		Ciphertext:        secret.Ciphertext,
+		Nonce:             secret.Nonce,
+		CookieUpdatedAtMS: secret.CookieUpdatedAtMS,
+	}, true, nil
 }
 
 func (h *Handler) saveOllamaResult(ctx context.Context, result ollama.CollectionResult) error {
@@ -148,17 +215,29 @@ func (h *Handler) saveOllamaResult(ctx context.Context, result ollama.Collection
 		return errors.New("repository is not initialized")
 	}
 	_, _, err := h.repo.RecordOllamaResult(ctx, repository.OllamaCollectionResult{
-		ID:              result.ID,
-		Status:          result.Status,
-		ObservedAtMS:    result.ObservedAtMS,
-		IsSuccess:       result.IsSuccess,
-		SnapshotJSON:    result.SnapshotJSON,
-		Error:           result.Error,
-		ErrorAtMS:       result.ErrorAtMS,
-		NextAttemptAtMS: result.NextAttemptAtMS,
-		AttemptCount:    result.AttemptCount,
+		ID:                result.ID,
+		Status:            result.Status,
+		ObservedAtMS:      result.ObservedAtMS,
+		IsSuccess:         result.IsSuccess,
+		SnapshotJSON:      result.SnapshotJSON,
+		Error:             result.Error,
+		ErrorAtMS:         result.ErrorAtMS,
+		NextAttemptAtMS:   result.NextAttemptAtMS,
+		AttemptCount:      result.AttemptCount,
+		CookieUpdatedAtMS: result.CookieUpdatedAtMS,
+		Auto:              result.Auto,
 	})
 	return err
+}
+
+// triggerOllamaRefresh queues an opportunistic scrape when the shared service
+// exists. It is nil-safe: with the collector off - or in a demo - nothing is
+// queued, and no fallback collector is started.
+func (h *Handler) triggerOllamaRefresh(id string) {
+	if h.ollama == nil {
+		return
+	}
+	h.ollama.Trigger(id)
 }
 
 func (h *Handler) recordOllamaObservations(ctx context.Context, value *quota.NormalizedQuota) error {
@@ -182,7 +261,7 @@ func (h *Handler) listOllamaAccounts(writer http.ResponseWriter, request *http.R
 	}
 	dtos := make([]ollamaAccountDTO, 0, len(accounts))
 	for _, account := range accounts {
-		dtos = append(dtos, ollamaAccountToDTO(account))
+		dtos = append(dtos, h.ollamaAccountToDTO(account))
 	}
 	writeJSON(writer, http.StatusOK, ollamaAccountListResponse{Accounts: dtos})
 }
@@ -206,7 +285,7 @@ func (h *Handler) getOllamaAccount(writer http.ResponseWriter, request *http.Req
 		writeError(writer, http.StatusNotFound, "ollama account not found")
 		return
 	}
-	writeJSON(writer, http.StatusOK, ollamaAccountToDTO(account))
+	writeJSON(writer, http.StatusOK, h.ollamaAccountToDTO(account))
 }
 
 func (h *Handler) createOllamaAccount(writer http.ResponseWriter, request *http.Request) {
@@ -255,7 +334,13 @@ func (h *Handler) createOllamaAccount(writer http.ResponseWriter, request *http.
 		return
 	}
 	h.recordAuditWithoutRequest("ollama.account.create", "ollama_account", account.ID, "success", map[string]any{"label": label})
-	writeJSON(writer, http.StatusCreated, ollamaAccountToDTO(account))
+	// A newly created enabled account is scraped at once instead of waiting out the
+	// periodic interval. A created-disabled account stays untouched, and with the
+	// collector off nothing is queued at all.
+	if account.Enabled {
+		h.triggerOllamaRefresh(account.ID)
+	}
+	writeJSON(writer, http.StatusCreated, h.ollamaAccountToDTO(account))
 }
 
 func (h *Handler) updateOllamaAccount(writer http.ResponseWriter, request *http.Request) {
@@ -303,6 +388,17 @@ func (h *Handler) updateOllamaAccount(writer http.ResponseWriter, request *http.
 		update.Ciphertext = ciphertext
 		update.Nonce = nonce
 	}
+	// The previous state decides whether the update warrants a scrape: a cookie
+	// change or a resume does, a label-only edit and a pause do not.
+	previous, previousFound, err := h.repo.GetOllamaAccount(request.Context(), id)
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	if !previousFound {
+		writeError(writer, http.StatusNotFound, "ollama account not found")
+		return
+	}
 	account, found, err := h.repo.UpdateOllamaAccount(request.Context(), id, update)
 	if err != nil {
 		writeInternalError(writer, err)
@@ -313,7 +409,23 @@ func (h *Handler) updateOllamaAccount(writer http.ResponseWriter, request *http.
 		return
 	}
 	h.recordAuditWithoutRequest("ollama.account.update", "ollama_account", id, "success", map[string]any{"cookie_changed": update.SetCookie})
-	writeJSON(writer, http.StatusOK, ollamaAccountToDTO(account))
+	// A new cookie, or a paused account brought back on, is scraped as soon as the
+	// current backoff - if any - allows it. A label-only edit sends no request.
+	if shouldRefreshOllamaAccount(previous.Enabled, account.Enabled, update.SetCookie) {
+		h.triggerOllamaRefresh(account.ID)
+	}
+	writeJSON(writer, http.StatusOK, h.ollamaAccountToDTO(account))
+}
+
+// shouldRefreshOllamaAccount decides whether an update warrants an immediate
+// scrape. Only an enabled account is scraped; a resume or a cookie change does, a
+// label-only edit or a pause does not. It is a pure function so the truth table is
+// tested directly rather than through timing.
+func shouldRefreshOllamaAccount(previousEnabled, enabled, cookieChanged bool) bool {
+	if !enabled {
+		return false
+	}
+	return cookieChanged || !previousEnabled
 }
 
 func (h *Handler) deleteOllamaAccount(writer http.ResponseWriter, request *http.Request) {
@@ -368,6 +480,89 @@ func (h *Handler) getOllamaQuota(writer http.ResponseWriter, request *http.Reque
 	writeJSON(writer, http.StatusOK, ollamaQuotaResponse{Accounts: dtos})
 }
 
+// refreshOllamaAccount runs the console's explicit refresh for one account. It is
+// synchronous and bounded by the collector's own timeout, rooted in its service
+// context rather than this request: a scrape runs through the shared service
+// (honouring a persisted backoff, the manual minimum gap and the in-flight lock) or
+// the call coalesces onto the scrape already running and returns its real outcome. A
+// suppressed or deadline-limited request answers without pretending success. With the
+// collector switched off - or not started yet - it answers 503 and never starts a
+// fallback.
+func (h *Handler) refreshOllamaAccount(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	id, ok := ollamaAccountID(writer, request)
+	if !ok {
+		return
+	}
+	if h.repo == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ollama account storage is unavailable")
+		return
+	}
+	if h.ollama == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ollama collection is disabled")
+		return
+	}
+	// The collector owns the deadline, rooted in its process context rather than this
+	// request: a client disconnect must not truncate a scrape, and the request is never
+	// held longer than one refresh timeout. The request context is passed only so a
+	// coalesced wait can stop early when the client is gone.
+	result, err := h.ollama.RefreshAccount(request.Context(), id)
+	if errors.Is(err, ollama.ErrAccountNotFound) {
+		writeError(writer, http.StatusNotFound, "ollama account not found")
+		return
+	}
+	if errors.Is(err, ollama.ErrServiceNotStarted) {
+		writeError(writer, http.StatusServiceUnavailable, "ollama collection is not running yet")
+		return
+	}
+	if errors.Is(err, ollama.ErrRefreshSuperseded) {
+		writeError(writer, http.StatusServiceUnavailable, "ollama refresh did not complete: the account changed while it ran")
+		return
+	}
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "ollama refresh could not be completed")
+		return
+	}
+	account, found, err := h.repo.GetOllamaAccount(request.Context(), id)
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	if !found {
+		writeError(writer, http.StatusNotFound, "ollama account not found")
+		return
+	}
+	response := ollamaRefreshResponse{
+		Account:   h.ollamaAccountToDTO(account),
+		Refreshed: result.Refreshed,
+	}
+	if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
+		response.Quota = json.RawMessage(account.QuotaSnapshotJSON)
+	}
+	if result.Suppressed {
+		response.RetryAtMS = result.RetryAtMS
+		if response.RetryAtMS == nil {
+			fallback := h.now().UnixMilli()
+			response.RetryAtMS = &fallback
+		}
+		h.recordAuditWithoutRequest("ollama.account.refresh", "ollama_account", id, "rate_limited", nil)
+		writeJSON(writer, http.StatusTooManyRequests, response)
+		return
+	}
+	h.recordAuditWithoutRequest("ollama.account.refresh", "ollama_account", id, refreshAuditResult(account.Status), nil)
+	writeJSON(writer, http.StatusOK, response)
+}
+
+// refreshAuditResult names the scrape outcome the audit row records. The request
+// itself succeeded whenever it reached here; the result reflects whether the scrape
+// produced a reading.
+func refreshAuditResult(status string) string {
+	if status == ollama.StatusOK {
+		return "success"
+	}
+	return "failure"
+}
+
 func (h *Handler) encryptOllamaCookie(cookie string) ([]byte, []byte, error) {
 	if h.cipher == nil {
 		return nil, nil, errOllamaCipherUnavailable
@@ -391,8 +586,12 @@ func ollamaAccountID(writer http.ResponseWriter, request *http.Request) (string,
 	return id, true
 }
 
-func ollamaAccountToDTO(account repository.OllamaAccount) ollamaAccountDTO {
-	return ollamaAccountDTO{
+// ollamaAccountToDTO projects one account's metadata. It adds two live fields the
+// console reads but the database does not store: whether a scrape is in flight, and
+// when a refresh next becomes allowed (a persisted backoff or the manual gap,
+// whichever is later). Neither is a secret.
+func (h *Handler) ollamaAccountToDTO(account repository.OllamaAccount) ollamaAccountDTO {
+	dto := ollamaAccountDTO{
 		ID:               account.ID,
 		Label:            account.Label,
 		Enabled:          account.Enabled,
@@ -407,4 +606,32 @@ func ollamaAccountToDTO(account repository.OllamaAccount) ollamaAccountDTO {
 		CreatedAtMS:      account.CreatedAtMS,
 		UpdatedAtMS:      account.UpdatedAtMS,
 	}
+	if h.ollama == nil {
+		return dto
+	}
+	dto.Refreshing = h.ollama.Refreshing(account.ID)
+	dto.RetryAtMS = h.ollamaRetryAt(account)
+	return dto
+}
+
+// ollamaRetryAt is the earliest instant a refresh is allowed again: the persisted
+// backoff or the manual gap, whichever is later. It is omitted when neither is
+// pending.
+func (h *Handler) ollamaRetryAt(account repository.OllamaAccount) *int64 {
+	if h.ollama == nil {
+		return nil
+	}
+	nowMS := h.now().UnixMilli()
+	var best *int64
+	if account.NextAttemptAtMS != nil && *account.NextAttemptAtMS > nowMS {
+		best = account.NextAttemptAtMS
+	}
+	if at, ok := h.ollama.ManualRetryAt(account.ID); ok {
+		ms := at.UnixMilli()
+		if ms > nowMS && (best == nil || ms > *best) {
+			value := ms
+			best = &value
+		}
+	}
+	return best
 }

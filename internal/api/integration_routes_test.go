@@ -49,7 +49,8 @@ func TestOptionalModuleRoutesRequireTheConsoleSession(t *testing.T) {
 	}
 
 	// A bearer token is not a console session for these routes: the read-only MCP key
-	// reaches read capabilities, not the management surface.
+	// reaches read capabilities, not the management surface. The manual refresh is a
+	// write, so it is refused twice over.
 	request, err := http.NewRequest(http.MethodGet, base+"/omc/api/v1/ollama/accounts", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -62,6 +63,19 @@ func TestOptionalModuleRoutesRequireTheConsoleSession(t *testing.T) {
 	bearerResponse.Body.Close()
 	if bearerResponse.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("bearer GET = %d, want 401", bearerResponse.StatusCode)
+	}
+
+	refreshRequest, err := http.NewRequest(http.MethodPost, base+"/omc/api/v1/ollama/accounts/some-id/refresh", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshResponse, err := anonymous.Do(refreshRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refreshResponse.Body.Close()
+	if refreshResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous refresh = %d, want 401", refreshResponse.StatusCode)
 	}
 
 	// The authenticated console reaches them.
@@ -99,6 +113,7 @@ func TestOptionalModuleWritesAreSameOriginGuarded(t *testing.T) {
 	}{
 		{http.MethodPut, "/omc/api/v1/feishu/settings"},
 		{http.MethodPost, "/omc/api/v1/ollama/accounts"},
+		{http.MethodPost, "/omc/api/v1/ollama/accounts/some-id/refresh"},
 	}
 	for _, write := range writes {
 		request, err := http.NewRequest(write.method, base+write.path, bytes.NewReader(body))

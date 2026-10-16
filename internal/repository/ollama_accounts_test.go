@@ -189,6 +189,241 @@ func TestRecordOllamaResultKeepsTheLastGoodSnapshot(t *testing.T) {
 	}
 }
 
+// TestGetOllamaAccountSecretReadsDisabledAccount pins that the per-account reload
+// used by the refresh paths finds a paused account too, so a one-off manual refresh
+// can read its cookie even though periodic collection skips it.
+func TestGetOllamaAccountSecretReadsDisabledAccount(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	ciphertext, nonce, _ := cipher.Encrypt([]byte("paused-cookie"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Label: "paused", Enabled: false, Ciphertext: ciphertext, Nonce: nonce, NowMS: 4242,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, found, err := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if err != nil || !found {
+		t.Fatalf("secret read = %v %v", found, err)
+	}
+	if secret.Enabled {
+		t.Fatal("the account is disabled, so enabled must be false")
+	}
+	if secret.CookieUpdatedAtMS != 4242 {
+		t.Fatalf("cookie version = %d, want 4242", secret.CookieUpdatedAtMS)
+	}
+	if decrypted, derr := cipher.Decrypt(secret.Ciphertext, secret.Nonce); derr != nil || string(decrypted) != "paused-cookie" {
+		t.Fatalf("decrypt = %q %v", decrypted, derr)
+	}
+	if _, found, err := repo.GetOllamaAccountSecret(ctx, "missing"); err != nil || found {
+		t.Fatalf("missing read = %v %v", found, err)
+	}
+}
+
+// TestRecordOllamaResultDroppedWhenCookieChanged pins the stale-cookie guard: a
+// scrape that read an old cookie cannot overwrite the reading of the cookie the
+// operator has since replaced. A dropped write leaves the account exactly as it was.
+func TestRecordOllamaResultDroppedWhenCookieChanged(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	first, firstNonce, _ := cipher.Encrypt([]byte("first-cookie"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Enabled: true, Ciphertext: first, Nonce: firstNonce, NowMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, found, err := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if err != nil || !found {
+		t.Fatalf("secret = %v %v", found, err)
+	}
+	oldVersion := secret.CookieUpdatedAtMS
+
+	// The operator replaces the cookie; the account now carries a newer version.
+	second, secondNonce, _ := cipher.Encrypt([]byte("second-cookie"))
+	updated, found, err := repo.UpdateOllamaAccount(ctx, account.ID, OllamaAccountUpdate{
+		SetCookie: true, Ciphertext: second, Nonce: secondNonce, NowMS: 2000,
+	})
+	if err != nil || !found {
+		t.Fatalf("update = %v %v", found, err)
+	}
+	replaced, found, err := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if err != nil || !found {
+		t.Fatalf("replaced secret = %v %v", found, err)
+	}
+	if replaced.CookieUpdatedAtMS == oldVersion {
+		t.Fatal("the test needs two distinct cookie versions")
+	}
+
+	// A stale success carrying the old cookie version must be dropped entirely.
+	stale := `{"auth_index":"ollama:` + account.ID + `","provider":"ollama","windows":[]}`
+	after, found, err := repo.RecordOllamaResult(ctx, OllamaCollectionResult{
+		ID: account.ID, Status: "ok", ObservedAtMS: 3000, IsSuccess: true, SnapshotJSON: stale,
+		CookieUpdatedAtMS: &oldVersion,
+	})
+	if err != nil || !found {
+		t.Fatalf("stale record = %v %v", found, err)
+	}
+	if after.Status != updated.Status || after.QuotaSnapshotJSON != "" || after.LastSuccessAtMS != nil {
+		t.Fatalf("a stale cookie version overwrote the account: %+v", after)
+	}
+
+	// The current cookie version is applied.
+	newVersion := replaced.CookieUpdatedAtMS
+	applied, found, err := repo.RecordOllamaResult(ctx, OllamaCollectionResult{
+		ID: account.ID, Status: "ok", ObservedAtMS: 4000, IsSuccess: true, SnapshotJSON: stale,
+		CookieUpdatedAtMS: &newVersion,
+	})
+	if err != nil || !found {
+		t.Fatalf("fresh record = %v %v", found, err)
+	}
+	if applied.Status != "ok" || applied.QuotaSnapshotJSON != stale || applied.LastSuccessAtMS == nil || *applied.LastSuccessAtMS != 4000 {
+		t.Fatalf("the current cookie version was not applied: %+v", applied)
+	}
+}
+
+// TestRecordOllamaResultForDeletedAccountIsANoOp pins that a scrape which finished
+// after the account was deleted is dropped rather than resurrecting a row or
+// failing.
+func TestRecordOllamaResultForDeletedAccountIsANoOp(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	ciphertext, nonce, _ := cipher.Encrypt([]byte("cookie"))
+	account, _ := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{Enabled: true, Ciphertext: ciphertext, Nonce: nonce})
+	if removed, err := repo.DeleteOllamaAccount(ctx, account.ID); err != nil || !removed {
+		t.Fatalf("delete = %v %v", removed, err)
+	}
+	_, found, err := repo.RecordOllamaResult(ctx, OllamaCollectionResult{
+		ID: account.ID, Status: "ok", ObservedAtMS: 5000, IsSuccess: true,
+		SnapshotJSON: `{"auth_index":"ollama:` + account.ID + `"}`,
+	})
+	if err != nil {
+		t.Fatalf("recording a deleted account must not fail: %v", err)
+	}
+	if found {
+		t.Fatal("a deleted account must not be reported as found")
+	}
+	if count, _ := repo.CountOllamaAccounts(ctx); count != 0 {
+		t.Fatalf("a deleted account was resurrected: count = %d", count)
+	}
+}
+
+// TestCookieVersionAdvancesStrictlyOnReplacement pins that replacing a cookie always
+// raises its version, even when two writes share a millisecond. That is the one
+// generation this lane still tracks: it reliably tells a result that read an old
+// cookie apart from the new one.
+func TestCookieVersionAdvancesStrictlyOnReplacement(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	ciphertext, nonce, _ := cipher.Encrypt([]byte("cookie"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Enabled: true, Ciphertext: ciphertext, Nonce: nonce, NowMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+
+	second, secondNonce, _ := cipher.Encrypt([]byte("second"))
+	if _, _, err := repo.UpdateOllamaAccount(ctx, account.ID, OllamaAccountUpdate{
+		SetCookie: true, Ciphertext: second, Nonce: secondNonce, NowMS: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterFirst, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if afterFirst.CookieUpdatedAtMS <= created.CookieUpdatedAtMS {
+		t.Fatalf("cookie version did not advance: %d -> %d", created.CookieUpdatedAtMS, afterFirst.CookieUpdatedAtMS)
+	}
+
+	third, thirdNonce, _ := cipher.Encrypt([]byte("third"))
+	if _, _, err := repo.UpdateOllamaAccount(ctx, account.ID, OllamaAccountUpdate{
+		SetCookie: true, Ciphertext: third, Nonce: thirdNonce, NowMS: 1000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	afterSecond, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if afterSecond.CookieUpdatedAtMS <= afterFirst.CookieUpdatedAtMS {
+		t.Fatalf("cookie version did not advance again: %d -> %d", afterFirst.CookieUpdatedAtMS, afterSecond.CookieUpdatedAtMS)
+	}
+}
+
+// TestLabelEditDoesNotInvalidateReading pins the accepted policy: a label edit is
+// ordinary metadata and does not carry a generation, so a reading that was in flight
+// or already due is still written.
+func TestLabelEditDoesNotInvalidateReading(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	ciphertext, nonce, _ := cipher.Encrypt([]byte("cookie"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Enabled: true, Ciphertext: ciphertext, Nonce: nonce, NowMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+	label := "renamed"
+	if _, _, err := repo.UpdateOllamaAccount(ctx, account.ID, OllamaAccountUpdate{Label: &label, NowMS: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	recorded, found, err := repo.RecordOllamaResult(ctx, OllamaCollectionResult{
+		ID: account.ID, Status: "ok", ObservedAtMS: 5000, IsSuccess: true,
+		SnapshotJSON:      `{"auth_index":"ollama:` + account.ID + `","provider":"ollama","windows":[]}`,
+		CookieUpdatedAtMS: &secret.CookieUpdatedAtMS, Auto: true,
+	})
+	if err != nil || !found {
+		t.Fatalf("record = %v %v", found, err)
+	}
+	if recorded.Status != "ok" || recorded.Label != "renamed" {
+		t.Fatalf("a label edit invalidated a reading: %+v", recorded)
+	}
+}
+
+// TestRecordOllamaResultRejectsAutomaticWriteWhileDisabled pins the direct case: an
+// automatic result never writes to a disabled account, while a manual refresh of the
+// paused account does.
+func TestRecordOllamaResultRejectsAutomaticWriteWhileDisabled(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	ciphertext, nonce, _ := cipher.Encrypt([]byte("cookie"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Enabled: true, Ciphertext: ciphertext, Nonce: nonce, NowMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled := false
+	if _, _, err := repo.UpdateOllamaAccount(ctx, account.ID, OllamaAccountUpdate{Enabled: &disabled, NowMS: 2000}); err != nil {
+		t.Fatal(err)
+	}
+	paused, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+
+	// An automatic result is refused while the account is disabled.
+	after, _, err := repo.RecordOllamaResult(ctx, OllamaCollectionResult{
+		ID: account.ID, Status: "transport_error", ObservedAtMS: 5000, Error: "rate limited",
+		NextAttemptAtMS: int64Ptr(9999999), AttemptCount: 1, Auto: true,
+		CookieUpdatedAtMS: &paused.CookieUpdatedAtMS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Status != "" || after.NextAttemptAtMS != nil || after.AttemptCount != 0 {
+		t.Fatalf("an automatic result wrote to a disabled account: %+v", after)
+	}
+
+	// A manual refresh of the paused account is written.
+	manual, _, err := repo.RecordOllamaResult(ctx, OllamaCollectionResult{
+		ID: account.ID, Status: "ok", ObservedAtMS: 6000, IsSuccess: true,
+		SnapshotJSON:      `{"auth_index":"ollama:` + account.ID + `","provider":"ollama","windows":[]}`,
+		CookieUpdatedAtMS: &paused.CookieUpdatedAtMS,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual.Status != "ok" {
+		t.Fatalf("a paused manual refresh was dropped: %+v", manual)
+	}
+}
+
 // TestOllamaAccountsAreNotReadableByOperatorQueries records that an unclassified
 // table is refused by the raw SQL path by default, so the encrypted cookie cannot be
 // read even though the table is not yet declared hidden.
