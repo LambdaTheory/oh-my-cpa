@@ -860,7 +860,8 @@ owns its triage bucket. The rendering of those readings stays with the existing
   precision as shifted numeric stamps, so response latency does not create dataset drift.
   `deploy/cloudflare/worker.test.mjs` verifies usage/reference bounds rebase together without
   changing amounts or basis. The demo freshness digest includes quota parsing, estimation,
-  repository joins and observation seeding through `scripts/demo-inputs.mjs`.
+  repository joins, observation seeding and the model-advice capability declaration
+  through `scripts/demo-inputs.mjs`.
 
 ### Request selection and export coverage
 

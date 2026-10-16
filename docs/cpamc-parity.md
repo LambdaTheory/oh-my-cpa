@@ -93,6 +93,11 @@ Subsequent milestones:
 
 The following capabilities are unique to Oh My CPA and have no counterpart in CPAMC, but are part of this product's deliverables:
 
+The Agent/MCP `model_advice` read ranks client-requested model names using relevant
+stored quota readings and eligible credential counts. It recommends only `ok` or
+`caution` models; missing or ambiguous routes and unmeasured credentials remain
+unknown. This OMC extension neither switches models nor refreshes quota (ADR 0097).
+
 | Capability | Entrypoint | Description |
 | --- | --- | --- |
 | Usage Request Browser | `/usage/events`, `/usage/events/{id}`, `/usage/events/{id}/request-log`, `/usage/facets`, `/usage/ingest/refresh` | Multi-select facets (union within dimensions, intersection across dimensions), global search, range filtering, column layout and view persistence, single request detail, and raw request log downloads. The refresh action drains CPA's queue on demand until records are queryable before re-reading lists and facets. Lists are sorted by request time descending (`timestamp_ms` + `id` composite cursor), matching the displayed time column; new record counts are tracked independently against ingestion `id`; each API-key record also names the upstream key that served it (`provider_key_mask`), resolved at read time from the credential lists CPA currently reports, with an unidentifiable credential printing nothing (ADR 0017) |

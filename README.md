@@ -301,8 +301,8 @@ troubleshooting.
 ## Agents and MCP
 
 **In the console:** On the `/agent` page, a model routed through CPA answers questions
-and operates the console: usage and request analysis, providers, OAuth, quota, client
-keys, configuration and pricing. Reads run directly. Changes are prepared server-side
+and operates the console: usage and request analysis, providers, OAuth, quota,
+read-only model advice, client keys, configuration and pricing. Reads run directly. Changes are prepared server-side
 and run only after an Allow in the console. Secrets, tokens and OAuth authorization
 never enter the model's context. Answers can mix text with inline interactive components that
 appear while they are generated: local filters, calculators, diagrams and charts. Components
