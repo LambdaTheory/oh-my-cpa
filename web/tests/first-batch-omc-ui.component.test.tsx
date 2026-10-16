@@ -84,7 +84,7 @@ describe('First Batch OMC UI Component Tests', () => {
             auth_index: 'auth_cand_1',
             provider: 'anthropic',
             name: 'Candidate 1',
-            account_label: 'Label 1',
+            account_label: 'auth_cand_1: Label 1',
             disabled: false,
             controllable: true,
             adopted: false,
@@ -119,8 +119,10 @@ describe('First Batch OMC UI Component Tests', () => {
       fireEvent.click(adoptBtn);
 
       // Check candidates are listed in modal
-      expect(await screen.findByText('auth_cand_1')).toBeDefined();
-      expect(screen.getByText('auth_cand_2')).toBeDefined();
+      expect(await screen.findByText('Label 1')).toBeDefined();
+      expect(screen.getByText('Label 2')).toBeDefined();
+      expect(screen.queryByText('auth_cand_1')).toBeNull();
+      expect(screen.getByRole('checkbox', { name: 'Label 1' })).toBeDefined();
 
       // In default empty selection mode, select all adoptable candidates explicitly
       const selectAllBtn = screen.getByRole('button', { name: '全选未接管' });
@@ -151,6 +153,7 @@ describe('First Batch OMC UI Component Tests', () => {
         accounts: [
           {
             auth_index: 'acc_auto_disabled',
+            account_label: 'acc_auto_disabled: Auto account',
             is_adopted: true,
             is_enabled: false,
             state: 'disabled',
@@ -164,6 +167,7 @@ describe('First Batch OMC UI Component Tests', () => {
           },
           {
             auth_index: 'acc_ext_disabled',
+            account_label: 'External account',
             is_adopted: true,
             is_enabled: false,
             state: 'idle',
@@ -182,10 +186,10 @@ describe('First Batch OMC UI Component Tests', () => {
 
       renderWithClient(<AccountAutomationDrawer open={true} onClose={() => {}} />);
 
-      expect(await screen.findByText('acc_auto_disabled')).toBeDefined();
+      expect(await screen.findByText('Auto account')).toBeDefined();
       expect(screen.getByText('7d耗尽自动关闭')).toBeDefined();
 
-      expect(screen.getByText('acc_ext_disabled')).toBeDefined();
+      expect(screen.getByText('External account')).toBeDefined();
       expect(screen.getByText('外部停用')).toBeDefined();
     });
 
@@ -330,7 +334,8 @@ describe('First Batch OMC UI Component Tests', () => {
       renderWithClient(<AccountAutomationDrawer open={true} onClose={() => {}} />);
 
       // Verify roster displays evidence_identity_mismatch human copy
-      expect(await screen.findByText('acc_mismatched')).toBeDefined();
+      expect(await screen.findByText('账号', { exact: true })).toBeDefined();
+      expect(screen.queryByText('acc_mismatched')).toBeNull();
       expect(screen.getByText(/凭据与观测身份不一致，暂停自动操作/)).toBeDefined();
 
       // Open adopt modal
@@ -338,15 +343,15 @@ describe('First Batch OMC UI Component Tests', () => {
       fireEvent.click(adoptBtn);
 
       // Verify unverified provider candidate displays humanized ineligible reason
-      expect(await screen.findByText('cand_unknown_provider')).toBeDefined();
+      expect(await screen.findByText('Unknown Vendor Acc')).toBeDefined();
       expect(screen.getByText(/能力未核实暂监控/)).toBeDefined();
 
       // Checkbox for ineligible candidate is disabled
-      const unknownCheckbox = screen.getByLabelText(/cand_unknown_provider/) as HTMLInputElement;
+      const unknownCheckbox = screen.getByLabelText('Unknown Vendor Acc') as HTMLInputElement;
       expect(unknownCheckbox.disabled).toBe(true);
 
       // Checkbox for eligible candidate is enabled
-      const eligibleCheckbox = screen.getByLabelText(/cand_verified_eligible/) as HTMLInputElement;
+      const eligibleCheckbox = screen.getByLabelText('Claude Acc') as HTMLInputElement;
       expect(eligibleCheckbox.disabled).toBe(false);
 
       // Default selection is empty; submit button is disabled
@@ -552,11 +557,11 @@ describe('First Batch OMC UI Component Tests', () => {
       const ollamaRecord = projection.records.find((r) => r.source === 'ollama')!;
 
       expect(cpaRecord.canSelectForFileBatch).toBe(true);
-      expect(ollamaRecord.canSelectForFileBatch).toBe(false);
-      expect(ollamaRecord.canToggleFile).toBe(false);
+      expect(ollamaRecord.canSelectForFileBatch).toBe(true);
+      expect(ollamaRecord.canToggleFile).toBe(true);
       expect(ollamaRecord.canDownloadFile).toBe(false);
-      expect(ollamaRecord.canDeleteFile).toBe(false);
-      expect(ollamaRecord.canRefreshQuota).toBe(false);
+      expect(ollamaRecord.canDeleteFile).toBe(true);
+      expect(ollamaRecord.canRefreshQuota).toBe(true);
     });
   });
 

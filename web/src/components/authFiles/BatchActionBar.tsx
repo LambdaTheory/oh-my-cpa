@@ -23,6 +23,7 @@ interface BatchActionBarProps {
   canRefresh: boolean;
   onDelete: () => void;
   hiddenCount?: number;
+  scopeNote?: string;
 }
 
 export const BatchActionBar: React.FC<BatchActionBarProps> = ({
@@ -37,6 +38,7 @@ export const BatchActionBar: React.FC<BatchActionBarProps> = ({
   canRefresh,
   onDelete,
   hiddenCount = 0,
+  scopeNote,
 }) => {
   const t = useT();
 
@@ -48,7 +50,7 @@ export const BatchActionBar: React.FC<BatchActionBarProps> = ({
     <SelectionBar
       label={t('af.selected_n', { n: selectedCount })}
       summary={t('af.selected_n', { n: selectedCount })}
-      note={hiddenCount > 0 ? t('omc.hidden_selection', { n: hiddenCount }) : undefined}
+      note={[hiddenCount > 0 ? t('omc.hidden_selection', { n: hiddenCount }) : '', scopeNote].filter(Boolean).join(' ')}
       selection={(
         <>
           {selectablePageCount > 0 && (

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button, Modal } from 'antd';
 import { Switch } from '../common/Switch';
 import { useT } from '../../i18n';
+import { credentialLabel } from '../../utils/credentialLabel';
 import type { OllamaAccountDTO, OllamaAccountWritePayload } from '../../types/ollama';
 
 interface OllamaAccountEditorModalProps {
@@ -27,7 +28,7 @@ export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> =
   useEffect(() => {
     if (open) {
       if (account) {
-        setFormLabel(account.label ?? '');
+        setFormLabel(credentialLabel(account.label, [`ollama:${account.id}`, account.id]));
         setFormCookie(''); // Never prefill stored cookie
         setFormEnabled(account.enabled);
       } else {

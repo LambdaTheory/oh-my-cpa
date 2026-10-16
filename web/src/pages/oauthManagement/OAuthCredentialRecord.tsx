@@ -89,7 +89,7 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
   const t = useT();
   const { modal } = AntdApp.useApp();
   const isDemo = isDemoMode();
-  const identity = deriveAuthFileIdentity(file);
+  const identity = deriveAuthFileIdentity(file, t('credential.account_fallback', { provider: displayProvider }));
   const disabled = isAuthFileDisabled(file);
   const problem = isAuthFileProblem(file);
   const hasWarning = hasAuthFileStatusWarning(file);
@@ -116,7 +116,7 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
   const switchDisabled = busy || (isOllama ? isDemo : (file.runtime_only || !canTargetFile));
   const switchAriaLabel = isOllama
     ? t('ollama.status_toggle_label', { name: identity.primary })
-    : t('af.status_toggle_label', { name: file.name });
+    : t('af.status_toggle_label', { name: identity.primary });
 
   return (
     <article
@@ -128,12 +128,12 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
     >
       {/* 1. Identity & Routing */}
       <div className={styles['record-identity']}>
-        {!file.runtime_only && (
+        {(isOllama || !file.runtime_only) && (
           <Checkbox
             checked={selected}
             disabled={busy || !canTargetFile}
             onChange={(event) => onSelect(event.target.checked)}
-            aria-label={t('af.select_one', { name: file.name })}
+            aria-label={t('af.select_one', { name: identity.primary })}
             className={styles['record-checkbox']}
           />
         )}
@@ -152,12 +152,6 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
                 {identity.secondary}
               </span>
             )}
-            <span
-              className={styles['record-auth-index']}
-              title={`${t('af.detail_auth_index')}: ${file.auth_index || '—'}`}
-            >
-              {file.auth_index || '—'}
-            </span>
             {isOllama && (
               <Tag size="small">{ollamaAccount?.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
             )}
@@ -254,7 +248,7 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
             icon={<ProfileOutlined />}
             disabled={busy}
             onClick={onShowDetails}
-            aria-label={`${t('common.details')}: ${file.name}`}
+            aria-label={`${t('common.details')}: ${identity.primary}`}
             className={styles['btn-details']}
           >
             <span className={styles['btn-details-text']}>{t('common.details')}</span>
@@ -358,7 +352,7 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
               if (key === 'delete') {
                 modal.confirm({
                   title: isOllama ? t('ollama.delete_confirm') : t('af.delete_one_title'),
-                  content: file.name,
+                  content: identity.primary,
                   okText: t('common.delete'),
                   cancelText: t('common.cancel'),
                   okButtonProps: { danger: true },
@@ -373,7 +367,7 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
               type="text"
               size="small"
               icon={<MoreOutlined />}
-              aria-label={`${t('keys.actions_more')}: ${file.name}`}
+              aria-label={`${t('keys.actions_more')}: ${identity.primary}`}
               className={styles['record-action-more']}
             />
           </Tooltip>

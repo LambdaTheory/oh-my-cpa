@@ -4,6 +4,9 @@
  * Keys mirror DICT in ../index.tsx. Keep this catalog complete: a missing key would fall back to another language and violate the console-wide full-localization rule.
  */
 export const ZH_HANT: Readonly<Record<string, string>> = {
+  "credential.account_fallback": "{provider} 帳號",
+  "credential.refresh_skipped": "略過 {n} 個：{reasons}",
+  "credential.collection_scope": "Ollama 啟用/停用僅控制採集，不影響推理。",
   "mobile.filters": "篩選",
   "header.tools": "控制台工具",
   "cfg.source_tools": "原始碼工具",

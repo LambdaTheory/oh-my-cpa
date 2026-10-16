@@ -415,8 +415,9 @@ func TestOllamaCookieUpdateDuringInflightScrapeIsCollected(t *testing.T) {
 	}, func(handler *Handler) {
 		service := handler.BuildOllamaService()
 		service.Fetch = func(_ context.Context, account ollama.Account, cookie string) (ollama.Snapshot, error) {
+			callNumber := calls.Add(1)
 			scrapes <- cookie
-			if calls.Add(1) == 1 {
+			if callNumber == 1 {
 				firstStarted <- struct{}{}
 				<-release
 				return ollama.Snapshot{

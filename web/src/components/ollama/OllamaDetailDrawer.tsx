@@ -17,6 +17,8 @@ import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
 import { formatTimeWithCountdown } from '../../pages/quota/quotaFormat';
 import { QuotaProgressBar } from '../../pages/quota/QuotaProgressBar';
 import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
+import { credentialLabel } from '../../utils/credentialLabel';
+import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import type { OllamaAccountDTO } from '../../types/ollama';
 import type { NormalizedQuota } from '../../types/quota';
 import styles from '../authFiles/AuthFileDetailDrawer.module.css';
@@ -44,6 +46,8 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
   const toast = useToast();
   const queryClient = useQueryClient();
   const isDemo = isDemoMode();
+  const displayLabel = credentialLabel(account?.label, [account?.id ? `ollama:${account.id}` : undefined, account?.id], t('credential.account_fallback', { provider: 'Ollama' }));
+  const credits = verifiedQuotaCredits(quota);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [, setTick] = useState(0);
@@ -142,7 +146,7 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
   const handleDelete = () => {
     modal.confirm({
       title: t('ollama.delete_confirm'),
-      content: account.label || account.id,
+      content: displayLabel,
       okButtonProps: { danger: true },
       onOk: () => deleteMutation.mutate(account.id),
     });
@@ -152,7 +156,7 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
 
   return (
     <AppDrawer
-      title={account.label || t('ollama.detail_title')}
+      title={displayLabel}
       width="wide"
       open={open}
       onClose={onClose}
@@ -244,14 +248,14 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
                   label: t('quota.col_plan'),
                   value: <span className="mono-num">{quota?.plan?.plan_label || '—'}</span>,
                 },
-                ...(quota?.plan?.credits?.unlimited ? [{
+                ...(credits?.unlimited ? [{
                   key: 'balance',
                   label: t('quota.col_credit_balance'),
                   value: <span className="mono-num">{t('quota.credits_unlimited')}</span>,
-                }] : (quota?.plan?.credits?.balance !== undefined && quota?.plan?.credits?.balance !== null && quota?.plan?.credits?.balance !== '') ? [{
+                }] : (credits?.balance !== undefined && credits?.balance !== null && credits?.balance !== '') ? [{
                   key: 'balance',
                   label: t('quota.col_credit_balance'),
-                  value: <span className="mono-num">{String(quota.plan.credits.balance)}</span>,
+                  value: <span className="mono-num">{String(credits.balance)}</span>,
                 }] : []),
               ]}
             />
@@ -394,7 +398,7 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
                 ...(account.label ? [{
                   key: 'label',
                   label: t('ollama.col_account'),
-                  value: account.label,
+                  value: displayLabel,
                 }] : []),
                 {
                   key: 'cookie',

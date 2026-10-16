@@ -1057,6 +1057,15 @@ checks.
 
 ### Opt-in sorting measurements
 
+Credential feedback regressions live in `scripts/test-credential-labels.ts`,
+`scripts/test-oauth-workspace.ts`, `internal/ollama/parse_test.go` and
+`web/tests/credential-actions.component.test.tsx`. The rendered tests drive the
+actual workspace action hook and typed client, including mixed-source selection,
+eleven eligible targets in a thirteen-entry inventory, collection/deletion routing,
+a held 429 and last-good snapshot retention. Existing first-batch automation and
+Ollama probes own friendly adoption labels, real checkbox/action wiring and
+desktop/phone screenshots. These extend the existing automatic discovery layers.
+
 `scripts/test-oauth-sort.ts` compares every OAuth workspace sort with the frozen
 baseline oracle in `scripts/fixtures/oauth-sort.ts`, including empty/singleton inputs,
 Unicode/numeric/equivalent labels, missing numeric defaults, stable ties, unknown-key

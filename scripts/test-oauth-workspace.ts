@@ -239,6 +239,27 @@ test('refresh planning deduplicates indexes and reports every skip reason', () =
   );
 });
 
+test('mixed refresh: thirteen entries mean eleven targets and two disabled skips', () => {
+  const files = Array.from({ length: 12 }, (_, index) => file({
+    name: `Synthetic ${index}`, auth_index: `index-${index}`, disabled: index >= 10,
+  }));
+  const quotas = files.map((entry) => quota({ auth_index: entry.auth_index! }));
+  const account = {
+    id: 'opaque-monitor', label: 'ollama:opaque-monitor: Legacy account', enabled: true, has_cookie: true,
+    attempt_count: 0, created_at_ms: 1, updated_at_ms: 1,
+  };
+  const projection = buildOAuthWorkspaceProjection(files, quotas, choices, [account], []);
+  const plan = buildQuotaRefreshTargets(projection.records);
+  assert.equal(projection.records.length, 13);
+  assert.equal(plan.targetCount, 11);
+  assert.deepEqual(plan.eligibleIndexes, files.slice(0, 10).map((entry) => entry.auth_index));
+  assert.deepEqual(plan.ollamaAccountIds, ['opaque-monitor']);
+  assert.deepEqual(plan.skipped.map((entry) => entry.reason), ['credential-disabled', 'credential-disabled']);
+  assert.equal(projection.records.at(-1)?.file.name, 'Legacy account');
+  assert.equal(buildQuotaRefreshTargets([projection.records.at(-1)!]).targetCount, 1, 'an unread monitor can still be refreshed');
+  assert.equal(buildQuotaRefreshTargets(projection.records.slice(10, 12)).targetCount, 0);
+});
+
 test('query parsing clamps unknown state and keeps one-shot OAuth intent separate', () => {
   const parsed = parseOAuthWorkspaceQuery(new URLSearchParams(
     'provider=CODEX&q=ops&status=bogus&quota=attention&sort=weight-desc&page=-4&page_size=99&density=compact&action=connect&connect_provider=iflow&focus=quota&code=secret',
@@ -663,11 +684,11 @@ test('ollama: accounts project as distinct non-CPA records with strict action is
 
   assert.equal(ollamaRecord.key, 'ollama:ollama-test-1');
   assert.equal(ollamaRecord.displayProvider, 'ollama');
-  assert.equal(ollamaRecord.canSelectForFileBatch, false, 'Ollama records must never be selectable for CPA batch actions');
-  assert.equal(ollamaRecord.canToggleFile, false, 'CPA file toggle must not operate on Ollama accounts');
+  assert.equal(ollamaRecord.canSelectForFileBatch, true, 'Ollama records participate in source-aware selection');
+  assert.equal(ollamaRecord.canToggleFile, true, 'Ollama collection can be toggled through its own API');
   assert.equal(ollamaRecord.canDownloadFile, false, 'Ollama accounts have no credential JSON download');
-  assert.equal(ollamaRecord.canDeleteFile, false, 'CPA file delete must not operate on Ollama accounts');
-  assert.equal(ollamaRecord.canRefreshQuota, false, 'Global CPA quota refresh must not refresh Ollama snapshot');
+  assert.equal(ollamaRecord.canDeleteFile, true, 'Ollama deletion uses its own API');
+  assert.equal(ollamaRecord.canRefreshQuota, true, 'Unified refresh dispatches to the dedicated Ollama endpoint');
 
   // Provider options and counts
   const options = workspaceProviderOptions(projection.records, choices);

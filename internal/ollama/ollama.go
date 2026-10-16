@@ -156,6 +156,7 @@ func (s Snapshot) ToQuota(label string) *quota.NormalizedQuota {
 		}
 		if s.Balance != "" {
 			plan.Credits = &quota.QuotaCredits{Balance: s.Balance}
+			value.RawSignals = map[string]string{"ollama_balance_source": "settings_balance"}
 		}
 		value.Plan = plan
 	}

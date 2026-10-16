@@ -54,6 +54,7 @@ import { useOAuthSessions } from './useOAuthSessions';
 import { useOAuthWorkspaceActions } from './useOAuthWorkspaceActions';
 import {
   buildOAuthWorkspaceProjection,
+  buildQuotaRefreshTargets,
   consumeOneShotIntent,
   filterOAuthWorkspaceRecords,
   parseOAuthWorkspaceQuery,
@@ -428,35 +429,6 @@ export const OAuthManagementPage: React.FC = () => {
     }
   };
 
-  const toggleOllamaAccount = async (account: OllamaAccountDTO) => {
-    setIsOllamaMutating(true);
-    try {
-      await api.updateOllamaAccount(account.id, {
-        enabled: !account.enabled,
-      });
-      void queryClient.invalidateQueries({ queryKey: ['ollama-accounts'] });
-      void queryClient.invalidateQueries({ queryKey: ['ollama-quota'] });
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsOllamaMutating(false);
-    }
-  };
-
-  const deleteOllamaAccount = async (id: string) => {
-    setIsOllamaMutating(true);
-    try {
-      await api.deleteOllamaAccount(id);
-      toast.success(t('ollama.delete_success'));
-      void queryClient.invalidateQueries({ queryKey: ['ollama-accounts'] });
-      void queryClient.invalidateQueries({ queryKey: ['ollama-quota'] });
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : String(err));
-    } finally {
-      setIsOllamaMutating(false);
-    }
-  };
-
   const onTargetGone = React.useCallback((recordKey: string) => {
     setSelectedIdentity((current) => (current?.key === recordKey ? undefined : current));
 
@@ -486,10 +458,14 @@ export const OAuthManagementPage: React.FC = () => {
   const hiddenSelectionCount = selectedRecords.filter(
     (record) => !pagedRecords.some((pageRecord) => pageRecord.key === record.key),
   ).length;
-  const eligibleFilteredRefreshCount = React.useMemo(
-    () => new Set(visibleRecords.filter((record) => record.canRefreshQuota).map((record) => record.authIndex)).size,
+  const filteredRefreshPlan = React.useMemo(
+    () => buildQuotaRefreshTargets(visibleRecords),
     [visibleRecords],
   );
+  const eligibleFilteredRefreshCount = filteredRefreshPlan.targetCount;
+  const refreshSkipSummary = Array.from(new Set(filteredRefreshPlan.skipped.map((item) => item.reason)))
+    .map((reason) => `${t(`omc.quota_skip_${reason}`)} (${filteredRefreshPlan.skipped.filter((item) => item.reason === reason).length})`)
+    .join('; ');
 
   const displayProviderForAuthorization = React.useCallback((providerId: string) => (
     records.find((record) => record.authorizationProviderId === providerId)?.displayProvider ?? providerId
@@ -824,6 +800,7 @@ export const OAuthManagementPage: React.FC = () => {
         selectedCount={selectedRecords.length}
         selectablePageCount={pagedRecords.filter((record) => record.canSelectForFileBatch).length}
         hiddenCount={hiddenSelectionCount}
+        scopeNote={selectedRecords.some((record) => record.source === 'ollama') ? t('credential.collection_scope') : undefined}
         isMutating={actions.isOperating}
         onSelectPage={() => {
           const keys = pagedRecords.filter((record) => record.canSelectForFileBatch).map((record) => record.key);
@@ -871,9 +848,9 @@ export const OAuthManagementPage: React.FC = () => {
             disabled={visibleRecords.length === 0}
             menu={{
               items: [
-                { key: 'page', label: t('omc.refresh_scope_page', { n: pagedRecords.filter((record) => record.canRefreshQuota).length }) },
+                { key: 'page', label: t('omc.refresh_scope_page', { n: buildQuotaRefreshTargets(pagedRecords).targetCount }) },
                 { key: 'filtered', label: t('omc.refresh_scope_filtered', { n: eligibleFilteredRefreshCount }) },
-                { key: 'all', label: t('omc.refresh_scope_all', { n: new Set(records.filter((record) => record.canRefreshQuota).map((record) => record.authIndex)).size }) },
+                { key: 'all', label: t('omc.refresh_scope_all', { n: buildQuotaRefreshTargets(records).targetCount }) },
               ],
               onClick: ({ key }) => void actions.refreshQuota(key as 'page' | 'filtered' | 'all', visibleRecords, pagedRecords, records),
             }}
@@ -881,6 +858,11 @@ export const OAuthManagementPage: React.FC = () => {
             <Button icon={<DownOutlined />} disabled={visibleRecords.length === 0} aria-label={t('common.more')} />
           </Dropdown>
         </Space.Compact>
+        {filteredRefreshPlan.skipped.length > 0 && (
+          <span className={styles['refresh-skips']} data-testid="quota-refresh-skips">
+            {t('credential.refresh_skipped', { n: filteredRefreshPlan.skipped.length, reasons: refreshSkipSummary })}
+          </span>
+        )}
       </Toolbar>
       {isFiltersOpen && (
         <div id="oauth-collection-filters" className={styles['advanced-filters']}>
@@ -980,7 +962,7 @@ export const OAuthManagementPage: React.FC = () => {
                   displayProvider={record.displayProvider}
                   pluginLogo={pluginOAuthLogoFor(pluginLogos, record.displayProvider)}
                   selected={selectedKeySet.has(record.key)}
-                  busy={record.source === 'ollama' ? isOllamaMutating : actions.isRecordBusy(record)}
+                  busy={actions.isRecordBusy(record) || (record.source === 'ollama' && isOllamaMutating)}
                   canTargetFile={record.canSelectForFileBatch}
                   onSelect={(checked) => {
                     setSelectedKeys((previous) => (
@@ -989,21 +971,9 @@ export const OAuthManagementPage: React.FC = () => {
                         : previous.filter((key) => key !== record.key)
                     ));
                   }}
-                  onToggle={() => {
-                    if (record.source === 'ollama') {
-                      if (record.ollamaAccount) void toggleOllamaAccount(record.ollamaAccount);
-                    } else {
-                      void actions.toggleOne(record);
-                    }
-                  }}
+                  onToggle={() => void actions.toggleOne(record)}
                   onDownload={() => actions.download(record)}
-                  onDelete={() => {
-                    if (record.source === 'ollama') {
-                      if (record.ollamaAccount) void deleteOllamaAccount(record.ollamaAccount.id);
-                    } else {
-                      void actions.deleteOne(record);
-                    }
-                  }}
+                  onDelete={() => void actions.deleteOne(record)}
                   onEdit={() => {
                     if (record.source === 'ollama') {
                       setEditingOllamaAccount(record.ollamaAccount ?? null);

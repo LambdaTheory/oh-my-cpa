@@ -7,6 +7,7 @@ import {
   chunkItems,
   executeBatchStatus,
   isAuthFileDisabled,
+  deriveAuthFileIdentity,
 } from '../../components/authFiles/authFileLogic';
 import {
   buildQuotaRefreshTargets,
@@ -21,6 +22,7 @@ import {
   quotaRefreshOutcomeKind,
 } from '../../utils/quotaRefreshOutcome';
 import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
+import { credentialLabel } from '../../utils/credentialLabel';
 
 export interface OAuthWorkspaceActions {
   busyFileKeys: Set<string>;
@@ -97,6 +99,8 @@ export function useOAuthWorkspaceActions(
       queryClient.invalidateQueries({ queryKey: ['management-auth-files'] }),
       queryClient.invalidateQueries({ queryKey: ['management-quota'] }),
       queryClient.invalidateQueries({ queryKey: ['management-overview'] }),
+      queryClient.invalidateQueries({ queryKey: ['ollama-accounts'] }),
+      queryClient.invalidateQueries({ queryKey: ['ollama-quota'] }),
     ]);
   }, [queryClient]);
 
@@ -127,7 +131,7 @@ export function useOAuthWorkspaceActions(
   }, []);
 
   const recordTargetKeys = React.useCallback((record: OAuthWorkspaceRecord): string[] => {
-    const keys = [`file:${record.fileName}`];
+    const keys = [record.source === 'ollama' ? `ollama-account:${record.ollamaAccount?.id}` : `file:${record.fileName}`];
     if (record.authIndex) keys.push(`quota:${record.authIndex}`);
     return keys;
   }, []);
@@ -223,7 +227,9 @@ export function useOAuthWorkspaceActions(
     const targets = reservation.reservedKeys;
     markFileBusy([record.key], true);
     try {
-      const result = await api.deleteManagementAuthFiles([record.fileName]);
+      const result = record.source === 'ollama' && record.ollamaAccount
+        ? (await api.deleteOllamaAccount(record.ollamaAccount.id), { files: [record.fileName], failed: [] })
+        : await api.deleteManagementAuthFiles([record.fileName]);
       const confirmedByResponse = Boolean(result.files?.includes(record.fileName));
       const confirmed = confirmedByResponse || await confirmSingleDeletion(record.fileName);
       if (!confirmed) {
@@ -268,7 +274,11 @@ export function useOAuthWorkspaceActions(
     try {
       const latest = recordsRef.current.find((candidate) => candidate.key === record.key);
       if (!latest || !latest.canToggleFile) return;
-      await api.setManagementAuthFileStatus(latest.fileName, !isAuthFileDisabled(latest.file), latest.authIndex);
+      if (latest.source === 'ollama' && latest.ollamaAccount) {
+        await api.updateOllamaAccount(latest.ollamaAccount.id, { enabled: !latest.ollamaAccount.enabled });
+      } else {
+        await api.setManagementAuthFileStatus(latest.fileName, !isAuthFileDisabled(latest.file), latest.authIndex);
+      }
       await invalidateWorkspace();
     } catch (error) {
       toast.error(errorMessage(error, t));
@@ -293,19 +303,27 @@ export function useOAuthWorkspaceActions(
     markFileBusy(targetRecords.map((record) => record.key), true);
     try {
       const outcome = await executeBatchStatus(
-        targetRecords.map((record) => record.file),
+        targetRecords.filter((record) => record.source === 'cpa').map((record) => record.file),
         disabled,
         (name, nextDisabled, authIndex) => api.setManagementAuthFileStatus(name, nextDisabled, authIndex),
         5,
       );
       const succeededNames = new Set(outcome.succeeded);
       const succeededKeys = new Set(
-        targetRecords.filter((record) => succeededNames.has(record.fileName)).map((record) => record.key),
+        targetRecords.filter((record) => record.source === 'cpa' && succeededNames.has(record.fileName)).map((record) => record.key),
       );
       const failures = [
         ...outcome.failed,
         ...reservation.conflicts.map((record) => ({ name: record.fileName, error: t('omc.operation_conflict') })),
       ];
+      for (const record of targetRecords.filter((candidate) => candidate.source === 'ollama' && candidate.ollamaAccount)) {
+        try {
+          await api.updateOllamaAccount(record.ollamaAccount!.id, { enabled: !disabled });
+          succeededKeys.add(record.key);
+        } catch (error) {
+          failures.push({ name: record.fileName, error: errorMessage(error, t) });
+        }
+      }
       setSelectedKeys((previous) => previous.filter((key) => !succeededKeys.has(key)));
       if (failures.length > 0) {
         toast.warning(t('af.failure_details_title'), {
@@ -314,8 +332,8 @@ export function useOAuthWorkspaceActions(
       } else {
         toast.success(
           disabled
-            ? t('af.batch_disable_success', { n: outcome.succeeded.length })
-            : t('af.batch_enable_success', { n: outcome.succeeded.length }),
+            ? t('af.batch_disable_success', { n: succeededKeys.size })
+            : t('af.batch_enable_success', { n: succeededKeys.size }),
         );
       }
       await invalidateWorkspace();
@@ -350,8 +368,19 @@ export function useOAuthWorkspaceActions(
       const refreshNext = async (): Promise<void> => {
         for (let record = pending.shift(); record; record = pending.shift()) {
           try {
-            await api.refreshManagementAuthFile(record.fileName, record.file.auth_index);
-            succeededCount += 1;
+            if (record.source === 'ollama' && record.ollamaAccount) {
+              let failureReason = '';
+              const captureReason = (message: string) => { failureReason = message; };
+              const outcome = await executeOllamaAccountRefresh(record.ollamaAccount.id, {
+                queryClient, t,
+                toast: { success: () => {}, info: () => {}, warning: captureReason, error: captureReason },
+              });
+              if (outcome.success) succeededCount += 1;
+              else failures.push({ name: record.fileName, error: failureReason });
+            } else {
+              await api.refreshManagementAuthFile(record.fileName, record.file.auth_index);
+              succeededCount += 1;
+            }
           } catch (error) {
             failures.push({ name: record.fileName, error: errorMessage(error, t) });
           }
@@ -371,7 +400,7 @@ export function useOAuthWorkspaceActions(
       releaseTargets(targets);
       releaseFileLock();
     }
-  }, [acquireFileLock, invalidateWorkspace, markFileBusy, toast, releaseFileLock, releaseTargets, reserveRecordSet, t]);
+  }, [acquireFileLock, invalidateWorkspace, markFileBusy, toast, queryClient, releaseFileLock, releaseTargets, reserveRecordSet, t]);
 
   const batchDelete = React.useCallback(async (selectedRecords: OAuthWorkspaceRecord[]) => {
     const eligible = selectedRecords.filter((record) => record.canDeleteFile);
@@ -385,16 +414,16 @@ export function useOAuthWorkspaceActions(
     }
     const targets = reservation.reservedKeys;
     markFileBusy(targetRecords.map((record) => record.key), true);
-    const confirmedNames: string[] = [];
+    const confirmedKeys = new Set<string>();
     const failures: Array<{ name: string; error: string }> = reservation.conflicts.map((record) => ({
       name: record.fileName,
       error: t('omc.operation_conflict'),
     }));
     try {
-      for (const chunk of chunkItems(targetRecords, 100)) {
+      for (const chunk of chunkItems(targetRecords.filter((record) => record.source === 'cpa'), 100)) {
         try {
           const response = await api.deleteManagementAuthFiles(chunk.map((record) => record.fileName));
-          confirmedNames.push(...(response.files ?? []));
+          chunk.filter((record) => response.files?.includes(record.fileName)).forEach((record) => confirmedKeys.add(record.key));
           failures.push(...(response.failed ?? []).map((item) => ({
             name: item.name,
             error: item.error || t('af.request_failed'),
@@ -410,16 +439,22 @@ export function useOAuthWorkspaceActions(
           chunk.forEach((record) => failures.push({ name: record.fileName, error: reason }));
         }
       }
-      const confirmedSet = new Set(confirmedNames);
-      const confirmedKeys = targetRecords.filter((record) => confirmedSet.has(record.fileName));
-      setSelectedKeys((previous) => previous.filter((key) => !confirmedKeys.some((record) => record.key === key)));
-      confirmedKeys.forEach((record) => onTargetGone(record.key));
+      for (const record of targetRecords.filter((candidate) => candidate.source === 'ollama' && candidate.ollamaAccount)) {
+        try {
+          await api.deleteOllamaAccount(record.ollamaAccount!.id);
+          confirmedKeys.add(record.key);
+        } catch (error) {
+          failures.push({ name: record.fileName, error: errorMessage(error, t) });
+        }
+      }
+      setSelectedKeys((previous) => previous.filter((key) => !confirmedKeys.has(key)));
+      confirmedKeys.forEach((key) => onTargetGone(key));
       if (failures.length > 0) {
         toast.warning(t('af.failure_details_title'), {
           items: failures.map((item) => ({ name: item.name, reason: item.error })),
         });
-      } else if (confirmedNames.length > 0) {
-        toast.success(t('af.deleted', { n: confirmedNames.length }));
+      } else if (confirmedKeys.size > 0) {
+        toast.success(t('af.deleted', { n: confirmedKeys.size }));
       }
       await invalidateWorkspace();
     } finally {
@@ -454,28 +489,52 @@ export function useOAuthWorkspaceActions(
   const refreshQuotaIndexes = React.useCallback(async (
     planIndexes: string[],
     skipped: Array<{ name: string; reason: string }>,
+    ollamaAccountIds: string[] = [],
   ) => {
-    if (planIndexes.length === 0) {
+    const skipDetail = Array.from(new Set(skipped.map((item) => item.reason)))
+      .map((reason) => `${reason} (${skipped.filter((item) => item.reason === reason).length})`)
+      .join('; ') || undefined;
+    if (planIndexes.length + ollamaAccountIds.length === 0) {
       // Every run reports under one key, so the previous run's report is replaced rather than
       // left open beside an answer about a different click.
-      toast.info(t('omc.quota_refresh_none'), { key: QUOTA_REFRESH_TOAST_KEY });
+      toast.info(t('omc.quota_refresh_none'), { key: QUOTA_REFRESH_TOAST_KEY, detail: skipDetail });
       return;
     }
-    const reserved = reserveTargets(planIndexes.map((index) => `quota:${index}`));
+    const allIndexes = [...planIndexes, ...ollamaAccountIds.map((id) => `ollama:${id}`)];
+    const reserved = reserveTargets(allIndexes.map((index) => `quota:${index}`));
     const targetIndexes = planIndexes.filter((index) => reserved.includes(`quota:${index}`));
-    const conflicting = planIndexes.filter((index) => !reserved.includes(`quota:${index}`));
+    const targetOllamaIds = ollamaAccountIds.filter((id) => reserved.includes(`quota:ollama:${id}`));
+    const conflicting = allIndexes.filter((index) => !reserved.includes(`quota:${index}`));
+    const labelForIndex = (index: string) => {
+      const record = recordsRef.current.find((candidate) => candidate.authIndex === index);
+      return record ? deriveAuthFileIdentity(record.file, t('credential.account_fallback', { provider: record.displayProvider })).primary
+        : t('credential.account_fallback', { provider: '' });
+    };
     // Kept apart so the report lists what needs attention first: a failure, then a target with no
     // outcome, then what was never eligible.
-    const unknowns: ToastItem[] = conflicting.map((index) => ({ name: index, reason: t('omc.operation_conflict') }));
-    markQuotaBusy(targetIndexes, true);
+    const unknowns: ToastItem[] = conflicting.map((index) => ({ name: labelForIndex(index), reason: t('omc.operation_conflict') }));
+    const busyIndexes = [...targetIndexes, ...targetOllamaIds.map((id) => `ollama:${id}`)];
+    markQuotaBusy(busyIndexes, true);
     try {
       const outcome = await refreshCredentialQuotas(targetIndexes, mergeReturnedQuota);
       const failures: ToastItem[] = outcome.failures.map((failure) => ({
-        name: failure.name,
+        name: labelForIndex(failure.authIndex),
         reason: quotaRefreshFailureReason(failure, t),
       }));
-      outcome.unknownIndexes.forEach((index) => unknowns.push({ name: index, reason: t('omc.quota_refresh_unknown') }));
-      const succeeded = outcome.succeeded;
+      outcome.unknownIndexes.forEach((index) => unknowns.push({ name: labelForIndex(index), reason: t('omc.quota_refresh_unknown') }));
+      let succeeded = outcome.succeeded;
+      // The dedicated helper retains last-good cache data and reports server backoff.
+      // Keep one aggregate report instead of a toast per monitored account.
+      for (const id of targetOllamaIds) {
+        let failureReason = '';
+        const captureReason = (message: string) => { failureReason = message; };
+        const result = await executeOllamaAccountRefresh(id, {
+          queryClient, t,
+          toast: { success: () => {}, info: () => {}, warning: captureReason, error: captureReason },
+        });
+        if (result.success) succeeded += 1;
+        else failures.push({ name: labelForIndex(`ollama:${id}`), reason: failureReason });
+      }
       const failed = failures.length;
       // A target held by another operation was not refreshed either. Counting it as skipped
       // would let a run that refreshed nothing report a clean acknowledgement, so it is
@@ -502,12 +561,12 @@ export function useOAuthWorkspaceActions(
       } else {
         toast.success(
           t('omc.quota_refresh_report_clean', { succeeded, skipped: skippedCount }),
-          { key: QUOTA_REFRESH_TOAST_KEY },
+          { key: QUOTA_REFRESH_TOAST_KEY, detail: skipDetail },
         );
       }
       await queryClient.invalidateQueries({ queryKey: ['management-quota'] });
     } finally {
-      markQuotaBusy(targetIndexes, false);
+      markQuotaBusy(busyIndexes, false);
       releaseTargets(reserved);
     }
   }, [mergeReturnedQuota, toast, queryClient, releaseTargets, reserveTargets, t]);
@@ -542,9 +601,9 @@ export function useOAuthWorkspaceActions(
     const source = scope === 'page' ? pageRecords : scope === 'all' ? allRecords : filteredRecords;
     const plan = buildQuotaRefreshTargets(source);
     await refreshQuotaIndexes(plan.eligibleIndexes, plan.skipped.map((item) => ({
-      name: item.name,
+      name: credentialLabel(item.name, [item.authIndex], t('credential.account_fallback', { provider: '' }).trim()),
       reason: t(`omc.quota_skip_${item.reason}`),
-    })));
+    })), plan.ollamaAccountIds);
   }, [refreshQuotaIndexes, t]);
 
   const clearCooldown = React.useCallback(async (record: OAuthWorkspaceRecord) => {
