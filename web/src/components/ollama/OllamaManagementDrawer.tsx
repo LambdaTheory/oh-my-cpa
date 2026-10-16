@@ -8,12 +8,14 @@ import { Notice, useToast } from '../feedback';
 import { EmptyState } from '../common/EmptyState';
 import { PageLoading } from '../common/PageLoading';
 import { StatusLabel, type StatusTone } from '../common/StatusLabel';
-import { PlusOutlined, DeleteOutlined, EditOutlined, ReloadOutlined } from '../icons';
+import { PlusOutlined, DeleteOutlined, EditOutlined, ReloadOutlined, SyncOutlined } from '../icons';
 import { api } from '../../api/client';
 import { useT } from '../../i18n';
 import { isDemoMode } from '../../types/demoMode';
 import { getTimeZone } from '../../utils/time';
 import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
+import { formatTimeWithCountdown } from '../../pages/quota/quotaFormat';
+import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
 import { OllamaAccountEditorModal } from './OllamaAccountEditorModal';
 import type { OllamaAccountDTO, OllamaAccountWritePayload, OllamaQuotaDTO } from '../../types/ollama';
 
@@ -32,20 +34,36 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
   // Dialog State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<OllamaAccountDTO | null>(null);
+  const [refreshingAccountIds, setRefreshingAccountIds] = useState<Record<string, boolean>>({});
 
   // Queries
   const accountsQuery = useQuery({
     queryKey: ['ollama-accounts'],
     queryFn: () => api.listOllamaAccounts(),
     enabled: open,
-    refetchInterval: 20_000,
+    refetchInterval: (query) => {
+      // Auto-poll short interval (2.5s) if any account has refreshing: true within 45s, otherwise 20s
+      const data = query.state.data;
+      const now = Date.now();
+      const isAnyRefreshing = data?.accounts?.some(
+        (a) => a.refreshing && (!a.last_observed_at_ms || now - a.last_observed_at_ms < 45_000)
+      );
+      return isAnyRefreshing ? 2500 : 20_000;
+    },
   });
 
   const quotaQuery = useQuery({
     queryKey: ['ollama-quota'],
     queryFn: () => api.getOllamaQuota(),
     enabled: open,
-    refetchInterval: 20_000,
+    refetchInterval: () => {
+      const accounts = accountsQuery.data?.accounts;
+      const now = Date.now();
+      const isAnyRefreshing = accounts?.some(
+        (a) => a.refreshing && (!a.last_observed_at_ms || now - a.last_observed_at_ms < 45_000)
+      );
+      return isAnyRefreshing ? 2500 : 20_000;
+    },
   });
 
   // Mutations
@@ -287,6 +305,21 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
                           toggleSwitchMutation.mutate({ account, enabled: checked })
                         }
                         aria-label={account.label || account.id}
+                      />
+                      <Button
+                        size="small"
+                        icon={<SyncOutlined spin={Boolean(refreshingAccountIds[account.id] || account.refreshing)} />}
+                        disabled={Boolean(refreshingAccountIds[account.id] || account.refreshing) || isDemo || Boolean(account.retry_at_ms && account.retry_at_ms > Date.now())}
+                        aria-label={t('quota.btn_refresh_quota')}
+                        title={account.retry_at_ms && account.retry_at_ms > Date.now() ? formatTimeWithCountdown(account.retry_at_ms, Date.now(), t) : t('quota.btn_refresh_quota')}
+                        onClick={async () => {
+                          setRefreshingAccountIds((prev) => ({ ...prev, [account.id]: true }));
+                          try {
+                            await executeOllamaAccountRefresh(account.id, { queryClient, t, toast });
+                          } finally {
+                            setRefreshingAccountIds((prev) => ({ ...prev, [account.id]: false }));
+                          }
+                        }}
                       />
                       <Button
                         size="small"

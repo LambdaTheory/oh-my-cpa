@@ -19,11 +19,28 @@
 package ollama
 
 import (
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 )
+
+// ErrAccountNotFound is returned by a per-account refresh when the account does
+// not exist (or has just been deleted). The console maps it to a 404.
+var ErrAccountNotFound = errors.New("ollama: account not found")
+
+// ErrServiceNotStarted is returned by a per-account refresh before the collector's
+// process lifetime context is installed. It is the safe refusal for a request that
+// arrives before Start; it is never a reason to fall back to the request context.
+var ErrServiceNotStarted = errors.New("ollama: collector is not started")
+
+// ErrRefreshSuperseded is returned by a manual refresh when the scrape read a cookie
+// the operator replaced while it was running, or coalesced onto an automatic scrape
+// whose reading was refused because the account is now paused. The reading was not
+// persisted, so the console reports the refresh as incomplete rather than as an old
+// success; it is not retried automatically.
+var ErrRefreshSuperseded = errors.New("ollama: refresh superseded by a newer change")
 
 // Provider is the display provider this feature reports. It is deliberately not
 // a CPA credential provider: an Ollama account read here is decoupled from CPA's
@@ -42,6 +59,19 @@ const (
 	DefaultTimeout     = 20 * time.Second
 	DefaultBackoffBase = 5 * time.Minute
 	DefaultBackoffMax  = 6 * time.Hour
+
+	// DefaultManualMinGap is the shortest interval between two console-forced
+	// refreshes of one account. It exists so a held-down button cannot hammer the
+	// settings page; a normal operator action is well outside it.
+	DefaultManualMinGap = 30 * time.Second
+	// DefaultConcurrency caps how many scrapes run at once across the periodic
+	// pass, the create/update triggers and manual refreshes, so a burst of newly
+	// added accounts does not open a connection per account.
+	DefaultConcurrency = 2
+	// DefaultRefreshTimeout bounds one manual refresh end to end - waiting for a
+	// concurrency permit, the scrape and the reload - so a saturated service cannot
+	// hold an HTTP request open indefinitely.
+	DefaultRefreshTimeout = 20 * time.Second
 )
 
 // Failure names why a scrape did not produce a quota reading. The zero value is a

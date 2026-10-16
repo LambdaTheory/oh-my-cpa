@@ -118,6 +118,8 @@ func TestDemoPolicyRefusesTheDangerousSurface(t *testing.T) {
 		{http.MethodPost, "/api/v1/management/providers/pull-models"},
 		{http.MethodPost, "/api/v1/management/providers/probe"},
 		{http.MethodPost, "/api/v1/pricing/sync"},
+		// A manual Ollama refresh would scrape ollama.com with a stored cookie.
+		{http.MethodPost, "/api/v1/ollama/accounts/some-id/refresh"},
 	}
 	for _, route := range refused {
 		rule, match := demoVerdictFor(route.method, route.path)

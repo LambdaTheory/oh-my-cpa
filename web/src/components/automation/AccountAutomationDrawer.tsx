@@ -25,6 +25,41 @@ interface AccountAutomationDrawerProps {
   onClose: () => void;
 }
 
+function getAccountAutomationDisplayName(item?: { auth_index?: string; account_label?: string; name?: string; provider?: string } | null): {
+  primary: string;
+  secondary?: string;
+  provider?: string;
+} {
+  if (!item) return { primary: '—' };
+  const provider = item.provider;
+  if (item.account_label) {
+    return {
+      primary: item.account_label,
+      secondary: item.name && item.name !== item.account_label ? item.name : undefined,
+      provider,
+    };
+  }
+  if (item.name) {
+    return {
+      primary: item.name,
+      provider,
+    };
+  }
+  if (item.auth_index) {
+    return {
+      primary: item.auth_index,
+      provider,
+    };
+  }
+  if (provider) {
+    return {
+      primary: provider,
+      provider,
+    };
+  }
+  return { primary: '—' };
+}
+
 export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = ({ open, onClose }) => {
   const t = useT();
   const toast = useToast();
@@ -459,55 +494,55 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
               const r = account.monitor_reason?.toLowerCase();
               const isMissingReset = r === 'missing_reset' || r === 'exhausted_missing_reset';
 
-              return (
-                <div
-                  key={account.auth_index}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 8,
-                    padding: '12px 14px',
-                    background: 'var(--surface)',
-                    border: '1px solid var(--border)',
-                    borderRadius: 'var(--radius)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <span style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
-                        {account.auth_index}
-                      </span>
-                      {account.account_label && (
-                        <span style={{ color: 'var(--fg2)', fontSize: 13 }}>
-                          ({account.account_label})
-                        </span>
-                      )}
-                      {account.name && (
-                        <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                          {account.name}
-                        </span>
-                      )}
-                      {account.is_adopted ? (
-                        <Tag size="small" tone="accent">{t('automation.tag_adopted')}</Tag>
-                      ) : (
-                        <Tag size="small">{t('automation.tag_not_adopted')}</Tag>
-                      )}
-                      {account.disabled_by_automation ? (
-                        <Tag size="small" tone="danger">{t('automation.tag_disabled_by_auto')}</Tag>
-                      ) : !account.is_enabled ? (
-                        <Tag size="small">{t('automation.tag_disabled_external')}</Tag>
-                      ) : null}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
-                      <Switch
-                        size="small"
-                        checked={account.is_enabled}
-                        disabled={isDemo || !account.is_adopted || accountSwitchMutation.isPending}
-                        onChange={(checked) =>
-                          accountSwitchMutation.mutate({ authIndex: account.auth_index, enabled: checked })
-                        }
-                        aria-label={account.auth_index}
+                  const nameInfo = getAccountAutomationDisplayName(account);
+
+                  return (
+                    <div
+                      key={account.auth_index}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                        padding: '12px 14px',
+                        background: 'var(--surface)',
+                        border: '1px solid var(--border)',
+                        borderRadius: 'var(--radius)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 600 }}>
+                            {nameInfo.primary}
+                          </span>
+                          {nameInfo.secondary && (
+                            <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                              ({nameInfo.secondary})
+                            </span>
+                          )}
+                          {nameInfo.provider && (
+                            <Tag size="small">{nameInfo.provider}</Tag>
+                          )}
+                          {account.is_adopted ? (
+                            <Tag size="small" tone="accent">{t('automation.tag_adopted')}</Tag>
+                          ) : (
+                            <Tag size="small">{t('automation.tag_not_adopted')}</Tag>
+                          )}
+                          {account.disabled_by_automation ? (
+                            <Tag size="small" tone="danger">{t('automation.tag_disabled_by_auto')}</Tag>
+                          ) : !account.is_enabled ? (
+                            <Tag size="small">{t('automation.tag_disabled_external')}</Tag>
+                          ) : null}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                          <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
+                          <Switch
+                            size="small"
+                            checked={account.is_enabled}
+                            disabled={isDemo || !account.is_adopted || accountSwitchMutation.isPending}
+                            onChange={(checked) =>
+                              accountSwitchMutation.mutate({ authIndex: account.auth_index, enabled: checked })
+                            }
+                            aria-label={nameInfo.primary}
                       />
                     </div>
                   </div>
@@ -572,7 +607,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                           onClick={() => {
                             modal.confirm({
                               title: t('automation.btn_cancel_retry'),
-                              content: t('automation.cancel_confirm'),
+                              content: `${nameInfo.primary}: ${t('automation.cancel_confirm')}`,
                               onOk: () => cancelMutation.mutate(account.auth_index),
                             });
                           }}
@@ -666,48 +701,58 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
             }}
           >
             {candidates.length > 0 ? (
-              candidates.map((c) => (
-                <Checkbox
-                  key={c.auth_index}
-                  checked={selectedAdoptKeys.includes(c.auth_index)}
-                  disabled={!c.eligible}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedAdoptKeys([...selectedAdoptKeys, c.auth_index]);
-                    } else {
-                      setSelectedAdoptKeys(selectedAdoptKeys.filter((k) => k !== c.auth_index));
-                    }
-                  }}
-                >
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{c.auth_index}</span>
-                  {c.account_label && <span style={{ marginLeft: 6, color: 'var(--fg2)' }}>({c.account_label})</span>}
-                  {c.adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
-                  {c.disabled && <span style={{ marginLeft: 6, color: 'var(--warn)', fontSize: 12 }}>[{t('automation.tag_disabled_external')}]</span>}
-                  {!c.eligible && c.ineligible_reason && (
-                    <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
-                      ({getReasonLabel(c.ineligible_reason)})
-                    </span>
-                  )}
-                </Checkbox>
-              ))
+              candidates.map((c) => {
+                const nameInfo = getAccountAutomationDisplayName(c);
+                return (
+                  <Checkbox
+                    key={c.auth_index}
+                    checked={selectedAdoptKeys.includes(c.auth_index)}
+                    disabled={!c.eligible}
+                    aria-label={c.auth_index}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedAdoptKeys([...selectedAdoptKeys, c.auth_index]);
+                      } else {
+                        setSelectedAdoptKeys(selectedAdoptKeys.filter((k) => k !== c.auth_index));
+                      }
+                    }}
+                  >
+                    <span style={{ fontWeight: 500, fontSize: 13 }}>{c.auth_index}</span>
+                    {c.account_label && <span style={{ marginLeft: 6, color: 'var(--fg2)', fontSize: 12 }}>({c.account_label})</span>}
+                    {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
+                    {c.adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
+                    {c.disabled && <span style={{ marginLeft: 6, color: 'var(--warn)', fontSize: 12 }}>[{t('automation.tag_disabled_external')}]</span>}
+                    {!c.eligible && c.ineligible_reason && (
+                      <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
+                        ({getReasonLabel(c.ineligible_reason)})
+                      </span>
+                    )}
+                  </Checkbox>
+                );
+              })
             ) : (
-              accounts.map((a) => (
-                <Checkbox
-                  key={a.auth_index}
-                  checked={selectedAdoptKeys.includes(a.auth_index)}
-                  onChange={(e) => {
-                    if (e.target.checked) {
-                      setSelectedAdoptKeys([...selectedAdoptKeys, a.auth_index]);
-                    } else {
-                      setSelectedAdoptKeys(selectedAdoptKeys.filter((k) => k !== a.auth_index));
-                    }
-                  }}
-                >
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{a.auth_index}</span>
-                  {a.account_label && <span style={{ marginLeft: 6, color: 'var(--fg2)' }}>({a.account_label})</span>}
-                  {a.is_adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
-                </Checkbox>
-              ))
+              accounts.map((a) => {
+                const nameInfo = getAccountAutomationDisplayName(a);
+                return (
+                  <Checkbox
+                    key={a.auth_index}
+                    checked={selectedAdoptKeys.includes(a.auth_index)}
+                    aria-label={nameInfo.primary}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedAdoptKeys([...selectedAdoptKeys, a.auth_index]);
+                      } else {
+                        setSelectedAdoptKeys(selectedAdoptKeys.filter((k) => k !== a.auth_index));
+                      }
+                    }}
+                  >
+                    <span style={{ fontWeight: 500, fontSize: 13 }}>{nameInfo.primary}</span>
+                    {nameInfo.secondary && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>({nameInfo.secondary})</span>}
+                    {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
+                    {a.is_adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
+                  </Checkbox>
+                );
+              })
             )}
           </div>
 
@@ -760,8 +805,14 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>{t('automation.manual_reset_desc')}</p>
-          <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
-            {manualResetTarget?.auth_index}
+          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>{getAccountAutomationDisplayName(manualResetTarget).primary}</span>
+            {getAccountAutomationDisplayName(manualResetTarget).secondary && (
+              <span style={{ color: 'var(--muted)', fontSize: 12 }}>({getAccountAutomationDisplayName(manualResetTarget).secondary})</span>
+            )}
+            {getAccountAutomationDisplayName(manualResetTarget).provider && (
+              <Tag size="small">{getAccountAutomationDisplayName(manualResetTarget).provider}</Tag>
+            )}
           </div>
           <div>
             <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>

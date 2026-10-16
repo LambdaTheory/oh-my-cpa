@@ -20,6 +20,7 @@ import {
   QUOTA_REFRESH_TOAST_KEY,
   quotaRefreshOutcomeKind,
 } from '../../utils/quotaRefreshOutcome';
+import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
 
 export interface OAuthWorkspaceActions {
   busyFileKeys: Set<string>;
@@ -512,9 +513,25 @@ export function useOAuthWorkspaceActions(
   }, [mergeReturnedQuota, toast, queryClient, releaseTargets, reserveTargets, t]);
 
   const refreshQuotaForRecord = React.useCallback(async (record: OAuthWorkspaceRecord) => {
+    if (record.source === 'ollama' && record.ollamaAccount && record.authIndex) {
+      const reserved = reserveTargets([`quota:${record.authIndex}`]);
+      if (reserved.length === 0) {
+        toast.warning(t('omc.operation_conflict'));
+        return;
+      }
+      markQuotaBusy([record.authIndex], true);
+      try {
+        await executeOllamaAccountRefresh(record.ollamaAccount.id, { queryClient, t, toast });
+      } finally {
+        markQuotaBusy([record.authIndex], false);
+        releaseTargets(reserved);
+      }
+      return;
+    }
+
     if (!record.canRefreshQuota || !record.authIndex) return;
     await refreshQuotaIndexes([record.authIndex], []);
-  }, [refreshQuotaIndexes]);
+  }, [markQuotaBusy, queryClient, refreshQuotaIndexes, releaseTargets, reserveTargets, t, toast]);
 
   const refreshQuota = React.useCallback(async (
     scope: 'page' | 'filtered' | 'all',

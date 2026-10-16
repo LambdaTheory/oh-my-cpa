@@ -455,7 +455,15 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   numeric percentage: a missing value is "not reported", never zero, and the window
   duration stays unknown because the page states none. The per-account switch stops
   collection only; it is not a CPA credential state and never claims to stop
-  inference. Ollama is the deliberate exception to the CPA data sources.
+  inference. Adding an enabled account, changing its cookie or resuming it triggers a
+  scrape at once, and the console can force one account with an explicit manual
+  refresh; the switch gates the periodic pass, so a single manual refresh still works
+  on a paused account. A scrape carries the cookie version it read, so a result from a
+  cookie the operator has since replaced is dropped; an automatic result never writes to
+  a disabled account, while a manual refresh of a paused account does. Enable state is
+  not a generation: a label edit does not invalidate a reading, and a disable plus a
+  quick resume under one in-flight scrape is an accepted race, not a security boundary.
+  Ollama is the deliberate exception to the CPA data sources.
 - **Feishu Notification**: One message the Feishu bot sends to the operator's group
   from OMC's stored quota data, after denoising. It is not a language model and holds
   no Agent session. A problem is announced once per episode - a credential is invalid,

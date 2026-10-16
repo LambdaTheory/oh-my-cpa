@@ -580,6 +580,12 @@ export function buildQuotaRefreshTargets(
       skipped.push({ authIndex: index, name: record.fileName, reason: 'credential-disabled' });
       continue;
     }
+    if (record.source === 'ollama') {
+      // Ollama records are refreshed individually via their dedicated endpoint,
+      // and not through the bulk /api/v1/management/quota/refresh endpoint.
+      skipped.push({ authIndex: index, name: record.fileName, reason: 'refresh-unsupported' });
+      continue;
+    }
     if (!record.quota.capabilities?.refresh_supported) {
       skipped.push({ authIndex: index, name: record.fileName, reason: 'refresh-unsupported' });
       continue;

@@ -83,6 +83,7 @@ import type {
   OllamaAccountListResponse,
   OllamaAccountWritePayload,
   OllamaQuotaResponse,
+  OllamaRefreshResponse,
 } from '../types/ollama';
 import type {
   FeishuSettingsDTO,
@@ -1301,6 +1302,12 @@ export const api = {
   async deleteOllamaAccount(id: string): Promise<{ ok: boolean }> {
     return request<{ ok: boolean }>(`/ollama/accounts/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    });
+  },
+
+  async refreshOllamaAccount(id: string): Promise<OllamaRefreshResponse> {
+    return request<OllamaRefreshResponse>(`/ollama/accounts/${encodeURIComponent(id)}/refresh`, {
+      method: 'POST',
     });
   },
 

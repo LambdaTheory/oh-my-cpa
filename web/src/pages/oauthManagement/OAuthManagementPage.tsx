@@ -40,6 +40,7 @@ import { BatchActionBar } from '../../components/authFiles/BatchActionBar';
 import { OAuthModelRulesDrawer } from '../../components/authFiles/OAuthModelRulesDrawer';
 import { AccountAutomationDrawer } from '../../components/automation/AccountAutomationDrawer';
 import { OllamaManagementDrawer } from '../../components/ollama/OllamaManagementDrawer';
+import { OllamaDetailDrawer } from '../../components/ollama/OllamaDetailDrawer';
 import { OllamaAccountEditorModal } from '../../components/ollama/OllamaAccountEditorModal';
 import type { OllamaAccountDTO, OllamaAccountWritePayload } from '../../types/ollama';
 import { ProviderFilterTabs } from '../../components/common/ProviderFilterTabs';
@@ -153,6 +154,14 @@ export const OAuthManagementPage: React.FC = () => {
     staleTime: 15_000,
     retry: 1,
     placeholderData: keepPreviousData,
+    refetchInterval: (query) => {
+      const now = Date.now();
+      // Only short-poll accounts that have refreshing: true and are not stuck beyond 45s
+      const isAnyRefreshing = query.state.data?.accounts?.some(
+        (a) => a.refreshing && (!a.last_observed_at_ms || now - a.last_observed_at_ms < 45_000)
+      );
+      return isAnyRefreshing ? 2500 : false;
+    },
   });
   const ollamaQuotaQuery = useQuery({
     queryKey: ['ollama-quota'],
@@ -160,6 +169,13 @@ export const OAuthManagementPage: React.FC = () => {
     staleTime: 15_000,
     retry: 1,
     placeholderData: keepPreviousData,
+    refetchInterval: () => {
+      const now = Date.now();
+      const isAnyRefreshing = ollamaAccountsQuery.data?.accounts?.some(
+        (a) => a.refreshing && (!a.last_observed_at_ms || now - a.last_observed_at_ms < 45_000)
+      );
+      return isAnyRefreshing ? 2500 : false;
+    },
   });
 
   const choices = React.useMemo(
@@ -387,6 +403,7 @@ export const OAuthManagementPage: React.FC = () => {
   const [isVertexImportOpen, setIsVertexImportOpen] = React.useState(false);
   const [isAutomationOpen, setIsAutomationOpen] = React.useState(false);
   const [isOllamaOpen, setIsOllamaOpen] = React.useState(false);
+  const [selectedOllamaAccount, setSelectedOllamaAccount] = React.useState<OllamaAccountDTO | null>(null);
   const [editingOllamaAccount, setEditingOllamaAccount] = React.useState<OllamaAccountDTO | null>(null);
   const [isOllamaEditorOpen, setIsOllamaEditorOpen] = React.useState(false);
   const [isOllamaMutating, setIsOllamaMutating] = React.useState(false);
@@ -996,7 +1013,13 @@ export const OAuthManagementPage: React.FC = () => {
                     }
                   }}
                   onShowModels={() => openCredential(record, 'models')}
-                  onShowDetails={() => openCredential(record, 'overview')}
+                  onShowDetails={() => {
+                    if (record.source === 'ollama' && record.ollamaAccount) {
+                      setSelectedOllamaAccount(record.ollamaAccount);
+                    } else {
+                      openCredential(record, 'overview');
+                    }
+                  }}
                   onRefreshQuota={() => void actions.refreshQuotaForRecord(record)}
                   canRefreshQuota={record.canRefreshQuota}
                   isRefreshingQuota={Boolean(record.authIndex && actions.busyQuotaIndexes.has(record.authIndex))}
@@ -1102,6 +1125,19 @@ export const OAuthManagementPage: React.FC = () => {
       <AccountAutomationDrawer
         open={isAutomationOpen}
         onClose={() => setIsAutomationOpen(false)}
+      />
+
+      <OllamaDetailDrawer
+        open={Boolean(selectedOllamaAccount)}
+        account={selectedOllamaAccount ? (ollamaAccountsQuery.data?.accounts.find((a) => a.id === selectedOllamaAccount.id) ?? selectedOllamaAccount) : null}
+        quota={selectedOllamaAccount ? ollamaQuotaQuery.data?.accounts.find((q) => q.account_id === selectedOllamaAccount.id)?.quota : null}
+        onClose={() => setSelectedOllamaAccount(null)}
+        onEdit={(account) => {
+          setSelectedOllamaAccount(null);
+          setEditingOllamaAccount(account);
+          setIsOllamaEditorOpen(true);
+        }}
+        onDeleted={() => setSelectedOllamaAccount(null)}
       />
 
       <OllamaManagementDrawer

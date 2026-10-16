@@ -26,7 +26,12 @@ Migration `044_ollama_accounts.sql` adds one table, `ollama_accounts`:
   label or cookie.
 - `label` — the operator's display name.
 - `enabled` — gates collection only, never CPA.
-- `cookie_ciphertext`, `cookie_nonce` — the AES-GCM encrypted session cookie.
+- `cookie_ciphertext`, `cookie_nonce`, `cookie_updated_at_ms` — the AES-GCM encrypted
+  session cookie and its version. Replacing the cookie raises the version strictly, so a
+  scrape that read an older cookie cannot overwrite the reading of a newer one.
+- `updated_at_ms` — ordinary metadata: when the account row was last updated. It is
+  deliberately not a generation: a label edit or an enable toggle does not invalidate a
+  reading that is already due or in flight.
 - `status`, `last_success_at_ms`, `last_observed_at_ms`, `newest_error`,
   `newest_error_at_ms` — the newest collection outcome. `last_observed_at_ms` moves
   on every attempt, success or failure, so "never collected" is distinguishable from
@@ -47,8 +52,38 @@ The collector (`internal/ollama`) runs once on start and then every
 the integration owner wires the repository and the cipher in, and tests inject a
 clock, a fetch and a store.
 
-- Only enabled accounts are fetched; a disabled account is skipped, and turning it
-  off also drops any pending backoff.
+One `ollama.Collector` is the single per-account refresh entry point, shared by the
+periodic pass, the create/update triggers and the console's manual refresh. A scrape
+that is already running is joined rather than duplicated, at most two scrapes run at
+once across every entry point, and a persisted backoff suppresses all of them. A
+scrape result carries the cookie version it read, and the store writes it only while
+the cookie still matches and - for an automatic result - the account is still enabled.
+The design is deliberately simple rather than a full lifecycle state machine: label
+edits and enable toggles do not invalidate a reading, and this lane does not track an
+enable generation.
+
+- Only enabled accounts are fetched on the periodic pass; a disabled account is
+  skipped, and turning it off also drops any pending backoff. An explicit manual
+  refresh may still read a paused account once, without changing `enabled`. An
+  automatic result that finishes while the account is disabled is refused, so it does
+  not rewrite the status, error, snapshot or retry schedule; a manual refresh of the
+  paused account is written.
+- Adding an enabled account, changing its cookie, or bringing a paused account back on
+  triggers a scrape at once, without waiting for the cadence. A label-only edit sends
+  no request, and a created-disabled account stays untouched. The triggers run on the
+  service's long-lived context, so a trigger that outlives its request is not cancelled.
+- A trigger runs one round. A cookie change that lands while a scrape is already running
+  is **not** dropped to the cadence: the running scrape read the old cookie, the store
+  refuses its result, and the account is left as one pending marker so the worker takes
+  the newest cookie in one more round. Repeated changes to the same account collapse
+  into that single marker rather than one scrape per change. A live 429, a pause or a
+  shutdown stops the follow-up, and the account's enable state is never turned into a
+  generation.
+- **Accepted race.** A disable and a quick resume that both land under one in-flight
+  scrape are not tracked: that scrape may write its reading to the resumed account,
+  because its cookie is unchanged and the account is enabled again when it finishes.
+  This is accepted for a self-hosted deployment of a few trusted operators reading
+  quota; it is not a security boundary and does not claim to be one.
 - The target is the fixed settings URL. There is no operator input that can point
   the collector at another address, and redirects are not followed, so a redirect
   can neither be mistaken for a login page nor carry the cookie off-domain.
@@ -57,7 +92,8 @@ clock, a fetch and a store.
 - A timeout, a `429` or any other transport failure is a `transport_error`; a page
   that parses to no numeric window is a `parse_error`. Both back off. A `429`'s
   `Retry-After` is honoured when present; otherwise the wait doubles from
-  `DefaultBackoffBase` (5 minutes) up to `DefaultBackoffMax` (6 hours).
+  `DefaultBackoffBase` (5 minutes) up to `DefaultBackoffMax` (6 hours). A manual
+  refresh, or a first/update-cookie trigger, never bypasses a live backoff.
 - Only a numeric percentage makes a window real. Missing values are never filled
   with `0` or `100`, and a value outside `[0,100]` (including a negative such as
   `-1%`) or a non-numeric value is refused rather than clamped to a fabricated
@@ -66,7 +102,9 @@ clock, a fetch and a store.
   unknown, because the page does not state one and it must not be inferred as "5h".
 - On success the safe snapshot and the auth index `ollama:<id>` are persisted. The
   shared observation timeline is written only when a window states a real duration,
-  which Ollama does not today.
+  which Ollama does not today. A failure keeps the last good snapshot and only
+  advances `last_observed_at_ms`, so "collected and failed" is distinguishable from
+  "never collected".
 
 ## HTTP API
 
@@ -77,10 +115,11 @@ of them. Wire fields are `snake_case`.
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/v1/ollama/accounts` | List accounts; each carries `has_cookie`, never the cookie. |
-| POST | `/api/v1/ollama/accounts` | Add an account; `cookie` is required. |
-| GET | `/api/v1/ollama/accounts/{id}` | One account's metadata. |
-| PUT | `/api/v1/ollama/accounts/{id}` | Update `label`, `enabled` and/or `cookie`; an omitted cookie keeps the stored one. |
+| POST | `/api/v1/ollama/accounts` | Add an account; `cookie` is required. An enabled account is scraped at once. |
+| GET | `/api/v1/ollama/accounts/{id}` | One account's metadata, including `refreshing` and the live `retry_at_ms`. |
+| PUT | `/api/v1/ollama/accounts/{id}` | Update `label`, `enabled` and/or `cookie`; an omitted cookie keeps the stored one. A cookie change or a resume triggers a scrape; a label-only edit does not. |
 | DELETE | `/api/v1/ollama/accounts/{id}` | Remove an account. |
+| POST | `/api/v1/ollama/accounts/{id}/refresh` | Force one scrape now. Synchronous and bounded; coalesces with a scrape already running. |
 | GET | `/api/v1/ollama/quota` | The newest stored snapshots, read-only; never triggers a scrape. |
 
 Account DTO (never includes the cookie):
@@ -98,9 +137,52 @@ Account DTO (never includes the cookie):
   "next_attempt_at_ms": 0,
   "attempt_count": 0,
   "created_at_ms": 0,
-  "updated_at_ms": 0
+  "updated_at_ms": 0,
+  "refreshing": false,
+  "retry_at_ms": 0
 }
 ```
+
+`refreshing` is true while a scrape for the account is in flight; `retry_at_ms` is the
+earliest instant a refresh is allowed again (a persisted backoff or the manual gap,
+whichever is later) and is omitted when nothing is pending.
+
+### Manual refresh
+
+`POST /api/v1/ollama/accounts/{id}/refresh` is a console session write; the read-only
+MCP key reaches none of these routes and a demo refuses it. It is synchronous and
+answers after the scrape finishes. The whole call - waiting for a concurrency permit,
+the scrape and the reload - shares one budget (`RefreshTimeout`, 20 seconds by
+default) that is rooted in the collector's process context, not the request: a client
+that disconnects does not truncate a scrape, no second timeout is stacked on top of
+the first, and a request held behind a saturated service returns by the deadline with
+`refreshed` false instead of queueing and then scraping. Before the collector's
+process context is installed (the instant before the listener accepts, or a service
+that was never started) the route answers `503`. It answers:
+
+```json
+{
+  "account": { "…": "the metadata above, after the attempt" },
+  "quota": { "…": "the newest safe snapshot, when one exists" },
+  "refreshed": true,
+  "retry_at_ms": 0
+}
+```
+
+- `refreshed` is true only when a scrape actually ran for the request and its reading
+  was written. A request that coalesces onto a scrape already in flight returns that
+  scrape's real outcome; it is never reported as a fresh success that did not happen.
+- The manual refresh runs one round and does not chase a change that lands under it. If
+  the cookie was replaced while it ran (so the store refused the old-cookie reading),
+  it answers the existing `503` ("the account changed while it ran") instead of
+  returning an old success; the next click or the next cadence reads the new cookie.
+- When a persisted backoff or the manual minimum gap still applies, the response is
+  `429` with `refreshed` false and `retry_at_ms` naming when the account is free, so the
+  console disables the button instead of hammering `ollama.com`.
+- A missing account is `404`. With the collector switched off (`OMCPA_OLLAMA_COLLECTOR_ENABLED=false`)
+  or in a demo the route is `503` and no fallback collector is started.
+- Refreshing a paused account is a deliberate one-off read: it does not change `enabled`,
+  which only gates the periodic pass.
 
 ## Security boundary
 
@@ -119,12 +201,13 @@ The module is wired into the running process:
 
 - `api.RegisterOllamaRoutes(v1, handler)` is called inside the authenticated
   `/api/v1` group in `internal/api/handler.go`.
-- `handler.BuildOllamaService()` returns the collector; `app.Run` starts its `Run`
-  under the process lifetime context. A demo never builds it, and
-  `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` switches it off without removing accounts.
-  `OMCPA_OLLAMA_COLLECTOR_INTERVAL`, `OMCPA_OLLAMA_TIMEOUT`,
-  `OMCPA_OLLAMA_BACKOFF_BASE` and `OMCPA_OLLAMA_BACKOFF_MAX` override the module
-  defaults.
+- `handler.BuildOllamaService()` returns the collector; `app.Run` builds it once,
+  hands the same instance back through `handler.SetOllamaService` and starts its
+  `Run` under the process lifetime context. A demo never builds it, and
+  `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` switches it off without removing accounts
+  (the manual refresh then answers `503`). `OMCPA_OLLAMA_COLLECTOR_INTERVAL`,
+  `OMCPA_OLLAMA_TIMEOUT`, `OMCPA_OLLAMA_BACKOFF_BASE` and `OMCPA_OLLAMA_BACKOFF_MAX`
+  override the module defaults.
 - `TABLE_LIFECYCLES` (`internal/repository/lifecycle.go`) declares
   `ollama_accounts` permanent, and the readable/hidden classification
   (`internal/repository/readonly_query.go`) hides it from the operator query path

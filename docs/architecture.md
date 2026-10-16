@@ -2179,6 +2179,31 @@ and the newest reading is served by `GET /api/v1/ollama/quota` and the read-only
 `ollama_accounts_status` summary. The account routes are session- and same-origin
 authenticated; the collector is never started in demo mode.
 
+One `ollama.Collector` is the single per-account refresh entry point, shared by the
+periodic pass, the create/update triggers and the console's
+`POST /api/v1/ollama/accounts/{id}/refresh`. The periodic pass and a manual refresh
+coalesce onto a scrape already in flight rather than starting a second one; the
+automatic triggers (a create, a cookie change, a resume) queue on the service's
+long-lived context, so a trigger that outlives its request is not cancelled and no
+goroutine is unbounded. A trigger runs one round; when that round coalesced onto a
+scrape that read a cookie the operator has since replaced, the account is left as one
+pending marker and the worker takes the newest cookie in one more round, so the change
+never waits for the cadence. Every scrape takes a global concurrency permit (two),
+honours a persisted backoff and only then runs. A result carries the cookie version it
+read, and the store writes it only while the cookie still matches and - for an
+automatic result - the account is still enabled; a manual refresh of a paused account
+is written and a manual that read a replaced cookie reports incomplete. There is no
+enable generation, so a label edit never invalidates a reading and a disable plus a
+quick resume under one in-flight scrape may let that scrape's reading land - an accepted
+race for a self-hosted tool reading quota, not a security boundary. `app.Run`
+installs the collector's process context before the listener accepts its first
+request, and a manual refresh is bounded end to end by one timeout rooted in that
+context - never the request context - so a disconnected client cannot truncate a
+scrape and a saturated service cannot hold a request open. A manual refresh may read a
+paused account once without changing `enabled`; `enabled` gates only the periodic
+pass. With the collector off - or in a demo - the manual route answers `503` and the
+triggers are inert, and no fallback collector is started.
+
 ### Feishu notifications
 
 `internal/feishu` reuses one Feishu long connection to answer read-only queries and
@@ -2281,7 +2306,7 @@ fix a defect with a new migration, never by editing `schema_migrations`
 | Pricing sync | `app.Run` → `pricing.Service` | Best effort; prices go stale, capture continues |
 | Quota refresh scheduler | `app.Run` → `quota.Scheduler` | Best effort; readings go stale, capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0095) |
 | Account auto-management | `app.Run` → `automation.Manager` | Best effort; plans stay in the database for the next pass, and capture and the HTTP server continue. It performs a CPA write, so it is disabled in demo mode; `OMCPA_ACCOUNT_AUTOMATION_ENABLED=false` forbids the loop and `OMCPA_ACCOUNT_AUTOMATION_ENABLED=true` forces it on regardless of the web switch (ADR 0096) |
-| Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. It scrapes `ollama.com`, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
+| Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. The same instance also drains the create/update trigger queue and answers the console's manual refresh, so all three share one lock, one two-scrape concurrency cap and one persisted backoff. It scrapes `ollama.com`, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
 | Feishu notifications | `app.Run` → `feishu.Service` | Best effort; the long connection and the classification loop are started with the process and stopped before the database closes. A disabled, forced-off or degraded configuration is inert and never fails startup; it is never started in demo mode |
 | Release sweep | `app.Run` → `release.Service` | Best effort; the stored index and its timestamps go stale, and the page says so. Every six hours, first run delayed by one interval so a restart loop cannot become a request loop |
 | Usage-fact fold + data lifecycle | `ingest.Maintenance` inside the pipeline | Retried on its own interval; errors surface in ingest status |

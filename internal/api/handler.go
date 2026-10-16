@@ -29,6 +29,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	appcrypto "github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/ollama"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
@@ -91,6 +92,12 @@ type Handler struct {
 	// enable at the recorded reset). Nil until SetAutomation; nil-safe reads answer
 	// an empty roster.
 	automation *automation.Service
+	// ollama is the shared Ollama collection service. The background pass, the
+	// console's manual refresh and the create/update triggers all go through one
+	// instance so the per-account lock, the concurrency cap and the persisted
+	// backoff agree. Nil when the collector is switched off or in a demo, which is
+	// exactly what makes the manual route answer 503 instead of scraping.
+	ollama *ollama.Collector
 	// feishu is the Feishu notification bot and its settings routes. Nil until
 	// SetFeishuAPI; its routes are registered only once it exists, so a test that
 	// does not wire it serves no Feishu endpoint.
@@ -102,6 +109,15 @@ type Handler struct {
 // and the intent version agree between the two.
 func (h *Handler) SetAutomation(service *automation.Service) {
 	h.automation = service
+}
+
+// SetOllamaService installs the shared Ollama collection service. The application
+// builds it once and starts its Run; the manual refresh route and the create/update
+// triggers then share the per-account lock and the persisted backoff. Left nil when
+// the collector is off or in a demo, so the manual route reports 503 rather than
+// starting a second collector.
+func (h *Handler) SetOllamaService(service *ollama.Collector) {
+	h.ollama = service
 }
 
 // SetFeishuAPI installs the Feishu bot and enables its routes. The service is

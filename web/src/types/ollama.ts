@@ -14,6 +14,8 @@ export interface OllamaAccountDTO {
   attempt_count: number;
   created_at_ms: number;
   updated_at_ms: number;
+  refreshing?: boolean;
+  retry_at_ms?: number | null;
 }
 
 export interface OllamaAccountWritePayload {
@@ -37,4 +39,11 @@ export interface OllamaQuotaDTO {
 
 export interface OllamaQuotaResponse {
   accounts: OllamaQuotaDTO[];
+}
+
+export interface OllamaRefreshResponse {
+  account: OllamaAccountDTO;
+  quota?: NormalizedQuota | null;
+  refreshed: boolean;
+  retry_at_ms?: number | null;
 }
