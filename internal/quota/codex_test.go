@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -88,12 +89,12 @@ func TestParseCodexUsageCurrentPayload(t *testing.T) {
 	}
 }
 
-func TestParseCodexUsageCamelCaseAndClamping(t *testing.T) {
+func TestParseCodexUsageCamelCaseReadsTheReportedShare(t *testing.T) {
 	raw := []byte(`{
 		"planType": "plus",
 		"rateLimit": {
 			"primaryWindow": {
-				"usedPercent": 140,
+				"usedPercent": 40,
 				"limitWindowSeconds": 18000,
 				"resetAfterSeconds": 120
 			}
@@ -118,18 +119,69 @@ func TestParseCodexUsageCamelCaseAndClamping(t *testing.T) {
 	if w.ID != "five_hour" {
 		t.Errorf("w.ID = %q, want five_hour", w.ID)
 	}
-	if w.UsedPercent == nil || *w.UsedPercent != 100.0 {
-		t.Errorf("w.UsedPercent clamped = %v, want 100.0", w.UsedPercent)
+	if w.UsedPercent == nil || *w.UsedPercent != 40.0 {
+		t.Errorf("w.UsedPercent = %v, want the reported 40.0", w.UsedPercent)
 	}
-	if w.RemainingPercent == nil || *w.RemainingPercent != 0.0 {
-		t.Errorf("w.RemainingPercent clamped = %v, want 0.0", w.RemainingPercent)
+	if w.RemainingPercent == nil || *w.RemainingPercent != 60.0 {
+		t.Errorf("w.RemainingPercent = %v, want 60.0", w.RemainingPercent)
 	}
 	if w.ResetAccuracy != "derived" {
 		t.Errorf("w.ResetAccuracy = %q, want derived", w.ResetAccuracy)
 	}
 }
 
-func TestParseCodexUsageRejectsNonFiniteNumbersAndHonoursLimitReached(t *testing.T) {
+// A window's used share is trustworthy only inside 0..100. A non-finite or out-of-range
+// reading is unknown, not a 100% exhaustion: clamping it would manufacture the very weekly
+// exhaustion evidence that closes the account. A true 0 and a true 100 are kept unchanged.
+func TestParseCodexUsageRejectsOutOfRangeShares(t *testing.T) {
+	cases := []struct {
+		name    string
+		used    string
+		wantNil bool
+		want    float64
+	}{
+		{"a negative reading is rejected", `-1`, true, 0},
+		{"one over the scale is rejected", `101`, true, 0},
+		{"far over the scale is rejected", `140`, true, 0},
+		{"a string over the scale is rejected", `"101"`, true, 0},
+		{"a true zero is kept", `0`, false, 0},
+		{"a true hundred is kept", `100`, false, 100},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := []byte(`{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":` +
+				testCase.used + `,"limit_window_seconds":18000}}}`)
+			_, windows, _, err := ParseCodexUsage(raw, time.Now().UnixMilli())
+			if err != nil {
+				t.Fatalf("ParseCodexUsage failed: %v", err)
+			}
+			if len(windows) != 1 {
+				t.Fatalf("len(windows) = %d, want 1", len(windows))
+			}
+			if testCase.wantNil {
+				if windows[0].UsedPercent != nil {
+					t.Fatalf("used = %v, want unknown for an untrustworthy reading", *windows[0].UsedPercent)
+				}
+				if windows[0].RemainingPercent != nil {
+					t.Fatalf("remaining = %v, want unknown", *windows[0].RemainingPercent)
+				}
+				return
+			}
+			if windows[0].UsedPercent == nil || *windows[0].UsedPercent != testCase.want {
+				t.Fatalf("used = %v, want %v", windows[0].UsedPercent, testCase.want)
+			}
+			if windows[0].RemainingPercent == nil || *windows[0].RemainingPercent != 100-testCase.want {
+				t.Fatalf("remaining = %v, want %v", windows[0].RemainingPercent, 100-testCase.want)
+			}
+		})
+	}
+}
+
+// A global rate-limit flag covers the rate limit as a whole, never a single window's
+// reading. A window that published a real 0..100 share keeps it (a genuine 100% still
+// reports 100%), and a window that published nothing stays unknown instead of being
+// pinned to a fabricated 100%.
+func TestParseCodexUsageKeepsReportedReadingsWhenTheRateLimitIsReached(t *testing.T) {
 	raw := []byte(`{
 		"plan_type": "pro",
 		"rate_limit": {
@@ -162,14 +214,15 @@ func TestParseCodexUsageRejectsNonFiniteNumbersAndHonoursLimitReached(t *testing
 	if windows[1].ID != "code_review_5h" {
 		t.Fatalf("code-review window id = %q, want code_review_5h", windows[1].ID)
 	}
-	if windows[1].UsedPercent == nil || *windows[1].UsedPercent != 100 {
-		t.Fatalf("limit-reached code-review used_percent = %v, want 100", windows[1].UsedPercent)
+	if windows[1].UsedPercent == nil || *windows[1].UsedPercent != 10 {
+		t.Fatalf("limit-reached code-review used_percent = %v, want the reported 10", windows[1].UsedPercent)
 	}
 }
 
-// A limit reached on the 5-hour window must not report the weekly window as spent: the
-// flag covers the rate limit, while each window still carries its own usage.
-func TestParseCodexUsageLimitReachedPinsOnlyTheExhaustedWindow(t *testing.T) {
+// A limit_reached / allowed=false flag must never fabricate a window's usage. A real
+// 100% reading is kept and an untouched window keeps its own share; a window that
+// published no reading stays unknown even when it is the most-used one.
+func TestParseCodexUsageLimitReachedNeverFabricatesWindowUsage(t *testing.T) {
 	raw := []byte(`{
 		"plan_type": "plus",
 		"rate_limit": {
@@ -187,13 +240,13 @@ func TestParseCodexUsageLimitReachedPinsOnlyTheExhaustedWindow(t *testing.T) {
 		t.Fatalf("len(windows) = %d, want 2", len(windows))
 	}
 	if windows[0].ID != "five_hour" || windows[0].RemainingPercent == nil || *windows[0].RemainingPercent != 0 {
-		t.Fatalf("five_hour = %+v, want 0%% remaining", windows[0])
+		t.Fatalf("five_hour = %+v, want the true 100%% reading kept", windows[0])
 	}
 	if windows[1].ID != "weekly" || windows[1].UsedPercent == nil || *windows[1].UsedPercent != 37 {
-		t.Fatalf("weekly used = %v, want 37", windows[1].UsedPercent)
+		t.Fatalf("weekly used = %v, want the reported 37", windows[1].UsedPercent)
 	}
 
-	// With rounded usage below 100, the most used window is the one pinned.
+	// The most-used window is not promoted to 100: a rounded 99 is still 99, not spent.
 	raw = []byte(`{"rate_limit": {"limit_reached": true,
 		"primary_window": {"used_percent": 20, "limit_window_seconds": 18000},
 		"secondary_window": {"used_percent": 99, "limit_window_seconds": 604800}}}`)
@@ -201,8 +254,143 @@ func TestParseCodexUsageLimitReachedPinsOnlyTheExhaustedWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCodexUsage failed: %v", err)
 	}
-	if *windows[0].UsedPercent != 20 || *windows[1].UsedPercent != 100 {
-		t.Fatalf("used = %v / %v, want 20 / 100", *windows[0].UsedPercent, *windows[1].UsedPercent)
+	if *windows[0].UsedPercent != 20 || *windows[1].UsedPercent != 99 {
+		t.Fatalf("used = %v / %v, want the reported 20 / 99", *windows[0].UsedPercent, *windows[1].UsedPercent)
+	}
+
+	// A window that published no reading stays unknown; a real weekly share beside a
+	// global flag keeps its value.
+	raw = []byte(`{"rate_limit": {"allowed": false,
+		"primary_window": {"limit_window_seconds": 18000},
+		"secondary_window": {"used_percent": 43, "limit_window_seconds": 604800}}}`)
+	_, windows, _, err = ParseCodexUsage(raw, time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("ParseCodexUsage failed: %v", err)
+	}
+	if windows[0].UsedPercent != nil {
+		t.Fatalf("unreported five-hour used = %v, want unknown", *windows[0].UsedPercent)
+	}
+	if windows[1].UsedPercent == nil || *windows[1].UsedPercent != 43 {
+		t.Fatalf("weekly used = %v, want the reported 43", windows[1].UsedPercent)
+	}
+}
+
+// The reachable false positive: the primary five-hour window is genuinely at 100%, the
+// account-level weekly window published a future reset but no used_percent, and the rate
+// limit is flagged reached. The weekly window is unknown, not spent, so no synthetic
+// weekly 100% may appear. Under the former attribution this input recorded a weekly 100%
+// observation, which is what drove the account auto-manager to disconnect the credential.
+func TestParseCodexUsageGlobalLimitLeavesAnUnreportedWeeklyWindowUnknown(t *testing.T) {
+	nowMS := time.Now().UnixMilli()
+	// Keep the reset on a whole second: the wire field carries epoch seconds, so the
+	// parser reconstructs it as resetSeconds*1000.
+	resetInFutureMS := (nowMS/1000)*1000 + int64(72*time.Hour/time.Millisecond)
+	resetSeconds := fmt.Sprintf("%d", resetInFutureMS/1000)
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "snake_case",
+			raw: `{
+				"plan_type": "plus",
+				"rate_limit": {
+					"allowed": false,
+					"limit_reached": true,
+					"primary_window": {"used_percent": 100, "limit_window_seconds": 18000, "reset_after_seconds": 3600},
+					"secondary_window": {"limit_window_seconds": 604800, "reset_at": ` + resetSeconds + `}
+				}
+			}`,
+		},
+		{
+			name: "camelCase",
+			raw: `{
+				"planType": "plus",
+				"rateLimit": {
+					"allowed": false,
+					"limitReached": true,
+					"primaryWindow": {"usedPercent": 100, "limitWindowSeconds": 18000, "resetAfterSeconds": 3600},
+					"secondaryWindow": {"limitWindowSeconds": 604800, "resetAt": ` + resetSeconds + `}
+				}
+			}`,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, windows, _, err := ParseCodexUsage([]byte(testCase.raw), nowMS)
+			if err != nil {
+				t.Fatalf("ParseCodexUsage failed: %v", err)
+			}
+			byID := map[string]QuotaWindow{}
+			for _, window := range windows {
+				byID[window.ID] = window
+			}
+			fiveHour, ok := byID["five_hour"]
+			if !ok || fiveHour.UsedPercent == nil || *fiveHour.UsedPercent != 100 {
+				t.Fatalf("five-hour = %+v, want the real 100%% reading kept", fiveHour)
+			}
+			weekly, ok := byID["weekly"]
+			if !ok {
+				t.Fatalf("weekly window missing from %+v", windows)
+			}
+			if weekly.UsedPercent != nil {
+				t.Fatalf("weekly used = %v, want unknown (nil) rather than a synthetic 100", *weekly.UsedPercent)
+			}
+			if weekly.ResetAtMS == nil {
+				t.Fatalf("weekly reset missing, want the published future reset %d", resetInFutureMS)
+			}
+			if *weekly.ResetAtMS != resetInFutureMS {
+				t.Fatalf("weekly reset = %d, want %d", *weekly.ResetAtMS, resetInFutureMS)
+			}
+		})
+	}
+}
+
+// A code-review or model-scoped limit is not the account-level weekly window: even when
+// its own rate limit is flagged reached and its windows publish nothing, the standard
+// weekly window must keep the share it reported.
+func TestParseCodexUsageScopedLimitsDoNotElevateTheStandardWeeklyWindow(t *testing.T) {
+	raw := []byte(`{
+		"plan_type": "plus",
+		"rate_limit": {
+			"allowed": true,
+			"limit_reached": false,
+			"primary_window": {"used_percent": 100, "limit_window_seconds": 18000},
+			"secondary_window": {"used_percent": 40, "limit_window_seconds": 604800, "reset_after_seconds": 500000}
+		},
+		"code_review_rate_limit": {
+			"allowed": false,
+			"limit_reached": true,
+			"primary_window": {"limit_window_seconds": 18000}
+		},
+		"additional_rate_limits": [
+			{
+				"limit_name": "gpt-reserve",
+				"rate_limit": {
+					"allowed": false,
+					"limit_reached": true,
+					"primary_window": {"limit_window_seconds": 604800, "reset_after_seconds": 400000}
+				}
+			}
+		]
+	}`)
+	_, windows, _, err := ParseCodexUsage(raw, time.Now().UnixMilli())
+	if err != nil {
+		t.Fatalf("ParseCodexUsage failed: %v", err)
+	}
+	byID := map[string]QuotaWindow{}
+	for _, window := range windows {
+		byID[window.ID] = window
+	}
+	if weekly := byID["weekly"]; weekly.UsedPercent == nil || *weekly.UsedPercent != 40 {
+		t.Fatalf("standard weekly used = %v, want the reported 40", weekly.UsedPercent)
+	}
+	if cr := byID["code_review_5h"]; cr.Scope != "code_review" || cr.UsedPercent != nil {
+		t.Fatalf("code-review 5h = %+v, want code_review scope and an unknown reading", cr)
+	}
+	if reserve := byID["addl_0_p"]; reserve.Scope != "model" || reserve.UsedPercent != nil {
+		t.Fatalf("model reserve = %+v, want model scope and an unknown reading", reserve)
 	}
 }
 

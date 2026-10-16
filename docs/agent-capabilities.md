@@ -661,6 +661,31 @@ for that provider's OAuth credentials, so it must remain visible in the preview.
 These capabilities are available through the built-in Agent and stdio MCP registry,
 without a new adapter or any secret-bearing response.
 
+### Account auto-management status
+
+`account_automation_status` is a low-risk read exposed to the Agent and MCP. It returns
+the resolved master switch (whether the environment variable or the console's web
+switch is in effect) and, for each adopted credential, its plan: the state, why it has
+no automatic control, whether OMC disabled it, the scheduled recovery instant, and
+whether a standard weekly reading exists with its used share. It returns no credential
+material, and it is read-only by construction: the console's
+`/api/v1/account-automation` write routes are session-and-same-origin authenticated and
+the read-only MCP key cannot reach them, so the agent cannot adopt, switch, cancel or
+set a recovery time. See ADR 0096.
+
+### Ollama and Feishu status
+
+`ollama_accounts_status` and `feishu_notifications_status` are low-risk reads exposed
+to the Agent and MCP. The first reports the Ollama collector switch and, per stored
+account, its label, collection status, newest safe quota reading and retry state; the
+session cookie is never returned. The second reports the Feishu module's enabled,
+ready, degraded, forced-off and connected state, where its switch comes from, open
+problems, pending and queued sends, and its last error; the app secret is never
+returned. Neither has a write path: the console's `/api/v1/ollama` and
+`/api/v1/feishu` routes are session-and-same-origin authenticated and the read-only
+MCP key cannot reach them. See `docs/ollama-monitoring.md` and
+`docs/feishu-notifications.md`.
+
 ### Plugin-page native boundary
 
 The browser's trusted Plugin Host (ADR 0067) is not an Agent/MCP capability. It exposes native

@@ -70,6 +70,26 @@ import type {
   ModelPrice,
   UpstreamModel,
 } from '../types/pricing';
+import type {
+  AccountAutomationListResponse,
+  AccountAutomationSettingsDTO,
+  AccountAutomationAccountDTO,
+  AccountAutomationAdoptPayload,
+  AccountAutomationAdoptResponse,
+  AccountAutomationManualResetPayload,
+} from '../types/accountAutomation';
+import type {
+  OllamaAccountDTO,
+  OllamaAccountListResponse,
+  OllamaAccountWritePayload,
+  OllamaQuotaResponse,
+} from '../types/ollama';
+import type {
+  FeishuSettingsDTO,
+  FeishuSettingsWriteDTO,
+  FeishuStatusDTO,
+  FeishuTestResponse,
+} from '../types/feishu';
 
 
 /** DEFAULT_LOG_PAGE is the page size a fresh tail read asks for. */
@@ -1209,6 +1229,104 @@ export const api = {
     return request<{ interval_hours: number; state: PricingSyncState }>('/pricing/sync-schedule', {
       method: 'PUT',
       body: JSON.stringify({ interval_hours: intervalHours }),
+    });
+  },
+
+  // Line A: Account Automation
+  async getAccountAutomation(): Promise<AccountAutomationListResponse> {
+    return request<AccountAutomationListResponse>('/account-automation');
+  },
+
+  async getAccountAutomationSettings(): Promise<AccountAutomationSettingsDTO> {
+    return request<AccountAutomationSettingsDTO>('/account-automation/settings');
+  },
+
+  async putAccountAutomationSettings(payload: { enabled: boolean }): Promise<AccountAutomationSettingsDTO> {
+    return request<AccountAutomationSettingsDTO>('/account-automation/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async putAccountAutomationAccount(authIndex: string, payload: { enabled: boolean }): Promise<AccountAutomationAccountDTO> {
+    return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async postAccountAutomationAdopt(payload: AccountAutomationAdoptPayload): Promise<AccountAutomationAdoptResponse> {
+    return request<AccountAutomationAdoptResponse>('/account-automation/adopt', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async postAccountAutomationCancel(authIndex: string): Promise<AccountAutomationAccountDTO> {
+    return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}/cancel`, {
+      method: 'POST',
+    });
+  },
+
+  async postAccountAutomationManualReset(authIndex: string, payload: AccountAutomationManualResetPayload): Promise<AccountAutomationAccountDTO> {
+    return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}/manual-reset`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // Line B: Ollama Accounts
+  async listOllamaAccounts(): Promise<OllamaAccountListResponse> {
+    return request<OllamaAccountListResponse>('/ollama/accounts');
+  },
+
+  async createOllamaAccount(payload: OllamaAccountWritePayload): Promise<OllamaAccountDTO> {
+    return request<OllamaAccountDTO>('/ollama/accounts', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getOllamaAccount(id: string): Promise<OllamaAccountDTO> {
+    return request<OllamaAccountDTO>(`/ollama/accounts/${encodeURIComponent(id)}`);
+  },
+
+  async updateOllamaAccount(id: string, payload: OllamaAccountWritePayload): Promise<OllamaAccountDTO> {
+    return request<OllamaAccountDTO>(`/ollama/accounts/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteOllamaAccount(id: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/ollama/accounts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  async getOllamaQuota(): Promise<OllamaQuotaResponse> {
+    return request<OllamaQuotaResponse>('/ollama/quota');
+  },
+
+  // Line C: Feishu Notifications
+  async getFeishuSettings(): Promise<FeishuSettingsDTO> {
+    return request<FeishuSettingsDTO>('/feishu/settings');
+  },
+
+  async putFeishuSettings(payload: FeishuSettingsWriteDTO): Promise<FeishuSettingsDTO> {
+    return request<FeishuSettingsDTO>('/feishu/settings', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getFeishuStatus(): Promise<FeishuStatusDTO> {
+    return request<FeishuStatusDTO>('/feishu/status');
+  },
+
+  async postFeishuTest(): Promise<FeishuTestResponse> {
+    return request<FeishuTestResponse>('/feishu/test', {
+      method: 'POST',
     });
   },
 };

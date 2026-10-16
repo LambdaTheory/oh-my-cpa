@@ -212,6 +212,15 @@ func ParseClaudeUsage(raw []byte, nowMS int64) ([]QuotaWindow, *QuotaExtraUsage,
 			return
 		}
 		utilVal, hasUtil := toFloat(w.Utilization)
+		// A utilization share is trustworthy only inside 0..100. A non-finite or out-of-range
+		// reading is dropped to unknown instead of being clamped: clamping 101 (or a negative
+		// value) to 100 would manufacture an exhaustion reading Anthropic never published, and a
+		// fabricated weekly 100% is exactly what closes the account. The shared clamp below stays
+		// for the providers that compute a share; here the value has been validated, so the clamp
+		// cannot change it.
+		if hasUtil && (math.IsNaN(utilVal) || math.IsInf(utilVal, 0) || utilVal < 0 || utilVal > 100) {
+			hasUtil = false
+		}
 
 		var resetAtMS *int64
 		var resetLabel string
@@ -271,6 +280,13 @@ func ParseClaudeUsage(raw []byte, nowMS int64) ([]QuotaWindow, *QuotaExtraUsage,
 		}
 		if strings.EqualFold(modelName, "fable") || strings.EqualFold(modelName, "fable 5") {
 			pct, hasPct := toFloat(lim.Percent)
+			// The same trust rule as the windowed readings: an out-of-range or non-finite
+			// percent is unknown, not a fabricated 100. This keeps the modern limit spelling and
+			// the legacy iguana_necktie window - which shares addWindow - describing the same
+			// window the same way.
+			if hasPct && (math.IsNaN(pct) || math.IsInf(pct, 0) || pct < 0 || pct > 100) {
+				hasPct = false
+			}
 			if hasPct {
 				foundFable = true
 				var resetAtMS *int64

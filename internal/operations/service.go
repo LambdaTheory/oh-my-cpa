@@ -41,6 +41,16 @@ type Service struct {
 	SetOAuthExcludedModels     func(context.Context, string, []string, string) error
 	NormalizeCredentialFields  func(map[string]any) (map[string]any, error)
 	UpdateCredentialFields     func(context.Context, CredentialTarget, map[string]any, string) error
+	// AutomationSummary reads the account auto-management plan for the read-only
+	// agent tool. It exposes no write path: the MCP read-only key cannot reach the
+	// console's account-automation routes at all.
+	AutomationSummary func(context.Context) (AutomationStatus, error)
+	// OllamaSummary reads the Ollama account monitoring summary for the read-only
+	// agent tool. It never carries a cookie.
+	OllamaSummary func(context.Context) (OllamaStatus, error)
+	// FeishuSummary reads the Feishu notification module status for the read-only
+	// agent tool. It never carries the app secret.
+	FeishuSummary func(context.Context) (FeishuStatus, error)
 }
 type Empty struct{}
 type Done struct {
@@ -82,7 +92,7 @@ func read[I, O any](registry *capability.Registry, name, description string, han
 	return capability.Register(registry, Meta(name, description, "read", "low"), nil, func(ctx context.Context, input I, _, _ string) (O, error) { return handler(ctx, input) })
 }
 func (s *Service) Register(registry *capability.Registry) error {
-	registrations := []func(*capability.Registry) error{s.registerUsage, s.registerKeys, s.registerConfig, s.registerProviders, s.registerProviderMutations, s.registerOAuth, s.registerQuota, s.registerQuotaObservations, s.registerQuotaActions, s.registerSystem, s.registerPricing, s.registerDatabase, s.registerTimezone, s.registerTpsCalculation, s.registerCustomIcons, s.registerModelSquare}
+	registrations := []func(*capability.Registry) error{s.registerUsage, s.registerKeys, s.registerConfig, s.registerProviders, s.registerProviderMutations, s.registerOAuth, s.registerQuota, s.registerQuotaObservations, s.registerQuotaActions, s.registerSystem, s.registerPricing, s.registerDatabase, s.registerTimezone, s.registerTpsCalculation, s.registerCustomIcons, s.registerModelSquare, s.registerAccountAutomation, s.registerOllama, s.registerFeishu}
 	for _, register := range registrations {
 		if err := register(registry); err != nil {
 			return err

@@ -72,6 +72,56 @@ func TestParseClaudeUsageAndFable(t *testing.T) {
 	}
 }
 
+// A utilization share is trustworthy only inside 0..100. A non-finite or out-of-range reading
+// is unknown, not a 100% exhaustion: clamping 101 (or a negative value) to 100 would manufacture
+// the weekly exhaustion evidence that closes the account. The account seven-day window keeps its
+// standard scope and a true 0/100 stays exactly as reported.
+func TestParseClaudeUsageRejectsOutOfRangeUtilization(t *testing.T) {
+	cases := []struct {
+		name    string
+		util    string
+		wantNil bool
+		want    float64
+	}{
+		{"a utilization one over the scale", `101`, true, 0},
+		{"a negative utilization", `-1`, true, 0},
+		{"a non-numeric utilization", `"not-a-number"`, true, 0},
+		{"a true zero", `0`, false, 0},
+		{"a true hundred", `100`, false, 100},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := []byte(`{"seven_day":{"utilization":` + testCase.util + `,"resets_at":"2026-07-27T10:00:00Z"}}`)
+			windows, _, err := ParseClaudeUsage(raw, time.Now().UnixMilli())
+			if err != nil {
+				t.Fatalf("ParseClaudeUsage failed: %v", err)
+			}
+			if len(windows) != 1 {
+				t.Fatalf("len(windows) = %d, want 1", len(windows))
+			}
+			window := windows[0]
+			if window.ID != "seven_day" || window.Scope != "standard" || window.PeriodHours == nil || *window.PeriodHours != 168 {
+				t.Fatalf("window = %+v, want the standard seven-day account window", window)
+			}
+			if testCase.wantNil {
+				if window.UsedPercent != nil {
+					t.Fatalf("used = %v, want unknown for an untrustworthy utilization", *window.UsedPercent)
+				}
+				if window.RemainingPercent != nil {
+					t.Fatalf("remaining = %v, want unknown", *window.RemainingPercent)
+				}
+				return
+			}
+			if window.UsedPercent == nil || *window.UsedPercent != testCase.want {
+				t.Fatalf("used = %v, want %v", window.UsedPercent, testCase.want)
+			}
+			if window.RemainingPercent == nil || *window.RemainingPercent != 100-testCase.want {
+				t.Fatalf("remaining = %v, want %v", window.RemainingPercent, 100-testCase.want)
+			}
+		})
+	}
+}
+
 func TestParseClaudeProfile(t *testing.T) {
 	rawPro := []byte(`{
 		"account": { "has_claude_pro": true, "has_claude_max": false },

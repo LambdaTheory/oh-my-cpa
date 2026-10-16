@@ -178,6 +178,13 @@ func TestBrowserDTOAllowlistAndSecretExclusion(t *testing.T) {
 		// The per-model breakdown. It is a window over stored request history like the dashboard, so it
 		// must clear the same secret-leakage assertions.
 		"/api/v1/management/dashboard/models?preset=1h",
+		// Account auto-management reads the roster and the resolved master switch;
+		// the response must not carry credential material.
+		"/api/v1/account-automation",
+		// Ollama account metadata and the newest safe snapshots. The DTO must carry
+		// has_cookie and never the encrypted cookie.
+		"/api/v1/ollama/accounts",
+		"/api/v1/ollama/quota",
 	}
 
 	for _, endpoint := range endpoints {

@@ -4,6 +4,7 @@ import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { PluginItem } from '../../types/plugin';
 import { OAUTH_PROVIDER_PATTERN, type OAuthProviderChoice } from '../oauthProviderLogic';
 import type { QuotaItem } from '../../types/quota';
+import type { OllamaAccountDTO, OllamaQuotaDTO } from '../../types/ollama';
 
 export type OAuthWorkspaceDensity = 'compact' | 'expanded';
 export type OAuthWorkspaceQuotaFilter =
@@ -36,9 +37,24 @@ export type OAuthWorkspaceQuotaCondition =
   | 'unobserved'
   | 'loading';
 
+export type OAuthWorkspaceRecordSource = 'cpa' | 'ollama';
+
 export interface OAuthWorkspaceRecord {
   key: string;
+  source: OAuthWorkspaceRecordSource;
+  ollamaAccount?: OllamaAccountDTO;
   file: ManagementAuthFile;
+  /**
+   * Request telemetry for traffic metrics and sorting.
+   * CPA credentials have known telemetry (even when 0).
+   * External monitor-only sources like Ollama have unknown request telemetry and must never be fabricated as 0.
+   */
+  requestTelemetry: {
+    known: boolean;
+    totalRequests: number | null;
+    success: number | null;
+    failed: number | null;
+  };
   quota?: QuotaItem;
   quotaMatch: OAuthWorkspaceQuotaMatch;
   quotaCondition: OAuthWorkspaceQuotaCondition;
@@ -219,6 +235,8 @@ export function buildOAuthWorkspaceProjection(
   files: ManagementAuthFile[],
   quotas: QuotaItem[],
   choices: OAuthProviderChoice[],
+  ollamaAccounts: OllamaAccountDTO[] = [],
+  ollamaQuotas: OllamaQuotaDTO[] = [],
 ): OAuthWorkspaceProjection {
   const fileNames = countValues(files.map((file) => file.name.trim()).filter(Boolean));
   const fileIndexes = countValues(files.map((file) => file.auth_index ?? '').filter(Boolean));
@@ -233,7 +251,7 @@ export function buildOAuthWorkspaceProjection(
   }
 
   const occurrences = new Map<string, number>();
-  const records = files.map((file): OAuthWorkspaceRecord => {
+  const cpaRecords = files.map((file): OAuthWorkspaceRecord => {
     const name = file.name.trim();
     const authIndex = (file.auth_index ?? '') || undefined;
     const tuple = JSON.stringify([name, authIndex ?? '']);
@@ -265,8 +283,15 @@ export function buildOAuthWorkspaceProjection(
     const fileBacked = !file.runtime_only;
 
     return {
-      key: `${tuple}#${occurrence}`,
+      key: `cpa:${tuple}#${occurrence}`,
+      source: 'cpa',
       file,
+      requestTelemetry: {
+        known: true,
+        totalRequests: file.success + file.failed,
+        success: file.success,
+        failed: file.failed,
+      },
       quota,
       quotaMatch,
       quotaCondition: condition,
@@ -309,6 +334,73 @@ export function buildOAuthWorkspaceProjection(
       ),
     };
   });
+
+  const ollamaQuotaMap = new Map<string, OllamaQuotaDTO>();
+  for (const q of ollamaQuotas) {
+    if (q.account_id) ollamaQuotaMap.set(q.account_id, q);
+  }
+
+  const ollamaRecords: OAuthWorkspaceRecord[] = ollamaAccounts.map((account): OAuthWorkspaceRecord => {
+    const quotaSnapshot = ollamaQuotaMap.get(account.id);
+    const quotaItem: QuotaItem | undefined = quotaSnapshot?.quota ?? undefined;
+    const authIndex = `ollama:${account.id}`;
+    const condition = quotaItem ? quotaConditionOf(quotaItem) : 'unobserved';
+    const statusNormalized = (account.status ?? '').trim().toLowerCase();
+    const isProblem = statusNormalized === 'auth_invalid'
+      || statusNormalized === 'transport_error'
+      || statusNormalized === 'parse_error';
+
+    // Synthesize a minimal ManagementAuthFile projection strictly for table column contracts
+    // Never send this object to CPA backend APIs!
+    const syntheticFile: ManagementAuthFile = {
+      name: account.label || account.id,
+      auth_index: authIndex,
+      type: 'ollama',
+      provider: 'ollama',
+      disabled: !account.enabled,
+      unavailable: isProblem,
+      runtime_only: true,
+      status: !account.enabled ? 'disabled' : (isProblem ? 'error' : 'active'),
+      status_message: account.newest_error || undefined,
+      success: 0,
+      failed: 0,
+    };
+
+    return {
+      key: `ollama:${account.id}`,
+      source: 'ollama',
+      ollamaAccount: account,
+      file: syntheticFile,
+      requestTelemetry: {
+        known: false,
+        totalRequests: null,
+        success: null,
+        failed: null,
+      },
+      quota: quotaItem,
+      quotaMatch: quotaItem ? 'matched' : 'missing-quota',
+      quotaCondition: condition,
+      isQuotaAttention: isProblem || isQuotaAttention(condition),
+      isQuotaUnsupported: true, // Ollama does not support live scrape on quota button
+      isQuotaObserved: quotaItem ? hasMeaningfulObservation(quotaItem) : false,
+      displayProvider: 'ollama',
+      authorizationProviderId: undefined,
+      fileName: account.label || account.id,
+      authIndex,
+      hasUniqueFileName: true,
+      hasUniqueAuthIndex: true,
+      canSelectForFileBatch: false, // Strict protection: CPA batch actions must never select Ollama rows
+      canEditFile: false, // Not a CPA file
+      canToggleFile: false, // CPA toggle is setManagementAuthFileStatus; Ollama uses updateOllamaAccount
+      canDownloadFile: false, // No JSON auth file to download
+      canDeleteFile: false, // Not a CPA auth file
+      canRefreshQuota: false, // Quota refresh does not trigger Ollama scrape
+      canClearCooldown: false,
+      canRedeemCredit: false,
+    };
+  });
+
+  const records = [...cpaRecords, ...ollamaRecords];
 
   const knownIndexes = new Set(
     files
@@ -371,6 +463,8 @@ export function filterOAuthWorkspaceRecords(
       fileText(record.file.auth_index),
       fileText(record.file.note),
       fileText(record.file.status_message),
+      fileText(record.ollamaAccount?.label),
+      fileText(record.ollamaAccount?.id),
       fileText(record.quota?.plan?.plan_label),
       fileText(record.quota?.error),
       fileText(record.quota?.recommendation?.reason),
@@ -399,8 +493,21 @@ export function sortOAuthWorkspaceRecords(
       return copy.sort((left, right) => byName(right, left));
     case 'requests-desc':
       return copy.sort((left, right) => {
-        const requestDelta = (right.file.success + right.file.failed) - (left.file.success + left.file.failed);
-        return requestDelta || byName(left, right);
+        const leftKnown = left.requestTelemetry.known;
+        const rightKnown = right.requestTelemetry.known;
+        // Known CPA request counts precede unknown telemetry (e.g. monitor-only Ollama accounts)
+        if (leftKnown && !rightKnown) return -1;
+        if (!leftKnown && rightKnown) return 1;
+        if (!leftKnown && !rightKnown) {
+          // Stable fallback among unknown records: by name collator, then by stable unique key
+          const nameDiff = byName(left, right);
+          return nameDiff || left.key.localeCompare(right.key);
+        }
+        // Both are known request counts: compare total requests descending
+        const leftTotal = left.requestTelemetry.totalRequests ?? 0;
+        const rightTotal = right.requestTelemetry.totalRequests ?? 0;
+        const requestDelta = rightTotal - leftTotal;
+        return requestDelta || byName(left, right) || left.key.localeCompare(right.key);
       });
     case 'priority-desc':
       return copy.sort((left, right) => {

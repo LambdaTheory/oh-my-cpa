@@ -27,6 +27,7 @@ import (
 	appcrypto "github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/demo"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/pricing"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -165,6 +166,23 @@ func demoExportCases() []demoExportCase {
 		{Name: "quota", Path: "/api/v1/management/quota"},
 		// One credential's quota detail, for the page the quota list links into.
 		{Name: "quota-codex", Path: "/api/v1/management/quota/auth-codex-01"},
+		// Account auto-management reads the demo's own roster and resolved master
+		// switch. The loop that would write CPA never runs in a demo.
+		{Name: "account-automation", Path: "/api/v1/account-automation"},
+		{Name: "account-automation-settings", Path: "/api/v1/account-automation/settings"},
+		// Ollama account monitoring reads the demo's own stored accounts and safe
+		// snapshots; the scraper is never started in a demo. The demonstration seeds no
+		// Ollama account, so the detail route is a recorded gap below.
+		{Name: "ollama-accounts", Path: "/api/v1/ollama/accounts"},
+		{Name: "ollama-quota", Path: "/api/v1/ollama/quota"},
+		// Feishu notification settings and status (lane C). The console's settings page
+		// mounts the Feishu panel, which reads these two endpoints on arrival. The bot is
+		// wired force-disabled in demoExportRouter below - a demonstration never opens a
+		// long connection - so these captures are the disabled state a visitor sees. The
+		// settings write and the test send are not reads; the test send is refused by the
+		// demo policy, and neither is exported.
+		{Name: "feishu-settings", Path: "/api/v1/feishu/settings"},
+		{Name: "feishu-status", Path: "/api/v1/feishu/status"},
 		{Name: "logs", Path: "/api/v1/management/logs?limit=200"},
 		{Name: "logs-status", Path: "/api/v1/management/logs/status"},
 		{Name: "service-logs", Path: "/api/v1/management/service-logs"},
@@ -253,6 +271,7 @@ func demoExportCases() []demoExportCase {
 // the console already renders for a refused operation.
 var demoExportRouteGaps = map[string]string{
 	"/api/v1/management/auth-files/safe-fields": "the fixture refuses the download the projection reads, by design and under test",
+	"/api/v1/ollama/accounts/{id}":              "the demonstration seeds no Ollama account, so there is no detail row to open",
 }
 
 // demoExportFirstEventPath builds the detail path for the first event the list carried.
@@ -789,12 +808,23 @@ func demoExportShiftText(item any, deltaMS int64) any {
 			if parseErr != nil {
 				return match
 			}
+			if at.IsZero() {
+				return match
+			}
 			shifted := at.Add(time.Duration(deltaMS) * time.Millisecond)
 			if deltaMS != 0 {
 				shifted = shifted.Round(time.Minute)
 			}
 			return shifted.UTC().Format(time.RFC3339)
 		})
+	}
+	// The Go zero instant is "never happened", not a stamped read: the Feishu status
+	// carries it as `last_summary_at` when no digest has run, and shifting it produced
+	// a nonsense year and a value that tracked when the export ran. It is left as the
+	// handler wrote it, which is also what a self-hosted install reports before its first
+	// summary.
+	if parsed.IsZero() {
+		return item
 	}
 	// Runtime text stamps use the same minute precision as shifted millis;
 	// response latency must not introduce a new one-second dataset on each run.
@@ -910,6 +940,17 @@ func demoExportRouter(t *testing.T) (http.Handler, time.Time) {
 	// clock rather than caller parameters. Pin them to the seeded history so
 	// quota cycles stay live and the calendar grid covers that same history.
 	handler.nowFn = func() time.Time { return demoExportReference }
+	// The console's settings page mounts the Feishu panel, which reads the settings and
+	// status endpoints - and those routes exist only once the bot is wired (see
+	// handler.routes). A demo deployment builds the real bot with the environment
+	// force-off, so the export does the same: the routes answer the disabled state the
+	// console renders, no long connection is opened, and no app id or secret is involved.
+	// Without SetFeishuAPI the two reads 404 in the served demonstration.
+	feishuAPI, err := handler.BuildFeishuAPI(context.Background(), handler.BuildFeishuReportSource(), feishu.Overlay{ForceDisabled: true})
+	if err != nil {
+		t.Fatalf("build export feishu api: %v", err)
+	}
+	handler.SetFeishuAPI(feishuAPI)
 	return handler.routes(), demoExportReference
 }
 
@@ -1333,6 +1374,10 @@ func TestDemoExportRebaseIsIndependentOfTheExportClock(t *testing.T) {
 			"maintenance": map[string]any{"last_run_at": time.UnixMilli(exportedAt - 10000).UTC().Format(time.RFC3339)},
 			"channels":    []any{map[string]any{"updated_at_ms": float64(0)}},
 			"icons":       []any{map[string]any{"created_at_ms": float64(reference - 5000), "updated_at_ms": float64(reference)}},
+			// A never-run digest: the handler reports the Go zero instant as
+			// `last_summary_at`, which the re-base must leave alone rather than shift
+			// into a nonsense year that tracks when the export ran.
+			"last_summary_at": "0001-01-01T00:00:00Z",
 			"versions": []any{
 				map[string]any{"effective_from_ms": float64(exportedAt + 3)},
 				map[string]any{"effective_from_ms": float64(reference - 86_400_000)},
@@ -1360,6 +1405,9 @@ func TestDemoExportRebaseIsIndependentOfTheExportClock(t *testing.T) {
 	}
 	if got := first["channels"].([]any)[0].(map[string]any)["updated_at_ms"]; got != float64(0) {
 		t.Fatalf("an unset instant was shifted to %v", got)
+	}
+	if got := first["last_summary_at"]; got != "0001-01-01T00:00:00Z" {
+		t.Fatalf("the zero instant was shifted to %v", got)
 	}
 	runtimeFacts := first["runtime"].(map[string]any)
 	if runtimeFacts["go_version"] != demoExportHostKeys["go_version"] || runtimeFacts["os_arch"] != demoExportHostKeys["os_arch"] {
@@ -1514,4 +1562,60 @@ func TestDemoDashboardHealthIncludesEveryState(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("cache control = %q", response.Header().Get("Cache-Control"))
 	}
+}
+
+// TestDemoFeishuReadsAreServedDisabled pins the two Feishu reads the settings page makes
+// on arrival. They matter because the routes exist only once the bot is wired, so a demo
+// whose export forgot to wire it serves 404 for both - which is exactly the gap the browser
+// run surfaced. The reads are also a read-only allowlist: the settings and status DTOs must
+// state the forced-disabled source and must never carry the app secret.
+func TestDemoFeishuReadsAreServedDisabled(t *testing.T) {
+	router, _ := demoExportRouter(t)
+
+	settings := getDemoExportPath(t, router, "/api/v1/feishu/settings")
+	if settings.Status != http.StatusOK {
+		t.Fatalf("GET /api/v1/feishu/settings = %d: %s", settings.Status, settings.Body)
+	}
+	var settingsDTO struct {
+		HasSecret *bool  `json:"has_secret"`
+		ForcedOff *bool  `json:"forced_off"`
+		Source    string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(settings.Body), &settingsDTO); err != nil {
+		t.Fatalf("settings body is not JSON: %v", err)
+	}
+	if settingsDTO.HasSecret == nil || *settingsDTO.HasSecret {
+		t.Fatalf("settings must report no stored app secret: %s", settings.Body)
+	}
+	if settingsDTO.ForcedOff == nil || !*settingsDTO.ForcedOff {
+		t.Fatalf("settings must report the forced-off state: %s", settings.Body)
+	}
+	if strings.Contains(settings.Body, `"app_secret"`) {
+		t.Fatalf("settings response carries an app_secret field: %s", settings.Body)
+	}
+
+	status := getDemoExportPath(t, router, "/api/v1/feishu/status")
+	if status.Status != http.StatusOK {
+		t.Fatalf("GET /api/v1/feishu/status = %d: %s", status.Status, status.Body)
+	}
+	var statusDTO struct {
+		ForcedOff *bool  `json:"forced_off"`
+		Source    string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(status.Body), &statusDTO); err != nil {
+		t.Fatalf("status body is not JSON: %v", err)
+	}
+	if statusDTO.ForcedOff == nil || !*statusDTO.ForcedOff {
+		t.Fatalf("status must report the forced-off state: %s", status.Body)
+	}
+}
+
+// getDemoExportPath performs one GET against the export router without a session, which is
+// how the exported dataset is captured: in demo mode a read is served and handed its session.
+func getDemoExportPath(t *testing.T, router http.Handler, path string) demoExportResponse {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	return demoExportResponse{Status: response.Code, ContentType: response.Header().Get("Content-Type"), Body: response.Body.String()}
 }

@@ -41,6 +41,7 @@ export const CREDENTIAL_PROVIDERS: Record<string, ProviderMetadata> = {
   doubao: { id: 'doubao', label: 'Doubao', iconId: 'Doubao' },
   spark: { id: 'spark', label: 'Spark', iconId: 'Spark' },
   openai: { id: 'openai', label: 'OpenAI', iconId: 'OpenAI' },
+  ollama: { id: 'ollama', label: 'Ollama', iconId: 'Ollama' },
 };
 
 export function getCredentialProviderMetadata(providerKey: string): ProviderMetadata {

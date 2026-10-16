@@ -240,10 +240,6 @@ async function main() {
           await turn.getByTestId('agent-view').waitFor({ state: 'visible', timeout: NAVIGATION_TIMEOUT_MS });
           if (await page.getByTestId('agent-rejected').count() > 0) throw new Error('the demonstration refused its own example question');
         }
-        if (route.path === '/playground') {
-          await page.getByTestId('playground-demo-example').click();
-          await page.getByTestId('playground-answer').getByText('$0.97').waitFor({ state: 'visible', timeout: REPLAY_TIMEOUT_MS });
-        }
         if (route.path === '/oauth-management') {
           await page.getByTestId('oauth-management-model-rules-open').first().click();
           const drawer = page.getByTestId('oauth-model-rules-drawer');
@@ -263,6 +259,29 @@ async function main() {
       } finally {
         reads.dispose();
       }
+    }
+
+    // The retired Playground address is no longer a page of its own: the built console must
+    // send a visitor on to the dashboard, and the surviving conversation workspace must still
+    // open. Neither is a route in the table above, so both are checked here - driving the
+    // obsolete page's example control would wait forever on a page that no longer exists.
+    const dashboardRoute = DEMO_ROUTES.find((route) => route.path === '/dashboard');
+    const redirectReads = watchDemoReads(page, BASE, dashboardRoute.reads, NAVIGATION_TIMEOUT_MS);
+    try {
+      await page.goto(`${BASE}/playground`, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
+      await redirectReads.ready;
+      await page.waitForFunction(hasDemoContent, dashboardRoute, { timeout: NAVIGATION_TIMEOUT_MS });
+      const landed = new URL(page.url()).pathname.replace(/\/$/, '');
+      if (!landed.endsWith('/dashboard')) {
+        throw new Error(`did not redirect to the dashboard (landed on ${new URL(page.url()).pathname})`);
+      }
+      await page.goto(`${BASE}/agent`, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
+      await page.getByTestId('agent-empty').waitFor({ state: 'visible', timeout: NAVIGATION_TIMEOUT_MS });
+      console.log('[demo] /playground: redirects to the dashboard, and the Agent workspace still opens');
+    } catch (error) {
+      failures.push(`/playground: ${error.message}`);
+    } finally {
+      redirectReads.dispose();
     }
     if (network.problems.some(problem => problem.kind === 'outbound')) failures.push('Demo made an undeclared outbound request');
   } finally {

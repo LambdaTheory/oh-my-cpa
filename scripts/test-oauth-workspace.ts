@@ -15,6 +15,7 @@ import {
   quotaRefreshOutcomeKind,
   sortOAuthWorkspaceRecords,
   updateWorkspaceSearch,
+  workspaceProviderCounts,
   workspaceProviderOptions,
 } from '../web/src/pages/oauthManagement/oauthWorkspaceLogic.ts';
 import type { OAuthProviderChoice } from '../web/src/pages/oauthProviderLogic.ts';
@@ -616,4 +617,116 @@ test('an allowance outside the plan is one family, not one per window', () => {
     ['code_review_5h', 'code_review_weekly'],
     'both of an allowance’s windows belong in the row when the allowance is all it has',
   );
+});
+
+test('ollama: accounts project as distinct non-CPA records with strict action isolation', () => {
+  const ollamaAccount = {
+    id: 'ollama-test-1',
+    label: 'Team Ollama',
+    enabled: true,
+    has_cookie: true,
+    status: 'ok',
+    attempt_count: 0,
+    created_at_ms: 1000,
+    updated_at_ms: 1000,
+  };
+  const ollamaQuota = {
+    account_id: 'ollama-test-1',
+    label: 'Team Ollama',
+    enabled: true,
+    status: 'ok',
+    observed_at_ms: 2000,
+    quota: {
+      auth_index: 'ollama:ollama-test-1',
+      name: 'Team Ollama',
+      type: 'ollama',
+      provider: 'ollama',
+      disabled: false,
+      status: 'healthy' as const,
+      observed_at_ms: 2000,
+      windows: [{ id: 'weekly', label: '7d', scope: 'standard', used_percent: 30, remaining_percent: 70 }],
+      recommendation: { status: 'healthy' as const, priority: 'none' as const, action: 'none' as const, reason: '' },
+      capabilities: { refresh_supported: false, clear_cooldown_supported: false, reset_credit_supported: false },
+      quota_exceeded: false,
+    },
+  };
+
+  const projection = buildOAuthWorkspaceProjection([file()], [quota()], choices, [ollamaAccount], [ollamaQuota]);
+  assert.equal(projection.records.length, 2);
+
+  const cpaRecord = projection.records.find((r) => r.source === 'cpa')!;
+  const ollamaRecord = projection.records.find((r) => r.source === 'ollama')!;
+
+  assert.equal(cpaRecord.key.startsWith('cpa:'), true);
+  assert.equal(cpaRecord.canSelectForFileBatch, true);
+  assert.equal(cpaRecord.canRefreshQuota, true);
+
+  assert.equal(ollamaRecord.key, 'ollama:ollama-test-1');
+  assert.equal(ollamaRecord.displayProvider, 'ollama');
+  assert.equal(ollamaRecord.canSelectForFileBatch, false, 'Ollama records must never be selectable for CPA batch actions');
+  assert.equal(ollamaRecord.canToggleFile, false, 'CPA file toggle must not operate on Ollama accounts');
+  assert.equal(ollamaRecord.canDownloadFile, false, 'Ollama accounts have no credential JSON download');
+  assert.equal(ollamaRecord.canDeleteFile, false, 'CPA file delete must not operate on Ollama accounts');
+  assert.equal(ollamaRecord.canRefreshQuota, false, 'Global CPA quota refresh must not refresh Ollama snapshot');
+
+  // Provider options and counts
+  const options = workspaceProviderOptions(projection.records, choices);
+  assert.equal(options.includes('ollama'), true);
+  const counts = workspaceProviderCounts(projection.records);
+  assert.equal(counts.ollama, 1);
+  assert.equal(counts.all, 2);
+
+  // Search filter matches Ollama label
+  const searchResults = filterOAuthWorkspaceRecords(projection.records, 'Team Ollama', 'all', 'all', 'all');
+  assert.equal(searchResults.length, 1);
+  assert.equal(searchResults[0].key, 'ollama:ollama-test-1');
+});
+
+test('ollama request telemetry: requests-desc sort orders known CPA ahead of unknown Ollama telemetry without fabricating zero', () => {
+  const cpaZero = file({ name: 'cpa-zero.json', success: 0, failed: 0 });
+  const cpaActive = file({ name: 'cpa-active.json', success: 10, failed: 2 });
+  const ollama1 = {
+    id: 'ollama-acc-1',
+    label: 'Same Label',
+    enabled: true,
+    has_cookie: true,
+    attempt_count: 0,
+    created_at_ms: 1000,
+    updated_at_ms: 1000,
+  };
+  const ollama2 = {
+    id: 'ollama-acc-2',
+    label: 'Same Label',
+    enabled: false,
+    has_cookie: true,
+    attempt_count: 0,
+    created_at_ms: 1000,
+    updated_at_ms: 1000,
+  };
+
+  const projection = buildOAuthWorkspaceProjection([cpaZero, cpaActive], [], choices, [ollama1, ollama2], []);
+  assert.equal(projection.records.length, 4);
+
+  const sorted = sortOAuthWorkspaceRecords(projection.records, 'requests-desc');
+  const sortedKeys = sorted.map((r) => r.key);
+
+  // 1. Known CPA with requests (12) must come first
+  assert.equal(sorted[0].fileName, 'cpa-active.json');
+  assert.equal(sorted[0].requestTelemetry.known, true);
+  assert.equal(sorted[0].requestTelemetry.totalRequests, 12);
+
+  // 2. Known CPA with 0 requests must precede unknown Ollama accounts
+  assert.equal(sorted[1].fileName, 'cpa-zero.json');
+  assert.equal(sorted[1].requestTelemetry.known, true);
+  assert.equal(sorted[1].requestTelemetry.totalRequests, 0);
+
+  // 3 & 4. Unknown Ollama accounts must NOT be treated as 0 requests and come after known CPA records,
+  // ordered deterministically by name collator then stable key
+  assert.equal(sortedKeys[2], 'ollama:ollama-acc-1');
+  assert.equal(sorted[2].requestTelemetry.known, false);
+  assert.equal(sorted[2].requestTelemetry.totalRequests, null);
+
+  assert.equal(sortedKeys[3], 'ollama:ollama-acc-2');
+  assert.equal(sorted[3].requestTelemetry.known, false);
+  assert.equal(sorted[3].requestTelemetry.totalRequests, null);
 });

@@ -15,6 +15,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/auth"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/config"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
@@ -35,7 +36,17 @@ func demoHandler(t *testing.T, basePath string) *Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandler(config.Config{BasePath: basePath, Version: "test", IsDemoMode: true}, repository.New(db), cipher, nil, authManager)
+	handler := NewHandler(config.Config{BasePath: basePath, Version: "test", IsDemoMode: true}, repository.New(db), cipher, nil, authManager)
+	// The demo policy and the export-coverage gate walk the routes the server actually
+	// serves, and the Feishu routes exist only once the bot is wired. Building the real
+	// bot force-disabled mirrors a demo deployment, so the two settings reads are part of
+	// the walked surface rather than invisible to it.
+	feishuAPI, err := handler.BuildFeishuAPI(context.Background(), handler.BuildFeishuReportSource(), feishu.Overlay{ForceDisabled: true})
+	if err != nil {
+		t.Fatalf("build demo feishu api: %v", err)
+	}
+	handler.SetFeishuAPI(feishuAPI)
+	return handler
 }
 
 // The classification table has to be total. A route that no rule describes is
@@ -153,6 +164,10 @@ func TestDemoPolicyKeepsTheReadingSurface(t *testing.T) {
 		{http.MethodGet, "/api/v1/management/oauth/providers"},
 		{http.MethodGet, "/api/v1/management/quota"},
 		{http.MethodGet, "/api/v1/management/quota/auth-codex-01"},
+		// The settings page's Feishu panel reads these on arrival. They move only the
+		// demonstration's own stored settings; the long connection and the sender never run.
+		{http.MethodGet, "/api/v1/feishu/settings"},
+		{http.MethodGet, "/api/v1/feishu/status"},
 		{http.MethodGet, "/api/v1/management/system"},
 		{http.MethodGet, "/api/v1/management/client-key-aliases"},
 		{http.MethodGet, "/api/v1/pricing"},

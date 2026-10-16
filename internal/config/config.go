@@ -28,6 +28,9 @@ type Config struct {
 	MasterKey      string
 	Usage          UsageConfig
 	Quota          QuotaConfig
+	Automation     AutomationConfig
+	Feishu         FeishuConfig
+	Ollama         OllamaConfig
 	PublicURL      string
 	Version        string
 	RequestTimeout time.Duration
@@ -193,11 +196,114 @@ var DefaultQuotaCredentialFloorByProvider = map[string]time.Duration{
 	"antigravity": 5 * time.Minute,
 }
 
+// AutomationConfig controls account-level auto-management: disabling a credential
+// only on explicit new account-level weekly exhaustion evidence and enabling it at
+// the recorded reset time.
+//
+// The master switch is an environment variable rather than a stored setting, and
+// the struct keeps "unset" apart from "explicitly off": under the default (unset)
+// an operator can still turn automation on from the console, while
+// OMCPA_ACCOUNT_AUTOMATION_ENABLED=false is an out-of-band emergency control the
+// web switch must never override. EffectiveEnabled resolves the two.
+type AutomationConfig struct {
+	// MasterFromEnv is true when the environment variable was set explicitly.
+	MasterFromEnv bool
+	// MasterEnvValue is the parsed environment value; meaningful only when
+	// MasterFromEnv is true.
+	MasterEnvValue bool
+	// EvaluationInterval is how often the pass runs.
+	EvaluationInterval time.Duration
+	// BackoffBase and BackoffMax shape the persisted retry schedule after a failed
+	// enable.
+	BackoffBase time.Duration
+	BackoffMax  time.Duration
+	// MaxEvidenceAge bounds how old the reading that justifies a disable may be.
+	MaxEvidenceAge time.Duration
+}
+
+// Account automation defaults. The pass is a light read most of the time, and the
+// evidence age is a day so a brief scheduler outage does not make every reading
+// unusable while still bounding a long one.
+const (
+	DefaultAutomationInterval    = time.Minute
+	DefaultAutomationBackoffBase = 5 * time.Minute
+	DefaultAutomationBackoffMax  = 6 * time.Hour
+	DefaultAutomationMaxEvidence = 24 * time.Hour
+)
+
+// EffectiveEnabled resolves the environment master switch against the stored web
+// switch. An explicit environment value always wins; an unset one leaves the web
+// choice in force.
+func (c AutomationConfig) EffectiveEnabled(webEnabled bool) bool {
+	if c.MasterFromEnv {
+		return c.MasterEnvValue
+	}
+	return webEnabled
+}
+
+// Source names where the effective switch came from, so the console can show it.
+func (c AutomationConfig) Source(webEnabled bool) string {
+	if c.MasterFromEnv {
+		if c.MasterEnvValue {
+			return "env_enabled"
+		}
+		return "env_disabled"
+	}
+	if webEnabled {
+		return "web"
+	}
+	return "default_off"
+}
+
+// LoopAllowed reports whether the background loop may run at all. An explicit
+// environment false forbids it; an unset default still starts it so a later web
+// enable takes effect without a restart.
+func (c AutomationConfig) LoopAllowed() bool {
+	return !(c.MasterFromEnv && !c.MasterEnvValue)
+}
+
 type CPAConfig struct {
 	BaseURL       string
 	UsageAddr     string
 	ManagementKey string
 }
+
+// FeishuConfig is the environment override for the Feishu bot. The app secret is
+// read here and only here; it travels to the bot's resolved configuration and is
+// never written to a response or a log by this layer.
+//
+// Enabled is tri-state: nil leaves the console's web switch in force, true forces
+// the bot on and false is an environment off the web cannot override.
+// ForceDisabled is the stronger emergency switch. An empty environment string is
+// treated as unset, so a compose file that passes a variable through unset cannot
+// pin the feature off.
+type FeishuConfig struct {
+	Enabled       *bool
+	ForceDisabled bool
+	AppID         *string
+	AppSecret     *string
+	ChatID        *string
+}
+
+// OllamaConfig controls the Ollama quota collector, the one loop that scrapes
+// ollama.com with each account's stored cookie.
+type OllamaConfig struct {
+	// CollectorEnabled gates the background scraper. It is off in demo mode, which
+	// must not make an outbound request.
+	CollectorEnabled bool
+	Interval         time.Duration
+	Timeout          time.Duration
+	BackoffBase      time.Duration
+	BackoffMax       time.Duration
+}
+
+// Ollama collector defaults, shared with internal/ollama.
+const (
+	DefaultOllamaInterval    = 15 * time.Minute
+	DefaultOllamaTimeout     = 20 * time.Second
+	DefaultOllamaBackoffBase = 5 * time.Minute
+	DefaultOllamaBackoffMax  = 6 * time.Hour
+)
 
 // NormalizeBasePath returns a clean URL path without a trailing slash. An
 // empty environment value means the documented default (/omc); callers that
@@ -330,6 +436,18 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	automationConfig, err := loadAutomationConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	feishuConfig, err := loadFeishuConfig()
+	if err != nil {
+		return Config{}, err
+	}
+	ollamaConfig, err := loadOllamaConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	releaseConfig, err := loadReleaseConfig()
 	if err != nil {
 		return Config{}, err
@@ -343,6 +461,10 @@ func Load() (Config, error) {
 		// A demonstration must not reach any upstream. The scheduler is a network
 		// loop, so it is switched off here rather than left to the fixture to absorb.
 		quotaConfig.SchedulerEnabled = false
+		// The Ollama collector scrapes ollama.com and the Feishu bot opens a long
+		// connection and sends messages: neither may happen in a demonstration.
+		ollamaConfig.CollectorEnabled = false
+		feishuConfig.ForceDisabled = true
 	}
 
 	cpa := CPAConfig{
@@ -370,6 +492,9 @@ func Load() (Config, error) {
 		ListenAddr:        listenAddr,
 		Usage:             usage,
 		Quota:             quotaConfig,
+		Automation:        automationConfig,
+		Feishu:            feishuConfig,
+		Ollama:            ollamaConfig,
 		BasePath:          basePath,
 		DataDir:           dataDir,
 		DatabasePath:      databasePath,
@@ -661,6 +786,127 @@ func loadQuotaConfig() (QuotaConfig, error) {
 		BackoffBase:               backoffBase,
 		BackoffMax:                backoffMax,
 	}, nil
+}
+
+// loadAutomationConfig reads the account auto-management settings. The master
+// switch keeps unset and explicit-false apart: the former leaves the web choice
+// in force, the latter is an emergency off the web cannot override.
+func loadAutomationConfig() (AutomationConfig, error) {
+	cfg := AutomationConfig{}
+	if raw, present := os.LookupEnv("OMCPA_ACCOUNT_AUTOMATION_ENABLED"); present && strings.TrimSpace(raw) != "" {
+		value, err := parseBoolString("OMCPA_ACCOUNT_AUTOMATION_ENABLED", raw)
+		if err != nil {
+			return AutomationConfig{}, err
+		}
+		cfg.MasterFromEnv = true
+		cfg.MasterEnvValue = value
+	}
+	interval, err := parseDurationEnv("OMCPA_ACCOUNT_AUTOMATION_INTERVAL", DefaultAutomationInterval)
+	if err != nil {
+		return AutomationConfig{}, err
+	}
+	backoffBase, err := parseDurationEnv("OMCPA_ACCOUNT_AUTOMATION_BACKOFF_BASE", DefaultAutomationBackoffBase)
+	if err != nil {
+		return AutomationConfig{}, err
+	}
+	backoffMax, err := parseDurationEnv("OMCPA_ACCOUNT_AUTOMATION_BACKOFF_MAX", DefaultAutomationBackoffMax)
+	if err != nil {
+		return AutomationConfig{}, err
+	}
+	if backoffMax < backoffBase {
+		return AutomationConfig{}, fmt.Errorf("OMCPA_ACCOUNT_AUTOMATION_BACKOFF_MAX must be at least OMCPA_ACCOUNT_AUTOMATION_BACKOFF_BASE: %q < %q", backoffMax, backoffBase)
+	}
+	maxEvidence, err := parseDurationEnv("OMCPA_ACCOUNT_AUTOMATION_MAX_EVIDENCE_AGE", DefaultAutomationMaxEvidence)
+	if err != nil {
+		return AutomationConfig{}, err
+	}
+	cfg.EvaluationInterval = interval
+	cfg.BackoffBase = backoffBase
+	cfg.BackoffMax = backoffMax
+	cfg.MaxEvidenceAge = maxEvidence
+	return cfg, nil
+}
+
+// loadFeishuConfig reads the Feishu environment override. The app secret is read
+// only here, never echoed by an error or a log.
+//
+// A switch is tri-state: OMCPA_FEISHU_ENABLED unset leaves the web setting in
+// force; OMCPA_FEISHU_FORCE_DISABLED is the emergency off. An empty string is
+// treated as unset so a compose file that passes a variable through unset does
+// not become a hard value.
+func loadFeishuConfig() (FeishuConfig, error) {
+	cfg := FeishuConfig{}
+	if raw, present := os.LookupEnv("OMCPA_FEISHU_ENABLED"); present && strings.TrimSpace(raw) != "" {
+		value, err := parseBoolString("OMCPA_FEISHU_ENABLED", raw)
+		if err != nil {
+			return FeishuConfig{}, err
+		}
+		cfg.Enabled = &value
+	}
+	forceDisabled, err := parseBoolEnv("OMCPA_FEISHU_FORCE_DISABLED", false)
+	if err != nil {
+		return FeishuConfig{}, err
+	}
+	cfg.ForceDisabled = forceDisabled
+	cfg.AppID = optionalEnvString("OMCPA_FEISHU_APP_ID")
+	cfg.AppSecret = optionalEnvString("OMCPA_FEISHU_APP_SECRET")
+	cfg.ChatID = optionalEnvString("OMCPA_FEISHU_CHAT_ID")
+	return cfg, nil
+}
+
+// loadOllamaConfig reads the Ollama collector settings.
+func loadOllamaConfig() (OllamaConfig, error) {
+	enabled, err := parseBoolEnv("OMCPA_OLLAMA_COLLECTOR_ENABLED", true)
+	if err != nil {
+		return OllamaConfig{}, err
+	}
+	interval, err := parseDurationEnv("OMCPA_OLLAMA_COLLECTOR_INTERVAL", DefaultOllamaInterval)
+	if err != nil {
+		return OllamaConfig{}, err
+	}
+	timeout, err := parseDurationEnv("OMCPA_OLLAMA_TIMEOUT", DefaultOllamaTimeout)
+	if err != nil {
+		return OllamaConfig{}, err
+	}
+	backoffBase, err := parseDurationEnv("OMCPA_OLLAMA_BACKOFF_BASE", DefaultOllamaBackoffBase)
+	if err != nil {
+		return OllamaConfig{}, err
+	}
+	backoffMax, err := parseDurationEnv("OMCPA_OLLAMA_BACKOFF_MAX", DefaultOllamaBackoffMax)
+	if err != nil {
+		return OllamaConfig{}, err
+	}
+	if backoffMax < backoffBase {
+		return OllamaConfig{}, fmt.Errorf("OMCPA_OLLAMA_BACKOFF_MAX must be at least OMCPA_OLLAMA_BACKOFF_BASE: %q < %q", backoffMax, backoffBase)
+	}
+	return OllamaConfig{
+		CollectorEnabled: enabled,
+		Interval:         interval,
+		Timeout:          timeout,
+		BackoffBase:      backoffBase,
+		BackoffMax:       backoffMax,
+	}, nil
+}
+
+// optionalEnvString returns a pointer to a non-empty environment value, or nil
+// when it is unset or empty. An empty value is not an override: it cannot erase a
+// value the operator saved in the console.
+func optionalEnvString(name string) *string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	return &raw
+}
+
+// parseBoolString reads one explicit boolean, reporting the variable name in the
+// error. parseBoolEnv handles the unset case; this is the set case it shares.
+func parseBoolString(name, raw string) (bool, error) {
+	value, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean: %q", name, raw)
+	}
+	return value, nil
 }
 
 // parseDurationEnv reads a positive duration, or the fallback when it is unset.

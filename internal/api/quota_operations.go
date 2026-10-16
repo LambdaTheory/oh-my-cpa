@@ -105,7 +105,7 @@ func (h *Handler) redeemQuotaCredit(ctx context.Context, client *management.Clie
 	// next scheduled poll.
 	prior := h.loadPriorNormalizedQuota(ctx, authIndex)
 	refreshed, _ := svc.RefreshCredentialQuota(ctx, *foundFile, prior)
-	if refreshed != nil && h.repo != nil && refreshed.Status != "error" && refreshed.Status != "stale" {
+	if refreshed != nil && h.repo != nil {
 		_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
 	}
 	h.attachWindowCapacity(ctx, refreshed, h.now().UnixMilli())

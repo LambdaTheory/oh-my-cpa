@@ -81,6 +81,18 @@ const FIXED_ROUTES = new Map([
   ['/api/v1/management/auth-files/model-aliases', 'auth-files-model-aliases'],
   ['/api/v1/management/auth-files/excluded-models', 'auth-files-excluded-models'],
   ['/api/v1/management/oauth/providers', 'oauth-providers'],
+  // Ollama account monitoring is folded into the unified OAuth workspace, which reads
+  // both of these on every load rather than only when the Ollama drawer opens. The
+  // demonstration seeds no Ollama account, so the exported captures are empty
+  // inventories; the map still has to carry them, because a missing entry is a 404 the
+  // workspace reads on arrival rather than a state a visitor can dismiss.
+  ['/api/v1/ollama/accounts', 'ollama-accounts'],
+  ['/api/v1/ollama/quota', 'ollama-quota'],
+  // Feishu notification settings and status. The settings page's panel reads both on
+  // arrival, and the demonstration builds the bot force-disabled, so these are the
+  // captured disabled-state answers the console renders.
+  ['/api/v1/feishu/settings', 'feishu-settings'],
+  ['/api/v1/feishu/status', 'feishu-status'],
   ['/api/v1/management/quota', 'quota'],
   ['/api/v1/management/logs/status', 'logs-status'],
   ['/api/v1/management/service-logs', 'service-logs'],

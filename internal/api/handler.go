@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/applog"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/auth"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/automation"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/config"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/discovery"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
@@ -86,6 +87,27 @@ type Handler struct {
 	// background scheduler share it, so a limit seen by one path is respected by
 	// the others. It is in memory only: a restart clears it.
 	quotaBackoff *quota.Backoff
+	// automation runs account-level auto-management (disable on weekly exhaustion,
+	// enable at the recorded reset). Nil until SetAutomation; nil-safe reads answer
+	// an empty roster.
+	automation *automation.Service
+	// feishu is the Feishu notification bot and its settings routes. Nil until
+	// SetFeishuAPI; its routes are registered only once it exists, so a test that
+	// does not wire it serves no Feishu endpoint.
+	feishu *FeishuAPI
+}
+
+// SetAutomation installs the account auto-management service the HTTP routes and
+// the background loop share. The same instance is what makes the per-account lock
+// and the intent version agree between the two.
+func (h *Handler) SetAutomation(service *automation.Service) {
+	h.automation = service
+}
+
+// SetFeishuAPI installs the Feishu bot and enables its routes. The service is
+// started and stopped by the application, and reloaded by the settings route.
+func (h *Handler) SetFeishuAPI(api *FeishuAPI) {
+	h.feishu = api
 }
 
 // now is the handler's view of the clock.
@@ -298,6 +320,23 @@ func (h *Handler) routes() chi.Router {
 				v1.Post("/management/quota/refresh", h.refreshCredentialQuota)
 				v1.Post("/management/quota/redeem-credit", h.redeemCodexResetCredit)
 				v1.Get("/management/quota/{authIndex}", h.getCredentialQuotaDetail)
+				// Account-level auto-management: the adopted roster, the resolved
+				// master switch, and the per-account switches, one-time batch
+				// adoption, cancel and manual recovery time.
+				v1.Get("/account-automation", h.getAccountAutomation)
+				v1.Get("/account-automation/settings", h.getAccountAutomationSettings)
+				v1.Put("/account-automation/settings", h.putAccountAutomationSettings)
+				v1.Put("/account-automation/accounts/{authIndex}", h.putAccountAutomationAccount)
+				v1.Post("/account-automation/adopt", h.postAccountAutomationAdopt)
+				v1.Post("/account-automation/accounts/{authIndex}/cancel", h.postAccountAutomationCancel)
+				v1.Post("/account-automation/accounts/{authIndex}/manual-reset", h.postAccountAutomationManualReset)
+				// Ollama quota monitoring (lane B) and Feishu notifications (lane C).
+				// The Feishu routes exist only when the bot is wired, so a deployment
+				// that never configures it serves no dead endpoint.
+				RegisterOllamaRoutes(v1, h)
+				if h.feishu != nil {
+					RegisterFeishuRoutes(v1, h.feishu)
+				}
 				v1.Get("/management/system", h.getSystemInfo)
 				v1.Get("/management/system/diagnostics", h.getSystemDiagnostics)
 				v1.Get("/management/system/releases", h.getSystemReleases)

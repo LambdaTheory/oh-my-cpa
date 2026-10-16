@@ -14,12 +14,15 @@ import (
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/api"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/auth"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/automation"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/config"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/discovery"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/demo"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/ollama"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/pricing"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/release"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -45,6 +48,15 @@ type App struct {
 	release *release.Service
 	// maintenance owns its own database connection, so it is closed with the app.
 	maintenance *repository.MaintenanceService
+	// automation runs account-level auto-management (weekly-exhaustion disable and
+	// reset-time enable). Nil in demo mode, which performs no external write.
+	automation *automation.Manager
+	// ollama scrapes the configured Ollama accounts. Nil in demo mode, which must not
+	// make an outbound request.
+	ollama *ollama.Collector
+	// feishu is the notification bot: the long connection, the classification loop and
+	// the outbound sender. Nil in demo mode.
+	feishu *feishu.Service
 	// upstream is the in-process CPA fixture. It is non-nil only in demo mode, and
 	// it is the reason a demo deployment can boot with no gateway at all.
 	upstream *demo.Upstream
@@ -150,6 +162,21 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 		}
 	}
 	handler := api.NewHandler(cfg, repo, cipher, logger, authManager)
+	// Account auto-management shares one service between the HTTP routes and the
+	// background pass, so the per-account lock and the intent version agree.
+	automationService := handler.BuildAutomationService()
+	handler.SetAutomation(automationService)
+
+	// Feishu notifications. The bot is built here so its authenticated settings
+	// routes exist; the long connection is started by Run under the process
+	// lifetime context and stopped on shutdown. A failure to build it is logged and
+	// leaves the routes unregistered rather than failing startup.
+	feishuAPI, feishuErr := handler.BuildFeishuAPI(ctx, handler.BuildFeishuReportSource(), feishuOverlay(cfg))
+	if feishuErr != nil {
+		logger.Warn("feishu notifications could not be built", "error", feishuErr)
+	} else {
+		handler.SetFeishuAPI(feishuAPI)
+	}
 
 	// Zero-config pricing: the service syncs from OpenRouter once at startup and
 	// then daily, and custom rows and operator pins always win. Failures degrade
@@ -216,6 +243,36 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 		}
 	}
 
+	// Account auto-management performs a CPA write when it disables or enables a
+	// credential, so a demo never builds the loop. An explicit environment false
+	// leaves it unbuilt too; an unset default still builds it so a later web enable
+	// takes effect without a restart.
+	var automationManager *automation.Manager
+	if !cfg.IsDemoMode && cfg.Automation.LoopAllowed() {
+		automationManager = &automation.Manager{
+			Service:  automationService,
+			Interval: cfg.Automation.EvaluationInterval,
+			Logger:   logger,
+		}
+	}
+
+	// The Ollama collector scrapes ollama.com with each account's cookie, so a demo
+	// never builds it. An operator may also switch it off without removing accounts.
+	var ollamaCollector *ollama.Collector
+	if !cfg.IsDemoMode && cfg.Ollama.CollectorEnabled {
+		ollamaCollector = handler.BuildOllamaService()
+		if ollamaCollector != nil {
+			ollamaCollector.Interval = cfg.Ollama.Interval
+			ollamaCollector.BackoffBase = cfg.Ollama.BackoffBase
+			ollamaCollector.BackoffMax = cfg.Ollama.BackoffMax
+		}
+	}
+
+	var feishuService *feishu.Service
+	if feishuErr == nil && feishuAPI != nil {
+		feishuService = feishuAPI.Service()
+	}
+
 	return &App{
 		cfg:     cfg,
 		db:      db,
@@ -229,7 +286,22 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 		pricing:     pricingService,
 		release:     releaseService,
 		maintenance: maintenanceService,
+		automation:  automationManager,
+		ollama:      ollamaCollector,
+		feishu:      feishuService,
 	}, nil
+}
+
+// feishuOverlay projects the Feishu environment configuration onto the bot's
+// override. The plaintext app secret is carried here only.
+func feishuOverlay(cfg config.Config) feishu.Overlay {
+	return feishu.Overlay{
+		ForceDisabled: cfg.Feishu.ForceDisabled,
+		Enabled:       cfg.Feishu.Enabled,
+		AppID:         cfg.Feishu.AppID,
+		AppSecret:     cfg.Feishu.AppSecret,
+		ChatID:        cfg.Feishu.ChatID,
+	}
 }
 
 // usageUpstream adapts the CPA management client to the collector's narrower
@@ -418,6 +490,36 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 
+	// Account auto-management is best-effort like the quota scheduler: losing it
+	// parks the plans in the database for the next pass and never breaks request
+	// capture or the HTTP server. It performs a CPA write, so a demo never starts it.
+	if a.automation != nil {
+		go func() {
+			if err := a.automation.Run(runCtx); err != nil {
+				a.logger.Warn("account auto-management stopped", "error", err)
+			}
+		}()
+	}
+
+	// The Ollama collector scrapes ollama.com. Best-effort and never built in a demo;
+	// a failed pass leaves the previous reading and a persisted backoff behind.
+	if a.ollama != nil {
+		go func() {
+			if err := a.ollama.Run(runCtx); err != nil {
+				a.logger.Warn("ollama collection stopped", "error", err)
+			}
+		}()
+	}
+
+	// The Feishu bot opens one long connection and runs its own classification loop.
+	// Start is a no-op for a disabled, forced-off or degraded configuration, so an
+	// unusable Feishu setup never fails startup.
+	if a.feishu != nil && !a.cfg.IsDemoMode {
+		if err := a.feishu.Start(runCtx); err != nil {
+			a.logger.Warn("feishu notifications did not start", "error", err)
+		}
+	}
+
 	// The release sweep is best-effort in the same way and for the same reason: a
 	// version that was not checked is stale information, not a broken deployment.
 	// OMCPA_UPDATE_CHECK_ENABLED=false switches it off while leaving the page's own
@@ -457,6 +559,11 @@ func (a *App) Run(ctx context.Context) error {
 	// and the pipeline joined first: a request or a final ingest flush must not
 	// find the store gone.
 	stop()
+	// The Feishu bot owns a long connection and its owns goroutines; join it before
+	// the database closes so a final outbox write cannot find the store gone.
+	if a.feishu != nil {
+		a.feishu.Stop()
+	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	a.handler.CloseBrowserRuns()

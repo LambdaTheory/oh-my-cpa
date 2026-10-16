@@ -96,9 +96,11 @@ test('the shared token layer selects every surface that renders it', () => {
 });
 
 test('the unified OAuth workspace selects its density scenario and overlay history', () => {
+  // The page also raises the first-batch automation and Ollama drawers, so a change to
+  // it selects the two scenarios that drive them as well.
   assert.deepEqual(
     planFor('web/src/pages/oauthManagement/OAuthManagementPage.tsx'),
-    ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
+    ['omc-account-automation', 'omc-ollama-accounts', 'oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
   );
   assert.deepEqual(
     planFor('web/src/components/authFiles/AuthFileDetailDrawer.tsx'),
@@ -112,6 +114,28 @@ test('the unified OAuth workspace selects its density scenario and overlay histo
     planFor('web/src/pages/LegacyOAuthManagementRedirect.tsx'),
     ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
   );
+});
+
+test('the first-batch management surfaces have a non-empty rule of their own', () => {
+  // A change to a drawer or the OMC settings page reaches exactly the scenario that
+  // drives it, and nothing is left to widen to the whole catalog. The positive half
+  // proves the mapping exists; the negative half proves the rule is not a blanket.
+  assert.deepEqual(planFor('web/src/components/automation/AccountAutomationDrawer.tsx'), ['omc-account-automation']);
+  assert.deepEqual(planFor('web/src/components/ollama/OllamaManagementDrawer.tsx'), ['omc-ollama-accounts']);
+  assert.deepEqual(planFor('web/src/types/accountAutomation.ts'), ['omc-account-automation']);
+  assert.deepEqual(planFor('web/src/types/ollama.ts'), ['omc-ollama-accounts']);
+  assert.deepEqual(planFor('web/src/types/feishu.ts'), ['omc-feishu-settings']);
+  // The Feishu panel is a section of the OMC settings page, which the phone sweep also
+  // loads, so its own scenario is not the only surface that reads it.
+  assert.deepEqual(planFor('web/src/components/feishu/FeishuSettingsPanel.tsx'), ['omc-settings', 'omc-feishu-settings', 'mobile-console']);
+  const settings = new Set(planFor('web/src/pages/OmcSettingsPage.tsx'));
+  assert.equal(settings.has('omc-settings'), true);
+  assert.equal(settings.has('omc-feishu-settings'), true);
+  // Negative control: a drawer change must not drag in the OAuth workspace's own
+  // density scenario or the request list, which it does not touch.
+  const automation = new Set(planFor('web/src/components/automation/AccountAutomationDrawer.tsx'));
+  assert.equal(automation.has('oauth-management'), false);
+  assert.equal(automation.has('column-alignment'), false);
 });
 
 test('a provider-console change selects only the provider-console scenarios', () => {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/agent"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/automation"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/gateway"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
@@ -125,6 +126,99 @@ func (h *Handler) operationsService() *operations.Service {
 			h.pricing.NotifyModelsChanged()
 		}
 	}}
+	service.AutomationSummary = func(ctx context.Context) (operations.AutomationStatus, error) {
+		if h.automation == nil {
+			return operations.AutomationStatus{Source: "unavailable", Accounts: []operations.AutomationAccountSummary{}}, nil
+		}
+		status, err := h.automation.Status(ctx)
+		if err != nil {
+			return operations.AutomationStatus{}, err
+		}
+		roster, err := h.automation.ListAccounts(ctx)
+		if err != nil {
+			return operations.AutomationStatus{}, err
+		}
+		indexes := make([]string, 0, len(roster))
+		for _, account := range roster {
+			indexes = append(indexes, account.AuthIndex)
+		}
+		evidence := map[string]repository.AutomationWeeklyWindow{}
+		if h.repo != nil {
+			if latest, err := h.repo.LatestStandardWeeklyWindows(ctx, indexes); err == nil {
+				evidence = latest
+			}
+		}
+		result := operations.AutomationStatus{Enabled: status.Enabled, Source: status.Source, Accounts: []operations.AutomationAccountSummary{}}
+		for _, account := range roster {
+			summary := operations.AutomationAccountSummary{
+				AuthIndex:            account.AuthIndex,
+				Provider:             account.Provider,
+				Name:                 account.Name,
+				State:                account.State,
+				MonitorReason:        account.MonitorReason,
+				IsEnabled:            account.IsEnabled,
+				DisabledByAutomation: account.IsDisabledByAutomation(),
+			}
+			if dueMS, ok := automation.RecoveryDue(account); ok {
+				summary.RecoveryAtMS = &dueMS
+			}
+			if window, ok := evidence[account.AuthIndex]; ok {
+				summary.HasWeeklyEvidence = true
+				usedPercent := window.UsedPercent
+				summary.WeeklyUsedPercent = &usedPercent
+			}
+			result.Accounts = append(result.Accounts, summary)
+		}
+		return result, nil
+	}
+	service.OllamaSummary = func(ctx context.Context) (operations.OllamaStatus, error) {
+		status := operations.OllamaStatus{CollectorEnabled: h.cfg.Ollama.CollectorEnabled, Accounts: []operations.OllamaAccountSummary{}}
+		if h.repo == nil {
+			return status, nil
+		}
+		accounts, err := h.repo.ListOllamaAccounts(ctx)
+		if err != nil {
+			return operations.OllamaStatus{}, err
+		}
+		for _, account := range accounts {
+			summary := operations.OllamaAccountSummary{
+				ID:               account.ID,
+				Label:            account.Label,
+				Enabled:          account.Enabled,
+				Status:           account.Status,
+				LastSuccessAtMS:  account.LastSuccessAtMS,
+				LastObservedAtMS: account.LastObservedAtMS,
+				NewestError:      account.NewestError,
+				NextAttemptAtMS:  account.NextAttemptAtMS,
+				AttemptCount:     account.AttemptCount,
+			}
+			if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
+				summary.HasReading = true
+				summary.Quota = json.RawMessage(account.QuotaSnapshotJSON)
+			}
+			status.Accounts = append(status.Accounts, summary)
+		}
+		return status, nil
+	}
+	service.FeishuSummary = func(ctx context.Context) (operations.FeishuStatus, error) {
+		if h.feishu == nil || h.feishu.Service() == nil {
+			return operations.FeishuStatus{Source: "unavailable", Degraded: true, Reason: "not configured"}, nil
+		}
+		snapshot := h.feishu.Service().StatusSnapshot(ctx)
+		return operations.FeishuStatus{
+			Enabled:      snapshot.Enabled,
+			Ready:        snapshot.Ready,
+			Degraded:     snapshot.Degraded,
+			Reason:       snapshot.Reason,
+			Source:       snapshot.Source,
+			ForcedOff:    snapshot.ForcedOff,
+			Connected:    snapshot.Connected,
+			OpenItems:    snapshot.OpenItems,
+			PendingSends: snapshot.PendingSends,
+			QueuedSends:  snapshot.QueuedSends,
+			LastError:    snapshot.LastError,
+		}, nil
+	}
 	service.ListProviders = func(ctx context.Context) ([]operations.Provider, error) {
 		client, err := h.capabilityClient(ctx)
 		if err != nil {
@@ -219,10 +313,8 @@ func (h *Handler) operationsService() *operations.Service {
 					h.recordQuotaRateLimit(authIndex, quota.DetectProvider(file.Type, file.Provider), err)
 					return operations.Quota{}, err
 				}
-				if value.Status != "error" && value.Status != "stale" {
-					if err = h.persistNormalizedQuotaSnapshot(ctx, value); err != nil {
-						return operations.Quota{}, err
-					}
+				if err = h.persistNormalizedQuotaSnapshot(ctx, value); err != nil {
+					return operations.Quota{}, err
 				}
 				h.clearQuotaRateLimit(authIndex, quota.DetectProvider(file.Type, file.Provider))
 				h.attachWindowCapacity(ctx, value, h.now().UnixMilli())

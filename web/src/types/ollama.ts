@@ -1,0 +1,40 @@
+import type { NormalizedQuota } from './quota';
+
+export interface OllamaAccountDTO {
+  id: string;
+  label?: string;
+  enabled: boolean;
+  has_cookie: boolean;
+  status?: string;
+  last_success_at_ms?: number | null;
+  last_observed_at_ms?: number | null;
+  newest_error?: string;
+  newest_error_at_ms?: number | null;
+  next_attempt_at_ms?: number | null;
+  attempt_count: number;
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export interface OllamaAccountWritePayload {
+  label?: string;
+  cookie?: string;
+  enabled?: boolean;
+}
+
+export interface OllamaAccountListResponse {
+  accounts: OllamaAccountDTO[];
+}
+
+export interface OllamaQuotaDTO {
+  account_id: string;
+  label?: string;
+  enabled: boolean;
+  status?: string;
+  observed_at_ms?: number | null;
+  quota?: NormalizedQuota | null;
+}
+
+export interface OllamaQuotaResponse {
+  accounts: OllamaQuotaDTO[];
+}

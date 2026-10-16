@@ -42,6 +42,31 @@ test('unknown API endpoints and wrong methods never receive an empty successful 
 });
 
 
+test('the OAuth workspace defaults read an inert Ollama inventory and still fault on writes', async () => {
+  let handler;
+  const context = { route: async (_, callback) => { handler = callback; } };
+  const problems = [];
+  await installRoutes(context, [], { record: problem => problems.push(problem) });
+  const call = async (method, pathname) => {
+    let response;
+    await handler({ request: () => ({ url: () => `http://127.0.0.1${pathname}`, method: () => method }), fulfill: value => { response = value; } });
+    return response;
+  };
+  // The handler's own shape (`internal/api/ollama_accounts.go`): an empty inventory. The
+  // OAuth workspace reads both on every load, so a scenario that does not exercise Ollama
+  // renders no Ollama rows rather than an undeclared-fixture fault.
+  for (const pathname of ['/omc/api/v1/ollama/accounts', '/omc/api/v1/ollama/quota']) {
+    const response = await call('GET', pathname);
+    assert.equal(response.status, 200, pathname);
+    assert.deepEqual(response.json, { accounts: [] }, pathname);
+  }
+  // The default is the read alone: a write is a scenario's to declare, never an empty
+  // success, so a missing fixture cannot masquerade as a working save.
+  const write = await call('POST', '/omc/api/v1/ollama/accounts');
+  assert.equal(write.status, 501, 'an undeclared write remains a harness fault, not a success');
+  assert.equal(problems.length, 1);
+});
+
 test('global expectation matchers produce repeatable bounded verdicts', () => {
   const ledger = createProblemLedger();
   ledger.expect({kind: 'console', message: /^expected$/g, count: 2});

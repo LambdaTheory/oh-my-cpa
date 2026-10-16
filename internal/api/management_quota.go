@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
@@ -113,8 +114,9 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 		}
 		h.clearQuotaRateLimit(targetIndex, quota.DetectProvider(file.Type, file.Provider))
 
-		// Persist snapshot to DB only when successful (healthy, warning, or exhausted), never stale or error
-		if h.repo != nil && refreshed.Status != "error" && refreshed.Status != "stale" {
+		// Record the safe collection result for every outcome; the snapshot itself is
+		// written only for a successful read inside persistNormalizedQuotaSnapshot.
+		if h.repo != nil {
 			_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
 		}
 		h.attachWindowCapacity(ctx, refreshed, h.now().UnixMilli())
@@ -189,7 +191,7 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 			}
 			if refreshed != nil {
 				results[index] = refreshed
-				if h.repo != nil && refreshed.Status != "error" && refreshed.Status != "stale" {
+				if h.repo != nil {
 					_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
 				}
 				h.clearQuotaRateLimit(authIdx, quota.DetectProvider(f.Type, f.Provider))
@@ -264,7 +266,14 @@ func (h *Handler) loadPriorNormalizedQuota(ctx context.Context, authIndex string
 }
 
 func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.NormalizedQuota) error {
-	if h.repo == nil || q == nil || q.Disabled || q.Error != "" || q.Status == "stale" || q.Status == "error" {
+	if h.repo == nil || q == nil {
+		return nil
+	}
+	// Record the safe collection outcome before the success gate. An auth failure
+	// never produces a quota snapshot, so this enum-only signal is the only durable
+	// evidence the Feishu report can read that a credential needs re-authentication.
+	h.recordQuotaSignal(ctx, q)
+	if q.Disabled || q.Error != "" || q.Status == "stale" || q.Status == "error" {
 		return nil
 	}
 	// Carry observed reset evidence through the existing JSON snapshots, so a
@@ -347,6 +356,67 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		h.logger.Warn("record active quota observations", "auth_index", q.AuthIndex, "error", err)
 	}
 	return nil
+}
+
+// recordQuotaSignal persists the safe, enum-only collection outcome for one
+// credential. It runs for every refresh result, including a failure, so the Feishu
+// report can tell an auth failure (which never produces a snapshot) from a
+// transport one. It stores no raw error, token or secret.
+func (h *Handler) recordQuotaSignal(ctx context.Context, q *quota.NormalizedQuota) {
+	if h == nil || h.repo == nil || q == nil {
+		return
+	}
+	authIndex := strings.TrimSpace(q.AuthIndex)
+	if authIndex == "" {
+		return
+	}
+	state := classifyQuotaSignal(q)
+	signal := repository.FeishuAccountSignal{
+		AuthIndex:  authIndex,
+		Provider:   strings.TrimSpace(q.Provider),
+		State:      state,
+		ObservedAt: quotaSignalObservedAt(q, state, h.now()),
+	}
+	if err := h.repo.SaveFeishuAccountSignal(ctx, signal); err != nil && h.logger != nil {
+		h.logger.Warn("record feishu quota signal", "auth_index", authIndex, "error", err)
+	}
+}
+
+// classifyQuotaSignal maps a refresh result to the fixed collection-state
+// vocabulary. The authentication decision reuses the quota layer's already-tested
+// classification: EvaluateStatusAndRecommendation sets the recommendation to
+// needs_reauth only for an explicit auth failure, so this never re-parses a raw
+// error string for a 401. An error that is not needs_reauth is a transport
+// failure; a successful read is healthy.
+func classifyQuotaSignal(q *quota.NormalizedQuota) string {
+	if q == nil {
+		return repository.FeishuSignalUnknown
+	}
+	if strings.EqualFold(strings.TrimSpace(q.Recommendation.Status), "needs_reauth") {
+		return repository.FeishuSignalAuthInvalid
+	}
+	if strings.TrimSpace(q.Error) != "" {
+		return repository.FeishuSignalTransport
+	}
+	switch strings.ToLower(strings.TrimSpace(q.Status)) {
+	case "healthy", "warning", "exhausted", "cooldown", "unpublished":
+		return repository.FeishuSignalHealthy
+	case "stale", "error":
+		return repository.FeishuSignalTransport
+	default:
+		return repository.FeishuSignalUnknown
+	}
+}
+
+// quotaSignalObservedAt returns the instant the collection outcome was observed.
+// A successful read carries its real reading instant; a failure carries the
+// attempt instant (now) because a failed result keeps the prior reading's
+// timestamp, which would otherwise make a fresh auth failure look old.
+func quotaSignalObservedAt(q *quota.NormalizedQuota, state string, now time.Time) time.Time {
+	if q != nil && state == repository.FeishuSignalHealthy && q.ObservedAtMS > 0 {
+		return time.UnixMilli(q.ObservedAtMS).UTC()
+	}
+	return now
 }
 
 // planFromSnapshot rebuilds the full normalized plan (including subscription

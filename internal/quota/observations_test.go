@@ -2,6 +2,7 @@ package quota
 
 import (
 	"testing"
+	"time"
 )
 
 func TestActiveObservationsFromQuotaKeepsOnlyMeasuredWindows(t *testing.T) {
@@ -51,6 +52,65 @@ func TestActiveObservationsFromQuotaKeepsOnlyMeasuredWindows(t *testing.T) {
 	}
 }
 
+// The observation timeline records only measured windows. The parser must hand it a weekly
+// window with no reading, or with a non-finite/out-of-range one, as nil, so a global rate-limit
+// flag or an untrustworthy number cannot become a recorded weekly 100% - the row that otherwise
+// drives the account auto-manager. A true hundred is still recorded as the measured 100 it is.
+func TestActiveObservationsFromQuotaDoesNotRecordAnUntrustworthyWeeklyWindow(t *testing.T) {
+	observedAtMS := time.Now().UnixMilli()
+	cases := []struct {
+		name       string
+		weeklyUsed string
+		wantWeekly bool
+		wantUsed   float64
+	}{
+		{"a window that published nothing", ``, false, 0},
+		{"a weekly window one over the scale", `"used_percent": 101,`, false, 0},
+		{"a negative weekly window", `"used_percent": -1,`, false, 0},
+		{"a measured weekly window", `"used_percent": 100,`, true, 100},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := []byte(`{
+				"plan_type": "plus",
+				"rate_limit": {
+					"allowed": false,
+					"limit_reached": true,
+					"primary_window": {"used_percent": 100, "limit_window_seconds": 18000, "reset_after_seconds": 3600},
+					"secondary_window": {` + testCase.weeklyUsed + ` "limit_window_seconds": 604800, "reset_after_seconds": 400000}
+				}
+			}`)
+			_, windows, _, err := ParseCodexUsage(raw, observedAtMS)
+			if err != nil {
+				t.Fatalf("ParseCodexUsage failed: %v", err)
+			}
+			value := &NormalizedQuota{AuthIndex: "idx-1", Provider: "codex", ObservedAtMS: observedAtMS, Windows: windows}
+			observations := ActiveObservationsFromQuota(value)
+
+			// The measured five-hour window is always recorded at its real 100%.
+			if len(observations) == 0 || observations[0].WindowKind != PassiveWindowFiveHour || observations[0].UsedPercent != 100 {
+				t.Fatalf("observations = %+v, want the measured five-hour window at 100", observations)
+			}
+			weekly, found := findActiveObservation(observations, PassiveWindowWeekly)
+			if found != testCase.wantWeekly {
+				t.Fatalf("weekly observation found = %v, want %v (%+v)", found, testCase.wantWeekly, observations)
+			}
+			if testCase.wantWeekly && weekly.UsedPercent != testCase.wantUsed {
+				t.Fatalf("weekly observation = %+v, want used %v", weekly, testCase.wantUsed)
+			}
+		})
+	}
+}
+
+func findActiveObservation(observations []ActiveObservation, windowKind string) (ActiveObservation, bool) {
+	for _, observation := range observations {
+		if observation.WindowKind == windowKind {
+			return observation, true
+		}
+	}
+	return ActiveObservation{}, false
+}
+
 func TestActiveObservationsFromQuotaRejectsIncompleteInput(t *testing.T) {
 	if got := ActiveObservationsFromQuota(nil); got != nil {
 		t.Fatalf("nil quota = %+v", got)
@@ -60,6 +120,44 @@ func TestActiveObservationsFromQuotaRejectsIncompleteInput(t *testing.T) {
 	}
 	if got := ActiveObservationsFromQuota(&NormalizedQuota{AuthIndex: "cl-1", Provider: "claude"}); got != nil {
 		t.Fatalf("missing instant = %+v", got)
+	}
+}
+
+// The same trust rule applies to the Claude parser: an out-of-range or non-numeric
+// utilization is not a weekly reading, so it produces no observation and cannot become
+// account-level exhaustion evidence, while a true hundred is recorded as the measured 100.
+func TestActiveObservationsFromClaudeRejectUntrustworthyWeeklyUtilization(t *testing.T) {
+	observedAtMS := time.Now().UnixMilli()
+	reset := time.UnixMilli(observedAtMS).Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	cases := []struct {
+		name       string
+		util       string
+		wantWeekly bool
+		wantUsed   float64
+	}{
+		{"a utilization one over the scale", `101`, false, 0},
+		{"a negative utilization", `-1`, false, 0},
+		{"a non-numeric utilization", `"not-a-number"`, false, 0},
+		{"a measured weekly window", `100`, true, 100},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			raw := []byte(`{"seven_day":{"utilization":` + testCase.util + `,"resets_at":"` + reset + `"}}`)
+			windows, _, err := ParseClaudeUsage(raw, observedAtMS)
+			if err != nil {
+				t.Fatalf("ParseClaudeUsage failed: %v", err)
+			}
+			observations := ActiveObservationsFromQuota(&NormalizedQuota{
+				AuthIndex: "cl-1", Provider: "claude", ObservedAtMS: observedAtMS, Windows: windows,
+			})
+			weekly, found := findActiveObservation(observations, PassiveWindowWeekly)
+			if found != testCase.wantWeekly {
+				t.Fatalf("weekly observation found = %v, want %v (%+v)", found, testCase.wantWeekly, observations)
+			}
+			if testCase.wantWeekly && weekly.UsedPercent != testCase.wantUsed {
+				t.Fatalf("weekly observation = %+v, want used %v", weekly, testCase.wantUsed)
+			}
+		})
 	}
 }
 
