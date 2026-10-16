@@ -75,6 +75,9 @@ func startSystemTestServer(t *testing.T) (*http.Client, string, *repository.Repo
 	handler := NewHandler(config.Config{
 		BasePath: "/omc",
 		Version:  "v0.1.0-sys-test",
+		BuildIdentity: config.BuildIdentity{
+			Version: "dev+abcdef012345", Revision: "abcdef0123456789abcdef0123456789abcdef01", Ref: "refs/heads/fixture",
+		},
 		Usage: config.UsageConfig{
 			Enabled: true,
 			Mode:    "auto",
@@ -117,6 +120,11 @@ func TestSystemInfoEndpoint(t *testing.T) {
 		t.Fatalf("decode system info: %v", err)
 	}
 
+	if data.BuildIdentity.Version != "dev+abcdef012345" ||
+		data.BuildIdentity.Revision != "abcdef0123456789abcdef0123456789abcdef01" ||
+		data.BuildIdentity.Ref != "refs/heads/fixture" {
+		t.Fatalf("source identity did not survive the system DTO: %+v", data.BuildIdentity)
+	}
 	// Oh My CPA's own build version is reported as-is.
 	if data.OMCVersion.RunningVersion != "v0.1.0-sys-test" {
 		t.Errorf("running Oh My CPA version = %q, want v0.1.0-sys-test", data.OMCVersion.RunningVersion)

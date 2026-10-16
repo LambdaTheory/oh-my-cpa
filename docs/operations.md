@@ -18,6 +18,18 @@ the executable, keep the master key and data directory, and back up both before 
 upgrade. Only a matching data backup can undo forward migrations. The download,
 checksum and host configuration steps are in `docs/install.md`.
 
+## Fork build identity
+
+System Information reads immutable `build_identity` metadata from the binary,
+separate from upstream release observations and runtime `OMCPA_VERSION`.
+The Dokploy Compose service builds from the root Dockerfile and automatically
+uses checkout HEAD/ref files for the source revision and ref. Unknown metadata is
+shown as unknown; a known revision without a supplied tag is `dev+<12-character SHA>`.
+`OMCPA_BUILD_VERSION` is an optional Compose build input naming an actual fork tag,
+not a runtime environment override. The upstream comparison version remains
+`fork`, including tagged fork builds. Release checks only observe upstream releases;
+they do not approve or apply a fork upgrade. See `docs/releasing.md`.
+
 ## Settings
 
 Everything is an environment variable. The binary also reads `.env` from its working

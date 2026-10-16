@@ -51,3 +51,12 @@ test('new gateway bootstrap uses v8, enables usage and has no reusable client se
   assert.deepEqual(config.access['api-keys'], []);
   assert.equal(config.observability.usage['usage-statistics-enabled'], true);
 });
+
+test('Dokploy source build keeps fork tags out of upstream release comparisons', () => {
+  const service = readDeployment('dokploy/compose.yml').services.omc;
+  assert.equal(service.build.context, '../..');
+  assert.equal(service.build.dockerfile, 'Dockerfile');
+  assert.equal(service.build.args.VERSION, 'fork');
+  assert.equal(service.build.args.BUILD_TAG, '${OMCPA_BUILD_VERSION:-}');
+  assert.equal(service.environment.OMCPA_VERSION, undefined);
+});

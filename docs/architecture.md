@@ -2271,6 +2271,14 @@ demo never opens the connection.
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
 | Release observation | `release_index`, `release_check_state` | Migrations 024 and 025; `truncated` is added by 025, so a database that applied 024 before it existed still gains the column. `release_index` holds one row per published version (tag, name, publication time, prerelease flag) and is **replaced as a unit per product** by `PublishReleaseSnapshot`, because a feed that stops listing a withdrawn release must stop the console claiming it exists. `release_check_state` holds one row per product — the last attempt and success times, the redacted failure reason, the latest tag, the ETag and the truncation flag — and is written by `RecordReleaseCheckAttempt`/`PublishReleaseSnapshot`/`RecordReleaseCheckFailure`, read by `ListReleases` and `GetReleaseCheckState(ForRepository)`. A release's prose body is **never stored**: it lives in bounded process memory for the life of the process, so an index without notes still names the versions and links to the source (see §10) |
 
+The system response's `build_identity` DTO allowlists only the embedded build tag
+or derived development identifier, source revision and ref. `internal/config` reads
+linker inputs, with Go's embedded `vcs.revision` as a native-build fallback. Neither
+runtime environment overrides nor the upstream release feed populate this identity.
+The Docker build's `scripts/build-identity.mjs` reads only allowlisted Git HEAD,
+loose branch refs and packed refs; Git configuration, objects and credentials are
+excluded from the build context. The existing upstream update routes remain separate.
+
 `GET /management/system` resolves the gateway client once and runs its reads side by side
 - both products' version states, the gateway's health round trip, the credential list (read
 once for both the gateway's version header and its credential count), the plugin and

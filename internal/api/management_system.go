@@ -45,8 +45,9 @@ type SystemRepositoryDTO struct {
 // what the console may see, which is why the struct is written out rather than
 // marshalled from internal types.
 type SystemInfoDTO struct {
-	OMCVersion SystemProductVersionDTO `json:"omc_version"`
-	CPAVersion SystemProductVersionDTO `json:"cpa_version"`
+	BuildIdentity SystemBuildIdentityDTO  `json:"build_identity"`
+	OMCVersion    SystemProductVersionDTO `json:"omc_version"`
+	CPAVersion    SystemProductVersionDTO `json:"cpa_version"`
 
 	// UpdateCheckOnPageLoad tells the page whether it may check when it is opened. The server
 	// answers this rather than the page guessing, because the switch exists precisely so an
@@ -68,6 +69,12 @@ type SystemInfoDTO struct {
 	// MaintenanceAdmission states what VACUUM would need, before it is run.
 	MaintenanceAdmission SystemMaintenanceAdmissionDTO `json:"maintenance_admission"`
 	Runtime              SystemRuntimeDTO              `json:"runtime"`
+}
+
+type SystemBuildIdentityDTO struct {
+	Version  string `json:"version"`
+	Revision string `json:"revision"`
+	Ref      string `json:"ref"`
 }
 
 // SystemProductVersionDTO is one product's version answer.
@@ -248,6 +255,11 @@ func (h *Handler) getSystemInfo(writer http.ResponseWriter, request *http.Reques
 	}
 
 	dto := SystemInfoDTO{
+		BuildIdentity: SystemBuildIdentityDTO{
+			Version:  h.cfg.BuildIdentity.Version,
+			Revision: h.cfg.BuildIdentity.Revision,
+			Ref:      h.cfg.BuildIdentity.Ref,
+		},
 		UpdateCheckOnPageLoad: h.cfg.Release.AutoCheck,
 		UptimeSeconds:         uptime,
 		Maintenance:           h.maintenanceStatusDTO(),

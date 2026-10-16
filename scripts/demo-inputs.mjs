@@ -11,6 +11,7 @@
  */
 export const INPUTS = [
   'internal/api/demo_export_test.go',
+  'internal/api/management_system.go',
   'internal/demo/fixture.go',
   'internal/demo/seed.go',
   'internal/demo/quota.go',

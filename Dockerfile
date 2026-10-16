@@ -6,6 +6,11 @@ COPY web/package.json ./web/package.json
 RUN corepack enable && pnpm install --frozen-lockfile
 COPY web/ ./web/
 COPY scripts/ ./scripts/
+ARG REVISION
+ARG BUILD_REF
+ARG BUILD_TAG
+RUN --mount=type=bind,target=/identity-context \
+    node scripts/build-identity.mjs /identity-context > /build-identity.flags
 RUN pnpm --dir web run build
 
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS server
@@ -15,12 +20,13 @@ RUN go mod download
 COPY . .
 RUN rm -rf internal/web/dist && mkdir -p internal/web/dist
 COPY --from=web /src/web/dist/ ./internal/web/dist/
+COPY --from=web /build-identity.flags /tmp/build-identity.flags
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=v0.1.0-dev
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
-    -ldflags="-s -w -X github.com/oh-my-cpa/oh-my-cpa/internal/config.BuildVersion=${VERSION}" \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
+    -ldflags="-s -w -X github.com/oh-my-cpa/oh-my-cpa/internal/config.BuildVersion=${VERSION} $(cat /tmp/build-identity.flags)" \
     -o /out/oh-my-cpa ./cmd/oh-my-cpa
 
 # Certificates, timezone data and account files are architecture-independent. Preparing
