@@ -1,4 +1,4 @@
-import { until, settleLayout } from '../harness.mjs';
+import { CONDITION_TIMEOUT_MS, until, settleLayout } from '../harness.mjs';
 import { oauthManagementFixtures } from './oauthManagement.mjs';
 import { chartDashboard, chartTokenHeatmap } from './dashboardFixtures.mjs';
 
@@ -66,6 +66,17 @@ async function openAutomationDrawer(page) {
     await drawer.waitFor({ state: 'visible' });
   }
   return drawer;
+}
+
+async function dismissNotification(page, title, label) {
+  const notification = page.locator('.omc-toast').filter({ hasText: title });
+  await notification.waitFor({ state: 'visible', timeout: CONDITION_TIMEOUT_MS });
+  await until(async () => {
+    const className = await notification.getAttribute('class') ?? '';
+    return !/ant-notification-fade-(?:appear|enter)/.test(className);
+  }, { label: `${label} enter motion to settle` });
+  await notification.getByRole('button', { name: 'Close', exact: true }).click();
+  await notification.waitFor({ state: 'detached', timeout: CONDITION_TIMEOUT_MS });
 }
 
 function candidate(authIndex, { provider, name, label, disabled, controllable, adopted, eligible, reason }) {
@@ -511,20 +522,16 @@ export async function ollamaAccounts({ base, page, check }) {
   check('the default refresh never sends a monitor or disabled entry to CPA',
     JSON.stringify(quotaRefreshIndexes) === JSON.stringify(mixedFiles.slice(0, 10).map((file) => file.auth_index)));
   check('quota refresh preserves the monitor selection', await monitorRow.getByRole('checkbox').isChecked());
-  await page.locator('.omc-toast .ant-notification-notice-close').evaluateAll((buttons) => {
-    for (const button of buttons) button.click();
-  });
-  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'refresh acknowledgements dismissed before capture' });
+  await page.locator('.omc-toast').waitFor({ state: 'detached', timeout: CONDITION_TIMEOUT_MS });
+  check('refresh acknowledgements are dismissed before capture', await page.locator('.omc-toast').count() === 0);
   await settleLayout(page);
   await page.screenshot({ path: 'tmp/credential-mixed-refresh-desktop.png' });
   await monitorRow.getByRole('button', { name: 'More actions: Legacy account', exact: true }).click();
   await page.getByRole('menuitem', { name: 'Refresh quota', exact: true }).click();
   await until(() => monitorRefreshes === 2, { label: 'individual monitor active refresh' });
   await until(() => monitorRow.getByRole('button', { name: 'More actions: Legacy account', exact: true }).isEnabled(), { label: 'individual refresh settled' });
-  await page.locator('.omc-toast .ant-notification-notice-close').evaluateAll((buttons) => {
-    for (const button of buttons) button.click();
-  });
-  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'individual acknowledgement dismissed before capture' });
+  await dismissNotification(page, 'Ollama quota refreshed successfully', 'the individual Ollama acknowledgement');
+  check('the individual acknowledgement is dismissed before capture', await page.locator('.omc-toast').count() === 0);
   await monitorRow.scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'tmp/credential-ollama-selection-desktop.png' });
   await page.setViewportSize({ width: 375, height: 900 });
