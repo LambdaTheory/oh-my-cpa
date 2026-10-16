@@ -227,6 +227,35 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/management/quota/{authIndex}", demoAllow, ""},
 	{http.MethodPost, "/api/v1/management/quota/refresh", demoAllow, ""},
 
+	// Account auto-management. The background loop that would write CPA is never
+	// started in a demo, so these routes only move the demo's own in-memory roster
+	// and plan; the console renders the real switches against the fixture.
+	{http.MethodGet, "/api/v1/account-automation", demoAllow, ""},
+	{http.MethodGet, "/api/v1/account-automation/settings", demoAllow, ""},
+	{http.MethodPut, "/api/v1/account-automation/settings", demoAllow, ""},
+	{http.MethodPut, "/api/v1/account-automation/accounts/{authIndex}", demoAllow, ""},
+	{http.MethodPost, "/api/v1/account-automation/adopt", demoAllow, ""},
+	{http.MethodPost, "/api/v1/account-automation/accounts/{authIndex}/cancel", demoAllow, ""},
+	{http.MethodPost, "/api/v1/account-automation/accounts/{authIndex}/manual-reset", demoAllow, ""},
+
+	// Ollama account management (lane B). The collector that scrapes ollama.com is
+	// never started in a demo, so these routes only move the demo's own in-memory
+	// accounts and read back their stored snapshots.
+	{http.MethodGet, "/api/v1/ollama/accounts", demoAllow, ""},
+	{http.MethodPost, "/api/v1/ollama/accounts", demoAllow, ""},
+	{http.MethodGet, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
+	{http.MethodPut, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
+	{http.MethodDelete, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
+	{http.MethodGet, "/api/v1/ollama/quota", demoAllow, ""},
+
+	// Feishu settings and status (lane C). The long connection and the sender are
+	// never started in a demo, so reads and local settings writes are safe; the test
+	// send is refused because it would reach Feishu.
+	{http.MethodGet, "/api/v1/feishu/settings", demoAllow, ""},
+	{http.MethodPut, "/api/v1/feishu/settings", demoAllow, ""},
+	{http.MethodGet, "/api/v1/feishu/status", demoAllow, ""},
+	{http.MethodPost, "/api/v1/feishu/test", demoRefuse, "sending a Feishu test message is disabled"},
+
 	// A manual capture pass is answered locally: it reports a pass that found an
 	// empty queue, so the request list's own refresh button works without a queue
 	// to pop.

@@ -169,3 +169,32 @@ test('OAuth model rules cannot lose a captured read without failing coverage', a
     });
   }
 });
+
+test('the unified OAuth list cannot lose its Ollama inventory reads without failing coverage', async () => {
+  // The Ollama inventory is a read the unified OAuth workspace makes on every load, so a
+  // captured response it needs is part of the dataset contract exactly like the model-rule
+  // reads the test above pins. Losing one has to fail the gate rather than leave the page
+  // reading a 404 behind a green check.
+  for (const name of ['ollama-accounts', 'ollama-quota']) {
+    await withModifiedFile(DATASET, (content) => {
+      const dataset = JSON.parse(content);
+      delete dataset.responses[name];
+      return JSON.stringify(dataset);
+    }, (result) => {
+      assert.equal(result.code, 1);
+      assert.ok(result.output.includes(`/oauth-management needs "${name}"`), result.output);
+    });
+  }
+});
+
+test('the retired Playground page is not a routed read, but its responses stay in the dataset', async () => {
+  // The Playground page redirects to the dashboard, so check-demo must not declare it as a
+  // console route. Its captured API responses are backend fixtures the demonstration still
+  // serves (the Agent workspace's model picker shares the gateway read), so they are retained
+  // rather than deleted to make the gate narrower. This pins the retained fixtures without
+  // depending on the dataset's freshness, which a dirty worktree legitimately invalidates.
+  const dataset = JSON.parse(await readFile(DATASET, 'utf8'));
+  for (const name of ['playground-models', 'playground-run-active']) {
+    assert.ok(Object.prototype.hasOwnProperty.call(dataset.responses, name), `${name} must remain a captured response`);
+  }
+});

@@ -134,6 +134,7 @@ export const RollbackOutlined = createIcon(Lucide.RotateCcw, 'anticon-rollback')
 export const SafetyCertificateOutlined = createIcon(Lucide.ShieldCheck, 'anticon-safety-certificate');
 export const SaveOutlined = createIcon(Lucide.Save, 'anticon-save');
 export const SearchOutlined = createIcon(Lucide.Search, 'anticon-search');
+export const SendOutlined = createIcon(Lucide.Send, 'anticon-send');
 export const SettingOutlined = createIcon(Lucide.Settings, 'anticon-setting');
 export const ShopOutlined = createIcon(Lucide.Store, 'anticon-shop');
 export const SlidersOutlined = createIcon(Lucide.SlidersHorizontal, 'anticon-sliders');

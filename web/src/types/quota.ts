@@ -165,6 +165,8 @@ export interface QuotaItem {
   next_retry_after_ms?: number;
 }
 
+export type NormalizedQuota = QuotaItem;
+
 export interface QuotaSnapshotHistoryItem {
   id: string;
   auth_index: string;

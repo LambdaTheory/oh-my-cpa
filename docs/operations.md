@@ -98,6 +98,64 @@ exponential wait) and is shared by the manual refresh endpoint and the MCP `quot
 tool: while parked, both refuse with `rate_limited_backoff` and a retry time instead of
 probing the upstream again. The state is in memory only, so a restart clears it.
 
+### Account auto-management
+
+Account auto-management stops using a credential on explicit account-level weekly (7d)
+exhaustion evidence and starts using it again at the recorded reset. It is off by
+default, and a deployment that never adopts a credential is unaffected. The three
+variables below control the process, not the roster: adopting accounts, the per-account
+switch, the one-time recovery time and the web switch all live in the console under
+`/api/v1/account-automation` and in `account_automation_*` (migration 043).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_ACCOUNT_AUTOMATION_ENABLED` | unset (off) | Master switch. Unset leaves the console's web switch in force; an explicit `false` is an emergency off the console cannot override; an explicit `true` forces automation on. The console shows which source is in effect |
+| `OMCPA_ACCOUNT_AUTOMATION_INTERVAL` | `1m` | How often the pass evaluates the adopted roster |
+| `OMCPA_ACCOUNT_AUTOMATION_BACKOFF_BASE` | `5m` | First wait after a failed enable; it doubles up to the maximum |
+| `OMCPA_ACCOUNT_AUTOMATION_BACKOFF_MAX` | `6h` | Ceiling on the enable retry backoff. Must be at least the base |
+| `OMCPA_ACCOUNT_AUTOMATION_MAX_EVIDENCE_AGE` | `24h` | How old the weekly reading that justifies a disable may be |
+
+A failed enable persists its retry instant and attempt count, so a restart resumes the
+wait rather than retrying immediately. The loop performs a CPA write, so it never runs
+in demo mode. See ADR 0096.
+
+### Ollama monitoring
+
+The Ollama collector stores several accounts and scrapes `https://ollama.com/settings`
+with each account's session cookie to read its quota. The cookie is encrypted at rest
+and never returned. Ollama is not in CPA's control chain: the switch below stops the
+scraper, never inference. Accounts live in the console under `/api/v1/ollama/accounts`
+and the newest reading under `/api/v1/ollama/quota`; the collector never runs in demo
+mode.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_OLLAMA_COLLECTOR_ENABLED` | `true` | Run the background Ollama scraper. Off in demo mode |
+| `OMCPA_OLLAMA_COLLECTOR_INTERVAL` | `15m` | Cadence between collection passes |
+| `OMCPA_OLLAMA_TIMEOUT` | `20s` | Per-scrape HTTP timeout |
+| `OMCPA_OLLAMA_BACKOFF_BASE` | `5m` | First wait after a transport failure or 429; it doubles up to the maximum |
+| `OMCPA_OLLAMA_BACKOFF_MAX` | `6h` | Ceiling on the collection backoff. Must be at least the base |
+
+### Feishu notifications
+
+The Feishu bot reuses one long connection to answer read-only queries and to send
+denoised notifications. The app secret is encrypted at rest and never returned by
+the API, a log or a database read. The bot is answered from OMC's stored data and
+never triggers a refresh. Settings and status live under `/api/v1/feishu/settings`,
+`/api/v1/feishu/status` and `/api/v1/feishu/test`; the bot never runs in demo mode.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_FEISHU_ENABLED` | unset (uses the web switch) | Tri-state: unset leaves the console's switch in force, `true` forces the bot on and `false` is an environment off the web cannot override |
+| `OMCPA_FEISHU_FORCE_DISABLED` | `false` | Emergency off. Takes precedence over `OMCPA_FEISHU_ENABLED` and the web switch |
+| `OMCPA_FEISHU_APP_ID` | unset | Overrides the self-built app's App ID |
+| `OMCPA_FEISHU_APP_SECRET` | unset | Overrides the app secret. Held in memory only; never written to a response or a log |
+| `OMCPA_FEISHU_CHAT_ID` | unset | Overrides the target group `chat_id` |
+
+An empty value is treated as unset, so a compose file that passes a variable through
+without a value cannot pin the feature off. The console shows the effective source
+(`env_disabled`, `env_enabled`, `web` or `default_off`).
+
 ### Update checks and demo
 
 | Variable | Default | Purpose |

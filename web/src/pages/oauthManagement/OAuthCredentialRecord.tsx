@@ -27,10 +27,15 @@ import {
 } from '../../components/authFiles/authFileLogic';
 import styles from './OAuthCredentialRecord.module.css';
 import { Tag } from '../../components/common/Tag';
+import { formatObservedAgo } from '../quota/quotaFormat';
+
+import type { OllamaAccountDTO } from '../../types/ollama';
 
 const { Text } = Typography;
 
 interface OAuthCredentialRecordProps {
+  source?: 'cpa' | 'ollama';
+  ollamaAccount?: OllamaAccountDTO;
   file: ManagementAuthFile;
   identityKey: string;
   displayProvider: string;
@@ -56,6 +61,8 @@ interface OAuthCredentialRecordProps {
 }
 
 export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
+  source = 'cpa',
+  ollamaAccount,
   file,
   identityKey,
   displayProvider,
@@ -88,16 +95,28 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
   const hasWarning = hasAuthFileStatusWarning(file);
   const iconId = credentialProviderIconId(displayProvider, file.name);
 
+  const isOllama = source === 'ollama';
+
   // The state is read in its own column and the switch sits in the next one, as in the provider
   // table: a label beside the control made the pair read as one widget whose word changed with the
   // switch, and a problem credential's word was pushed out of the column whenever the switch rendered.
-  const status: { tone: StatusTone; label: string } = file.runtime_only
-    ? { tone: 'neutral', label: t('af.runtime_only_badge') }
-    : disabled
-      ? { tone: 'danger', label: t('af.disabled') }
-      : problem
-        ? { tone: 'warn', label: t('af.status_problem') }
-        : { tone: 'success', label: t('af.enabled') };
+  const status: { tone: StatusTone; label: string } = isOllama
+    ? (ollamaAccount?.enabled
+        ? (problem ? { tone: 'warn', label: t('ollama.status_transport_error') } : { tone: 'success', label: t('ollama.stat_collecting') })
+        : { tone: 'neutral', label: t('ollama.switch_paused') })
+    : file.runtime_only
+      ? { tone: 'neutral', label: t('af.runtime_only_badge') }
+      : disabled
+        ? { tone: 'danger', label: t('af.disabled') }
+        : problem
+          ? { tone: 'warn', label: t('af.status_problem') }
+          : { tone: 'success', label: t('af.enabled') };
+
+  const switchChecked = isOllama ? Boolean(ollamaAccount?.enabled) : !disabled;
+  const switchDisabled = busy || (isOllama ? isDemo : (file.runtime_only || !canTargetFile));
+  const switchAriaLabel = isOllama
+    ? t('ollama.status_toggle_label', { name: identity.primary })
+    : t('af.status_toggle_label', { name: file.name });
 
   return (
     <article
@@ -139,7 +158,10 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
             >
               {file.auth_index || '—'}
             </span>
-            {file.runtime_only && <Tag size="small">{t('af.status_virtual_badge')}</Tag>}
+            {isOllama && (
+              <Tag size="small">{ollamaAccount?.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
+            )}
+            {!isOllama && file.runtime_only && <Tag size="small">{t('af.status_virtual_badge')}</Tag>}
             {file.priority !== undefined && (
               <Tag size="small" className={styles['routing-tag']}>{t('omc.priority_value', { n: file.priority })}</Tag>
             )}
@@ -172,30 +194,49 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
       <div className={styles['record-switch']}>
         <Switch
           size="small"
-          checked={!disabled}
-          disabled={busy || file.runtime_only || !canTargetFile}
+          checked={switchChecked}
+          disabled={switchDisabled}
           onChange={onToggle}
-          aria-label={t('af.status_toggle_label', { name: file.name })}
+          aria-label={switchAriaLabel}
         />
       </div>
 
       {/* 4. Traffic Metrics */}
       <div className={styles['record-management']}>
-        <div className={styles['traffic-cell']}>
-          <div className={styles['traffic-primary']}>
-            <span className={styles['metric-success']} aria-label={t('dash.success_n', { n: file.success })}>
-              {t('dash.success_n', { n: file.success })}
-            </span>
+        {isOllama ? (
+          <div className={styles['traffic-cell']}>
+            <div className={styles['traffic-primary']}>
+              <span className={styles['metric-muted']} style={{ fontSize: 'var(--text-xs)' }}>
+                {ollamaAccount?.last_success_at_ms
+                  ? t('ollama.last_success', { time: formatObservedAgo(ollamaAccount.last_success_at_ms, Date.now(), t) })
+                  : t('ollama.status_unknown')}
+              </span>
+            </div>
+            {ollamaAccount?.next_attempt_at_ms && ollamaAccount.status?.toLowerCase() !== 'ok' && (
+              <div className={styles['traffic-secondary']}>
+                <span className={styles['metric-failed']}>
+                  {t('ollama.next_retry', { time: formatObservedAgo(ollamaAccount.next_attempt_at_ms, Date.now(), t) })}
+                </span>
+              </div>
+            )}
           </div>
-          <div className={styles['traffic-secondary']}>
-            <span
-              className={file.failed > 0 ? styles['metric-failed'] : styles['metric-muted']}
-              aria-label={t('dash.failure_n', { n: file.failed })}
-            >
-              {t('dash.failure_n', { n: file.failed })}
-            </span>
+        ) : (
+          <div className={styles['traffic-cell']}>
+            <div className={styles['traffic-primary']}>
+              <span className={styles['metric-success']} aria-label={t('dash.success_n', { n: file.success })}>
+                {t('dash.success_n', { n: file.success })}
+              </span>
+            </div>
+            <div className={styles['traffic-secondary']}>
+              <span
+                className={file.failed > 0 ? styles['metric-failed'] : styles['metric-muted']}
+                aria-label={t('dash.failure_n', { n: file.failed })}
+              >
+                {t('dash.failure_n', { n: file.failed })}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
         {identityDiagnostic}
         {reauthAction && <div className={styles['record-reauth']}>{reauthAction}</div>}
       </div>
@@ -207,22 +248,39 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
 
       {/* 6. Controls & Actions */}
       <div className={styles['record-actions']}>
-        <Tooltip title={t('common.details')}>
-          <Button
-            size="small"
-            icon={<ProfileOutlined />}
-            disabled={busy}
-            onClick={onShowDetails}
-            aria-label={`${t('common.details')}: ${file.name}`}
-            className={styles['btn-details']}
-          >
-            <span className={styles['btn-details-text']}>{t('common.details')}</span>
-          </Button>
-        </Tooltip>
+        {!isOllama && (
+          <Tooltip title={t('common.details')}>
+            <Button
+              size="small"
+              icon={<ProfileOutlined />}
+              disabled={busy}
+              onClick={onShowDetails}
+              aria-label={`${t('common.details')}: ${file.name}`}
+              className={styles['btn-details']}
+            >
+              <span className={styles['btn-details-text']}>{t('common.details')}</span>
+            </Button>
+          </Tooltip>
+        )}
         <Dropdown
           trigger={['click']}
           menu={{
-            items: [
+            items: isOllama ? [
+              {
+                key: 'edit',
+                icon: <EditOutlined />,
+                label: t('common.edit'),
+                disabled: busy || isDemo,
+              },
+              { type: 'divider' as const },
+              {
+                key: 'delete',
+                icon: <DeleteOutlined />,
+                label: t('common.delete'),
+                danger: true,
+                disabled: busy || isDemo,
+              },
+            ] : [
               {
                 key: 'models',
                 icon: <AppstoreOutlined />,
@@ -285,7 +343,7 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
               }
               if (key === 'delete') {
                 modal.confirm({
-                  title: t('af.delete_one_title'),
+                  title: isOllama ? t('ollama.delete_confirm') : t('af.delete_one_title'),
                   content: file.name,
                   okText: t('common.delete'),
                   cancelText: t('common.cancel'),

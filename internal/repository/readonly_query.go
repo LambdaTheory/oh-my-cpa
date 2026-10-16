@@ -44,6 +44,9 @@ import (
 
 // QUERY_READABLE_TABLES maps every table an operator query may read to the columns it must not.
 var QUERY_READABLE_TABLES = map[string][]string{
+	"account_automation_accounts":   {"account_label"},
+	"account_automation_batches":    nil,
+	"account_automation_settings":   nil,
 	"audit_events":                  nil,
 	"client_key_aliases":            nil,
 	"connections":                   nil,
@@ -52,6 +55,12 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"data_lifecycle_state":          nil,
 	"discovered_resources":          {"details_json"},
 	"error_events":                  {"body"},
+	"feishu_channel_tracks":         nil,
+	"feishu_account_signals":        nil,
+	"feishu_notifications":          nil,
+	"feishu_pending_items":          nil,
+	"feishu_settings":               nil,
+	"feishu_state":                  nil,
 	"ingest_gaps":                   nil,
 	"model_price_versions":          nil,
 	"model_prices":                  nil,
@@ -84,6 +93,8 @@ var QUERY_HIDDEN_TABLES = map[string]string{
 	"cpa_instances":      "the encrypted CPA management key",
 	"ui_preferences":     "operator preferences, including the playground's saved conversation",
 	"usage_inboxes":      "raw usage payloads as CPA published them, which can carry client keys",
+	"ollama_accounts":    "the AES-GCM encrypted Ollama session cookie",
+	"feishu_secrets":     "the AES-GCM encrypted Feishu app secret",
 }
 
 const (

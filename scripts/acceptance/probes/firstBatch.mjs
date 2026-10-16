@@ -1,0 +1,581 @@
+import { until, settleLayout } from '../harness.mjs';
+import { oauthManagementFixtures } from './oauthManagement.mjs';
+import { chartDashboard, chartTokenHeatmap } from './dashboardFixtures.mjs';
+
+/**
+ * The first-batch OMC management surfaces on the development server.
+ *
+ * Three claims only a real engine can establish, each on the surface the operator
+ * actually drives:
+ *
+ *   - Lane A opens the account-auto-management drawer from the OAuth workspace: an
+ *     empty roster is offered the gateway's live credentials for a one-time batch
+ *     adoption, an ineligible candidate is disabled and left out of the adopted set,
+ *     and a planned account exposes both the retry cancellation and the hand-filled
+ *     recovery time.
+ *   - Lane B adds and edits an Ollama account: the cookie is accepted on write,
+ *     omitted on an untouched edit, never echoed back, and a paused account with no
+ *     snapshot reads as an unknown quota rather than a fabricated zero.
+ *   - Lane C keeps the Feishu panel inert when the environment forces it off, leaves
+ *     the stored secret in place when the field is blank, and proves the test card is
+ *     a two-step action that sends nothing until the operator confirms.
+ *
+ * The routes are the handler-certified wire shapes: the account-automation DTOs
+ * (`internal/api/account_automation.go`), the Ollama account/quota DTOs
+ * (`internal/api/ollama_accounts.go`) and the Feishu settings/status/test DTOs
+ * (`internal/api/feishu.go`). No request leaves the console's own origin; the test
+ * card POST is fulfilled locally and never reaches Feishu.
+ */
+
+// ── Lane A: account auto-management ──────────────────────────────────────────
+
+const ELIGIBLE_ANTHROPIC = 'cand-anthropic-a';
+const ELIGIBLE_OPENAI = 'cand-openai-b';
+const INELIGIBLE_UNVERIFIED = 'cand-unverified-c';
+
+const automationSettings = (overrides = {}) => ({
+  web_enabled: false,
+  enabled: false,
+  source: 'default_off',
+  master_from_env: false,
+  accounts: 0,
+  ...overrides,
+});
+
+/**
+ * Loads a console route and settles the dev server before any assertion.
+ *
+ * The Vite development server may reload the document once while it optimizes the
+ * OAuth workspace's modules on their first request. Reloading once ourselves lands
+ * that optimization on a load we own; the second load is served from the same graph,
+ * so the reload cannot arrive in the middle of a flow and drop the drawer.
+ */
+async function gotoConsole(page, base, route, readySelector) {
+  await page.goto(`${base}${route}`, { waitUntil: 'domcontentloaded' });
+  await page.locator(readySelector).waitFor({ state: 'visible' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator(readySelector).waitFor({ state: 'visible' });
+}
+
+/** The automation drawer, re-opened after a reload if it was dropped. */
+async function openAutomationDrawer(page) {
+  await page.locator('.oauth-management-page').waitFor({ state: 'visible' });
+  const drawer = page.locator('.ant-drawer:visible').filter({ hasText: 'Account Automation' });
+  if (await drawer.count() === 0) {
+    await page.getByTestId('oauth-management-automation-open').click();
+    await drawer.waitFor({ state: 'visible' });
+  }
+  return drawer;
+}
+
+function candidate(authIndex, { provider, name, label, disabled, controllable, adopted, eligible, reason }) {
+  return {
+    auth_index: authIndex,
+    provider,
+    name,
+    account_label: label,
+    disabled,
+    controllable,
+    adopted,
+    eligible,
+    ineligible_reason: reason || undefined,
+  };
+}
+
+/** One module-scoped state per scenario, so a full-catalog run cannot bleed between them. */
+const automationState = {
+  phase: 'first',
+  settings: automationSettings(),
+  adopt: null,
+  cancel: null,
+  manualReset: null,
+};
+
+function automationListBody(state) {
+  const adopted = state.phase !== 'first';
+  return {
+    settings: { ...state.settings, accounts: adopted ? 2 : 0 },
+    accounts: adopted
+      ? [
+        {
+          auth_index: ELIGIBLE_ANTHROPIC,
+          provider: 'anthropic',
+          name: 'Anthropic A',
+          account_label: 'a@example.test',
+          is_adopted: true,
+          is_enabled: true,
+          state: 'waiting',
+          monitor_reason: 'backoff',
+          disabled_by_automation: false,
+          attempt_count: 2,
+          next_attempt_at_ms: Date.now() + 300_000,
+          has_weekly_evidence: true,
+          weekly_used_percent: 100,
+          weekly_reset_at_ms: Date.now() + 86_400_000,
+          intent_version: 3,
+        },
+        {
+          auth_index: ELIGIBLE_OPENAI,
+          provider: 'openai',
+          name: 'OpenAI B',
+          account_label: 'b@example.test',
+          is_adopted: true,
+          is_enabled: true,
+          state: 'monitoring',
+          monitor_reason: 'missing_reset',
+          disabled_by_automation: false,
+          attempt_count: 0,
+          has_weekly_evidence: true,
+          weekly_used_percent: 100,
+          intent_version: 4,
+        },
+      ]
+      : [],
+    candidates: [
+      candidate(ELIGIBLE_ANTHROPIC, { provider: 'anthropic', name: 'Anthropic A', label: 'a@example.test', disabled: false, controllable: true, adopted, eligible: true }),
+      candidate(ELIGIBLE_OPENAI, { provider: 'openai', name: 'OpenAI B', label: 'b@example.test', disabled: true, controllable: true, adopted, eligible: true }),
+      candidate(INELIGIBLE_UNVERIFIED, { provider: 'unverified-vendor', name: 'Unverified C', label: 'c@example.test', disabled: false, controllable: false, adopted, eligible: false, reason: 'unverified_account_weekly_capability' }),
+    ],
+  };
+}
+
+export function accountAutomationFixtures() {
+  return [
+    ...oauthManagementFixtures.routes,
+    [
+      (url, method) => method === 'GET' && url.pathname.endsWith('/account-automation/settings'),
+      () => automationListBody(automationState).settings,
+    ],
+    [
+      (url, method) => method === 'GET' && url.pathname.endsWith('/account-automation'),
+      () => automationListBody(automationState),
+    ],
+    [
+      (url, method) => method === 'POST' && url.pathname.endsWith('/account-automation/adopt'),
+      (url, method, request) => {
+        automationState.adopt = JSON.parse(request.postData() ?? '{}');
+        // The roster exists after the one-time selection, so the drawer's refetch can
+        // show the planned accounts the second half of the scenario drives.
+        automationState.phase = 'adopted';
+        return { adopted: (automationState.adopt.auth_indexes ?? []).length };
+      },
+    ],
+    [
+      (url, method) => method === 'POST' && /\/account-automation\/accounts\/[^/]+\/cancel$/.test(url.pathname),
+      url => {
+        automationState.cancel = decodeURIComponent(url.pathname.split('/').at(-2));
+        return automationListBody(automationState).accounts[0];
+      },
+    ],
+    [
+      (url, method) => method === 'POST' && /\/account-automation\/accounts\/[^/]+\/manual-reset$/.test(url.pathname),
+      (url, method, request) => {
+        automationState.manualReset = JSON.parse(request.postData() ?? '{}');
+        return automationListBody(automationState).accounts[1];
+      },
+    ],
+  ];
+}
+
+export async function accountAutomation({ base, page, check }) {
+  automationState.phase = 'first';
+  automationState.adopt = null;
+  automationState.cancel = null;
+  automationState.manualReset = null;
+
+  await gotoConsole(page, base, '/oauth-management', '.oauth-management-page');
+  const drawer = await openAutomationDrawer(page);
+  check('the OAuth workspace opens the account-auto-management drawer', await drawer.count() === 1);
+
+  const adoptButton = drawer.getByRole('button', { name: 'Adopt Accounts', exact: true });
+  await until(() => adoptButton.isEnabled(), { label: 'the empty roster to offer the live candidates' });
+  check('an empty roster is offered the gateway credentials for a one-time adoption', await adoptButton.isEnabled());
+  await adoptButton.click();
+
+  // The batch selection modal lists the gateway credentials as checkboxes; the roles
+  // are located by their accessible name so page-wide nested text nodes cannot inflate
+  // the count.
+  const candidateBox = (authIndex) => page.getByRole('checkbox', { name: authIndex });
+  await until(async () => (await candidateBox(ELIGIBLE_ANTHROPIC).count()) === 1, { label: 'the candidate list to arrive' });
+  check('every live credential is listed for the batch selection', await candidateBox(ELIGIBLE_ANTHROPIC).count() === 1
+    && await candidateBox(INELIGIBLE_UNVERIFIED).count() === 1);
+  check('an ineligible candidate is disabled rather than silently offered', await candidateBox(INELIGIBLE_UNVERIFIED).isDisabled());
+  // The reason is shown as the operator's own copy, never as the canonical token the API sends.
+  const ineligibleCopy = await page.locator('label.ant-checkbox-wrapper').filter({ hasText: INELIGIBLE_UNVERIFIED }).innerText();
+  check('an ineligible candidate names why it cannot be adopted in friendly copy',
+    ineligibleCopy.includes('Capability unverified (monitor only)')
+      && !ineligibleCopy.includes('unverified_account_weekly_capability'), ineligibleCopy);
+  // The batch starts empty: adoption is an explicit choice, so the operator selects the
+  // accounts rather than inheriting a default the page chose for them.
+  const confirmAdoption = page.getByRole('button', { name: 'Confirm Adoption', exact: true });
+  await until(async () => (await page.getByText('0 accounts selected', { exact: true }).count()) === 1, { label: 'the empty default selection' });
+  check('the batch starts with nothing selected', !(await candidateBox(ELIGIBLE_ANTHROPIC).isChecked())
+    && !(await candidateBox(ELIGIBLE_OPENAI).isChecked())
+    && await confirmAdoption.isDisabled());
+  // Select the two eligible accounts explicitly; the ineligible one cannot join the set.
+  await candidateBox(ELIGIBLE_ANTHROPIC).click();
+  await candidateBox(ELIGIBLE_OPENAI).click();
+  await until(() => confirmAdoption.isEnabled(), { label: 'the explicit selection to enable the confirmation' });
+  check('the explicitly selected eligible accounts are the batch', await candidateBox(ELIGIBLE_ANTHROPIC).isChecked()
+    && await candidateBox(ELIGIBLE_OPENAI).isChecked()
+    && !(await candidateBox(INELIGIBLE_UNVERIFIED).isChecked()));
+  await confirmAdoption.click();
+
+  await until(() => automationState.adopt !== null, { label: 'the adoption request to reach the gateway' });
+  const adoptedIndexes = automationState.adopt?.auth_indexes ?? [];
+  check('adoption carries exactly the eligible candidates', adoptedIndexes.length === 2
+    && adoptedIndexes.includes(ELIGIBLE_ANTHROPIC) && adoptedIndexes.includes(ELIGIBLE_OPENAI)
+    && !adoptedIndexes.includes(INELIGIBLE_UNVERIFIED), JSON.stringify(automationState.adopt));
+
+  // The roster now exists: one account is waiting on a retry, one is missing its reset.
+  const roster = await openAutomationDrawer(page);
+  await until(async () => (await roster.getByText(ELIGIBLE_ANTHROPIC, { exact: false }).count()) > 0, { label: 'the adopted roster to render' });
+  check('the plan distinguishes a scheduled retry from a missing reset',
+    await roster.getByRole('button', { name: 'Cancel Retry', exact: true }).count() === 1
+      && await roster.getByRole('button', { name: 'Set Manual Reset', exact: true }).count() === 1);
+
+  await roster.getByRole('button', { name: 'Cancel Retry', exact: true }).click();
+  const confirm = page.locator('.ant-modal-confirm:visible');
+  await confirm.waitFor({ state: 'visible' });
+  await confirm.getByRole('button', { name: 'OK', exact: true }).click();
+  await until(() => automationState.cancel !== null, { label: 'the retry cancellation to reach the gateway' });
+  check('cancelling the retry plan targets the waiting account', automationState.cancel === ELIGIBLE_ANTHROPIC, String(automationState.cancel));
+
+  await roster.getByRole('button', { name: 'Set Manual Reset', exact: true }).click();
+  const resetModal = page.locator('.ant-modal:visible').filter({ hasText: 'Set One-time Recovery Time' });
+  await resetModal.waitFor({ state: 'visible' });
+  const resetInput = resetModal.locator('input[type="datetime-local"]');
+  const future = new Date(Date.now() + 3 * 86_400_000);
+  const pad = (value) => String(value).padStart(2, '0');
+  await resetInput.fill(`${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}T${pad(future.getHours())}:${pad(future.getMinutes())}`);
+  await until(() => resetModal.getByRole('button', { name: 'Confirm', exact: true }).isEnabled(), { label: 'the future recovery time to be accepted' });
+  await resetModal.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await until(() => automationState.manualReset !== null, { label: 'the hand-filled recovery time to reach the gateway' });
+  check('a hand-filled recovery time is a future instant and reaches the missing-reset account',
+    typeof automationState.manualReset?.reset_at_ms === 'number' && automationState.manualReset.reset_at_ms > Date.now(),
+    JSON.stringify(automationState.manualReset));
+}
+
+// ── Lane B: Ollama accounts ──────────────────────────────────────────────────
+
+const OLLAMA_ACCOUNT_ID = 'ollama-fixture-1';
+const OLLAMA_PAUSED_ID = 'ollama-fixture-2';
+const OLLAMA_COOKIE = 'fixture-session-cookie-value';
+
+const ollamaState = {
+  created: null,
+  createdAccount: null,
+  updated: null,
+  putCount: 0,
+  cpaToggleCalls: 0,
+};
+
+function ollamaAccountList() {
+  const base = [
+    {
+      id: OLLAMA_ACCOUNT_ID,
+      label: 'My Ollama',
+      enabled: true,
+      has_cookie: true,
+      status: 'ok',
+      last_success_at_ms: Date.now() - 60_000,
+      attempt_count: 0,
+      created_at_ms: Date.now() - 86_400_000,
+      updated_at_ms: Date.now() - 60_000,
+    },
+    {
+      id: OLLAMA_PAUSED_ID,
+      label: 'Paused Ollama',
+      enabled: false,
+      has_cookie: true,
+      status: 'unknown',
+      attempt_count: 1,
+      created_at_ms: Date.now() - 3_600_000,
+      updated_at_ms: Date.now() - 3_600_000,
+    },
+  ];
+  return ollamaState.createdAccount ? [...base, ollamaState.createdAccount] : base;
+}
+
+function ollamaQuota() {
+  return {
+    accounts: [
+      {
+        account_id: OLLAMA_ACCOUNT_ID,
+        label: 'My Ollama',
+        enabled: true,
+        status: 'ok',
+        observed_at_ms: Date.now() - 60_000,
+        quota: {
+          auth_index: `ollama:${OLLAMA_ACCOUNT_ID}`,
+          name: 'My Ollama',
+          type: 'ollama',
+          provider: 'ollama',
+          disabled: false,
+          status: 'healthy',
+          observed_at_ms: Date.now() - 60_000,
+          windows: [{ id: 'weekly', label: '7d', scope: 'standard', used_percent: 45.5, remaining_percent: 54.5 }],
+          recommendation: { status: 'healthy', priority: 'none', action: 'none', reason: '' },
+          capabilities: { refresh_supported: false, clear_cooldown_supported: false, reset_credit_supported: false },
+          quota_exceeded: false,
+        },
+      },
+      // No snapshot: the first version must show an unknown quota, never a fabricated 0 or 100.
+      {
+        account_id: OLLAMA_PAUSED_ID,
+        label: 'Paused Ollama',
+        enabled: false,
+        status: 'unknown',
+      },
+    ],
+  };
+}
+
+export function ollamaAccountFixtures() {
+  return [
+    ...oauthManagementFixtures.routes,
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/ollama/accounts'), () => ({ accounts: ollamaAccountList() })],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/ollama/quota'), () => ollamaQuota()],
+    [
+      (url, method) => method === 'POST' && url.pathname.endsWith('/ollama/accounts'),
+      (url, method, request) => {
+        ollamaState.created = JSON.parse(request.postData() ?? '{}');
+        ollamaState.createdAccount = {
+          id: 'ollama-fixture-3',
+          label: ollamaState.created.label,
+          enabled: ollamaState.created.enabled ?? true,
+          has_cookie: true,
+          status: 'ok',
+          attempt_count: 0,
+          created_at_ms: Date.now(),
+          updated_at_ms: Date.now(),
+        };
+        return ollamaState.createdAccount;
+      },
+    ],
+    [
+      (url, method) => method === 'POST' && url.pathname.endsWith('/management/auth-files/status'),
+      () => {
+        ollamaState.cpaToggleCalls += 1;
+        return { status: 'ok' };
+      },
+    ],
+    [
+      (url, method) => method === 'PUT' && /\/ollama\/accounts\/[^/]+$/.test(url.pathname),
+      (url, method, request) => {
+        ollamaState.updated = JSON.parse(request.postData() ?? '{}');
+        ollamaState.putCount += 1;
+        return { ...ollamaAccountList()[0], label: ollamaState.updated.label ?? 'My Ollama', enabled: ollamaState.updated.enabled ?? true };
+      },
+    ],
+  ];
+}
+
+export async function ollamaAccounts({ base, page, check }) {
+  ollamaState.created = null;
+  ollamaState.createdAccount = null;
+  ollamaState.updated = null;
+  ollamaState.putCount = 0;
+  ollamaState.cpaToggleCalls = 0;
+
+  await gotoConsole(page, base, '/oauth-management', '.oauth-management-page');
+  await page.getByTestId('oauth-management-ollama-open').click();
+
+  const drawer = page.locator('.ant-drawer:visible').filter({ hasText: 'Ollama Accounts & Quota' });
+  await drawer.waitFor({ state: 'visible' });
+  check('the OAuth workspace opens the Ollama management drawer', await drawer.count() === 1);
+  await until(async () => (await drawer.getByText('My Ollama', { exact: true }).count()) > 0, { label: 'the account list to render' });
+
+  check('a stored cookie is reported as encrypted and never as its value',
+    await drawer.getByText('Encrypted', { exact: true }).count() === 2 && !(await drawer.innerText()).includes(OLLAMA_COOKIE));
+  check('a collected account shows its real used percent', (await drawer.innerText()).includes('45.5%'));
+  check('a paused account with no snapshot reads as an unknown quota', await drawer.getByText('Not reported', { exact: true }).count() >= 1);
+
+  // Edit: the cookie field starts blank, and saving without touching it omits it entirely.
+  await drawer.getByRole('button', { name: 'Edit', exact: true }).first().click();
+  const editModal = page.locator('.ant-modal:visible').filter({ hasText: 'Edit Ollama Account' });
+  await editModal.waitFor({ state: 'visible' });
+  const editCookie = editModal.locator('input[type="password"]');
+  check('editing an account never prefills the stored cookie', await editCookie.inputValue() === '');
+  await editModal.getByRole('button', { name: 'Save', exact: true }).click();
+  await until(() => ollamaState.updated !== null, { label: 'the untouched-edit save to reach the gateway' });
+  check('saving an untouched edit omits the cookie instead of clearing it',
+    !('cookie' in (ollamaState.updated ?? {})) && ollamaState.updated.label === 'My Ollama', JSON.stringify(ollamaState.updated));
+
+  // Add: a new account requires both a label and a cookie, and the cookie reaches the wire.
+  await until(async () => (await page.locator('.ant-modal:visible').count()) === 0, { label: 'the edit modal to close' });
+  await drawer.getByRole('button', { name: 'Add Ollama Account', exact: true }).click();
+  const addModal = page.locator('.ant-modal:visible').filter({ hasText: 'Add Ollama Account' });
+  await addModal.waitFor({ state: 'visible' });
+  const addLabel = addModal.locator('input[type="text"]');
+  const addCookie = addModal.locator('input[type="password"]');
+  check('a new account cannot be saved without both a label and a cookie',
+    await addLabel.inputValue() === '' && await addModal.getByRole('button', { name: 'Save', exact: true }).isDisabled());
+  await addLabel.fill('New Ollama');
+  await addCookie.fill(OLLAMA_COOKIE);
+  await addModal.getByRole('button', { name: 'Save', exact: true }).click();
+  await until(() => ollamaState.created !== null, { label: 'the new account to reach the gateway' });
+  check('the add carries the label and the cookie to the write-only endpoint',
+    ollamaState.created.label === 'New Ollama' && ollamaState.created.cookie === OLLAMA_COOKIE, JSON.stringify(ollamaState.created));
+  await until(async () => (await drawer.getByText('New Ollama', { exact: true }).count()) > 0, { label: 'the new account to appear' });
+  check('the typed cookie is never echoed back into the page', !(await drawer.innerText()).includes(OLLAMA_COOKIE));
+
+  // Close drawer and verify Ollama accounts appear inside the main OAuth workspace table and provider filter
+  await drawer.locator('.ant-drawer-close').click();
+  await page.locator('.ant-drawer-open').waitFor({ state: 'hidden' });
+
+  // Check Ollama provider tab exists (in Ant Design Tabs, each tab header is a role="tab")
+  const ollamaTab = page.locator('[role="tab"]').filter({ hasText: 'Ollama' });
+  check('the provider tabs list Ollama as a top-level provider option', await ollamaTab.count() > 0);
+  await ollamaTab.click();
+
+  // Ollama rows render in the workspace table
+  const ollamaRow = page.locator('[data-identity^="ollama:"]').first();
+  await ollamaRow.waitFor({ state: 'visible' });
+  check('Ollama account renders as a unified credential record in the workspace', await ollamaRow.count() > 0);
+  check('Ollama row shows real 55% remaining weekly quota derived from 45.5% used', (await ollamaRow.innerText()).includes('55%'));
+
+  // Verify action protection: Ollama row cannot be selected for CPA batch actions
+  check('Ollama row has no batch checkbox', await ollamaRow.locator('.ant-checkbox').count() === 0);
+
+  // Verify row switch toggles Ollama scraper collection (PUT /ollama/accounts), never CPA credential status (POST /auth-files/status)
+  const previousPutCount = ollamaState.putCount;
+  const previousCpaCount = ollamaState.cpaToggleCalls;
+  const rowSwitch = ollamaRow.locator('button[role="switch"]');
+  await rowSwitch.click();
+  await until(() => ollamaState.putCount > previousPutCount, { label: 'Ollama collection toggle to call updateOllamaAccount' });
+  check('toggling Ollama row calls PUT /ollama/accounts with enabled update', ollamaState.updated.enabled === false);
+  check('toggling Ollama row never calls CPA credential status endpoint', ollamaState.cpaToggleCalls === previousCpaCount);
+
+  // Verify action menu strictly isolates CPA actions
+  const moreBtn = ollamaRow.locator('.ant-btn-icon-only').first();
+  await moreBtn.click();
+  const dropdownMenu = page.locator('.ant-dropdown:visible');
+  await dropdownMenu.waitFor({ state: 'visible' });
+  const menuText = await dropdownMenu.innerText();
+  check('Ollama action menu hides CPA models, download, quota refresh and cooldown clear',
+    !menuText.includes('Models') && !menuText.includes('Download') && !menuText.includes('Refresh Quota'));
+  check('Ollama action menu provides Edit and Delete',
+    menuText.includes('Edit') && menuText.includes('Delete'));
+  // Close menu by clicking elsewhere
+  await page.keyboard.press('Escape');
+}
+
+// ── Lane C: Feishu settings ───────────────────────────────────────────────────
+
+const feishuState = {
+  phase: 'env',
+  testPosts: 0,
+  saveBody: null,
+  settings: {
+    enabled: false,
+    app_id: 'cli_env',
+    has_secret: true,
+    chat_id: 'oc_env',
+    summary_times: ['10:00'],
+    timezone: 'Asia/Shanghai',
+    quiet_start: '23:00',
+    quiet_end: '08:00',
+    tight_remaining_percent: 20,
+    channel_unavailable_after_ms: 1_800_000,
+    monitor_down_after_ms: 1_800_000,
+    source: 'env_forced_off',
+    degraded: false,
+    forced_off: true,
+  },
+  status: {
+    enabled: false,
+    ready: false,
+    degraded: false,
+    source: 'env_forced_off',
+    forced_off: true,
+    connected: false,
+    open_items: 0,
+    pending_sends: 0,
+    queued_sends: 0,
+  },
+};
+
+export function feishuSettingsFixtures() {
+  return [
+    [(url) => url.pathname.endsWith('/dashboard'), () => chartDashboard],
+    [(url) => url.pathname.endsWith('/dashboard/tail'), () => chartDashboard],
+    [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/feishu/settings'), () => feishuState.settings],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/feishu/status'), () => feishuState.status],
+    [
+      (url, method) => method === 'PUT' && url.pathname.endsWith('/feishu/settings'),
+      (url, method, request) => {
+        feishuState.saveBody = JSON.parse(request.postData() ?? '{}');
+        return feishuState.settings;
+      },
+    ],
+    [
+      (url, method) => method === 'POST' && url.pathname.endsWith('/feishu/test'),
+      () => {
+        feishuState.testPosts += 1;
+        return { sent: true };
+      },
+    ],
+  ];
+}
+
+export async function feishuSettings({ base, page, check }) {
+  feishuState.phase = 'env';
+  feishuState.testPosts = 0;
+  feishuState.saveBody = null;
+
+  await gotoConsole(page, base, '/omc-settings', '.omc-settings-page');
+  const appId = page.getByPlaceholder('cli_a1b2c3d4...');
+  await until(async () => (await page.getByText('Forced off by env', { exact: true }).count()) === 1, { label: 'the environment override to be surfaced' });
+  check('an environment force-off is named on the page and disables every control',
+    await appId.isDisabled()
+      && await page.getByRole('button', { name: 'Send Test Card', exact: true }).isDisabled());
+
+  // The environment stops forcing it off; the stored secret must survive a blank save.
+  feishuState.phase = 'web';
+  feishuState.settings = {
+    ...feishuState.settings,
+    enabled: true,
+    app_id: 'cli_12345',
+    chat_id: 'oc_chat_999',
+    source: 'web',
+    forced_off: false,
+  };
+  feishuState.status = {
+    ...feishuState.status,
+    enabled: true,
+    ready: true,
+    source: 'web',
+    forced_off: false,
+    connected: true,
+  };
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('.omc-settings-page').waitFor({ state: 'visible' });
+  await until(async () => (await page.getByPlaceholder('cli_a1b2c3d4...').inputValue()) === 'cli_12345', { label: 'the saved connection settings to load' });
+
+  const secret = page.locator('.omc-settings-page input[type="password"]');
+  check('a stored app secret is never echoed into the form', await secret.inputValue() === '');
+  await page.getByPlaceholder('cli_a1b2c3d4...').fill('cli_changed');
+  await page.getByRole('button', { name: 'Save Feishu Settings', exact: true }).click();
+  await until(() => feishuState.saveBody !== null, { label: 'the settings save to reach the gateway' });
+  check('a blank secret field leaves the stored secret untouched instead of clearing it',
+    !('app_secret' in (feishuState.saveBody ?? {})) && feishuState.saveBody.app_id === 'cli_changed', JSON.stringify(feishuState.saveBody));
+
+  // The test card is a two-step action: opening it sends nothing, and cancelling sends nothing.
+  const testButton = page.getByRole('button', { name: 'Send Test Card', exact: true });
+  await testButton.click();
+  const testConfirm = page.locator('.ant-modal:visible').filter({ hasText: 'Send Feishu Test Card' });
+  await testConfirm.waitFor({ state: 'visible' });
+  check('opening the test-card confirmation sends nothing on its own', feishuState.testPosts === 0);
+  await testConfirm.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await until(async () => (await page.locator('.ant-modal:visible').count()) === 0, { label: 'the test-card confirmation to close' });
+  check('cancelling the test-card confirmation still sends nothing', feishuState.testPosts === 0);
+
+  await testButton.click();
+  await testConfirm.waitFor({ state: 'visible' });
+  await testConfirm.getByRole('button', { name: 'Confirm', exact: true }).click();
+  await until(() => feishuState.testPosts === 1, { label: 'the confirmed test card to be sent' });
+  check('only an explicit confirmation sends the test card, exactly once', feishuState.testPosts === 1);
+  await settleLayout(page);
+}

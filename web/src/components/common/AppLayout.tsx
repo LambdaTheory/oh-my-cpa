@@ -5,7 +5,6 @@ import {
   ShopOutlined,
   AuditOutlined,
   CloudServerOutlined,
-  CodeSandboxOutlined,
   ControlOutlined,
   DashboardOutlined,
   DollarOutlined,
@@ -69,7 +68,7 @@ interface NavGroup {
  * transcript and the side panel independently, which only works when the route fills the
  * content area's height instead of growing it.
  */
-const WORKSPACE_ROUTES = new Set(['/playground', '/agent']);
+const WORKSPACE_ROUTES = new Set(['/agent']);
 
 /** A plugin page is a frame that fills the content area and scrolls inside itself. */
 function isWorkspaceRoute(pathname: string): boolean {
@@ -85,14 +84,13 @@ function routeViewKey(pathname: string): string {
   return pathname === '/plugins' || pathname.startsWith('/plugins/') ? '/plugins' : pathname;
 }
 
-const staticNavGroups: NavGroup[] = [
+export const staticNavGroups: NavGroup[] = [
   {
     key: 'operate',
     labelKey: 'nav.group.operate',
     items: [
       { key: '/dashboard', labelKey: 'nav.dashboard', icon: <DashboardOutlined /> },
       { key: '/agent', labelKey: 'nav.agent', icon: <RobotOutlined /> },
-      { key: '/playground', labelKey: 'nav.playground', icon: <CodeSandboxOutlined /> },
       { key: '/model-square', labelKey: 'nav.model_square', icon: <BlockOutlined /> },
     ],
   },
@@ -135,7 +133,7 @@ const staticNavGroups: NavGroup[] = [
  * running plugin registered. A plugin's page is a destination in its own right, so it sits
  * in the navigation beside the console's pages rather than behind the plugin's row.
  */
-function buildNavGroups(pluginPages: readonly PluginPageEntry[]): NavGroup[] {
+export function buildNavGroups(pluginPages: readonly PluginPageEntry[]): NavGroup[] {
   const pluginGroup: NavGroup = {
     key: 'plugins',
     labelKey: 'nav.group.plugins',

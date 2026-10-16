@@ -65,6 +65,7 @@ const DASHBOARD_SCENARIOS = [
 
 const AGENT_SCENARIOS = ['agent', 'agent-external', 'agent-question', 'agent-live', 'agent-views', 'agent-replace', 'agent-attach', 'agent-failure', 'agent-stream', 'agent-narrow', 'mobile-console'];
 
+
 /**
  * A source path maps to the scenarios it can affect.
  *
@@ -188,7 +189,7 @@ const SCENARIO_PATHS = [
   // three retired pages' UI claims; overlay-back covers the shared history layer.
   {
     prefix: 'web/src/pages/oauthManagement/',
-    scenarios: ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
+    scenarios: ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'omc-account-automation', 'omc-ollama-accounts', 'overlay-back', 'mobile-console'],
   },
   {
     prefix: 'web/src/pages/oauthProviderLogic',
@@ -328,8 +329,18 @@ const SCENARIO_PATHS = [
   // dashboard's model panels and the OMC page move together.
   {
     prefix: 'web/src/pages/OmcSettingsPage',
-    scenarios: ['omc-settings', 'scroll-smoothing', 'mobile-console'],
+    scenarios: ['omc-settings', 'omc-feishu-settings', 'scroll-smoothing', 'mobile-console'],
   },
+  // The first-batch drawers and their typed transports. Each is opened from a page
+  // that already has a rule, but the modules carry the behaviour the scenario drives -
+  // the adopt/reset flow, the cookie payload and the send confirmation - so a change
+  // here has to select the scenario that reads it.
+  { prefix: 'web/src/components/automation/', scenarios: ['omc-account-automation'] },
+  { prefix: 'web/src/components/ollama/', scenarios: ['omc-ollama-accounts'] },
+  { prefix: 'web/src/components/feishu/', scenarios: ['omc-feishu-settings', 'omc-settings', 'mobile-console'] },
+  { prefix: 'web/src/types/accountAutomation', scenarios: ['omc-account-automation'] },
+  { prefix: 'web/src/types/ollama', scenarios: ['omc-ollama-accounts'] },
+  { prefix: 'web/src/types/feishu', scenarios: ['omc-feishu-settings'] },
   {
     prefix: 'web/src/types/tokenDisplay',
     // Every scenario that renders a surface reading this layer: the OMC page that owns the setting,

@@ -9,7 +9,6 @@ const ROUTES = [
   ['/config', '.config-page'], ['/plugins', '.plugins-page'],
   ['/system', '.system-page'], ['/omc-settings', '.omc-settings-page'],
   ['/model-square', '.model-square-page'], ['/agent', '[data-testid="agent-page"]'],
-  ['/playground', '[data-testid="playground-page"]'],
 ];
 
 export async function mobileConsole({ base, page, check, errors }) {
@@ -75,7 +74,9 @@ export async function mobileConsole({ base, page, check, errors }) {
 }
 
 async function checkWorkspaceKeyboard({ base, page, check }) {
-  for (const route of ['/agent', '/playground']) {
+  // The Playground route is retired and redirects to the dashboard, so the Agent is the
+  // only conversation workspace the phone sweep can drive.
+  for (const route of ['/agent']) {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${base}${route}`, { waitUntil: 'domcontentloaded' });
     const workspace = page.getByTestId(`${route.slice(1)}-page`);

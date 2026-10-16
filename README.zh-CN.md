@@ -253,6 +253,8 @@ CPA 的每条用量记录只交给一个读取方。同一个 CPA 上已有其�
 - **请求记录**：多条件筛选与全文搜索；详情抽屉展示耗时、首字延迟、Token 明细与单请求原始日志。每条记录保留上游实际返回的模型，与请求模型不同时会被标出。
 - **后台采集**：无论是否打开浏览器，用量都会通过流式订阅或轮询持续入库。
 - **日志与审计**：实时查看网关日志与控制台自身的服务日志；操作审计记录只增不改，支持筛选与 JSON 导出。
+- **Ollama 监控**：维护多个 Ollama Cloud 账号，用加密保存的会话 Cookie 从账号设置页读取额度；Cookie 不会返回或写入日志，缺失的百分比保持“未报告”，关闭采集也绝不声称已停止推理。
+- **飞书通知**：复用一条长连接，从 OMC 已存储的读数回答只读的状态与额度查询，并发送去噪提醒——同一问题只通知一次、静默时段合并、仅在确有事项时发送定时摘要。应用密钥加密保存，环境强制关闭优先于网页设置。
 
 </details>
 
@@ -387,6 +389,8 @@ bearer_token_env_var = "OMCPA_CPA_MANAGEMENT_KEY"
 | [`docs/install.md`](docs/install.md) | 安装、验证、升级与排障 |
 | [`docs/install-for-agents.md`](docs/install-for-agents.md) | 写给编码 Agent 执行的安装指南 |
 | [`docs/operations.md`](docs/operations.md) | 配置参考与运维须知 |
+| [`docs/ollama-monitoring.md`](docs/ollama-monitoring.md) | Ollama 额度监控：账号、采集与安全边界 |
+| [`docs/feishu-notifications.md`](docs/feishu-notifications.md) | 飞书通知：机器人、去噪规则与配置 |
 | [`docs/ops/sqlite-operations.md`](docs/ops/sqlite-operations.md) | 备份、恢复与主密钥管理手册 |
 | [`docs/agent-capabilities.md`](docs/agent-capabilities.md) | 智能体能力清单、权限规则与 MCP 接入 |
 | [`docs/cpa-v8-compat.md`](docs/cpa-v8-compat.md) | CPA v8 基线与配置字段迁移对照 |

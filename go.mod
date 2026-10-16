@@ -6,6 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.4
 	github.com/google/jsonschema-go v0.4.2
 	github.com/google/uuid v1.6.0
+	github.com/larksuite/oapi-sdk-go/v3 v3.12.0
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	golang.org/x/image v0.45.0
 	golang.org/x/sys v0.47.0
@@ -15,6 +16,8 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

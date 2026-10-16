@@ -271,6 +271,8 @@ troubleshooting.
 - **Request records**: multi-select facets and full-text search; a detail drawer with duration, TTFT, token breakdown and the raw per-request log. Each record keeps the model the upstream reported serving, and flags the ones where it differs from the model requested.
 - **Background collection**: usage is ingested by stream or polling, even with no browser open.
 - **Logs and audit trail**: tail the gateway log, read the console's own service log, and review an append-only audit trail with filters and JSON export.
+- **Ollama monitoring**: keep several Ollama Cloud accounts and read each one's quota from its settings page with an encrypted session cookie. The cookie is never returned or logged, a missing percentage stays "not reported", and disabling collection never claims to stop inference.
+- **Feishu notifications**: one long connection answers read-only status and quota queries from OMC's stored readings and sends denoised alerts - one message per problem, merged during quiet hours, a scheduled digest only when there is something to say. The app secret is encrypted, and an environment force-off takes precedence over the web settings.
 
 </details>
 
@@ -411,6 +413,8 @@ Browser ──▶ Direct listener / existing HTTPS ingress ──▶ Oh My CPA (
 | [`docs/install.md`](docs/install.md) | Installation, verification, upgrades, troubleshooting |
 | [`docs/install-for-agents.md`](docs/install-for-agents.md) | The same install, as steps for a coding agent |
 | [`docs/operations.md`](docs/operations.md) | Settings reference and operational notes |
+| [`docs/ollama-monitoring.md`](docs/ollama-monitoring.md) | Ollama quota monitoring: accounts, collection and security boundary |
+| [`docs/feishu-notifications.md`](docs/feishu-notifications.md) | Feishu notifications: the bot, its denoise rules and configuration |
 | [`docs/ops/sqlite-operations.md`](docs/ops/sqlite-operations.md) | Backup, restore and master-key runbook |
 | [`docs/agent-capabilities.md`](docs/agent-capabilities.md) | Agent capability contract and the MCP bridge |
 | [`docs/cpa-v8-compat.md`](docs/cpa-v8-compat.md) | CPA v8 baseline and configuration relocation |

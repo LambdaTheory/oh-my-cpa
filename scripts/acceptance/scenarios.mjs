@@ -3,6 +3,7 @@ import { mobileConsole } from './probes/mobileConsole.mjs';
 import { routeRenderError, routeLazyError } from './probes/routeError.mjs';
 import { agentWorkspace, agentExternal, agentFailureCopy, agentStream, agentNarrow, agentLive, agentQuestion, agentViews, agentReplace, agentAttach, agentFixtures } from './probes/agent.mjs';
 import { playground, playgroundFixtures, playgroundNarrow } from './probes/playground.mjs';
+import { accountAutomation, accountAutomationFixtures, ollamaAccounts, ollamaAccountFixtures, feishuSettings, feishuSettingsFixtures } from './probes/firstBatch.mjs';
 /**
  * The browser probe scenarios, as a registry rather than a script.
  *
@@ -106,6 +107,18 @@ const routeErrorFixtures = () => [
   [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
 ];
 
+/**
+ * The dashboard reads a redirected `/playground` lands on. The retired address now
+ * renders the dashboard, so the two redirect scenarios own the same panel fixtures the
+ * dashboard scenarios do rather than reaching the default shell with an undeclared read.
+ */
+const retiredPlaygroundDashboardRoutes = () => [
+  [(url) => url.pathname.endsWith('/dashboard'), () => chartDashboard],
+  [(url) => url.pathname.endsWith('/dashboard/tail'), () => chartDashboard],
+  [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
+  [(url) => url.pathname.endsWith('/dashboard/models'), () => chartDashboardModels],
+];
+
 // Shared list data keeps the phone sweep on the same wire shapes as the list scenario.
 const PHONE_LIST_ROUTES = [
   [(url) => url.pathname.endsWith('/management/api-keys'), () => ({
@@ -193,8 +206,8 @@ export const SCENARIOS = [
   { id: 'agent-failure', name: 'Agent hands a refused message back and reports a failure as a sentence, not a code', options: { routes: agentFixtures() }, run: agentFailureCopy },
   { id: 'agent-stream', name: 'Agent coalesces tokens and follows live reasoning through Markdown layout changes', options: { routes: agentFixtures() }, run: agentStream },
   { id: 'agent-narrow', name: 'Agent keeps its model named in the composer and its drawer follows native Back on phones', options: { routes: agentFixtures(), viewport: { width: 320, height: 850 } }, run: agentNarrow },
-  { id: 'playground', name: 'ephemeral multimodal playground streams and inspects safe requests', options: { routes: playgroundFixtures() }, run: playground },
-  { id: 'playground-narrow', name: 'playground settings follow native Back and fit a phone', options: { routes: playgroundFixtures(), viewport: { width: 320, height: 850 } }, run: playgroundNarrow },
+  { id: 'playground', name: 'the retired playground address redirects to the dashboard and the Agent workspace stays reachable', options: { routes: [...agentFixtures(), ...retiredPlaygroundDashboardRoutes()] }, run: playground },
+  { id: 'playground-narrow', name: 'the retired playground address redirects on a phone and the phone navigation offers no entry to it', options: { routes: [...agentFixtures(), ...retiredPlaygroundDashboardRoutes()], viewport: { width: 320, height: 850 } }, run: playgroundNarrow },
   {
     id: 'omc-settings',
     name: 'OMC settings and the unit style it governs',
@@ -206,6 +219,24 @@ export const SCENARIOS = [
       ],
     },
     run: omcSettings,
+  },
+  {
+    id: 'omc-account-automation',
+    name: 'the OAuth workspace adopts eligible gateway accounts and plans a retry and a hand-filled recovery',
+    options: { viewport: { width: 1440, height: 900 }, routes: accountAutomationFixtures() },
+    run: accountAutomation,
+  },
+  {
+    id: 'omc-ollama-accounts',
+    name: 'Ollama accounts add and edit without echoing the cookie, and an absent snapshot reads as an unknown quota',
+    options: { viewport: { width: 1440, height: 900 }, routes: ollamaAccountFixtures() },
+    run: ollamaAccounts,
+  },
+  {
+    id: 'omc-feishu-settings',
+    name: 'Feishu settings honor the environment override, preserve a blank secret and confirm the test card before sending',
+    options: { viewport: { width: 1440, height: 1000 }, routes: feishuSettingsFixtures() },
+    run: feishuSettings,
   },
   {
     id: 'column-alignment',

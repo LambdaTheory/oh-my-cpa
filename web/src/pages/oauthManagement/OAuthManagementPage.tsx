@@ -16,6 +16,7 @@ import {
   FilterOutlined,
   LoginOutlined,
   SearchOutlined,
+  SettingOutlined,
   SyncOutlined,
   UploadOutlined,
 } from '../../components/icons';
@@ -37,6 +38,10 @@ import {
 import { AuthFileDetailDrawer } from '../../components/authFiles/AuthFileDetailDrawer';
 import { BatchActionBar } from '../../components/authFiles/BatchActionBar';
 import { OAuthModelRulesDrawer } from '../../components/authFiles/OAuthModelRulesDrawer';
+import { AccountAutomationDrawer } from '../../components/automation/AccountAutomationDrawer';
+import { OllamaManagementDrawer } from '../../components/ollama/OllamaManagementDrawer';
+import { OllamaAccountEditorModal } from '../../components/ollama/OllamaAccountEditorModal';
+import type { OllamaAccountDTO, OllamaAccountWritePayload } from '../../types/ollama';
 import { ProviderFilterTabs } from '../../components/common/ProviderFilterTabs';
 import { oauthProviderChoices } from '../oauthProviderLogic';
 import { CompactQuotaView } from '../quota/CompactQuotaView';
@@ -142,6 +147,20 @@ export const OAuthManagementPage: React.FC = () => {
     queryFn: api.getPlugins,
     staleTime: 30_000,
   });
+  const ollamaAccountsQuery = useQuery({
+    queryKey: ['ollama-accounts'],
+    queryFn: () => api.listOllamaAccounts(),
+    staleTime: 15_000,
+    retry: 1,
+    placeholderData: keepPreviousData,
+  });
+  const ollamaQuotaQuery = useQuery({
+    queryKey: ['ollama-quota'],
+    queryFn: () => api.getOllamaQuota(),
+    staleTime: 15_000,
+    retry: 1,
+    placeholderData: keepPreviousData,
+  });
 
   const choices = React.useMemo(
     () => oauthProviderChoices(pluginsQuery.data?.plugins, t),
@@ -156,8 +175,16 @@ export const OAuthManagementPage: React.FC = () => {
       filesQuery.data?.files ?? [],
       quotaQuery.data?.quotas ?? [],
       choices,
+      ollamaAccountsQuery.data?.accounts ?? [],
+      ollamaQuotaQuery.data?.accounts ?? [],
     ),
-    [choices, filesQuery.data?.files, quotaQuery.data?.quotas],
+    [
+      choices,
+      filesQuery.data?.files,
+      ollamaAccountsQuery.data?.accounts,
+      ollamaQuotaQuery.data?.accounts,
+      quotaQuery.data?.quotas,
+    ],
   );
   const records = projection.records;
   const recordsRef = React.useRef(records);
@@ -358,7 +385,60 @@ export const OAuthManagementPage: React.FC = () => {
 
   const [isModelRulesOpen, setIsModelRulesOpen] = React.useState(false);
   const [isVertexImportOpen, setIsVertexImportOpen] = React.useState(false);
+  const [isAutomationOpen, setIsAutomationOpen] = React.useState(false);
+  const [isOllamaOpen, setIsOllamaOpen] = React.useState(false);
+  const [editingOllamaAccount, setEditingOllamaAccount] = React.useState<OllamaAccountDTO | null>(null);
+  const [isOllamaEditorOpen, setIsOllamaEditorOpen] = React.useState(false);
+  const [isOllamaMutating, setIsOllamaMutating] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const saveOllamaAccount = async (payload: OllamaAccountWritePayload) => {
+    setIsOllamaMutating(true);
+    try {
+      if (editingOllamaAccount) {
+        await api.updateOllamaAccount(editingOllamaAccount.id, payload);
+      } else {
+        await api.createOllamaAccount(payload);
+      }
+      toast.success(t('ollama.save_success'));
+      setIsOllamaEditorOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['ollama-accounts'] });
+      void queryClient.invalidateQueries({ queryKey: ['ollama-quota'] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsOllamaMutating(false);
+    }
+  };
+
+  const toggleOllamaAccount = async (account: OllamaAccountDTO) => {
+    setIsOllamaMutating(true);
+    try {
+      await api.updateOllamaAccount(account.id, {
+        enabled: !account.enabled,
+      });
+      void queryClient.invalidateQueries({ queryKey: ['ollama-accounts'] });
+      void queryClient.invalidateQueries({ queryKey: ['ollama-quota'] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsOllamaMutating(false);
+    }
+  };
+
+  const deleteOllamaAccount = async (id: string) => {
+    setIsOllamaMutating(true);
+    try {
+      await api.deleteOllamaAccount(id);
+      toast.success(t('ollama.delete_success'));
+      void queryClient.invalidateQueries({ queryKey: ['ollama-accounts'] });
+      void queryClient.invalidateQueries({ queryKey: ['ollama-quota'] });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsOllamaMutating(false);
+    }
+  };
 
   const onTargetGone = React.useCallback((recordKey: string) => {
     setSelectedIdentity((current) => (current?.key === recordKey ? undefined : current));
@@ -371,8 +451,10 @@ export const OAuthManagementPage: React.FC = () => {
       filesQuery.refetch(),
       quotaQuery.refetch(),
       pluginsQuery.refetch(),
+      ollamaAccountsQuery.refetch(),
+      ollamaQuotaQuery.refetch(),
     ]);
-  }, [filesQuery, pluginsQuery, quotaQuery]);
+  }, [filesQuery, ollamaAccountsQuery, ollamaQuotaQuery, pluginsQuery, quotaQuery]);
 
   const totalCount = records.length;
   const disabledCount = records.filter((record) => isAuthFileDisabled(record.file)).length;
@@ -471,6 +553,31 @@ export const OAuthManagementPage: React.FC = () => {
     }));
 
   const quotaBodyForRecord = (record: OAuthWorkspaceRecord, forRow = false): React.ReactNode => {
+    if (record.source === 'ollama') {
+      if (record.quota) {
+        if (forRow) {
+          return (
+            <CompactQuotaView
+              item={record.quota}
+              nowMS={visibleNow}
+            />
+          );
+        }
+        return (
+          <CredentialQuotaBody
+            item={record.quota}
+            nowMS={visibleNow}
+            isDemo={isDemo}
+            isRefreshing={false}
+          />
+        );
+      }
+      return (
+        <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+          {t('ollama.status_unknown')}
+        </span>
+      );
+    }
     if (record.quota) {
       const isRefreshing = Boolean(record.authIndex && actions.busyQuotaIndexes.has(record.authIndex));
       if (forRow) {
@@ -533,6 +640,8 @@ export const OAuthManagementPage: React.FC = () => {
               <Button icon={<UploadOutlined />} disabled={isDemo || actions.isOperating} onClick={() => fileInputRef.current?.click()}>{t('af.upload')}</Button>
               <Button icon={<CloudUploadOutlined />} disabled={isDemo || actions.isOperating} onClick={() => setIsVertexImportOpen(true)}>{t('af.vertex_open')}</Button>
               <Button icon={<BranchesOutlined />} disabled={actions.isOperating} onClick={() => setIsModelRulesOpen(true)} data-testid="oauth-management-model-rules-open">{t('af.rules_open')}</Button>
+              <Button icon={<SettingOutlined />} onClick={() => setIsAutomationOpen(true)}>{t('automation.title')}</Button>
+              <Button icon={<SyncOutlined />} onClick={() => setIsOllamaOpen(true)}>{t('ollama.title')}</Button>
             </ActionMenu>
             <Button type="primary" icon={<LoginOutlined />} onClick={openConnect}>{t('omc.connect_account')}</Button>
           </>
@@ -561,6 +670,20 @@ export const OAuthManagementPage: React.FC = () => {
               data-testid="oauth-management-model-rules-open"
             >
               {t('af.rules_open')}
+            </Button>
+            <Button
+              icon={<SettingOutlined />}
+              onClick={() => setIsAutomationOpen(true)}
+              data-testid="oauth-management-automation-open"
+            >
+              {t('automation.title')}
+            </Button>
+            <Button
+              icon={<SyncOutlined />}
+              onClick={() => setIsOllamaOpen(true)}
+              data-testid="oauth-management-ollama-open"
+            >
+              {t('ollama.title')}
             </Button>
             <Button type="primary" icon={<LoginOutlined />} onClick={openConnect}>
               {t('omc.connect_account')}
@@ -833,12 +956,14 @@ export const OAuthManagementPage: React.FC = () => {
             {pagedRecords.map((record) => (
               <div key={record.key} data-quota-focus-anchor={record.quota ? record.authIndex : undefined}>
                 <OAuthCredentialRecord
+                  source={record.source}
+                  ollamaAccount={record.ollamaAccount}
                   file={record.file}
                   identityKey={record.key}
                   displayProvider={record.displayProvider}
                   pluginLogo={pluginOAuthLogoFor(pluginLogos, record.displayProvider)}
                   selected={selectedKeySet.has(record.key)}
-                  busy={actions.isRecordBusy(record)}
+                  busy={record.source === 'ollama' ? isOllamaMutating : actions.isRecordBusy(record)}
                   canTargetFile={record.canSelectForFileBatch}
                   onSelect={(checked) => {
                     setSelectedKeys((previous) => (
@@ -847,10 +972,29 @@ export const OAuthManagementPage: React.FC = () => {
                         : previous.filter((key) => key !== record.key)
                     ));
                   }}
-                  onToggle={() => void actions.toggleOne(record)}
+                  onToggle={() => {
+                    if (record.source === 'ollama') {
+                      if (record.ollamaAccount) void toggleOllamaAccount(record.ollamaAccount);
+                    } else {
+                      void actions.toggleOne(record);
+                    }
+                  }}
                   onDownload={() => actions.download(record)}
-                  onDelete={() => void actions.deleteOne(record)}
-                  onEdit={() => openCredential(record, 'configuration')}
+                  onDelete={() => {
+                    if (record.source === 'ollama') {
+                      if (record.ollamaAccount) void deleteOllamaAccount(record.ollamaAccount.id);
+                    } else {
+                      void actions.deleteOne(record);
+                    }
+                  }}
+                  onEdit={() => {
+                    if (record.source === 'ollama') {
+                      setEditingOllamaAccount(record.ollamaAccount ?? null);
+                      setIsOllamaEditorOpen(true);
+                    } else {
+                      openCredential(record, 'configuration');
+                    }
+                  }}
                   onShowModels={() => openCredential(record, 'models')}
                   onShowDetails={() => openCredential(record, 'overview')}
                   onRefreshQuota={() => void actions.refreshQuotaForRecord(record)}
@@ -953,6 +1097,24 @@ export const OAuthManagementPage: React.FC = () => {
         }}
         providerOptions={providerOptions.filter((provider) => provider !== 'all')}
         pluginLogos={pluginLogos}
+      />
+
+      <AccountAutomationDrawer
+        open={isAutomationOpen}
+        onClose={() => setIsAutomationOpen(false)}
+      />
+
+      <OllamaManagementDrawer
+        open={isOllamaOpen}
+        onClose={() => setIsOllamaOpen(false)}
+      />
+
+      <OllamaAccountEditorModal
+        open={isOllamaEditorOpen}
+        account={editingOllamaAccount}
+        isSaving={isOllamaMutating}
+        onClose={() => setIsOllamaEditorOpen(false)}
+        onSave={saveOllamaAccount}
       />
     </div>
   );

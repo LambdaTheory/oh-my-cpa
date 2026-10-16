@@ -427,6 +427,28 @@ test('the real phone sweep and unrelated probes retain separate attribution', ()
   assert.deepEqual([...settings.ids], ['omc-settings']);
 });
 
+test('the first-batch probe module is attributed to its three scenarios only', () => {
+  const acceptanceFiles = fs.readdirSync('scripts/acceptance/probes').filter((file) => file.endsWith('.mjs'))
+    .map((file) => `scripts/acceptance/probes/${file}`);
+  acceptanceFiles.push('scripts/acceptance/scenarios.mjs', 'scripts/acceptance/probe.mjs',
+    'scripts/acceptance/probe-batches.mjs', 'scripts/acceptance/probe-shards.mjs');
+  const read = (file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
+  const options = { readBase: read, readCurrent: read, acceptanceFiles };
+  const batch = planProbeChange(['scripts/acceptance/probes/firstBatch.mjs'], options);
+  assert.equal(batch.all, undefined, 'a probe module is not the runner');
+  assert.deepEqual(new Set(batch.ids), new Set(['omc-account-automation', 'omc-ollama-accounts', 'omc-feishu-settings']));
+  // Negative: the module binds the first-batch scenarios and none of the OAuth workspace's
+  // own density scenarios, so a change to it must not run the whole catalog or the
+  // unrelated workspace.
+  assert.equal(new Set(batch.ids).has('oauth-management'), false);
+  // The shared wire module it imports attributes to the first-batch scenarios too, through
+  // the module that imports it.
+  const shared = planProbeChange(['scripts/acceptance/probes/oauthManagement.mjs'], options);
+  for (const id of ['omc-account-automation', 'omc-ollama-accounts']) {
+    assert.equal(new Set(shared.ids).has(id), true, `the shared OAuth fixtures reach ${id}`);
+  }
+});
+
 test('a production import of out-of-graph test infrastructure is unresolved and widens', () => {
   for (const declaration of [
     "import { probe } from '../../tests/preferences.contract.test'; export const value = probe;",

@@ -209,6 +209,28 @@ export function defaultRoutes() {
     ],
 
     [(url, method) => method === 'GET' && url.pathname.endsWith('/custom-icons'), () => ({ icons: [] })],
+    // The OMC settings page renders the Feishu panel, so its two reads are part of the
+    // default surface a route's shell can reach. An inert, not-configured document is the
+    // honest default; scenarios that assert an override declare their own.
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/feishu/settings'), () => ({
+      enabled: false, has_secret: false, summary_times: ['10:00', '17:00'],
+      quiet_start: '23:00', quiet_end: '08:00', tight_remaining_percent: 20,
+      channel_unavailable_after_ms: 1_800_000, monitor_down_after_ms: 1_800_000,
+      source: 'web', degraded: false, forced_off: false,
+    })],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/feishu/status'), () => ({
+      enabled: false, ready: false, degraded: false, source: 'web', forced_off: false,
+      connected: false, open_items: 0, pending_sends: 0, queued_sends: 0,
+    })],
+    // The unified OAuth workspace now folds Ollama accounts into its own credential list,
+    // so it reads `/ollama/accounts` and `/ollama/quota` on every load rather than only when
+    // the Ollama drawer opens. An inert, empty inventory is the honest default for every
+    // scenario that does not exercise Ollama: the page degrades to no Ollama rows, exactly
+    // as it does when the read fails, without an undeclared-fixture fault. The shapes are the
+    // handler's own (`internal/api/ollama_accounts.go`), and the Ollama scenario declares its
+    // populated inventory as a scenario entry the dispatcher checks first.
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/ollama/accounts'), () => ({ accounts: [] })],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/ollama/quota'), () => ({ accounts: [] })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/auth-files'), () => ({ files: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/quota'), () => ({ summary: { total_credentials: 0, healthy_count: 0, warning_count: 0, exhausted_count: 0, cooldown_count: 0, attention_count: 0 }, quotas: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/providers'), () => ({ providers: [], total: 0 })],

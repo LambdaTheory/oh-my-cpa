@@ -119,9 +119,9 @@ func (h *Handler) QuotaScheduler(logger *slog.Logger) *quota.Scheduler {
 		return quota.NewService(client).RefreshCredentialQuota(ctx, file, prior)
 	}
 	scheduler.Persist = func(ctx context.Context, value *quota.NormalizedQuota) error {
-		if value == nil || value.Status == "error" || value.Status == "stale" {
-			return nil
-		}
+		// Every result flows through the same persistence entry so a failed refresh
+		// still records its safe collection signal; the success gate inside the
+		// persist keeps a failed read from overwriting the last good snapshot.
 		return h.persistNormalizedQuotaSnapshot(ctx, value)
 	}
 	return scheduler

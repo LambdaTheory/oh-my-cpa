@@ -29,7 +29,6 @@ import {
   DashboardPage,
   AgentPage,
   AuthorizePage,
-  PlaygroundPage,
   ModelSquarePage,
   LogsPage,
   AuditPage,
@@ -130,7 +129,7 @@ const AppRoutes: React.FC = () => {
       children: [
         { index: true, element: <Navigate to="/dashboard" replace /> },
         { path: 'dashboard', element: <DashboardPage /> },
-        { path: 'playground', element: <PlaygroundPage /> },
+        { path: 'playground', element: <Navigate to="/dashboard" replace /> },
         { path: 'agent', element: <AgentPage /> },
         { path: 'model-square', element: <ModelSquarePage /> },
         { path: 'ai-providers', element: <ProvidersPage /> },

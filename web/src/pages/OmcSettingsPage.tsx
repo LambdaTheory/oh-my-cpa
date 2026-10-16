@@ -30,6 +30,7 @@ import { PageHeader } from '../components/common/PageHeader';
 import { useScrollSmoothingPreference } from '../hooks/useScrollSmoothing';
 import { SCROLL_SMOOTHING_PREFERENCES, type ScrollSmoothingPreference } from '../utils/scrollSmoothingPreference';
 import { SectionHeading } from '../components/common/SectionHeading';
+import { FeishuSettingsPanel } from '../components/feishu/FeishuSettingsPanel';
 
 
 const MODE_LABEL_KEYS: Record<ThemeModePreference, string> = {
@@ -257,6 +258,13 @@ export const OmcSettingsPage: React.FC = () => {
             />
           }
         />
+      </div>
+
+      <div style={{ marginTop: 24 }}>
+        <SectionHeading
+          title={t('feishu.section_title')}
+        />
+        <FeishuSettingsPanel />
       </div>
     </div>
   );

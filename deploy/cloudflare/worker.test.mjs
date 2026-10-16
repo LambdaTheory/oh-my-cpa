@@ -200,6 +200,8 @@ describe('routing', () => {
       '/api/v1/management/auth-files',
       '/api/v1/management/auth-files/model-aliases',
       '/api/v1/management/auth-files/excluded-models',
+      '/api/v1/ollama/accounts',
+      '/api/v1/ollama/quota',
       '/api/v1/management/quota',
       '/api/v1/management/logs',
       '/api/v1/management/plugins',
@@ -229,6 +231,32 @@ describe('routing', () => {
       assert.ok(name, `${path} has no dataset entry`);
       assert.ok(DATASET.responses[name], `${path} resolved to a missing response`);
     }
+  });
+
+  it('serves the unified OAuth workspace’s Ollama inventory from the dataset and still refuses its writes', async () => {
+    // The unified OAuth workspace reads both of these on every load, not only when the
+    // Ollama drawer opens. They are empty inventories in the demonstration - it seeds no
+    // Ollama account - but the mapping has to exist, or the workspace reads a 404 on
+    // arrival. The write side crosses the Worker's refusal boundary like every other
+    // non-read, so a visitor cannot trigger a scraper the demonstration never starts.
+    const { default: worker } = await import('./worker.mjs');
+    const env = { ASSETS: { fetch: () => new Response('', { status: 200 }) } };
+    for (const path of ['/api/v1/ollama/accounts', '/api/v1/ollama/quota']) {
+      const response = await worker.fetch(new Request(`https://demo.example${path}`), env);
+      assert.equal(response.status, 200, `${path} did not answer`);
+      const name = responseNameFor(request(path));
+      assert.deepEqual(
+        await response.json(),
+        JSON.parse(DATASET.responses[name].body),
+        `${path} does not match its captured response`,
+      );
+    }
+    const write = await worker.fetch(
+      new Request('https://demo.example/api/v1/ollama/accounts', { method: 'POST', body: '{}' }),
+      env,
+    );
+    assert.equal(write.status, 403, 'an Ollama account write is not served by the demonstration');
+    assert.equal((await write.json()).code, 'demo_operation_refused');
   });
 
   it('answers a plugin settings document only for a plugin the dataset holds', () => {
