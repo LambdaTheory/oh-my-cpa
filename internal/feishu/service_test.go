@@ -398,12 +398,12 @@ func TestQuietQueueDropsFullyRecoveredProblem(t *testing.T) {
 	service.tick(context.Background())
 
 	// The credential recovers before the quiet end: nothing must be sent.
+	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
 	healthy := Report{GeneratedAt: *env.clock, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", State: StateHealthy, OK: true}},
+		Accounts: []AccountReport{{Key: "a1", State: StateHealthy, OK: true, ObservedAt: *env.clock, LastSuccessAt: *env.clock}},
 	}}}
 	env.source.report = healthy
-	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
 	service.tick(context.Background())
 	if sends, _ := env.sender.counts(); sends != 0 {
 		t.Fatalf("a fully recovered problem must not be sent, got %d", sends)
@@ -523,6 +523,8 @@ func TestScheduledSummarySendsForFreshTightChannel(t *testing.T) {
 // whose account window is below the tight threshold must not push a tight digest.
 func TestScheduledSummaryIgnoresStaleTightSample(t *testing.T) {
 	env := newTestEnv(t, Report{}, false)
+	// Isolate the digest age claim from the independently tested outage threshold.
+	env.service.resolved.MonitorDownAfter = 3 * time.Hour
 	stale := time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)
 	*env.clock = time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
 	service := env.service
@@ -738,10 +740,14 @@ func mixedReport(now time.Time, states map[string]string) Report {
 	reports := make([]AccountReport, 0, len(keys))
 	for _, key := range keys {
 		state := states[key]
-		reports = append(reports, AccountReport{
+		account := AccountReport{
 			Key: key, Label: key, State: state,
 			OK: state == StateHealthy, LastSuccessAt: now.Add(-time.Hour),
-		})
+		}
+		if account.OK {
+			account.ObservedAt, account.LastSuccessAt = now, now
+		}
+		reports = append(reports, account)
 	}
 	return Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "codex", Accounts: reports}}}
 }

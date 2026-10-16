@@ -56,9 +56,12 @@ type AccountReport struct {
 	// Disabled reports an operator's deliberate CPA disable. A disabled account
 	// is never the evidence for a channel outage or a monitor-down alert.
 	Disabled bool
+	// IsUnmonitored excludes credentials without a quota reader from channel
+	// evidence, but never suppresses an independently evidenced auth failure.
+	IsUnmonitored bool
 	// State is one of the State* constants.
 	State string
-	// OK reports whether this cycle produced a valid numeric reading. An
+	// OK reports whether the stored snapshot contains a valid numeric reading. An
 	// exhausted account reports OK true and a maxed window, so availability is
 	// decided from the windows, not from OK alone.
 	OK bool
@@ -128,8 +131,8 @@ func (a AccountReport) MetadataFresh(now time.Time, window time.Duration) bool {
 }
 
 // ReportSource supplies the newest evaluated report. It is implemented by the
-// integration owner over OMC's repository. has is false when no cycle has
-// succeeded yet. ReadReport is read-only: it must not trigger a refresh.
+// integration owner over OMC's repository. has is true when stored channels are
+// known, even before their first success. ReadReport must not trigger a refresh.
 type ReportSource interface {
 	ReadReport(ctx context.Context) (Report, bool)
 }

@@ -14,8 +14,8 @@ const KindQuery = "query"
 // KindSummary marks a scheduled or quiet-end digest.
 const KindSummary = "summary"
 
-// KindAlertBatch marks a quiet-end merge that carries several held immediate
-// alerts in a single notification.
+// KindAlertBatch carries same-cycle monitoring alerts or a quiet-end merge in a
+// single notification.
 const KindAlertBatch = "alert_batch"
 
 // defaultTitles map an alert kind onto its human title. A summary or a query has

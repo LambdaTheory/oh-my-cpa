@@ -277,6 +277,14 @@ cases run on every host; actual Windows filesystem behavior still needs a Window
 
 ## 2. Registering a new test
 
+Feishu monitoring-baseline claims live in `internal/feishu/monitor_baseline_test.go`:
+fake-clock threshold crossing, cached-success aging, same-cycle batching, quiet-hour
+retry and restart deduplication, and disabled/unsupported channel exclusions.
+`internal/api/feishu_monitor_baseline_test.go` owns stored reader eligibility,
+nonpositive timestamp decoding and a fake-sender service restart flow through the real
+stored report source and SQLite outbox. Existing report-source tests retain the
+stored-only and auth-signal claims. These Go suites are discovered automatically.
+
 Discovery is automatic wherever it can be, so a test cannot be written and then never
 run:
 

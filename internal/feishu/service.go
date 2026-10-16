@@ -623,21 +623,32 @@ func (s *Service) tick(ctx context.Context) {
 	})
 	state.PendingItems = result.Items
 
-	// Immediate alerts open exactly one notification per episode. During quiet they
+	// Immediate alerts retain one identity per episode. During quiet they
 	// are persisted as queued notifications and promoted to pending at the quiet
 	// end; a problem that recovered in the meantime is dropped, not sent.
+	var stalled []Notification
 	for _, alert := range result.Alerts {
 		notification := notificationFromAlert(alert, now)
 		if quiet {
 			notification.State = NotifyQueued
+		} else if alert.Kind == AlertMonitorDown {
+			stalled = append(stalled, notification)
+			continue
 		}
 		state.queueNotification(notification)
+	}
+	switch len(stalled) {
+	case 0:
+	case 1:
+		state.queueNotification(stalled[0])
+	default:
+		state.queueNotification(mergeQueued(stalled, now))
 	}
 	if !quiet {
 		s.promoteQueued(state)
 	}
 
-	s.maybeStartupSummary(ctx, state, resolved, rep, has, now)
+	s.maybeStartupSummary(ctx, state, resolved, rep, has, result.Opened, now)
 	s.maybeScheduledSummary(state, resolved, rep, has, now)
 
 	state.UpdatedAt = now
@@ -688,7 +699,7 @@ func (s *Service) promoteQueued(state *State) {
 	}
 }
 
-// mergeQueued folds several still-open queued notifications into one batch. The
+// mergeQueued folds same-cycle alerts or still-open quiet notifications into one batch. The
 // batch keeps every held item and its alert exactly once; its id is derived from the
 // constituent notification ids so the merge stays idempotent.
 func mergeQueued(held []Notification, now time.Time) Notification {
@@ -740,12 +751,22 @@ func allItemsResolved(state *State, notification Notification) bool {
 
 // maybeStartupSummary sends the one-time startup summary, persisted so a settings
 // reload never resends it. Nothing is sent when there is nothing to report.
-func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolved Resolved, rep Report, has bool, now time.Time) {
+func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolved Resolved, rep Report, has bool, opened []PendingItem, now time.Time) {
 	if state.Bootstrapped {
 		return
 	}
 	state.Bootstrapped = true
-	open := openItems(state.PendingItems)
+	newItems := make(map[string]bool, len(opened))
+	for _, item := range opened {
+		newItems[item.ID] = true
+	}
+	var open []PendingItem
+	for _, item := range openItems(state.PendingItems) {
+		// This tick already queued an immediate alert for a new episode.
+		if !newItems[item.ID] {
+			open = append(open, item)
+		}
+	}
 	tight := []TightChannel(nil)
 	if has {
 		tight = tightChannels(rep, resolved.TightRemainingPercent, now, summaryFreshWindow)
@@ -919,21 +940,32 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 	}
 	for _, p := range rep.Providers {
 		track := tracks[p.Provider]
-		if track.FirstSeen.IsZero() {
+		if !isMonitoringTimeValid(track.FirstSeen) {
 			track.FirstSeen = now
 		}
+		if !isMonitoringTimeValid(track.LastValid) {
+			track.LastValid = time.Time{}
+		}
+		isMonitored := len(p.Accounts) == 0 && p.Error != ""
 		for _, account := range p.Accounts {
-			if account.Disabled {
+			if account.Disabled || account.IsUnmonitored {
 				continue
 			}
-			if account.OK && track.LastValid.Before(now) {
-				track.LastValid = now
+			isMonitored = true
+			lastSuccess := account.LastSuccessAt
+			if !isMonitoringTimeValid(lastSuccess) && account.OK {
+				lastSuccess = account.ObservedAt
 			}
-			if account.LastSuccessAt.After(track.LastValid) {
-				track.LastValid = account.LastSuccessAt
+			if isMonitoringTimeValid(lastSuccess) && lastSuccess.After(track.LastValid) {
+				track.LastValid = lastSuccess
 			}
 		}
-		tracks[p.Provider] = track
+		if isMonitored {
+			tracks[p.Provider] = track
+		} else {
+			// Time intentionally paused or unsupported is not monitoring downtime.
+			delete(tracks, p.Provider)
+		}
 	}
 	return tracks
 }

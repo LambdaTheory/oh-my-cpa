@@ -622,7 +622,7 @@ func msOf(value time.Time) *int64 {
 }
 
 func timeOfMS(value *int64) time.Time {
-	if value == nil {
+	if value == nil || *value <= 0 {
 		return time.Time{}
 	}
 	return time.UnixMilli(*value).UTC()
