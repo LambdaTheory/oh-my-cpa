@@ -14,6 +14,7 @@ import { useT } from '../../i18n';
 import { isDemoMode } from '../../types/demoMode';
 import { getTimeZone } from '../../utils/time';
 import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
+import { credentialLabel } from '../../utils/credentialLabel';
 import type {
   AccountAutomationAccountDTO,
   AccountAutomationCandidateDTO,
@@ -25,43 +26,35 @@ interface AccountAutomationDrawerProps {
   onClose: () => void;
 }
 
-function getAccountAutomationDisplayName(item?: { auth_index?: string; account_label?: string; name?: string; provider?: string } | null): {
+function getAccountAutomationDisplayName(item: { auth_index?: string; account_label?: string; name?: string; provider?: string } | null | undefined, fallback: string): {
   primary: string;
   secondary?: string;
   provider?: string;
 } {
-  if (!item) return { primary: '—' };
+  if (!item) return { primary: fallback };
   const provider = item.provider;
-  if (item.account_label) {
+  const accountLabel = credentialLabel(item.account_label, [item.auth_index]);
+  const name = credentialLabel(item.name, [item.auth_index]);
+  if (accountLabel) {
     return {
-      primary: item.account_label,
-      secondary: item.name && item.name !== item.account_label ? item.name : undefined,
+      primary: accountLabel,
+      secondary: name && name !== accountLabel ? name : undefined,
       provider,
     };
   }
-  if (item.name) {
+  if (name) {
     return {
-      primary: item.name,
+      primary: name,
       provider,
     };
   }
-  if (item.auth_index) {
-    return {
-      primary: item.auth_index,
-      provider,
-    };
-  }
-  if (provider) {
-    return {
-      primary: provider,
-      provider,
-    };
-  }
-  return { primary: '—' };
+  return { primary: fallback, provider };
 }
 
 export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = ({ open, onClose }) => {
   const t = useT();
+  const displayName = (item: Parameters<typeof getAccountAutomationDisplayName>[0]) =>
+    getAccountAutomationDisplayName(item, t('credential.account_fallback', { provider: item?.provider || '' }).trim());
   const toast = useToast();
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
@@ -494,7 +487,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
               const r = account.monitor_reason?.toLowerCase();
               const isMissingReset = r === 'missing_reset' || r === 'exhausted_missing_reset';
 
-                  const nameInfo = getAccountAutomationDisplayName(account);
+                  const nameInfo = displayName(account);
 
                   return (
                     <div
@@ -702,13 +695,13 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
           >
             {candidates.length > 0 ? (
               candidates.map((c) => {
-                const nameInfo = getAccountAutomationDisplayName(c);
+                const nameInfo = displayName(c);
                 return (
                   <Checkbox
                     key={c.auth_index}
                     checked={selectedAdoptKeys.includes(c.auth_index)}
                     disabled={!c.eligible}
-                    aria-label={c.auth_index}
+                    aria-label={nameInfo.primary}
                     onChange={(e) => {
                       if (e.target.checked) {
                         setSelectedAdoptKeys([...selectedAdoptKeys, c.auth_index]);
@@ -717,8 +710,8 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                       }
                     }}
                   >
-                    <span style={{ fontWeight: 500, fontSize: 13 }}>{c.auth_index}</span>
-                    {c.account_label && <span style={{ marginLeft: 6, color: 'var(--fg2)', fontSize: 12 }}>({c.account_label})</span>}
+                    <span style={{ fontWeight: 500, fontSize: 13 }}>{nameInfo.primary}</span>
+                    {nameInfo.secondary && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>({nameInfo.secondary})</span>}
                     {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
                     {c.adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
                     {c.disabled && <span style={{ marginLeft: 6, color: 'var(--warn)', fontSize: 12 }}>[{t('automation.tag_disabled_external')}]</span>}
@@ -732,7 +725,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
               })
             ) : (
               accounts.map((a) => {
-                const nameInfo = getAccountAutomationDisplayName(a);
+                const nameInfo = displayName(a);
                 return (
                   <Checkbox
                     key={a.auth_index}
@@ -806,12 +799,12 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p style={{ color: 'var(--muted)', fontSize: 13 }}>{t('automation.manual_reset_desc')}</p>
           <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>{getAccountAutomationDisplayName(manualResetTarget).primary}</span>
-            {getAccountAutomationDisplayName(manualResetTarget).secondary && (
-              <span style={{ color: 'var(--muted)', fontSize: 12 }}>({getAccountAutomationDisplayName(manualResetTarget).secondary})</span>
+            <span>{displayName(manualResetTarget).primary}</span>
+            {displayName(manualResetTarget).secondary && (
+              <span style={{ color: 'var(--muted)', fontSize: 12 }}>({displayName(manualResetTarget).secondary})</span>
             )}
-            {getAccountAutomationDisplayName(manualResetTarget).provider && (
-              <Tag size="small">{getAccountAutomationDisplayName(manualResetTarget).provider}</Tag>
+            {displayName(manualResetTarget).provider && (
+              <Tag size="small">{displayName(manualResetTarget).provider}</Tag>
             )}
           </div>
           <div>

@@ -37,12 +37,13 @@ var (
 	reReset = regexp.MustCompile(`(?i)resets?\s+(?:in|on|at)?\s*(.+)`)
 	// "Session usage" is the current label for the five-hour window; the rest cover
 	// older and alternative wordings.
-	reLabel5h = regexp.MustCompile(`(?i)(session usage|session limit|rolling|5[\s-]?hour|five[\s-]?hour|hourly)`)
-	reLabel7d = regexp.MustCompile(`(?i)(weekly|7[\s-]?day|seven[\s-]?day)`)
-	reDur     = regexp.MustCompile(`(?i)(\d+)\s*([a-z]+)`)
-	rePlanLn  = regexp.MustCompile(`(?i)\bplan\b[:\s]+([A-Za-z][\w -]{0,20})`)
-	reMoney   = regexp.MustCompile(`[$€£]\s?\d[\d.,]*`)
-	reCredit  = regexp.MustCompile(`(?i)(?:balance|credit)[^\d$€£]{0,12}([$€£]?\s?\d[\d.,]*)`)
+	reLabel5h     = regexp.MustCompile(`(?i)(session usage|session limit|rolling|5[\s-]?hour|five[\s-]?hour|hourly)`)
+	reLabel7d     = regexp.MustCompile(`(?i)(weekly|7[\s-]?day|seven[\s-]?day)`)
+	reDur         = regexp.MustCompile(`(?i)(\d+)\s*([a-z]+)`)
+	rePlanLn      = regexp.MustCompile(`(?i)\bplan\b[:\s]+([A-Za-z][\w -]{0,20})`)
+	reCredit      = regexp.MustCompile(`(?i)^(?:credit balance|account balance|balance)\s*:?\s*([$€£]?\s?\d[\d.,]*)\s*$`)
+	reCreditLabel = regexp.MustCompile(`(?i)^(?:credit balance|account balance|balance)\s*:?\s*$`)
+	reBalance     = regexp.MustCompile(`^[$€£]?\s?\d[\d.,]*$`)
 )
 
 // parse flattens the settings HTML to text and applies heuristics to recover the
@@ -286,20 +287,12 @@ func isLetter(r rune) bool {
 }
 
 func extractBalance(lines []string) string {
-	for _, line := range lines {
-		if !strings.Contains(strings.ToLower(line), "balance") && !strings.Contains(strings.ToLower(line), "credit") {
-			continue
-		}
+	for index, line := range lines {
 		if match := reCredit.FindStringSubmatch(line); match != nil {
 			return strings.TrimSpace(match[1])
 		}
-		if match := reMoney.FindString(line); match != "" {
-			return match
-		}
-	}
-	for _, line := range lines {
-		if match := reMoney.FindString(line); match != "" {
-			return match
+		if reCreditLabel.MatchString(line) && index+1 < len(lines) && reBalance.MatchString(lines[index+1]) {
+			return strings.TrimSpace(lines[index+1])
 		}
 	}
 	return ""

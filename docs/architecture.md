@@ -942,6 +942,14 @@ comparator with `components/authFiles/authFileLogic.ts` blindly: that legacy lis
 numeric-ranking ties use a different plain-name comparison policy. The differential
 oracle and opt-in benchmark are documented in `docs/testing.md`.
 
+The workspace's quota target planner separates CPA auth indexes from Ollama account
+IDs. Its count drives the page/filtered/all controls and the action dispatch: CPA
+keeps its bounded quota batches; Ollama uses its existing per-account refresh.
+Source-aware selection also routes collection status and deletion without sending
+monitor IDs to CPA. The shared label projection removes opaque display prefixes
+without changing wire targets. Ollama monetary readings carry explicit settings-field
+evidence in the existing raw-signal map so unverified legacy balances stay hidden.
+
 Shared conversation primitives do not depend on a page at runtime: `utils/ids.ts`
 owns one fallback ID counter, `utils/thinking.ts` parses inline thinking,
 `types/requestModel.ts` reads the effective custom-body model, and

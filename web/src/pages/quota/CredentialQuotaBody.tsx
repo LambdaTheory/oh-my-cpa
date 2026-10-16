@@ -13,6 +13,7 @@ import { Notice } from '../../components/feedback';
 import { SectionHeading } from '../../components/common/SectionHeading';
 import { Tag } from '../../components/common/Tag';
 import { ConfirmAction } from '../../components/common/ConfirmAction';
+import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 
 interface CredentialQuotaBodyProps {
   item: QuotaItem;
@@ -46,9 +47,10 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
   // has no hover, and the caveat matters most to the reader who cannot reach one.
   const hasCapacityReading = windows.some((window) => window.usage || window.capacity);
   const availableCredits = item.reset_credits?.available_count ?? 0;
-  const creditBalanceText = item.plan?.credits?.unlimited
+  const credits = verifiedQuotaCredits(item);
+  const creditBalanceText = credits?.unlimited
     ? t('quota.credits_unlimited')
-    : item.plan?.credits?.balance;
+    : credits?.balance;
   const applicableCredits = item.reset_credits?.applicable_available_count ?? 0;
   const creditRows = (item.reset_credits?.credits ?? [])
     .filter((credit) => credit.expires_at_ms)

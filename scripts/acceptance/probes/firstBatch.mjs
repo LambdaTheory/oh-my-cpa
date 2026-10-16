@@ -101,7 +101,7 @@ function automationListBody(state) {
           auth_index: ELIGIBLE_ANTHROPIC,
           provider: 'anthropic',
           name: 'Anthropic A',
-          account_label: 'a@example.test',
+          account_label: `${ELIGIBLE_ANTHROPIC}: a@example.test`,
           is_adopted: true,
           is_enabled: true,
           state: 'waiting',
@@ -132,7 +132,7 @@ function automationListBody(state) {
       ]
       : [],
     candidates: [
-      candidate(ELIGIBLE_ANTHROPIC, { provider: 'anthropic', name: 'Anthropic A', label: 'a@example.test', disabled: false, controllable: true, adopted, eligible: true }),
+      candidate(ELIGIBLE_ANTHROPIC, { provider: 'anthropic', name: 'Anthropic A', label: `${ELIGIBLE_ANTHROPIC}: a@example.test`, disabled: false, controllable: true, adopted, eligible: true }),
       candidate(ELIGIBLE_OPENAI, { provider: 'openai', name: 'OpenAI B', label: 'b@example.test', disabled: true, controllable: true, adopted, eligible: true }),
       candidate(INELIGIBLE_UNVERIFIED, { provider: 'unverified-vendor', name: 'Unverified C', label: 'c@example.test', disabled: false, controllable: false, adopted, eligible: false, reason: 'unverified_account_weekly_capability' }),
     ],
@@ -195,13 +195,14 @@ export async function accountAutomation({ base, page, check }) {
   // The batch selection modal lists the gateway credentials as checkboxes; the roles
   // are located by their accessible name so page-wide nested text nodes cannot inflate
   // the count.
-  const candidateBox = (authIndex) => page.getByRole('checkbox', { name: authIndex });
+  const candidateNames = { [ELIGIBLE_ANTHROPIC]: 'a@example.test', [ELIGIBLE_OPENAI]: 'b@example.test', [INELIGIBLE_UNVERIFIED]: 'c@example.test' };
+  const candidateBox = (authIndex) => page.getByRole('checkbox', { name: candidateNames[authIndex], exact: true });
   await until(async () => (await candidateBox(ELIGIBLE_ANTHROPIC).count()) === 1, { label: 'the candidate list to arrive' });
   check('every live credential is listed for the batch selection', await candidateBox(ELIGIBLE_ANTHROPIC).count() === 1
     && await candidateBox(INELIGIBLE_UNVERIFIED).count() === 1);
   check('an ineligible candidate is disabled rather than silently offered', await candidateBox(INELIGIBLE_UNVERIFIED).isDisabled());
   // The reason is shown as the operator's own copy, never as the canonical token the API sends.
-  const ineligibleCopy = await page.locator('label.ant-checkbox-wrapper').filter({ hasText: INELIGIBLE_UNVERIFIED }).innerText();
+  const ineligibleCopy = await page.locator('label.ant-checkbox-wrapper').filter({ hasText: 'c@example.test' }).innerText();
   check('an ineligible candidate names why it cannot be adopted in friendly copy',
     ineligibleCopy.includes('Capability unverified (monitor only)')
       && !ineligibleCopy.includes('unverified_account_weekly_capability'), ineligibleCopy);
@@ -212,6 +213,10 @@ export async function accountAutomation({ base, page, check }) {
   check('the batch starts with nothing selected', !(await candidateBox(ELIGIBLE_ANTHROPIC).isChecked())
     && !(await candidateBox(ELIGIBLE_OPENAI).isChecked())
     && await confirmAdoption.isDisabled());
+  check('adoption labels hide standalone and prefixed internal indexes',
+    !(await page.locator('.ant-modal:visible').innerText()).includes(ELIGIBLE_ANTHROPIC)
+      && !(await candidateBox(ELIGIBLE_ANTHROPIC).getAttribute('aria-label')).includes(ELIGIBLE_ANTHROPIC));
+  await page.screenshot({ path: 'tmp/credential-adoption-desktop.png' });
   // Select the two eligible accounts explicitly; the ineligible one cannot join the set.
   await candidateBox(ELIGIBLE_ANTHROPIC).click();
   await candidateBox(ELIGIBLE_OPENAI).click();
@@ -229,7 +234,8 @@ export async function accountAutomation({ base, page, check }) {
 
   // The roster now exists: one account is waiting on a retry, one is missing its reset.
   const roster = await openAutomationDrawer(page);
-  await until(async () => (await roster.getByText(ELIGIBLE_ANTHROPIC, { exact: false }).count()) > 0, { label: 'the adopted roster to render' });
+  await until(async () => (await roster.getByText('a@example.test', { exact: true }).count()) > 0, { label: 'the adopted roster to render' });
+  check('the managed roster retains friendly account labels', !(await roster.innerText()).includes(ELIGIBLE_ANTHROPIC));
   check('the plan distinguishes a scheduled retry from a missing reset',
     await roster.getByRole('button', { name: 'Cancel Retry', exact: true }).count() === 1
       && await roster.getByRole('button', { name: 'Set Manual Reset', exact: true }).count() === 1);
@@ -435,8 +441,7 @@ export async function ollamaAccounts({ base, page, check }) {
   check('Ollama account renders as a unified credential record in the workspace', await ollamaRow.count() > 0);
   check('Ollama row shows real 55% remaining weekly quota derived from 45.5% used', (await ollamaRow.innerText()).includes('55%'));
 
-  // Verify action protection: Ollama row cannot be selected for CPA batch actions
-  check('Ollama row has no batch checkbox', await ollamaRow.locator('.ant-checkbox').count() === 0);
+  check('Ollama row has an accessible batch checkbox', await ollamaRow.getByRole('checkbox', { name: 'Select My Ollama' }).count() === 1);
 
   // Verify row switch toggles Ollama scraper collection (PUT /ollama/accounts), never CPA credential status (POST /auth-files/status)
   const previousPutCount = ollamaState.putCount;
@@ -453,12 +458,87 @@ export async function ollamaAccounts({ base, page, check }) {
   const dropdownMenu = page.locator('.ant-dropdown:visible');
   await dropdownMenu.waitFor({ state: 'visible' });
   const menuText = await dropdownMenu.innerText();
-  check('Ollama action menu hides CPA models, download, quota refresh and cooldown clear',
-    !menuText.includes('Models') && !menuText.includes('Download') && !menuText.includes('Refresh Quota'));
-  check('Ollama action menu provides Edit and Delete',
-    menuText.includes('Edit') && menuText.includes('Delete'));
+  check('Ollama action menu hides CPA models, download and cooldown clear',
+    !menuText.includes('Models') && !menuText.includes('Download') && !menuText.includes('Clear Cooldown'));
+  check('Ollama action menu provides Refresh quota, Edit and Delete',
+    menuText.includes('Refresh quota') && menuText.includes('Edit') && menuText.includes('Delete'));
   // Close menu by clicking elsewhere
   await page.keyboard.press('Escape');
+
+  // The operator's mixed inventory: 10 enabled CPA, 2 disabled CPA and one monitor.
+  const mixedFiles = oauthManagementFixtures.files.map((file, index) => ({
+    ...file, disabled: index >= 10,
+    name: index === 0 ? `${file.auth_index}: Synthetic account.json` : file.name,
+    email: index === 0 ? `${file.auth_index}: synthetic@example.test` : file.email,
+  }));
+  const mixedQuotas = oauthManagementFixtures.quota.map((quota) => ({
+    ...quota, status: 'healthy', error: undefined,
+    capabilities: { ...quota.capabilities, refresh_supported: true },
+  }));
+  const monitor = { ...ollamaAccountList()[0], label: `ollama:${OLLAMA_ACCOUNT_ID}: Legacy account` };
+  let quotaRefreshIndexes = [];
+  let monitorRefreshes = 0;
+  await page.route('**/management/auth-files', (route) => route.fulfill({ json: { files: mixedFiles, total: 12 } }));
+  await page.route('**/management/quota', (route) => route.fulfill({ json: { quotas: mixedQuotas, total: 12, summary: {} } }));
+  await page.route('**/ollama/accounts', (route) => route.fulfill({ json: { accounts: [monitor] } }));
+  const monitorQuota = {
+    ...ollamaQuota().accounts[0].quota,
+    plan: { plan_type: 'legacy', plan_label: 'Legacy subscription', tier: 'standard', credits: { balance: '$0' } },
+  };
+  await page.route('**/ollama/quota', (route) => route.fulfill({ json: { accounts: [{ account_id: monitor.id, enabled: true, quota: monitorQuota }] } }));
+  await page.route('**/management/quota/refresh', (route) => {
+    quotaRefreshIndexes.push(...route.request().postDataJSON().auth_indexes);
+    return route.fulfill({ json: { status: 'ok', quotas: mixedQuotas.filter((quota) => quotaRefreshIndexes.includes(quota.auth_index)) } });
+  });
+  await page.route(`**/ollama/accounts/${monitor.id}/refresh`, (route) => {
+    monitorRefreshes += 1;
+    return route.fulfill({ json: { account: monitor, quota: monitorQuota, refreshed: true } });
+  });
+  await page.goto(`${base}/oauth-management?page_size=24`, { waitUntil: 'domcontentloaded' });
+  await until(async () => await page.getByTestId('oauth-credential-record').count() === 13, { label: 'the thirteen-entry inventory' });
+  const refreshAll = page.getByRole('button', { name: 'Refresh quota (11)', exact: true });
+  await refreshAll.waitFor({ state: 'visible' });
+  check('refresh states eleven targets and explains the two disabled skips',
+    (await page.getByTestId('quota-refresh-skips').innerText()).includes('2 skipped: Credential is disabled (2)'));
+  const monitorRow = page.locator(`[data-identity="ollama:${monitor.id}"]`);
+  check('legacy subscription money and opaque row labels are hidden',
+    !(await monitorRow.innerText()).includes('$0') && !(await monitorRow.innerText()).includes(monitor.id)
+      && !(await page.getByTestId('oauth-credential-record').first().innerText()).includes('auth-01:'));
+  await monitorRow.getByRole('checkbox', { name: 'Select Legacy account' }).check();
+  await refreshAll.click();
+  await until(() => quotaRefreshIndexes.length === 10 && monitorRefreshes === 1, { label: 'source-aware unified refresh requests' });
+  await until(() => refreshAll.isEnabled(), { label: 'the unified refresh to settle' });
+  check('the default refresh never sends a monitor or disabled entry to CPA',
+    JSON.stringify(quotaRefreshIndexes) === JSON.stringify(mixedFiles.slice(0, 10).map((file) => file.auth_index)));
+  check('quota refresh preserves the monitor selection', await monitorRow.getByRole('checkbox').isChecked());
+  await page.locator('.omc-toast .ant-notification-notice-close').evaluateAll((buttons) => {
+    for (const button of buttons) button.click();
+  });
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'refresh acknowledgements dismissed before capture' });
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/credential-mixed-refresh-desktop.png' });
+  await monitorRow.getByRole('button', { name: 'More actions: Legacy account', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'Refresh quota', exact: true }).click();
+  await until(() => monitorRefreshes === 2, { label: 'individual monitor active refresh' });
+  await until(() => monitorRow.getByRole('button', { name: 'More actions: Legacy account', exact: true }).isEnabled(), { label: 'individual refresh settled' });
+  await page.locator('.omc-toast .ant-notification-notice-close').evaluateAll((buttons) => {
+    for (const button of buttons) button.click();
+  });
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'individual acknowledgement dismissed before capture' });
+  await monitorRow.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'tmp/credential-ollama-selection-desktop.png' });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await settleLayout(page);
+  await refreshAll.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'tmp/credential-mixed-refresh-phone.png' });
+  const skipLayout = await page.getByTestId('quota-refresh-skips').evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth && node.scrollWidth <= node.clientWidth;
+  });
+  check('the skipped-count explanation fits its full phone row', skipLayout);
+  await monitorRow.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'tmp/credential-ollama-selection-phone.png' });
+  check('the mixed workspace fits a phone without horizontal overflow', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
 }
 
 // ── Lane C: Feishu settings ───────────────────────────────────────────────────

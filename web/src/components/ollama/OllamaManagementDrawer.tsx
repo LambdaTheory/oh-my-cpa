@@ -16,6 +16,7 @@ import { getTimeZone } from '../../utils/time';
 import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
 import { formatTimeWithCountdown } from '../../pages/quota/quotaFormat';
 import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
+import { credentialLabel } from '../../utils/credentialLabel';
 import { OllamaAccountEditorModal } from './OllamaAccountEditorModal';
 import type { OllamaAccountDTO, OllamaAccountWritePayload, OllamaQuotaDTO } from '../../types/ollama';
 
@@ -274,6 +275,7 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
             {accounts.map((account) => {
               const statusInfo = getStatusTone(account.status);
               const snapshot = quotaMap.get(account.id);
+              const displayLabel = credentialLabel(account.label, [`ollama:${account.id}`, account.id], t('credential.account_fallback', { provider: 'Ollama' }));
               const quotaData = snapshot?.quota;
 
               return (
@@ -291,7 +293,7 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontWeight: 600 }}>{account.label || account.id}</span>
+                      <span style={{ fontWeight: 600 }}>{displayLabel}</span>
                       <Tag size="small">{account.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
                       <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
                     </div>
@@ -304,7 +306,7 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
                         onChange={(checked) =>
                           toggleSwitchMutation.mutate({ account, enabled: checked })
                         }
-                        aria-label={account.label || account.id}
+                        aria-label={displayLabel}
                       />
                       <Button
                         size="small"
@@ -337,7 +339,7 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
                         onClick={() => {
                           modal.confirm({
                             title: t('ollama.delete_confirm'),
-                            content: account.label,
+                            content: displayLabel,
                             okButtonProps: { danger: true },
                             onOk: () => deleteMutation.mutate(account.id),
                           });

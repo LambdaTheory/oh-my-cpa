@@ -100,6 +100,13 @@ enable generation.
   reading, so the window is left unreported. A relative reset ("Resets in 3h") is
   marked `derived`; an absolute stamp is `exact`. The window duration is left
   unknown, because the page does not state one and it must not be inferred as "5h".
+- Monetary balances require an explicit monetary `Credit balance`, `Account balance`
+  or `Balance` field. Subscription prices, reset credits and unrelated dollar
+  amounts are not balances. New snapshots mark this evidence in
+  `raw_signals.ollama_balance_source` as `settings_balance`; the console hides
+  unverified balances in older Ollama snapshots while retaining their windows.
+  A verified zero keeps its original currency, and Codex credit standing remains
+  independent of this Ollama-specific evidence rule.
 - On success the safe snapshot and the auth index `ollama:<id>` are persisted. The
   shared observation timeline is written only when a window states a real duration,
   which Ollama does not today. A failure keeps the last good snapshot and only
@@ -219,9 +226,18 @@ The module is wired into the running process:
   - Ollama accounts project directly into `OAuthManagementPage.tsx` table records,
     filter tabs (`CREDENTIAL_PROVIDERS.ollama`), counts, search, and session/weekly quota
     views alongside CPA credentials.
-  - Action protections ensure CPA batch actions and single actions (download JSON,
-    model rules, CPA quota refresh, cooldown clear, credit redeem) do not operate on
-    Ollama rows.
+  - Accessible row checkboxes participate in mixed-source batch refresh, deletion
+    and enable/disable. Each action uses its source's existing API; Ollama IDs never
+    enter CPA auth-file or quota-refresh requests. Enable/disable changes collection,
+    not inference. CPA-only download, model rules, cooldown clear and credit redeem
+    remain unavailable for Ollama.
+  - Page, filtered and all quota refresh scopes include enabled Ollama accounts,
+    even before a first snapshot exists. Their targets use the dedicated per-account
+    refresh endpoint, while CPA targets keep the bounded CPA batch endpoint.
+    Disabled records are skipped by default with visible counts and reasons.
+    Individual manual refresh remains available for a paused account.
+  - Friendly labels are used in rows, management lists and details; opaque IDs and
+    index prefixes remain internal targeting keys rather than display fallbacks.
   - The row switch controls periodic collection for the Ollama account (`api.updateOllamaAccount`),
     not CPA inference routing.
   - The standalone account drawer `web/src/components/ollama/OllamaManagementDrawer.tsx`

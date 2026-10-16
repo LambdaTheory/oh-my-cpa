@@ -102,6 +102,35 @@ func TestParseMissingFields(t *testing.T) {
 	}
 }
 
+func TestParseBalanceRequiresExplicitMonetaryField(t *testing.T) {
+	cases := []struct {
+		page string
+		want string
+	}{
+		{`<div>Session usage 25% used</div><div>Legacy subscription $0/month</div>`, ""},
+		{`<div>Weekly usage 40% used</div><div>Buy credits for $20</div>`, ""},
+		{`<div>Credit reset: 0</div><div>Upgrade $99</div>`, ""},
+		{`<div>Credit balance: $0</div>`, "$0"},
+		{`<div>Account balance: €12.50</div>`, "€12.50"},
+		{`<div>Credit balance: 0</div>`, "0"},
+		{`<div>Credit balance</div><div>$0</div>`, "$0"},
+		{`<div>Credit balance</div><div>Legacy subscription $0/month</div>`, ""},
+	}
+	for _, testCase := range cases {
+		got := parse(testCase.page, time.Unix(0, 0))
+		if got.balance != testCase.want {
+			t.Errorf("parse(%q).balance = %q, want %q", testCase.page, got.balance, testCase.want)
+		}
+		normalized := (Snapshot{Balance: got.balance}).ToQuota("Synthetic account")
+		if testCase.want == "" && normalized.Plan != nil && normalized.Plan.Credits != nil {
+			t.Errorf("missing balance acquired credits: %+v", normalized.Plan)
+		}
+		if testCase.want != "" && normalized.RawSignals["ollama_balance_source"] != "settings_balance" {
+			t.Errorf("explicit balance lost provenance: %+v", normalized.RawSignals)
+		}
+	}
+}
+
 // TestParsePercentAcceptsOnlyTheRealRange pins that 0 and 100 are legitimate
 // readings while a value past the range or a non-finite value is refused instead of
 // being clamped to a fabricated 0 or 100.

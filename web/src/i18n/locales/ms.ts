@@ -4,6 +4,9 @@
  * Keys mirror DICT in ../index.tsx. Keep this catalog complete: a missing key would fall back to another language and violate the console-wide full-localization rule.
  */
 export const MS: Readonly<Record<string, string>> = {
+  "credential.account_fallback": "Akaun {provider}",
+  "credential.refresh_skipped": "{n} dilangkau: {reasons}",
+  "credential.collection_scope": "Dayakan/nyahdayakan Ollama hanya mempengaruhi pengumpulan, bukan inferens.",
   "mobile.filters": "Penapis",
   "header.tools": "Alat konsol",
   "cfg.source_tools": "Alat sumber",

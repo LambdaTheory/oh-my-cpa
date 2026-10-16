@@ -35,6 +35,11 @@ test('numeric ranking keeps absent priority and weight defaults and name tiebrea
   records[0].file.success = 1; records[0].file.failed = 1;
   records[1].file.success = 2; records[1].file.failed = 0;
   records[2].file.success = 0; records[2].file.failed = 0;
+  records.forEach((record) => {
+    record.requestTelemetry.totalRequests = record.file.success + record.file.failed;
+    record.requestTelemetry.success = record.file.success;
+    record.requestTelemetry.failed = record.file.failed;
+  });
   const indexes = (sort: AuthFileSortKey) => sortOAuthWorkspaceRecords(records, sort).map(record => records.indexOf(record));
   assert.deepEqual(indexes('priority-desc'), [2, 1, 0]);
   assert.deepEqual(indexes('weight-desc'), [1, 0, 2]);

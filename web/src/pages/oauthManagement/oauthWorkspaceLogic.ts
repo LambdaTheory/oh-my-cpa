@@ -5,6 +5,7 @@ import type { PluginItem } from '../../types/plugin';
 import { OAUTH_PROVIDER_PATTERN, type OAuthProviderChoice } from '../oauthProviderLogic';
 import type { QuotaItem } from '../../types/quota';
 import type { OllamaAccountDTO, OllamaQuotaDTO } from '../../types/ollama';
+import { credentialLabel } from '../../utils/credentialLabel';
 
 export type OAuthWorkspaceDensity = 'compact' | 'expanded';
 export type OAuthWorkspaceQuotaFilter =
@@ -353,7 +354,7 @@ export function buildOAuthWorkspaceProjection(
     // Synthesize a minimal ManagementAuthFile projection strictly for table column contracts
     // Never send this object to CPA backend APIs!
     const syntheticFile: ManagementAuthFile = {
-      name: account.label || account.id,
+      name: credentialLabel(account.label, [authIndex, account.id]),
       auth_index: authIndex,
       type: 'ollama',
       provider: 'ollama',
@@ -381,20 +382,20 @@ export function buildOAuthWorkspaceProjection(
       quotaMatch: quotaItem ? 'matched' : 'missing-quota',
       quotaCondition: condition,
       isQuotaAttention: isProblem || isQuotaAttention(condition),
-      isQuotaUnsupported: true, // Ollama does not support live scrape on quota button
+      isQuotaUnsupported: false,
       isQuotaObserved: quotaItem ? hasMeaningfulObservation(quotaItem) : false,
       displayProvider: 'ollama',
       authorizationProviderId: undefined,
-      fileName: account.label || account.id,
+      fileName: syntheticFile.name,
       authIndex,
       hasUniqueFileName: true,
       hasUniqueAuthIndex: true,
-      canSelectForFileBatch: false, // Strict protection: CPA batch actions must never select Ollama rows
+      canSelectForFileBatch: true,
       canEditFile: false, // Not a CPA file
-      canToggleFile: false, // CPA toggle is setManagementAuthFileStatus; Ollama uses updateOllamaAccount
+      canToggleFile: true,
       canDownloadFile: false, // No JSON auth file to download
-      canDeleteFile: false, // Not a CPA auth file
-      canRefreshQuota: false, // Quota refresh does not trigger Ollama scrape
+      canDeleteFile: true,
+      canRefreshQuota: account.enabled,
       canClearCooldown: false,
       canRedeemCredit: false,
     };
@@ -552,6 +553,8 @@ export function workspaceProviderCounts(records: OAuthWorkspaceRecord[]): Record
 
 export interface QuotaRefreshTargetPlan {
   eligibleIndexes: string[];
+  ollamaAccountIds: string[];
+  targetCount: number;
   skipped: Array<{ authIndex?: string; name: string; reason: string }>;
 }
 
@@ -561,9 +564,18 @@ export function buildQuotaRefreshTargets(
   const source = records;
   const seen = new Set<string>();
   const eligibleIndexes: string[] = [];
+  const ollamaAccountIds: string[] = [];
   const skipped: QuotaRefreshTargetPlan['skipped'] = [];
   for (const record of source) {
     const index = record.authIndex;
+    if (record.file.disabled) {
+      skipped.push({ authIndex: index, name: record.fileName, reason: 'credential-disabled' });
+      continue;
+    }
+    if (record.source === 'ollama' && record.ollamaAccount) {
+      if (!ollamaAccountIds.includes(record.ollamaAccount.id)) ollamaAccountIds.push(record.ollamaAccount.id);
+      continue;
+    }
     if (!index) {
       skipped.push({ name: record.fileName, reason: 'missing-auth-index' });
       continue;
@@ -576,16 +588,6 @@ export function buildQuotaRefreshTargets(
       skipped.push({ authIndex: index, name: record.fileName, reason: 'missing-quota-observation' });
       continue;
     }
-    if (record.file.disabled) {
-      skipped.push({ authIndex: index, name: record.fileName, reason: 'credential-disabled' });
-      continue;
-    }
-    if (record.source === 'ollama') {
-      // Ollama records are refreshed individually via their dedicated endpoint,
-      // and not through the bulk /api/v1/management/quota/refresh endpoint.
-      skipped.push({ authIndex: index, name: record.fileName, reason: 'refresh-unsupported' });
-      continue;
-    }
     if (!record.quota.capabilities?.refresh_supported) {
       skipped.push({ authIndex: index, name: record.fileName, reason: 'refresh-unsupported' });
       continue;
@@ -595,7 +597,7 @@ export function buildQuotaRefreshTargets(
       eligibleIndexes.push(index);
     }
   }
-  return { eligibleIndexes, skipped };
+  return { eligibleIndexes, ollamaAccountIds, targetCount: eligibleIndexes.length + ollamaAccountIds.length, skipped };
 }
 
 export function parseOAuthWorkspaceQuery(params: URLSearchParams): OAuthWorkspaceQueryState {

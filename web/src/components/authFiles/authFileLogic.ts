@@ -1,4 +1,5 @@
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
+import { credentialLabel } from '../../utils/credentialLabel';
 
 export const HEALTHY_STATUS_MESSAGES = new Set([
   'ok',
@@ -76,9 +77,9 @@ export interface AuthFileIdentity {
   isAccountPrimary: boolean;
 }
 
-export function deriveAuthFileIdentity(file: ManagementAuthFile): AuthFileIdentity {
-  const account = (file.email || file.project_id || '').trim();
-  const name = (file.name || '').trim();
+export function deriveAuthFileIdentity(file: ManagementAuthFile, fallback = '—'): AuthFileIdentity {
+  const account = credentialLabel(file.email || file.project_id, [file.auth_index]);
+  const name = credentialLabel(file.name, [file.auth_index]);
   if (account) {
     return {
       primary: account,
@@ -87,7 +88,7 @@ export function deriveAuthFileIdentity(file: ManagementAuthFile): AuthFileIdenti
     };
   }
   return {
-    primary: name || '—',
+    primary: name || fallback,
     secondary: undefined,
     isAccountPrimary: false,
   };

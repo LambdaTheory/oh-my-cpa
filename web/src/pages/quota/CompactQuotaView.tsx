@@ -19,6 +19,7 @@ import { compactQuotaCapacity } from './quotaCapacity';
 import { useTokenDisplayStyle } from '../../types/tokenDisplayContext';
 import styles from './QuotaPresentation.module.css';
 import { Meter } from '../../components/common/Meter';
+import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 
 interface CompactQuotaViewProps {
   item: QuotaItem;
@@ -51,13 +52,14 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   const planText = item.plan?.plan_label;
   const cooldownDiagnostic = compactCooldownDiagnostic(item);
   const availableCredits = item.reset_credits?.available_count ?? 0;
+  const credits = verifiedQuotaCredits(item);
   const hasCreditBalance = Boolean(
-    item.plan?.credits?.unlimited
-      || (item.plan?.credits?.balance !== undefined && item.plan?.credits?.balance !== null && item.plan?.credits?.balance !== ''),
+    credits?.unlimited
+      || (credits?.balance !== undefined && credits?.balance !== null && credits?.balance !== ''),
   );
-  const creditBalanceText = item.plan?.credits?.unlimited
+  const creditBalanceText = credits?.unlimited
     ? t('quota.credits_unlimited')
-    : item.plan?.credits?.balance != null ? String(item.plan.credits.balance) : undefined;
+    : credits?.balance != null ? String(credits.balance) : undefined;
 
   return (
     <div

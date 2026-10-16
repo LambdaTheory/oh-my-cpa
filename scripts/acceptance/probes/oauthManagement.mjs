@@ -908,7 +908,9 @@ async function verifyWorkspaceScale({ base, page, check }) {
         && new Set(batches.flat()).size === 23 && peakBatches === 1,
       JSON.stringify({ sizes: batches.map((batch) => batch.length), peakBatches }));
     check('batch errors and missing results remain visible to the operator',
-      report.includes('Fixture upstream failure') && report.includes('scale-13'), report);
+      report.includes('Fixture upstream failure') && report.includes('operator-2@example.test')
+        && report.includes('The response did not include an outcome for this target')
+        && !report.includes('scale-13'), report);
     // Exercise the real copy action without depending on the machine's clipboard permission.
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: async () => {} },
@@ -941,7 +943,11 @@ async function verifyWorkspaceScale({ base, page, check }) {
     await until(async () => await page.locator('.omc-toast-success').count() === 0,
       { label: 'copy acknowledgements are dismissed' });
     const previousBatches = batches.length;
-    await page.getByRole('button', { name: /Refresh quota \(23\)/ }).click();
+    // The persistent report can cover the toolbar; keyboard activation keeps it
+    // present while proving that the next outcome replaces it.
+    const refreshAgain = page.getByRole('button', { name: /Refresh quota \(23\)/ });
+    await refreshAgain.focus();
+    await refreshAgain.press('Enter');
     await until(() => batches.length === previousBatches + 3, { label: 'the second refresh completes every batch' });
     await until(async () => (await page.getByTestId('quota-operation-report').innerText()).includes('Fixture upstream failure (refresh 2)'),
       { label: 'the replacement report has the settled refresh outcome' });
