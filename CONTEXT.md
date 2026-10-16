@@ -470,7 +470,12 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   no Agent session. A problem is announced once per episode - a credential is invalid,
   every enabled account of a channel is unusable with an earliest recovery beyond the
   threshold, or a channel has produced no valid data for longer than the threshold -
-  and recovery is never nagged. Immediate alerts are held during quiet hours and
+  and recovery is never nagged. Monitoring downtime starts at the newest real numeric
+  reading, or the persisted first applicable observation before any success; missing
+  and nonpositive timestamps never prove elapsed downtime. Disabled credentials and
+  credentials without quota-reader evidence do not drive channel outages, while
+  independently evidenced authentication failures retain their episode policy.
+  Same-cycle monitoring alerts share one card. Immediate alerts are held during quiet hours and
   merged at the quiet end, dropping any whose problem has recovered; a scheduled
   digest is sent only when there are open items or a channel is tight. Queries are
   read-only and never trigger a refresh. The app secret is encrypted at rest, and the

@@ -328,6 +328,7 @@ type reportInfo struct {
 	unavailable map[string]bool
 	hasValid    map[string]bool
 	hasKey      map[string]bool
+	unmonitored map[string]bool
 	// recoveredKeys are the credentials with positive recovery evidence: a valid
 	// reading this round. Absent evidence is not recovery, so an item only resolves
 	// on a key that appears here.
@@ -340,6 +341,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		unavailable:   map[string]bool{},
 		hasValid:      map[string]bool{},
 		hasKey:        map[string]bool{},
+		unmonitored:   map[string]bool{},
 		recoveredKeys: map[string]bool{},
 	}
 	for _, p := range rep.Providers {
@@ -362,18 +364,18 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 				// a previously auth-broken credential works again.
 				info.recoveredKeys[account.Key] = true
 			}
-			if account.LastSuccessAt.After(pi.latestSuccess) {
-				pi.latestSuccess = account.LastSuccessAt
-			}
-			if account.Disabled {
+			if account.Disabled || account.IsUnmonitored {
 				continue
 			}
+			if isMonitoringTimeValid(account.LastSuccessAt) && account.LastSuccessAt.After(pi.latestSuccess) {
+				pi.latestSuccess = account.LastSuccessAt
+			}
 			enabled++
-			if account.OK {
+			if account.OK && observationFresh(account, now, defaultFreshWindow) {
 				pi.hasValid = true
 			} else {
 				sawFailure = true
-				if account.State != StateInvalid {
+				if account.State != StateInvalid && !account.AuthFailed {
 					authOnly = false
 				}
 			}
@@ -406,21 +408,18 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		}
 
 		// monitor_down: no valid data, a non-auth failure, and the reference
-		// reading is old enough. The reference is the persisted last-valid time,
-		// else the first time the channel was seen, else the newest successful read.
+		// reading is old enough. Use the newest real success (stored or reported),
+		// falling back to the first applicable observation only before any success.
 		track := tracks[p.Provider]
-		if pi.latestSuccess.IsZero() {
+		if isMonitoringTimeValid(track.LastValid) && track.LastValid.After(pi.latestSuccess) {
 			pi.latestSuccess = track.LastValid
 		}
-		ref := track.LastValid
-		if ref.IsZero() {
+		ref := pi.latestSuccess
+		if !isMonitoringTimeValid(ref) {
 			ref = track.FirstSeen
 		}
-		if ref.IsZero() {
-			ref = pi.latestSuccess
-		}
 		tracked := enabled > 0 || (len(p.Accounts) == 0 && p.Error != "")
-		if tracked && !pi.hasValid && sawFailure && !authOnly && !ref.IsZero() &&
+		if tracked && !pi.hasValid && sawFailure && !authOnly && isMonitoringTimeValid(ref) &&
 			now.Sub(ref) > cfg.MonitorDownAfter {
 			pi.monitorDown = true
 		}
@@ -428,6 +427,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		info.providers = append(info.providers, pi)
 		info.unavailable[p.Provider] = pi.channelUnavailable
 		info.hasValid[p.Provider] = pi.hasValid
+		info.unmonitored[p.Provider] = len(p.Accounts) > 0 && enabled == 0
 	}
 	return info
 }
@@ -454,7 +454,7 @@ func (info reportInfo) resolvedByEvidence(item PendingItem) bool {
 		if !info.present[item.Provider] {
 			return false
 		}
-		return info.hasValid[item.Provider]
+		return info.hasValid[item.Provider] || info.unmonitored[item.Provider]
 	default:
 		return false
 	}
@@ -517,7 +517,7 @@ func tightChannels(rep Report, threshold float64, now time.Time, window time.Dur
 		var best *float64
 		var bestReset *time.Time
 		for _, account := range p.Accounts {
-			if account.Disabled {
+			if account.Disabled || account.IsUnmonitored {
 				continue
 			}
 			if !usableState(account.State) {
@@ -558,7 +558,7 @@ func tightChannels(rep Report, threshold float64, now time.Time, window time.Dur
 // observationFresh reports whether an account's newest reading is recent enough
 // to decide a threshold. A missing observation time is unknown, never fresh.
 func observationFresh(account AccountReport, now time.Time, window time.Duration) bool {
-	if account.ObservedAt.IsZero() {
+	if !isMonitoringTimeValid(account.ObservedAt) {
 		return false
 	}
 	age := now.Sub(account.ObservedAt)
@@ -566,6 +566,10 @@ func observationFresh(account AccountReport, now time.Time, window time.Duration
 		age = 0
 	}
 	return age <= window
+}
+
+func isMonitoringTimeValid(observed time.Time) bool {
+	return !observed.IsZero() && observed.UnixMilli() > 0
 }
 
 // usableState reports an account that can still take traffic. It mirrors the

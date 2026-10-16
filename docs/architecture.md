@@ -2228,7 +2228,19 @@ percentage is "not reported", never zero, and a model- or group-scoped window ru
 out does not make an account unavailable. The denoise rules announce a credential
 problem, a whole-channel outage, or a long-running no-data condition once per
 episode, hold immediate alerts during quiet hours, and send a scheduled digest only
-when there is something to say. The app secret is AES-GCM encrypted in
+when there is something to say. Channel tracks start only for monitored, enabled
+credentials (or an explicit collector-level failure); disabled or unsupported-only
+channels clear their track rather than aging through an intentional stop. Built-in
+quota capabilities establish a reader before its first success; an otherwise unknown
+plugin needs a prior numeric snapshot because discovery stores no plugin quota
+advertisement. This eligibility never suppresses independently evidenced auth failures.
+The newest real successful observation advances last-valid time, never the poll time
+of a cached snapshot. Before any success the persisted first applicable observation
+is the baseline, so a restart preserves a genuine overdue outage without treating
+absent or nonpositive timestamps as elapsed time. Same-cycle monitoring alerts reuse
+the quiet-end batch format and keep their separate persistent episode identities;
+the startup digest excludes episodes already alerted by that tick.
+The app secret is AES-GCM encrypted in
 `feishu_secrets` (hidden) and never returned. A disabled, forced-off or degraded
 configuration stays loaded but inert, so it never fails startup;
 `OMCPA_FEISHU_ENABLED`, `OMCPA_FEISHU_FORCE_DISABLED` and the connection overrides

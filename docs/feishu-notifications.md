@@ -112,7 +112,7 @@ points the required tests use; no test opens a Feishu connection.
 
 `feishu.Report` → `ProviderReport` → `AccountReport` → `Window`. An
 `AccountReport` carries the opaque `Key`, the display `Label`, `Disabled`, the
-credential `State`, `OK` (a valid numeric reading this cycle), the `Windows`,
+credential `State`, `OK` (a valid numeric reading in the stored snapshot), the `Windows`,
 `CooldownUntil` (latest non-model cooldown) and the `LastSuccessAt`/`ObservedAt`
 times. `MetadataObservedAt` is when the credential's disable/identity metadata was
 last synced from the discovery path; it is a cache timestamp, never a reading
@@ -121,6 +121,11 @@ unrefuted collection evidence is an authentication failure; only a valid reading
 observed after the auth failure clears it. Only a window with `Scope == "account"`
 decides whole-account availability; a model- or group-scoped window running out does
 not. A window without a reported percentage is "not reported", never zero.
+`IsUnmonitored` excludes an account without quota-reader evidence from channel
+availability, monitoring downtime and tightness, not from independently evidenced
+credential-invalid notifications. Built-in provider capabilities establish the reader;
+an unknown plugin needs a prior numeric snapshot because discovery does not persist
+plugin quota advertisements. Such unread plugin credentials remain visible to queries.
 
 `feishu.ReportSource` is implemented by `internal/api/feishu_report_source.go` and
 is fully **stored-only**: `ReadReport` never calls the management gateway, so a query
@@ -152,6 +157,9 @@ stored credential metadata exists at all, the channel is still named from the
 persisted observation timeline with a collector-level error, so `monitor_down` can be
 timed from its persisted first-seen instant; that states the limit of a fully stored
 source rather than reaching for CPA inline.
+Only a numeric snapshot establishes `LastSuccessAt`; a successful response without
+numeric quota does not invent a valid reading. Re-reading a cached snapshot preserves
+its stored observation time instead of advancing last-valid time to the poll instant.
 
 ## Denoise rules
 
@@ -164,6 +172,18 @@ Immediate, once per episode:
   later than `ChannelUnavailableAfter` (`channel_unavailable`);
 - no valid data for longer than `MonitorDownAfter`, including a collector-level
   failure that yields no account at all (`monitor_down`).
+
+Monitoring downtime uses the newest real success, falling back to the persisted
+first applicable observation before any success. Missing and nonpositive timestamps
+are absent evidence: a supported unread channel first observed now cannot immediately
+prove the default 30-minute threshold, while a persisted established outage remains
+eligible after restart. Disabled and unmonitored accounts neither establish nor age
+a track; explicitly stopping all monitoring for a channel clears its track and retires
+its held monitoring episode without a recovery push. An auth-only failure remains
+covered by the credential policy, including when its signal has become stale.
+Several monitoring episodes opened in the same nonquiet cycle reuse `KindAlertBatch`
+for one card with separate item identities. A single episode keeps its ordinary
+notification identity; the startup digest excludes episodes opened by that same tick.
 
 Not immediate: a transient error, an ordinary threshold, a single account's 429, a
 model- or group-scoped exhaustion, and every recovery. An open problem is
@@ -183,8 +203,8 @@ usable account-window remaining below `TightRemainingPercent`). Tightness is jud
 only from accounts whose newest reading is still fresh, so a stale sample can neither
 warn that a channel is nearly out nor read a maxed window as "0 remaining"; when no
 report has been produced, `has` is false and no tight channel is added, but real open
-items are still summarized. The one-time startup summary is sent at most once per
-process and never on a settings reload.
+items are still summarized. The one-time startup summary is persisted across process
+restarts and settings reloads.
 
 Delivery is outbox-based: a notification is persisted before sending and marked
 sent only after a successful send, so a failed send is retried with a bounded

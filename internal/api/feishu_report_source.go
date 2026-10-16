@@ -185,10 +185,16 @@ func feishuAccountReport(meta repository.FeishuCredentialMetadata, snapshot repo
 		MetadataObservedAt: meta.ObservedAt,
 	}
 	account.OK = hasNumericWindow(account.Windows)
+	// Discovery does not persist plugin quota advertisements. A stored numeric
+	// plugin reading is positive reader evidence; an unknown driver alone is not.
+	provider := feishuCredentialProvider(meta, snapshot)
+	account.IsUnmonitored = !quota.CapabilitiesForProvider(provider).RefreshSupported && !account.OK
 	if hasSnapshot && snapshot.ObservedAtMS > 0 {
 		observed := time.UnixMilli(snapshot.ObservedAtMS).UTC()
-		account.LastSuccessAt = observed
 		account.ObservedAt = observed
+		if account.OK {
+			account.LastSuccessAt = observed
+		}
 	}
 	// A cached availability problem is not an auth failure: it reads as stale, never
 	// invalid, whether the cache is fresh or old.
