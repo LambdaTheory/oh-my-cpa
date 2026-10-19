@@ -56,16 +56,6 @@ Deploys CPA and OMC together.
        volumes:
          - oh-my-cpa-data:/data
 
-     oh-my-cpa-updater:
-       image: wiziscool/oh-my-cpa:latest
-       restart: unless-stopped
-       command: ["updater", "serve"]
-       user: "0:0"
-       read_only: true
-       cap_drop: [ALL]
-       volumes:
-         - /var/run/docker.sock:/var/run/docker.sock
-
    volumes:
      oh-my-cpa-data:
    ```
@@ -110,6 +100,8 @@ What the directory holds afterwards:
 - OMC's database lives in the `oh-my-cpa-data` Docker volume, which the image already
   owns as user `10001`.
 - `.env` holds both keys.
+- A bare `docker compose up -d` starts only CPA and OMC. It does not start an updater or
+  mount `/var/run/docker.sock`.
 - Console updates are disabled by default. [Upgrading](#upgrading) explains the optional
   socket-holding updater and the explicit opt-in required to install it.
 
@@ -363,6 +355,9 @@ These are the variables the two release Compose files accept. Compose reads
 | `OMCPA_FEISHU_ENABLED` | unset | Leave unset so the console's own switch is in force; `false` forces the bot off, with `OMCPA_FEISHU_FORCE_DISABLED` taking precedence |
 
 Everything else OMC reads is in `docs/operations.md`.
+Credential-specific OAuth model exclusions override provider defaults only with CPA
+v8.0.33 or later. Check the gateway version before relying on that precedence;
+`docs/operations.md` describes the rule.
 
 ## Reaching the console from elsewhere
 
@@ -560,6 +555,8 @@ hand, and for restoring one. Back up `.env` separately.
 Console updates are disabled by default. Before this section applies, set
 `OMCPA_UPDATER_ENABLED=true` in `deploy/.env`, recreate `oh-my-cpa`, and install the
 sidecar with the command under "Enabling console updates on an existing deployment".
+The published `compose.full.yml` and `compose.omc.yml` intentionally contain no updater
+service, so an ordinary `docker compose up` never mounts the Docker socket.
 
 When a newer release exists, **System Information** shows **Update now** beside Oh My
 CPA or CLIProxyAPI. Confirming it makes the `oh-my-cpa-updater` container:

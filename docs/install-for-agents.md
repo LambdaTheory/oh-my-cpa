@@ -65,6 +65,11 @@ dropped capabilities, every setting in `deploy/.env`).
 Container paths do not start an updater by default. The optional updater mounts the
 Docker socket and requires the user's explicit agreement plus
 `OMCPA_UPDATER_ENABLED=true`; install it only in the upgrade flow below.
+The published `compose.full.yml` and `compose.omc.yml` contain no updater service, so do
+not expect a bare `docker compose up` to create one or mount `/var/run/docker.sock`.
+Credential-specific OAuth model exclusions take precedence over provider defaults only
+with CPA v8.0.33 or later. Check CPA's version before promising that behavior; see
+`docs/operations.md` for the rule.
 
 ### A. CPA and OMC together
 

@@ -58,10 +58,27 @@ test('new gateway bootstrap uses v8, enables usage and has no reusable client se
 });
 
 test('Dokploy source build keeps fork tags out of upstream release comparisons', () => {
-  const service = readDeployment('dokploy/compose.yml').services.omc;
+  const document = readDeployment('dokploy/compose.yml');
+  assert.deepEqual(Object.keys(document.services), ['omc']);
+  const service = document.services.omc;
   assert.equal(service.build.context, '../..');
   assert.equal(service.build.dockerfile, 'Dockerfile');
   assert.equal(service.build.args.VERSION, 'fork');
   assert.equal(service.build.args.BUILD_TAG, '${OMCPA_BUILD_VERSION:-}');
+  assert.equal(service.read_only, true);
+  assert.equal(service.user, '10001:10001');
+  assert.deepEqual(service.tmpfs, ['/tmp:size=256m,mode=1777']);
+  assert.deepEqual(service.volumes, ['omc-data:/data']);
+  assert.equal(document.volumes['omc-data'], null);
+  assert.equal(service.environment.OMCPA_DATA_DIR, '/data');
+  assert.equal(service.environment.OMCPA_QUOTA_SCHEDULER_MODE, '${OMCPA_QUOTA_SCHEDULER_MODE:-interval}');
+  assert.equal(service.environment.OMCPA_QUOTA_SCHEDULER_ENABLED, '${OMCPA_QUOTA_SCHEDULER_ENABLED:-true}');
+  assert.equal(service.environment.OMCPA_UPDATER_ENABLED, '${OMCPA_UPDATER_ENABLED:-false}');
+  assert.equal(service.environment.OMCPA_MCP_READONLY_KEY, '${OMCPA_MCP_READONLY_KEY:-}');
+  assert.equal(service.environment.OMCPA_ACCOUNT_AUTOMATION_ENABLED, '${OMCPA_ACCOUNT_AUTOMATION_ENABLED:-}');
+  assert.equal(service.environment.OMCPA_FEISHU_ENABLED, '${OMCPA_FEISHU_ENABLED:-}');
+  assert.equal(service.environment.OMCPA_FEISHU_APP_SECRET, '${OMCPA_FEISHU_APP_SECRET:-}');
+  assert.equal(service.environment.OMCPA_OLLAMA_COLLECTOR_ENABLED, '${OMCPA_OLLAMA_COLLECTOR_ENABLED:-true}');
   assert.equal(service.environment.OMCPA_VERSION, undefined);
+  assert.ok(!JSON.stringify(document).includes('docker.sock'));
 });

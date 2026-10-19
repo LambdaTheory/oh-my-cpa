@@ -38,8 +38,9 @@ tag. The final Alpine image runs as uid/gid `10001:10001` with `/data` as its on
 persistent writable directory. Its own `deploy/healthcheck.sh` normalizes the prefix
 through `deploy/base-path.sh`; `degraded` is process readiness, not gateway connectivity.
 The same image is the updater when its command is `updater serve` (ADR 0099): the probe
-then asks the updater instead, so that role needs no health check of its own, and both
-release Compose files declare it as a second service that alone mounts the Docker socket.
+then asks the updater instead, so that role needs no health check of its own. The
+release Compose files start no updater. When installed explicitly, the updater
+sidecar alone mounts the Docker socket.
 
 Docker Hub distributes `wiziscool/oh-my-cpa` for amd64 and arm64. The full Compose
 file pulls CPA and OMC with loopback host ports; OMC-only Compose attaches to a fresh
@@ -2474,6 +2475,15 @@ is not a recoverable one. Migration 004 additionally runs a Go governance hook
 inside its transaction to sanitize historical rows. Rollback is forward-only:
 fix a defect with a new migration, never by editing `schema_migrations`
 (`docs/ops/sqlite-operations.md`).
+
+The fork occupies migrations 041–045. A schema 45 deployment keeps those tables
+and advances through 046 (credential warmup), 047 (font library), and 048 (channel
+model prices). The migration backup is created and smoke-tested before 046; each
+subsequent migration commits separately. A failed migration stops startup, and
+restoring an older executable requires restoring the matching pre-upgrade database
+backup. The repository's synthetic upgrade test checks both sets of tables, a
+pre-existing fork row, and the gap-free 041–048 upgrade sequence without duplicate
+versions. Versions 010–014 were never part of this repository's migration history.
 
 ## 10. Background loops
 

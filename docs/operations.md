@@ -350,6 +350,20 @@ from start-up and records the outcome once the updater reports it finished.
 
 ## Database maintenance
 
+Schema 45 upgrades in order through migrations 046–048. Migration 046 adds credential
+warmup policy, state and receipt tables plus `quota_snapshots.warmup_json`; migration 047
+adds the self-hosted `fonts` and `font_faces` library; migration 048 adds
+`channel_model_prices` and `model_price_versions.channel`. Existing fork tables from
+migrations 041–045 remain in place. Startup creates and smoke-tests the encrypted
+pre-migration backup before applying 046; if any migration fails, its transaction rolls
+back and startup stops. Returning to an older executable requires restoring that backup,
+not editing `schema_migrations` or trying to reverse individual migrations.
+
+The published Compose files and the Dokploy template keep
+`OMCPA_UPDATER_ENABLED=false` by default and do not mount the Docker socket. To opt in,
+set the variable to `true`, recreate OMC, then run the explicit `updater install` command
+in `docs/install.md`; only the resulting updater container holds the socket.
+
 The System Information page can truncate the WAL or rebuild the database, and refuses
 the second while the first runs. Both wait for in-flight writes rather than interrupting
 them, and a rebuild is declined up front when the filesystem lacks the free space SQLite
