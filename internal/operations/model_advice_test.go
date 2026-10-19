@@ -210,6 +210,79 @@ func TestModelAdviceExactModelScope(t *testing.T) {
 	}
 }
 
+func TestTightestAdviceWindowInfersMissingKind(t *testing.T) {
+	tests := []struct {
+		name      string
+		window    quota.QuotaWindow
+		wantKind  string
+		wantLabel string
+	}{
+		{
+			name:      "five-hour id wins over period",
+			window:    quota.QuotaWindow{ID: "five_hour", PeriodHours: advicePercent(168), RemainingPercent: advicePercent(40)},
+			wantKind:  "five_hour",
+			wantLabel: "Five-hour",
+		},
+		{
+			name:      "Claude weekly family id wins over period",
+			window:    quota.QuotaWindow{ID: "seven_day_fable", PeriodHours: advicePercent(5), RemainingPercent: advicePercent(40)},
+			wantKind:  "weekly",
+			wantLabel: "Weekly",
+		},
+		{
+			name:      "Claude weekly id",
+			window:    quota.QuotaWindow{ID: "seven_day", RemainingPercent: advicePercent(40)},
+			wantKind:  "weekly",
+			wantLabel: "Weekly",
+		},
+		{
+			name:      "Antigravity period fallback",
+			window:    quota.QuotaWindow{ID: "ag_gemini_models_standard", PeriodHours: advicePercent(167.5), RemainingPercent: advicePercent(40)},
+			wantKind:  "weekly",
+			wantLabel: "Weekly",
+		},
+		{
+			name:      "five-hour period fallback",
+			window:    quota.QuotaWindow{ID: "provider_short_window", PeriodHours: advicePercent(5.5), RemainingPercent: advicePercent(40)},
+			wantKind:  "five_hour",
+			wantLabel: "Five-hour",
+		},
+		{
+			name:      "daily period fallback",
+			window:    quota.QuotaWindow{ID: "provider_daily_window", PeriodHours: advicePercent(24.5), RemainingPercent: advicePercent(40)},
+			wantKind:  "daily",
+			wantLabel: "Daily",
+		},
+		{
+			name:      "monthly period fallback",
+			window:    quota.QuotaWindow{ID: "provider_monthly_window", PeriodHours: advicePercent(28 * 24), RemainingPercent: advicePercent(40)},
+			wantKind:  "monthly",
+			wantLabel: "Monthly",
+		},
+		{
+			name:      "unknown id and period remain unknown",
+			window:    quota.QuotaWindow{ID: "unrecognized", PeriodHours: advicePercent(12), RemainingPercent: advicePercent(40)},
+			wantKind:  "unknown",
+			wantLabel: "Quota window",
+		},
+		{
+			name:      "existing kind remains authoritative",
+			window:    quota.QuotaWindow{ID: "five_hour", Kind: "weekly", PeriodHours: advicePercent(5), RemainingPercent: advicePercent(40)},
+			wantKind:  "weekly",
+			wantLabel: "Weekly",
+		},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			window := tightestAdviceWindow([]quota.QuotaWindow{testCase.window})
+			if window == nil || window.Kind != testCase.wantKind || window.Label != testCase.wantLabel {
+				t.Fatalf("tightest window = %+v, want kind %q and label %q", window, testCase.wantKind, testCase.wantLabel)
+			}
+		})
+	}
+}
+
 func TestModelAdviceBoundedCatalogueAndInput(t *testing.T) {
 	directory := ModelSquareDirectory{Models: []gateway.Model{}, Routes: []ModelSquareRoute{}, Providers: []ModelSquareProvider{}}
 	for index := 0; index < 61; index++ {
