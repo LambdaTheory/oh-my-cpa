@@ -231,6 +231,7 @@ export async function systemInformationPage({ base, page, check }) {
     (await buildIdentity.innerText()).includes('refs/heads/fixture') &&
     !(await buildIdentity.innerText()).includes('v0.2.0') &&
     (await page.locator('[data-testid="sys-product-omc"]').innerText()).includes('v0.2.0'));
+  await page.screenshot({ path: 'tmp/system-versions-desktop.png', fullPage: true });
 
   // ── the change log renders the untrusted body ──────────────────────────────
   // The toggle is the only control that brings the body into the document.
@@ -999,6 +1000,7 @@ export async function systemInformationPage({ base, page, check }) {
         // the same path a reader does rather than calling internals.
         const beforeSwitch = await page.locator('[data-testid="sys-card-maintenance"]').innerText();
         await page.locator('.language-trigger-code').first().click();
+        await page.mouse.move(0, 0);
         const languageItem = page
           .locator('.ant-dropdown:visible .ant-dropdown-menu-item')
           .filter({ hasText: '简体中文' })
@@ -1125,6 +1127,7 @@ export async function systemInformationNarrow({ base, page, check }) {
   );
 
   await verifySystemOverview({ page, check });
+  await page.screenshot({ path: 'tmp/system-versions-phone.png', fullPage: true });
 
   const result = await page.evaluate(() => {
     const doc = document.documentElement;

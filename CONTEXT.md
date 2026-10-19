@@ -570,8 +570,9 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   opening it. It is console state rather
   than a deployment capability: it changes nothing about what the gateway serves, the pages it
   hides stay reachable by URL, the filter applies to the expanded rail, the collapsed rail and
-  the phone sheet from one model, and OMC Settings - the page that owns the choice - cannot be
-  hidden. See [[Preference]].
+  the phone sheet from one model, and the two irreplaceable management surfaces cannot be hidden:
+  OMC Settings owns the choice and the Feishu panel, while OAuth management owns the account
+  automation and Ollama entrances. See [[Preference]].
 - **Font Library**: The deployment's installed typefaces, from which the two
   **Font Roles** are chosen: `ui` (the interface) and `mono` (code, identifiers and
   aligned figures), stored as `omc_fonts` (`builtin:<id>` or `font:<library id>`; a

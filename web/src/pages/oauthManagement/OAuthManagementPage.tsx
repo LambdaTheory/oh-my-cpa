@@ -610,8 +610,20 @@ export const OAuthManagementPage: React.FC = () => {
               <Button icon={<UploadOutlined />} disabled={isDemo || actions.isOperating} onClick={() => fileInputRef.current?.click()}>{t('af.upload')}</Button>
               <Button icon={<CloudUploadOutlined />} disabled={isDemo || actions.isOperating} onClick={() => setIsVertexImportOpen(true)}>{t('af.vertex_open')}</Button>
               <Button icon={<BranchesOutlined />} disabled={actions.isOperating} onClick={() => setIsModelRulesOpen(true)} data-testid="oauth-management-model-rules-open">{t('af.rules_open')}</Button>
-              <Button icon={<SettingOutlined />} onClick={() => setIsAutomationOpen(true)}>{t('automation.title')}</Button>
-              <Button icon={<SyncOutlined />} onClick={() => setIsOllamaOpen(true)}>{t('ollama.title')}</Button>
+              <Button
+                icon={<SettingOutlined />}
+                onClick={() => setIsAutomationOpen(true)}
+                data-testid="oauth-management-automation-open-mobile"
+              >
+                {t('automation.title')}
+              </Button>
+              <Button
+                icon={<SyncOutlined />}
+                onClick={() => setIsOllamaOpen(true)}
+                data-testid="oauth-management-ollama-open-mobile"
+              >
+                {t('ollama.title')}
+              </Button>
             </ActionMenu>
             <Button type="primary" icon={<LoginOutlined />} onClick={openConnect}>{t('omc.connect_account')}</Button>
           </>

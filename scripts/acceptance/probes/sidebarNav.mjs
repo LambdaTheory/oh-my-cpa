@@ -88,8 +88,10 @@ export async function sidebarNavCustomization({ base, page, check }) {
     (await railGroups()).join(' | '));
   check('the settings row says nothing is out of the rail yet',
     (await rowSummary().innerText()).includes('Every entry is shown'), await rowSummary().innerText());
-  check('the panel lists an entry per rail destination, the locked one among them',
-    await rowToggle('/agent').count() === 1 && await rowToggle('/omc-settings').count() === 1);
+  check('the panel lists an entry per rail destination, including both locked management surfaces',
+    await rowToggle('/agent').count() === 1
+      && await rowToggle('/oauth-management').count() === 1
+      && await rowToggle('/omc-settings').count() === 1);
   check('a fresh console hides nothing, so the reset has nothing to put back', await showAll().isDisabled());
 
   // Hiding one entry: the rail answers immediately, and the stored document is the hidden set.
@@ -134,23 +136,30 @@ export async function sidebarNavCustomization({ base, page, check }) {
   check('the settings row states how many entries are out of the rail',
     (await rowSummary().innerText()).includes('5 hidden'), await rowSummary().innerText());
 
-  // The page that owns the setting is not hideable: a preference that could remove its own surface
-  // would leave the operator unable to undo it from the console.
-  check('the entry that owns the rail is shown switched on and inert',
-    await rowToggle('/omc-settings').isDisabled()
+  // The page that owns the setting and the page that owns the fork's account-operation entrances
+  // are not hideable: either preference would remove the only console path back to that capability.
+  check('irreplaceable management entries are shown switched on and inert',
+    await rowToggle('/oauth-management').isDisabled()
+      && (await rowToggle('/oauth-management').getAttribute('aria-checked')) === 'true'
+      && await rowToggle('/omc-settings').isDisabled()
       && (await rowToggle('/omc-settings').getAttribute('aria-checked')) === 'true');
+  await page.screenshot({ path: 'tmp/sidebar-fork-entries-desktop.png' });
   // A disabled switch is inert in the browser rather than through a handler, so the press happens on
   // the row around it. It is a plain click on purpose: a forced one skips the stability wait and can
   // dispatch at a point the dialog's opening animation has already moved past, landing on the mask
   // behind it - which closes the panel and takes every claim after this one with it.
   const writesBeforeLockedClick = writes.length;
-  await rowOf('/omc-settings').locator('.settings-toggle-title').click();
+  await rowOf('/oauth-management').locator('.settings-toggle-title').click();
   await until(async () => (await panel().isVisible()), { label: 'the panel to stay open' });
+  await until(async () => (await railEntry('/oauth-management').count()) === 1, { label: 'the OAuth entry to stay in the rail' });
+  await rowOf('/omc-settings').locator('.settings-toggle-title').click();
+  await until(async () => (await panel().isVisible()), { label: 'the panel to stay open after both locked rows' });
   await until(async () => (await railEntry('/omc-settings').count()) === 1, { label: 'the settings entry to stay in the rail' });
-  check('clicking the locked row leaves the rail, the panel and the stored set unchanged',
+  check('clicking locked rows leaves the rail, the panel and the stored set unchanged',
     await panel().isVisible()
+      && await railEntry('/oauth-management').count() === 1
       && await railEntry('/omc-settings').count() === 1
-      && writes.slice(writesBeforeLockedClick).filter((write) => String(write.body).includes('/omc-settings')).length === 0,
+      && writes.slice(writesBeforeLockedClick).filter((write) => /oauth-management|omc-settings/.test(String(write.body))).length === 0,
     writes.slice(writesBeforeLockedClick).map((write) => write.body).join(' '));
 
   // Everything back, and the write that says so. The rail answers on the click frame from the
@@ -179,9 +188,14 @@ export async function sidebarNavCustomization({ base, page, check }) {
   await until(async () => (await railEntry('/dashboard').count()) === 1, { label: 'the phone sheet to draw the rail' });
   const sheetGroups = await railGroups();
   check('the phone sheet draws the same set the rail does',
-    await railEntry('/dashboard').count() === 1 && await railEntry('/agent').count() === 1 && await railEntry('/audit').count() === 0,
+    await railEntry('/dashboard').count() === 1
+      && await railEntry('/agent').count() === 1
+      && await railEntry('/oauth-management').count() === 1
+      && await railEntry('/omc-settings').count() === 1
+      && await railEntry('/audit').count() === 0,
     await railEntry('/dashboard').count() + ' dashboard, ' + await railEntry('/agent').count() + ' agent, '
       + await railEntry('/audit').count() + ' audit');
   check('the phone sheet leaves out the group its hidden entries emptied',
     hasGroup(sheetGroups, 'Operate') && hasGroup(sheetGroups, 'Observe') === false, sheetGroups.join(' | '));
+  await page.screenshot({ path: 'tmp/sidebar-fork-entries-phone.png' });
 }
