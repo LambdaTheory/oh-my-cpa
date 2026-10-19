@@ -56,6 +56,10 @@ func Send(ctx context.Context, caller Caller, file management.AuthFile, provider
 	payload, _ := json.Marshal(body)
 	response, err := caller.ApiCall(ctx, management.ApiCallRequest{AuthIndex: file.AuthIndex, Method: http.MethodPost, URL: endpoint, Header: headers, Data: string(payload)})
 	if err != nil {
+		var rateLimited interface{ IsRateLimited() bool }
+		if errors.As(err, &rateLimited) && rateLimited.IsRateLimited() {
+			return Outcome{Status: "failed", Reason: "rate_limited"}
+		}
 		return Outcome{Status: "uncertain", Reason: "outcome_unknown"}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

@@ -67,6 +67,7 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_CPA_MANAGEMENT_KEY", "OMCPA_TRUSTED_PROXY_CIDRS", DemoModeEnv, "PORT",
 		"OMCPA_UPDATE_CHECK_ENABLED", "OMCPA_OMC_REPO", "OMCPA_CPA_REPO", "OMCPA_MCP_READONLY_KEY",
 		"OMCPA_UPDATER_ENABLED", "OMCPA_UPDATER_URL", "OMCPA_GOOGLE_FONTS_URL",
+		"OMCPA_QUOTA_SCHEDULER_MODE",
 		"OMCPA_QUOTA_SCHEDULER_ENABLED", "OMCPA_QUOTA_WATCH_INTERVAL", "OMCPA_QUOTA_ACTIVE_INTERVAL",
 		"OMCPA_QUOTA_NORMAL_INTERVAL", "OMCPA_QUOTA_IDLE_INTERVAL", "OMCPA_QUOTA_WATCH_USED_PERCENT",
 		"OMCPA_QUOTA_WATCH_WINDOW", "OMCPA_QUOTA_NORMAL_WINDOW", "OMCPA_QUOTA_WINDOW_END_MARGIN",
@@ -396,9 +397,10 @@ func TestLoadQuotaSchedulerDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != DefaultQuotaWatchInterval || cfg.Quota.IdleInterval != DefaultQuotaIdleInterval || cfg.Quota.GlobalConcurrency != DefaultQuotaGlobalConcurrency {
+	if cfg.Quota.SchedulerMode != QuotaSchedulerModeInterval || !cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != DefaultQuotaWatchInterval || cfg.Quota.IdleInterval != DefaultQuotaIdleInterval || cfg.Quota.GlobalConcurrency != DefaultQuotaGlobalConcurrency {
 		t.Fatalf("defaults = %+v", cfg.Quota)
 	}
+	t.Setenv("OMCPA_QUOTA_SCHEDULER_MODE", "adaptive")
 	t.Setenv("OMCPA_QUOTA_SCHEDULER_ENABLED", "false")
 	t.Setenv("OMCPA_QUOTA_WATCH_INTERVAL", "90s")
 	t.Setenv("OMCPA_QUOTA_WATCH_USED_PERCENT", "75")
@@ -407,12 +409,17 @@ func TestLoadQuotaSchedulerDefaultsAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != 90*time.Second || cfg.Quota.WatchUsedPercent != 75 || cfg.Quota.GlobalConcurrency != 2 {
+	if cfg.Quota.SchedulerMode != QuotaSchedulerModeAdaptive || cfg.Quota.SchedulerEnabled || cfg.Quota.WatchInterval != 90*time.Second || cfg.Quota.WatchUsedPercent != 75 || cfg.Quota.GlobalConcurrency != 2 {
 		t.Fatalf("overrides = %+v", cfg.Quota)
 	}
 }
 
 func TestLoadRejectsBadQuotaSchedulerSettings(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("OMCPA_QUOTA_SCHEDULER_MODE", "automatic")
+	if _, err := Load(); err == nil {
+		t.Fatal("an unknown quota scheduler mode was accepted")
+	}
 	clearConfigEnv(t)
 	t.Setenv("OMCPA_QUOTA_WATCH_INTERVAL", "not-a-duration")
 	if _, err := Load(); err == nil {

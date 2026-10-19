@@ -232,8 +232,7 @@ func (s *Service) SafeApiCall(ctx context.Context, authIndex, method, targetURL 
 	// be probed again. It is turned into a typed error here so every caller can
 	// park the credential instead of retrying into the same refusal.
 	if resp.StatusCode == http.StatusTooManyRequests {
-		retryAfter, hasRetryAfter := parseRetryAfter(resp.Header)
-		return resp, &RateLimitError{AuthIndex: strings.TrimSpace(authIndex), RetryAfter: retryAfter, HasRetryAfter: hasRetryAfter}
+		return resp, NewRateLimitError("", authIndex, resp.Header)
 	}
 	return resp, nil
 }

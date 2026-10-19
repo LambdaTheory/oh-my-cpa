@@ -2244,8 +2244,10 @@ range therefore revise both current estimates and historical references on the n
 read. Reset detection is limited to observed/retained evidence, not a complete upstream
 lifecycle. There are no new tables, migrations or routing inputs (ADR 0058 and ADR 0059).
 
-Readings are also refreshed in the background (ADR 0094). `Handler.RunQuotaAutoRefresh`
-in `internal/api/quota_auto_refresh.go` wakes every minute, reads the
+Readings are also refreshed in the background. `OMCPA_QUOTA_SCHEDULER_MODE=interval`
+is the default and selects ADR 0094's `Handler.RunQuotaAutoRefresh`; `adaptive` selects
+ADR 0104's per-account `quota.Scheduler`. Exactly one loop runs, and neither runs in demo
+mode. The interval loop in `internal/api/quota_auto_refresh.go` wakes every minute, reads the
 `omc_quota_auto_refresh` preference, lists the credentials and their latest snapshots,
 and asks `quota.AutoRefreshTrigger` (`internal/quota/auto_refresh.go`) which are due: a
 reset-driven read once a stored window's `reset_at_ms` plus a one-minute grace has
@@ -2480,12 +2482,11 @@ fix a defect with a new migration, never by editing `schema_migrations`
 | HTTP server | `app.Run` | Fatal; shutdown drains 10s |
 | Usage pipeline | `app.Run` → `ingest.Pipeline` | Fatal; a stopped collector must not serve silently stale numbers. `Run` returns only after every stage has stopped, and `app.Run` waits for it before the database closes, whichever loop ended first |
 | Pricing sync | `app.Run` → `pricing.Service` | Best effort; prices go stale, capture continues |
-| Quota refresh scheduler | `app.Run` → `quota.Scheduler` | Best effort; readings go stale, capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0104) |
+| Quota refresh | `app.Run` → `api.Handler.RunQuotaAutoRefresh` or `quota.Scheduler` | Best effort; `OMCPA_QUOTA_SCHEDULER_MODE` selects exactly one interval or adaptive loop. Readings go stale if it stops, while capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0094, ADR 0104) |
 | Account auto-management | `app.Run` → `automation.Manager` | Best effort; plans stay in the database for the next pass, and capture and the HTTP server continue. It performs a CPA write, so it is disabled in demo mode; `OMCPA_ACCOUNT_AUTOMATION_ENABLED=false` forbids the loop and `OMCPA_ACCOUNT_AUTOMATION_ENABLED=true` forces it on regardless of the web switch (ADR 0105) |
 | Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. The same instance also drains the create/update trigger queue and answers the console's manual refresh, so all three share one lock, one two-scrape concurrency cap and one persisted backoff. It scrapes `ollama.com`, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
 | Feishu notifications | `app.Run` → `feishu.Service` | Best effort; the long connection and the classification loop are started with the process and stopped before the database closes. A disabled, forced-off or degraded configuration is inert and never fails startup; it is never started in demo mode |
 | Release sweep | `app.Run` → `release.Service` | Best effort; the stored index and its timestamps go stale, and the page says so. Every six hours, first run delayed by one interval so a restart loop cannot become a request loop |
-| Quota auto refresh | `app.Run` → `api.Handler.RunQuotaAutoRefresh` | Best effort; a round that cannot reach CPA leaves the stored readings as they were and the next minute tries again. Reads only what the `omc_quota_auto_refresh` policy makes due (§8, ADR 0094) |
 | Usage-fact fold + data lifecycle | `ingest.Maintenance` inside the pipeline | Retried on its own interval; errors surface in ingest status |
 | Database maintenance | `repository.MaintenanceService`, started by an operator request | Never started automatically; a job's outcome is retained in process memory and recorded on the audit trail. The retained record is served by both reads, and the console shows only a job it observed rather than that record — see §11 |
 

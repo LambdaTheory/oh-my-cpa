@@ -104,7 +104,7 @@ func (h *Handler) redeemQuotaCredit(ctx context.Context, client *management.Clie
 	// Re-read usage right away so the redeemed credit is reflected before the
 	// next scheduled poll.
 	prior := h.loadPriorNormalizedQuota(ctx, authIndex)
-	refreshed, _ := svc.RefreshCredentialQuota(ctx, *foundFile, prior)
+	refreshed, _ := h.readCredentialQuota(ctx, svc, *foundFile, prior)
 	if refreshed != nil && h.repo != nil {
 		_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
 	}

@@ -969,7 +969,7 @@ func TestWarmupRateLimitedManualRecheckRetainsProtocolRefusal(t *testing.T) {
 				}
 				// Re-load durable state after the retry floor; no in-memory refusal may be required.
 				var clock atomic.Int64
-				clock.Store(state.NextAttemptMS + 1)
+				clock.Store(state.NextAttemptMS + 5*time.Minute.Milliseconds() + 1)
 				handler.nowFn = func() time.Time { return time.UnixMilli(clock.Load()) }
 				result, err = handler.executeWarmup(ctx, file.AuthIndex, "", "", false)
 				if err != nil || result.Status != "skipped" || result.Reason != refusal {
@@ -1020,7 +1020,7 @@ func TestWarmupRateLimitRetryWithoutProtocolPause(t *testing.T) {
 		t.Fatalf("backoff: %+v %v", result, err)
 	}
 	var clock atomic.Int64
-	clock.Store(state.NextAttemptMS + 1)
+	clock.Store(state.NextAttemptMS + 5*time.Minute.Milliseconds() + 1)
 	handler.nowFn = func() time.Time { return time.UnixMilli(clock.Load()) }
 	fixture.mu.Lock()
 	fixture.isRateLimited = false

@@ -371,8 +371,7 @@ func writeWarmupError(writer http.ResponseWriter, err error) {
 }
 
 func (h *Handler) refreshWarmupObservation(ctx context.Context, client *management.Client, file management.AuthFile) (*warmup.Observation, error) {
-	service := quota.NewServiceWithClock(client, h.now)
-	reading, err := service.RefreshCredentialQuota(ctx, file, h.loadPriorNormalizedQuota(ctx, file.AuthIndex))
+	reading, err := h.readCredentialQuota(ctx, quota.NewServiceWithClock(client, h.now), file, h.loadPriorNormalizedQuota(ctx, file.AuthIndex))
 	if err != nil || reading == nil || reading.Error != "" || reading.Status == "error" || reading.Status == "stale" || reading.WarmupEvidence == nil {
 		return nil, errors.New("quota_unknown")
 	}
@@ -380,6 +379,29 @@ func (h *Handler) refreshWarmupObservation(ctx context.Context, client *manageme
 		return nil, err
 	}
 	return reading.WarmupEvidence, nil
+}
+
+type warmupBackoffCaller struct {
+	handler   *Handler
+	client    *management.Client
+	provider  string
+	authIndex string
+}
+
+func (caller warmupBackoffCaller) ApiCall(ctx context.Context, request management.ApiCallRequest) (management.ApiCallResponse, error) {
+	if blocked, until := caller.handler.quotaBackoffBlocked(caller.provider, caller.authIndex); blocked {
+		return management.ApiCallResponse{}, quotaBackoffError(caller.provider, caller.authIndex, until, caller.handler.now())
+	}
+	response, err := caller.client.ApiCall(ctx, request)
+	if err != nil {
+		return response, err
+	}
+	if response.StatusCode == http.StatusTooManyRequests {
+		rateErr := quota.NewRateLimitError(caller.provider, caller.authIndex, response.Header)
+		caller.handler.recordQuotaRateLimit(caller.authIndex, caller.provider, rateErr)
+		return response, rateErr
+	}
+	return response, nil
 }
 func isWarmupActivated(before, after *warmup.Observation) bool {
 	if before == nil || after == nil || after.ObservedAtMS <= before.ObservedAtMS {
@@ -483,6 +505,9 @@ func (h *Handler) executeWarmup(ctx context.Context, authIndex, requestID, revis
 	} else if cooldowns[authIndex].IsActive {
 		return finish("cooldown")
 	}
+	if blocked, _ := h.quotaBackoffBlocked(credential.Provider, authIndex); blocked {
+		return finish("retry_wait")
+	}
 	priorReading := h.loadPriorNormalizedQuota(ctx, authIndex)
 	before, err := h.refreshWarmupObservation(ctx, client, file)
 	if err != nil {
@@ -569,7 +594,7 @@ func (h *Handler) executeWarmup(ctx context.Context, authIndex, requestID, revis
 		result.Status = "failed"
 		return finish("resource_conflict")
 	}
-	outcome := warmup.Send(ctx, client, file, credential.Provider, credential.Policy.Model)
+	outcome := warmup.Send(ctx, warmupBackoffCaller{handler: h, client: client, provider: credential.Provider, authIndex: file.AuthIndex}, file, credential.Provider, credential.Policy.Model)
 	result.Status = outcome.Status
 	result.Reason = outcome.Reason
 	result.InputTokens = outcome.InputTokens

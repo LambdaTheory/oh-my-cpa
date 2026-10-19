@@ -26,14 +26,13 @@ func writeQuotaRateLimited(writer http.ResponseWriter, until time.Time) {
 	})
 }
 
-// quotaBackoffBlocked reports whether a credential is parked after an upstream
-// 429. When it is, the caller must answer with rate_limited_backoff rather than
-// probe the upstream again.
-func (h *Handler) quotaBackoffBlocked(authIndex string) (bool, time.Time) {
+// quotaBackoffBlocked reports whether a credential or its provider is parked
+// after an upstream 429. Callers must refuse instead of probing either scope.
+func (h *Handler) quotaBackoffBlocked(provider, authIndex string) (bool, time.Time) {
 	if h.quotaBackoff == nil {
 		return false, time.Time{}
 	}
-	return h.quotaBackoff.CredentialBlocked(authIndex, h.now())
+	return h.quotaBackoff.Blocked(provider, authIndex, h.now())
 }
 
 // recordQuotaRateLimit parks a credential when a refresh failed with an upstream
@@ -59,8 +58,27 @@ func (h *Handler) clearQuotaRateLimit(authIndex, provider string) {
 // quotaBackoffError is the refusal a caller already inside a park receives. It
 // carries the remaining wait so the agent or operator knows when to retry the
 // same credential.
-func quotaBackoffError(until time.Time) error {
-	return &quota.RateLimitError{RetryAfter: time.Until(until), HasRetryAfter: true}
+func quotaBackoffError(provider, authIndex string, until, now time.Time) error {
+	return &quota.RateLimitError{Provider: provider, AuthIndex: authIndex, RetryAfter: until.Sub(now), HasRetryAfter: true}
+}
+
+func (h *Handler) readCredentialQuota(ctx context.Context, service *quota.Service, file management.AuthFile, prior *quota.NormalizedQuota) (*quota.NormalizedQuota, error) {
+	authIndex := strings.TrimSpace(file.AuthIndex)
+	provider := quota.DetectProvider(file.Type, file.Provider)
+	if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {
+		return nil, quotaBackoffError(provider, authIndex, until, h.now())
+	}
+	value, err := service.RefreshCredentialQuota(ctx, file, prior)
+	if err != nil {
+		if h.recordQuotaRateLimit(authIndex, provider, err) {
+			if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {
+				return nil, quotaBackoffError(provider, authIndex, until, h.now())
+			}
+		}
+		return nil, err
+	}
+	h.clearQuotaRateLimit(authIndex, provider)
+	return value, nil
 }
 
 // schedulerConfig maps the process configuration onto the scheduler's rules.

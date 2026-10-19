@@ -491,25 +491,6 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
-	// The quota scheduler actively refreshes each credential on a per-account
-	// cadence. It is best-effort like pricing: losing it leaves quota readings
-	// stale, but never breaks request capture or the HTTP server. It performs
-	// outbound probes, so a demo never runs it.
-	if !a.cfg.IsDemoMode && a.cfg.Quota.SchedulerEnabled {
-		if scheduler := a.handler.QuotaScheduler(a.logger); scheduler != nil {
-			go func() {
-				a.logger.Info("quota refresh scheduler started",
-					"watch_interval", a.cfg.Quota.WatchInterval.String(),
-					"active_interval", a.cfg.Quota.ActiveInterval.String(),
-					"normal_interval", a.cfg.Quota.NormalInterval.String(),
-					"idle_interval", a.cfg.Quota.IdleInterval.String())
-				if err := scheduler.Run(runCtx); err != nil {
-					a.logger.Warn("quota refresh scheduler stopped", "error", err)
-				}
-			}()
-		}
-	}
-
 	// Account auto-management is best-effort like the quota scheduler: losing it
 	// parks the plans in the database for the next pass and never breaks request
 	// capture or the HTTP server. It performs a CPA write, so a demo never starts it.
@@ -558,10 +539,7 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
-	// Automatic quota refresh is best effort too: a round that cannot reach CPA leaves the
-	// stored readings as they were. It reads providers through the gateway with each
-	// credential, so a demo, whose gateway is the fixture, never starts it.
-	// It is joined before Run returns, like the pipeline, because a round in flight writes
+	// Warmup is joined before Run returns because a round in flight writes state and
 	// observations to the database the caller closes next.
 	warmupDone := make(chan struct{})
 	if a.cfg.IsDemoMode {
@@ -575,14 +553,19 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 	defer func() { stop(); <-warmupDone }()
+	// Quota refresh is best effort: a failed round leaves the stored readings as they
+	// were. Exactly one configured mode runs, and a demo starts neither because both
+	// read providers through the gateway with each credential. It is joined before Run
+	// returns for the same database-lifetime reason as warmup and the usage pipeline.
 	quotaRefreshDone := make(chan struct{})
-	if a.cfg.IsDemoMode {
+	if a.cfg.IsDemoMode || !a.cfg.Quota.SchedulerEnabled {
 		close(quotaRefreshDone)
 	} else {
 		go func() {
 			defer close(quotaRefreshDone)
-			if err := a.handler.RunQuotaAutoRefresh(runCtx); err != nil && !errors.Is(err, context.Canceled) {
-				a.logger.Warn("automatic quota refresh loop stopped", "error", err)
+			a.logger.Info("quota refresh loop started", "mode", a.cfg.Quota.SchedulerMode)
+			if err := a.runQuotaRefreshLoop(runCtx); err != nil && !errors.Is(err, context.Canceled) {
+				a.logger.Warn("quota refresh loop stopped", "mode", a.cfg.Quota.SchedulerMode, "error", err)
 			}
 		}()
 	}
@@ -633,6 +616,26 @@ func (a *App) Run(ctx context.Context) error {
 		}
 	}
 	return runErr
+}
+
+func (a *App) runQuotaRefreshLoop(ctx context.Context) error {
+	return runQuotaRefreshMode(ctx, a.cfg.Quota.SchedulerMode,
+		a.handler.RunQuotaAutoRefresh,
+		func(ctx context.Context) error {
+			scheduler := a.handler.QuotaScheduler(a.logger)
+			if scheduler == nil {
+				return nil
+			}
+			return scheduler.Run(ctx)
+		},
+	)
+}
+
+func runQuotaRefreshMode(ctx context.Context, mode config.QuotaSchedulerMode, interval, adaptive func(context.Context) error) error {
+	if mode == config.QuotaSchedulerModeAdaptive {
+		return adaptive(ctx)
+	}
+	return interval(ctx)
 }
 
 func (a *App) Close() error {

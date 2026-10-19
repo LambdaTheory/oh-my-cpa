@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -96,24 +97,16 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 			writeAuditFailure(writer, "quota refresh attempt could not be audited")
 			return
 		}
-		if blocked, until := h.quotaBackoffBlocked(targetIndex); blocked {
-			writeQuotaRateLimited(writer, until)
-			return
-		}
 		prior := h.loadPriorNormalizedQuota(ctx, targetIndex)
-		svc := quota.NewService(client)
-		refreshed, err := svc.RefreshCredentialQuota(ctx, file, prior)
+		refreshed, err := h.readCredentialQuota(ctx, quota.NewService(client), file, prior)
 		if err != nil {
-			if h.recordQuotaRateLimit(targetIndex, quota.DetectProvider(file.Type, file.Provider), err) {
-				if blocked, until := h.quotaBackoffBlocked(targetIndex); blocked {
-					writeQuotaRateLimited(writer, until)
-					return
-				}
+			if blocked, until := h.quotaBackoffBlocked(quota.DetectProvider(file.Type, file.Provider), targetIndex); blocked {
+				writeQuotaRateLimited(writer, until)
+				return
 			}
 			writeError(writer, http.StatusBadGateway, fmt.Sprintf("refresh quota failed: %v", err))
 			return
 		}
-		h.clearQuotaRateLimit(targetIndex, quota.DetectProvider(file.Type, file.Provider))
 
 		// Record the safe collection result for every outcome; the snapshot itself is
 		// written only for a successful read inside persistNormalizedQuotaSnapshot.
@@ -166,6 +159,8 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 	}
 	svc := quota.NewService(client)
 	results := make([]*quota.NormalizedQuota, len(targetIndexes))
+	var rateMu sync.Mutex
+	var firstRateLimit *quota.RateLimitError
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
 
@@ -181,13 +176,17 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			if blocked, _ := h.quotaBackoffBlocked(authIdx); blocked {
-				return
-			}
 			prior := h.loadPriorNormalizedQuota(ctx, authIdx)
-			refreshed, rErr := svc.RefreshCredentialQuota(ctx, f, prior)
+			refreshed, rErr := h.readCredentialQuota(ctx, svc, f, prior)
 			if rErr != nil {
-				h.recordQuotaRateLimit(authIdx, quota.DetectProvider(f.Type, f.Provider), rErr)
+				var rateLimit *quota.RateLimitError
+				if errors.As(rErr, &rateLimit) {
+					rateMu.Lock()
+					if firstRateLimit == nil {
+						firstRateLimit = rateLimit
+					}
+					rateMu.Unlock()
+				}
 				return
 			}
 			if refreshed != nil {
@@ -195,11 +194,21 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 				if h.repo != nil {
 					_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
 				}
-				h.clearQuotaRateLimit(authIdx, quota.DetectProvider(f.Type, f.Provider))
 			}
 		}(i, cleanIdx, file)
 	}
 	wg.Wait()
+
+	// A batch is not a successful empty collection when one credential was parked:
+	// partial success already changes durable state, so the caller still needs 429
+	// to schedule the remaining work.
+	rateMu.Lock()
+	rateLimit := firstRateLimit
+	rateMu.Unlock()
+	if rateLimit != nil {
+		writeQuotaRateLimited(writer, h.now().Add(rateLimit.RetryAfter))
+		return
+	}
 
 	out := make([]*quota.NormalizedQuota, 0, len(results))
 	for _, r := range results {

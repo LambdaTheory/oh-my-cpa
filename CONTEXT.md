@@ -427,7 +427,11 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   window that states a period and a used share; a refresh that failed records none. It is
   how a quiet credential, a model-scoped window or a closed cycle becomes part of the
   history the passive stream cannot describe (ADR 0104).
-- **Quota Refresh Tier**: The per-account cadence the background scheduler reads a
+- **Quota Refresh Mode**: The single background policy selected by
+  `OMCPA_QUOTA_SCHEDULER_MODE`: `interval` (default) reads the stored
+  `omc_quota_auto_refresh` preference, while `adaptive` reads the `OMCPA_QUOTA_*` tier
+  configuration and ignores that preference. Neither loop runs in demo mode.
+- **Quota Refresh Tier**: The per-account cadence the adaptive background scheduler reads a
   credential at: watched, active, normal or idle, chosen by how recently it served a
   request and the highest used share among its windows. A credential whose standard window
   is already current through the passive stream is read no faster than the passive floor.
@@ -438,7 +442,8 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   `Retry-After` or a doubling wait when none is given. It is shared by the scheduler, the
   manual refresh endpoint and the `quota_refresh` capability: while parked, each refuses
   with `rate_limited_backoff` and a retry time instead of probing the upstream. It is held
-  in memory only, so a restart clears it (ADR 0104).
+  in memory only, so a restart clears it. Both background modes and credential warmup's
+  consuming requests share the same park (ADR 0104).
 - **Account Auto-Management**: OMC's control of one credential's `disabled` state from
   account-level evidence (ADR 0105). It disables only on a **new** standard weekly (7d)
   reading that states 100% used with its reset still in the future, and enables directly

@@ -25,9 +25,11 @@ capacity estimate needs.
 
 ## Decision
 
-Run one background loop, `internal/quota.Scheduler`, started by the application
-under the process lifetime context. Every minute it evaluates each refreshable,
-enabled credential and reads it on a per-account cadence derived from how recently
+The application runs exactly one quota refresh loop under the process lifetime context.
+`OMCPA_QUOTA_SCHEDULER_MODE=interval` is the default and runs ADR 0094's stored-preference
+policy. `OMCPA_QUOTA_SCHEDULER_MODE=adaptive` runs `internal/quota.Scheduler`; it does not
+read the `omc_quota_auto_refresh` preference. Every minute the adaptive mode evaluates each
+refreshable, enabled credential and reads it on a per-account cadence derived from how recently
 it served a request and the highest used share among its windows:
 
 - a credential with traffic in the last fifteen minutes and a window at or above
@@ -58,11 +60,14 @@ exists only for the model-scoped windows and the plan.
 `SafeApiCall` turns an upstream 429 into a typed `quota.RateLimitError` carrying the
 `Retry-After` header CPA relays from the upstream (delay-seconds or an HTTP date,
 bounded to a day), or an exponential wait (five minutes doubling to six hours) when
-none is present. `RefreshCredentialQuota` propagates it. The scheduler, the manual
+none is present. `RefreshCredentialQuota` propagates it. Both background modes, the manual
 `POST /management/quota/refresh` endpoint and the MCP `quota_refresh` tool all
 share one in-memory registry: a 429 parks the credential and its provider, and
 while parked each path answers `rate_limited_backoff` with a retry time instead of
-probing again. A successful read clears the park.
+probing again. Credential warmup's consuming requests also respect the park and wait without
+probing. A successful quota read clears its own credential park; a provider park is released
+only by the read whose 429 created it, so a sibling whose attempt was already in flight cannot
+erase a fresh refusal.
 
 Every successful refresh records each window with a stated period and used share
 into the observation timeline as `source='active'` (migration 042), under a
@@ -78,9 +83,9 @@ be two observations in one estimate.
 
 ## Consequences
 
-The scheduler is best-effort, like the pricing and release loops: losing it leaves
-readings stale, never breaks request capture or the HTTP server. It performs
-outbound probes, so it is disabled in demo mode and by
+Both modes are best-effort, like the pricing and release loops: losing the selected loop leaves
+readings stale, never breaks request capture or the HTTP server. They perform outbound probes,
+so neither starts in demo mode or when disabled by
 `OMCPA_QUOTA_SCHEDULER_ENABLED=false`.
 
 The backoff is in memory only. A restart clears it, and the worst a cleared state
