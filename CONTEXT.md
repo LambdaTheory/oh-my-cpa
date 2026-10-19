@@ -427,7 +427,11 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   window that states a period and a used share; a refresh that failed records none. It is
   how a quiet credential, a model-scoped window or a closed cycle becomes part of the
   history the passive stream cannot describe (ADR 0104).
-- **Quota Refresh Tier**: The per-account cadence the background scheduler reads a
+- **Quota Refresh Mode**: The single background policy selected by
+  `OMCPA_QUOTA_SCHEDULER_MODE`: `interval` (default) reads the stored
+  `omc_quota_auto_refresh` preference, while `adaptive` reads the `OMCPA_QUOTA_*` tier
+  configuration and ignores that preference. Neither loop runs in demo mode.
+- **Quota Refresh Tier**: The per-account cadence the adaptive background scheduler reads a
   credential at: watched, active, normal or idle, chosen by how recently it served a
   request and the highest used share among its windows. A credential whose standard window
   is already current through the passive stream is read no faster than the passive floor.

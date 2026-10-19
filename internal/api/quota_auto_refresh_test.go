@@ -24,6 +24,7 @@ type quotaAutoRefreshFixture struct {
 	mu            sync.Mutex
 	reads         map[string]int
 	isUsageFailed bool
+	isRateLimited bool
 }
 
 func (f *quotaAutoRefreshFixture) usageReads(authIndex string) int {
@@ -64,8 +65,12 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 			}
 			fixture.mu.Lock()
 			fixture.reads[payload.AuthIndex]++
-			isFailed := fixture.isUsageFailed
+			isFailed, isRateLimited := fixture.isUsageFailed, fixture.isRateLimited
 			fixture.mu.Unlock()
+			if isRateLimited {
+				_, _ = writer.Write([]byte(`{"status_code": 429, "header":{"Retry-After":["120"]}, "body": {"message":"slow down"}}`))
+				return
+			}
 			if isFailed {
 				_, _ = writer.Write([]byte(`{"status_code": 500, "body": {"message": "upstream unavailable"}}`))
 				return
@@ -118,7 +123,7 @@ func setAutoRefreshPolicy(t *testing.T, handler *Handler, policy string) {
 	}
 }
 
-func TestQuotaAutoRefreshDefaultsReadResetsAndASixHourSchedule(t *testing.T) {
+func TestQuotaAutoRefreshDefaultsReadResetsAndAThirtyMinuteSchedule(t *testing.T) {
 	ctx := context.Background()
 	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}}
 	handler := newQuotaAutoRefreshHandler(t, fixture)
@@ -128,12 +133,12 @@ func TestQuotaAutoRefreshDefaultsReadResetsAndASixHourSchedule(t *testing.T) {
 	saveAutoRefreshSnapshot(t, handler, "codex-fresh", "codex", nowMS-5*hour, nowMS+4*hour)
 
 	// No stored policy: the reset credential is read after its reset, the one nobody has
-	// read is read on schedule, and a five-hour-old reading is not yet six hours old.
+	// read is read on schedule, and a five-hour-old reading is also older than thirty minutes.
 	round, err := handler.runQuotaAutoRefreshRound(ctx)
-	if err != nil || round.Due != 2 || round.Refreshed != 2 || round.ByReset != 1 {
+	if err != nil || round.Due != 3 || round.Refreshed != 3 || round.ByReset != 1 {
 		t.Fatalf("default round = %+v err=%v", round, err)
 	}
-	for authIndex, want := range map[string]int{"codex-reset": 1, "codex-unread": 1, "codex-fresh": 0, "codex-off": 0, "meta-reset": 0, "codex-dup": 0} {
+	for authIndex, want := range map[string]int{"codex-reset": 1, "codex-unread": 1, "codex-fresh": 1, "codex-off": 0, "meta-reset": 0, "codex-dup": 0} {
 		if got := fixture.usageReads(authIndex); got != want {
 			t.Errorf("%s read %d times, want %d", authIndex, got, want)
 		}
@@ -207,6 +212,43 @@ func TestQuotaAutoRefreshDoesNotRepeatAFailedRead(t *testing.T) {
 	}
 	if got := fixture.usageReads("codex-reset"); got != 1 {
 		t.Fatalf("codex-reset read %d times, want 1", got)
+	}
+}
+
+func TestQuotaAutoRefreshSharesRateLimitBackoffAndClearsAfterSuccess(t *testing.T) {
+	ctx := context.Background()
+	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, isRateLimited: true}
+	handler := newQuotaAutoRefreshHandler(t, fixture)
+	now := time.Now().UTC()
+	handler.nowFn = func() time.Time { return now }
+	saveAutoRefreshSnapshot(t, handler, "codex-reset", "codex", now.Add(-5*time.Hour).UnixMilli(), now.Add(-2*time.Minute).UnixMilli())
+	setAutoRefreshPolicy(t, handler, `{"interval_minutes":0,"refresh_on_reset":true}`)
+
+	round, err := handler.runQuotaAutoRefreshRound(ctx)
+	if err != nil || round.Failed != 1 || fixture.usageReads("codex-reset") != 1 {
+		t.Fatalf("rate-limited round = %+v err=%v reads=%d", round, err, fixture.usageReads("codex-reset"))
+	}
+	if blocked, _ := handler.quotaBackoffBlocked("codex", "codex-reset"); !blocked {
+		t.Fatal("interval refresh did not park the credential")
+	}
+	if round, err = handler.runQuotaAutoRefreshRound(ctx); err != nil || round.Due != 0 || fixture.usageReads("codex-reset") != 1 {
+		t.Fatalf("parked round = %+v err=%v reads=%d", round, err, fixture.usageReads("codex-reset"))
+	}
+
+	now = now.Add(11 * time.Minute)
+	fixture.mu.Lock()
+	fixture.isRateLimited = false
+	fixture.mu.Unlock()
+	round, err = handler.runQuotaAutoRefreshRound(ctx)
+	if err != nil || round.Refreshed != 1 || fixture.usageReads("codex-reset") != 2 {
+		t.Fatalf("recovery round = %+v err=%v reads=%d", round, err, fixture.usageReads("codex-reset"))
+	}
+	if blocked, _ := handler.quotaBackoffBlocked("codex", "codex-reset"); blocked {
+		t.Fatal("successful interval refresh did not clear the park")
+	}
+	var active int
+	if err := handler.repo.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM quota_observations WHERE source='active'`).Scan(&active); err != nil || active == 0 {
+		t.Fatalf("successful interval refresh recorded no active observations: count=%d err=%v", active, err)
 	}
 }
 

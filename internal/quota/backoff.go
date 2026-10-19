@@ -24,6 +24,10 @@ type RateLimitError struct {
 
 func (e *RateLimitError) Error() string { return "rate_limited_backoff" }
 
+// IsRateLimited lets bounded consuming adapters preserve this refusal without
+// importing quota and turning it into an uncertain transport failure.
+func (e *RateLimitError) IsRateLimited() bool { return true }
+
 func (e *RateLimitError) FailureDetail() string {
 	if e.RetryAfter > 0 {
 		return "upstream rate limited; retry after " + e.RetryAfter.Round(time.Second).String()
@@ -41,6 +45,17 @@ func rateLimitFrom(err error) *RateLimitError {
 		return rateErr
 	}
 	return nil
+}
+
+// NewRateLimitError builds the typed refusal all consuming callers propagate.
+func NewRateLimitError(provider, authIndex string, headers map[string][]string) *RateLimitError {
+	retryAfter, hasRetryAfter := parseRetryAfter(headers)
+	return &RateLimitError{
+		Provider:      strings.TrimSpace(provider),
+		AuthIndex:     strings.TrimSpace(authIndex),
+		RetryAfter:    retryAfter,
+		HasRetryAfter: hasRetryAfter,
+	}
 }
 
 // Backoff is the in-memory record of when each credential and provider may next

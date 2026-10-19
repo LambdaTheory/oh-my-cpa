@@ -78,17 +78,23 @@ a message naming the variable.
 
 ### Quota refresh scheduler
 
-The scheduler actively reads each refreshable credential's quota from its provider on a
-per-account cadence. A credential is watched, active, normal or idle according to how recently
-it served a request, and a window at or above the watch threshold is read most often. A
-credential whose standard window is already current through the passive observation stream is
-read no faster than `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL`, because its own request headers
-already carry the reading. The credential floor is the hard minimum between two active reads
-of one credential; it is resolved per provider, so the watched tier's five minutes is
-reachable for Codex and Antigravity while Claude stays at ten minutes.
+Exactly one quota refresh mode runs outside demo mode:
+
+| Mode | Policy source | Behavior |
+| --- | --- | --- |
+| `interval` (default) | The `omc_quota_auto_refresh` preference, including the settings page and `quota_auto_refresh_get/set` | Reads due credentials every thirty minutes by default and after observed resets; each round is capped at sixteen reads with concurrency four, and Meta is excluded |
+| `adaptive` | The `OMCPA_QUOTA_*` environment variables below | Uses watched, active, normal and idle tiers, reset/window-end reads, passive-observation widening and per-provider credential floors; it does not read `omc_quota_auto_refresh` |
+
+The adaptive scheduler reads each refreshable credential's quota from its provider on a
+per-account cadence. A credential whose standard window is already current through the passive
+observation stream is read no faster than `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL`. The credential
+floor is the hard minimum between two active reads of one credential; it is resolved per
+provider, so the watched tier's five minutes is reachable for Codex and Antigravity while
+Claude stays at ten minutes.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `OMCPA_QUOTA_SCHEDULER_MODE` | `interval` | Select `interval` or `adaptive`; any other value refuses startup |
 | `OMCPA_QUOTA_SCHEDULER_ENABLED` | `true` | Run the background quota refresh scheduler. Off in demo mode |
 | `OMCPA_QUOTA_WATCH_INTERVAL` | `5m` | Interval for a credential with recent traffic and a window at or above `OMCPA_QUOTA_WATCH_USED_PERCENT` |
 | `OMCPA_QUOTA_ACTIVE_INTERVAL` | `15m` | Interval for a credential with recent traffic below the watch threshold |
@@ -106,9 +112,10 @@ reachable for Codex and Antigravity while Claude stays at ten minutes.
 | `OMCPA_QUOTA_BACKOFF_MAX` | `6h` | Ceiling on the 429 backoff. Must be at least the base |
 
 An upstream 429 parks the credential and its provider for the `Retry-After` (or the
-exponential wait) and is shared by the manual refresh endpoint and the MCP `quota_refresh`
-tool: while parked, both refuse with `rate_limited_backoff` and a retry time instead of
-probing the upstream again. The state is in memory only, so a restart clears it.
+exponential wait). The manual endpoint, Agent/MCP `quota_refresh`, the selected background
+loop and credential warmup's consuming requests share the park; while it is active they refuse
+with a retry time instead of probing upstream again. A successful quota read clears it. The
+state is in memory only, so a restart clears it.
 
 ### Account auto-management
 

@@ -148,11 +148,18 @@ type UsageConfig struct {
 	CollectErrors bool
 }
 
-// QuotaConfig controls the background per-account quota refresh scheduler. It
-// decides how often each credential's quota is actively read from its provider
-// based on how recently it served traffic; the console and MCP keep working
-// without it and refresh on demand.
+type QuotaSchedulerMode string
+
+const (
+	QuotaSchedulerModeInterval QuotaSchedulerMode = "interval"
+	QuotaSchedulerModeAdaptive QuotaSchedulerMode = "adaptive"
+)
+
+// QuotaConfig controls the selected background quota refresh scheduler. Interval
+// mode uses the stored operator preference; adaptive mode uses the tier settings
+// below. The console and MCP keep working without either loop and refresh on demand.
 type QuotaConfig struct {
+	SchedulerMode QuotaSchedulerMode
 	// SchedulerEnabled gates the background loop only.
 	SchedulerEnabled bool
 	// Tier intervals. A credential that served a request in WatchWindow and has
@@ -736,6 +743,13 @@ func loadUsageConfig() (UsageConfig, error) {
 // depends on how many credentials a deployment holds and how tightly its
 // providers meter.
 func loadQuotaConfig() (QuotaConfig, error) {
+	mode := QuotaSchedulerMode(strings.TrimSpace(os.Getenv("OMCPA_QUOTA_SCHEDULER_MODE")))
+	if mode == "" {
+		mode = QuotaSchedulerModeInterval
+	}
+	if mode != QuotaSchedulerModeInterval && mode != QuotaSchedulerModeAdaptive {
+		return QuotaConfig{}, fmt.Errorf("OMCPA_QUOTA_SCHEDULER_MODE must be interval or adaptive: %q", mode)
+	}
 	enabled, err := parseBoolEnv("OMCPA_QUOTA_SCHEDULER_ENABLED", true)
 	if err != nil {
 		return QuotaConfig{}, err
@@ -808,6 +822,7 @@ func loadQuotaConfig() (QuotaConfig, error) {
 		concurrency = parsed
 	}
 	return QuotaConfig{
+		SchedulerMode:             mode,
 		SchedulerEnabled:          enabled,
 		WatchInterval:             watchInterval,
 		ActiveInterval:            activeInterval,

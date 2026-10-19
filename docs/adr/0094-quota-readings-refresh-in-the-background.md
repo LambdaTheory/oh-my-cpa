@@ -24,7 +24,8 @@ operator's action.
 
 **A one-minute background loop re-reads credentials that are due, under a stored
 policy with two independent triggers.** `Handler.RunQuotaAutoRefresh`
-(`internal/api/quota_auto_refresh.go`), started by `app.Run`, reads the
+(`internal/api/quota_auto_refresh.go`), selected by the default
+`OMCPA_QUOTA_SCHEDULER_MODE=interval` and started by `app.Run`, reads the
 `omc_quota_auto_refresh` preference on every tick, so a change takes effect without a
 restart. The rules are pure functions in `internal/quota/auto_refresh.go`.
 
@@ -34,17 +35,16 @@ restart. The rules are pure functions in `internal/quota/auto_refresh.go`.
   that fails is not stored, so it is retried every ten minutes during the hour after the
   reset and then left for the operator or the schedule; a credential nobody has read has
   no boundary and is never read by it.
-- **Scheduled read** (`interval_minutes`, 360 - six hours - by default, 5-1440, or 0
+- **Scheduled read** (`interval_minutes`, 30 by default, 5-1440, or 0
   for off): a credential
   is read once the newer of its observation and the last attempt is that old,
   including a credential nobody has read. A thirty-second slack lets the read fire on the
   tick that ends the interval, because an observation is stamped when its read finishes.
 
 Both triggers are on by default. A reset-driven read only re-reads a credential an
-operator already read, once per boundary that reading announced. The six-hour schedule
-keeps no reading older than the shortest common window (five hours) is long, so a
-credential nobody has opened still has a recent reading, at four reads per credential a
-day; a deployment holding many credentials or wanting fewer upstream requests can
+operator already read, once per boundary that reading announced. The thirty-minute schedule
+matches the adaptive scheduler's normal tier and keeps quiet readings current; a deployment
+holding many credentials or wanting fewer upstream requests can
 lengthen it or turn it off.
 
 **Automatic reads reuse the manual path and its persistence rule.** A due credential
@@ -77,9 +77,9 @@ demonstration starts no loop of its own beyond the HTTP server.
   with no operator action, and the console pages that poll the stored readings - the
   dashboard panel and the OAuth management workspace, each every minute - show it.
 - A deployment upgraded to this version starts reading its credentials on its own:
-  within its first minutes every enabled credential whose reading is older than six
-  hours, or that nobody has read, is read (sixteen per minute), then each about every
-  six hours and after each reset. Turning both triggers off restores operator-only
+  within its first minutes every enabled credential whose reading is older than thirty
+  minutes, or that nobody has read, is read (sixteen per minute), then each about every
+  thirty minutes and after each reset. Turning both triggers off restores operator-only
   reads.
 - The attempt memory is lost on restart, so a failing credential that is due may be
   tried once more after a restart; the round limit still bounds that.

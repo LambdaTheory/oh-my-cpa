@@ -25,9 +25,11 @@ capacity estimate needs.
 
 ## Decision
 
-Run one background loop, `internal/quota.Scheduler`, started by the application
-under the process lifetime context. Every minute it evaluates each refreshable,
-enabled credential and reads it on a per-account cadence derived from how recently
+The application runs exactly one quota refresh loop under the process lifetime context.
+`OMCPA_QUOTA_SCHEDULER_MODE=interval` is the default and runs ADR 0094's stored-preference
+policy. `OMCPA_QUOTA_SCHEDULER_MODE=adaptive` runs `internal/quota.Scheduler`; it does not
+read the `omc_quota_auto_refresh` preference. Every minute the adaptive mode evaluates each
+refreshable, enabled credential and reads it on a per-account cadence derived from how recently
 it served a request and the highest used share among its windows:
 
 - a credential with traffic in the last fifteen minutes and a window at or above
@@ -78,9 +80,9 @@ be two observations in one estimate.
 
 ## Consequences
 
-The scheduler is best-effort, like the pricing and release loops: losing it leaves
-readings stale, never breaks request capture or the HTTP server. It performs
-outbound probes, so it is disabled in demo mode and by
+Both modes are best-effort, like the pricing and release loops: losing the selected loop leaves
+readings stale, never breaks request capture or the HTTP server. They perform outbound probes,
+so neither starts in demo mode or when disabled by
 `OMCPA_QUOTA_SCHEDULER_ENABLED=false`.
 
 The backoff is in memory only. A restart clears it, and the worst a cleared state

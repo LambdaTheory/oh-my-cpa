@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
 )
@@ -23,6 +24,8 @@ import (
 func TestManualRefreshHonoursAndRecordsRateLimitBackoff(t *testing.T) {
 	const managementKey = "management-secret"
 	var apiCalls int64
+	var isRateLimited atomic.Bool
+	isRateLimited.Store(true)
 
 	cpaServer := newFakeCPA(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer "+managementKey {
@@ -35,7 +38,11 @@ func TestManualRefreshHonoursAndRecordsRateLimitBackoff(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"files":[{"id":"file-1","name":"codex-main.json","auth_index":"codex-idx-1","type":"codex","provider":"codex","disabled":false}]}`))
 		case "/v8/management/requests/api-call":
 			atomic.AddInt64(&apiCalls, 1)
-			_, _ = writer.Write([]byte(`{"status_code":429,"header":{"Retry-After":["120"]},"body":{"message":"slow down"}}`))
+			if isRateLimited.Load() {
+				_, _ = writer.Write([]byte(`{"status_code":429,"header":{"Retry-After":["120"]},"body":{"message":"slow down"}}`))
+				return
+			}
+			_, _ = writer.Write([]byte(`{"status_code":200,"body":{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":3,"limit_window_seconds":18000,"reset_after_seconds":18000}}}}`))
 		default:
 			writer.WriteHeader(http.StatusNotFound)
 		}
@@ -55,6 +62,7 @@ func TestManualRefreshHonoursAndRecordsRateLimitBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
+	handler.nowFn = func() time.Time { return now }
 	if err := handler.repo.UpsertInstance(context.Background(), domain.CPAInstance{
 		ID: "default", Name: "Default", BaseURL: cpaServer.URL,
 		UsageAddr:               strings.TrimPrefix(cpaServer.URL, "http://"),
@@ -105,5 +113,36 @@ func TestManualRefreshHonoursAndRecordsRateLimitBackoff(t *testing.T) {
 	}
 	if err := json.Unmarshal(body, &refusal); err != nil || refusal.RetryAtMS <= time.Now().UnixMilli() {
 		t.Fatalf("backoff refusal carried no retry time: %s (%v)", body, err)
+	}
+
+	now = now.Add(121 * time.Second)
+	isRateLimited.Store(false)
+	status, body = post()
+	if status != http.StatusOK {
+		t.Fatalf("successful retry = %d %s", status, body)
+	}
+	if blocked, _ := handler.quotaBackoffBlocked("codex", "codex-idx-1"); blocked {
+		t.Fatal("successful manual refresh did not clear the park")
+	}
+}
+
+func TestAgentQuotaRefreshRefusesASharedBackoff(t *testing.T) {
+	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}}
+	handler := newQuotaAutoRefreshHandler(t, fixture)
+	now := time.Now().UTC()
+	handler.nowFn = func() time.Time { return now }
+	handler.quotaBackoff.Record("codex", "codex-reset", 2*time.Minute, true, now)
+	if err := handler.ensureAgent(); err != nil {
+		t.Fatal(err)
+	}
+	result, err := handler.agent.executor.Invoke(context.Background(), capability.Principal{ID: "administrator", Adapter: "agent", IsAdmin: true}, "quota_refresh", json.RawMessage(`{"auth_index":"codex-reset"}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "error" || result.Code != "rate_limited_backoff" || !strings.Contains(result.Detail, "retry after") {
+		t.Fatalf("agent refusal = %+v", result)
+	}
+	if fixture.usageReads("codex-reset") != 0 {
+		t.Fatal("parked Agent refresh reached the upstream")
 	}
 }
