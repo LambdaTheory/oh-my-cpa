@@ -184,6 +184,11 @@ When upgrading Oh My CPA, the application automatically inspects and applies une
 3. **Forward-Only Rollbacks**:
    - In production, rolling back by manually editing `schema_migrations` or rewinding schema files is strictly prohibited;
    - If a defect is discovered in a migration, deploy a forward-fixing migration (e.g. `008_fix_xxx.sql`) to correct the schema.
+4. **Schema 45 to 48 upgrade**:
+   - Stop any second process that could open the same data directory and take an operator backup of the data directory and `.env` before replacing the executable or image. The application's encrypted migration backup is an additional fail-closed gate, not a substitute for preserving the deployment inputs;
+   - Startup applies migration 046 first (`credential_warmup_policies`, `credential_warmup_state`, `credential_warmup_runs`, and `quota_snapshots.warmup_json`), then 047 (`fonts` and `font_faces`), then 048 (`channel_model_prices` and `model_price_versions.channel`). Migrations 041–045 and their fork-owned tables remain untouched;
+   - Each migration runs in its own transaction. A failure rolls back that migration and stops startup; earlier migrations that already committed remain applied. Fix the cause and restart to continue forward;
+   - Do not start an older binary against a database that reached 46, 47 or 48. To return to the pre-upgrade release, stop OMC and restore the complete backup made before migration 046 together with the matching `.env` and `OMCPA_MASTER_KEY`.
 
 ---
 

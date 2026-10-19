@@ -225,6 +225,140 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
+func TestMigration045UpgradesForkSchemaThrough048(t *testing.T) {
+	ctx := context.Background()
+	database := openDatabaseAtMigration(t, 45)
+
+	var beforeMax int
+	if err := database.SQL.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&beforeMax); err != nil {
+		t.Fatal(err)
+	}
+	if beforeMax != 45 {
+		t.Fatalf("pre-upgrade schema version = %d, want 45", beforeMax)
+	}
+	var beforeCount int
+	if err := database.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations`).Scan(&beforeCount); err != nil {
+		t.Fatal(err)
+	}
+	if beforeCount != 40 {
+		t.Fatalf("pre-upgrade migration count = %d, want 40", beforeCount)
+	}
+
+	forkTables := []string{
+		"quota_observations",
+		"account_automation_settings",
+		"account_automation_accounts",
+		"account_automation_batches",
+		"ollama_accounts",
+		"feishu_settings",
+		"feishu_secrets",
+		"feishu_pending_items",
+		"feishu_notifications",
+		"feishu_channel_tracks",
+		"feishu_state",
+		"feishu_account_signals",
+	}
+	for _, table := range forkTables {
+		var count int
+		if err := database.SQL.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatalf("check pre-upgrade table %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Fatalf("pre-upgrade table %s count = %d, want 1", table, count)
+		}
+	}
+	if _, err := database.SQL.ExecContext(ctx, `
+		INSERT INTO quota_observations
+			(auth_index, provider, window_kind, window_minutes, used_percent, observed_at_ms, event_key, created_at_ms)
+		VALUES ('synthetic-auth', 'codex', 'weekly', 10080, 25, 1000, 'synthetic-event', 1000)`); err != nil {
+		t.Fatalf("seed pre-upgrade fork row: %v", err)
+	}
+
+	if err := database.Migrate(ctx); err != nil {
+		t.Fatalf("migrate schema 45 through 48: %v", err)
+	}
+
+	upstreamTables := []string{
+		"credential_warmup_policies",
+		"credential_warmup_state",
+		"credential_warmup_runs",
+		"fonts",
+		"font_faces",
+		"channel_model_prices",
+	}
+	for _, table := range append(forkTables, upstreamTables...) {
+		var count int
+		if err := database.SQL.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&count); err != nil {
+			t.Fatalf("check table %s: %v", table, err)
+		}
+		if count != 1 {
+			t.Fatalf("table %s count = %d, want 1", table, count)
+		}
+	}
+	var preservedCount int
+	if err := database.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM quota_observations WHERE event_key = 'synthetic-event'`).Scan(&preservedCount); err != nil {
+		t.Fatal(err)
+	}
+	if preservedCount != 1 {
+		t.Fatalf("pre-upgrade fork row count = %d after migration, want 1", preservedCount)
+	}
+
+	for table, column := range map[string]string{
+		"quota_snapshots":      "warmup_json",
+		"model_price_versions": "channel",
+	} {
+		var count int
+		if err := database.SQL.QueryRowContext(ctx,
+			`SELECT COUNT(1) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&count); err != nil {
+			t.Fatalf("check %s.%s: %v", table, column, err)
+		}
+		if count != 1 {
+			t.Fatalf("column %s.%s count = %d, want 1", table, column, count)
+		}
+	}
+
+	rows, err := database.SQL.QueryContext(ctx, `
+		SELECT version
+		FROM schema_migrations
+		ORDER BY version`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	expectedVersions := make([]int, 0, 43)
+	for version := 1; version <= 9; version++ {
+		expectedVersions = append(expectedVersions, version)
+	}
+	for version := 15; version <= 48; version++ {
+		expectedVersions = append(expectedVersions, version)
+	}
+	for _, want := range expectedVersions {
+		if !rows.Next() {
+			t.Fatalf("schema_migrations ended before version %d", want)
+		}
+		var got int
+		if err := rows.Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("schema_migrations version = %d, want %d", got, want)
+		}
+	}
+	if rows.Next() {
+		var extra int
+		if err := rows.Scan(&extra); err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("unexpected duplicate migration version %d", extra)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBackupRestoreSmokeAndFreeSpaceCheck(t *testing.T) {
 	cipher, err := crypto.New("01234567890123456789012345678901")
 	if err != nil {

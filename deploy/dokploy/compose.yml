@@ -43,6 +43,7 @@ services:
       OMCPA_TRUSTED_PROXY_CIDRS: ${OMCPA_TRUSTED_PROXY_CIDRS:-}
       OMCPA_USAGE_INGEST_MODE: ${OMCPA_USAGE_INGEST_MODE:-off}
       OMCPA_QUOTA_SCHEDULER_ENABLED: ${OMCPA_QUOTA_SCHEDULER_ENABLED:-true}
+      OMCPA_QUOTA_SCHEDULER_MODE: ${OMCPA_QUOTA_SCHEDULER_MODE:-interval}
       OMCPA_QUOTA_WATCH_INTERVAL: ${OMCPA_QUOTA_WATCH_INTERVAL:-5m}
       OMCPA_QUOTA_ACTIVE_INTERVAL: ${OMCPA_QUOTA_ACTIVE_INTERVAL:-15m}
       OMCPA_QUOTA_NORMAL_INTERVAL: ${OMCPA_QUOTA_NORMAL_INTERVAL:-30m}
@@ -52,6 +53,7 @@ services:
       OMCPA_QUOTA_REFRESH_CONCURRENCY: ${OMCPA_QUOTA_REFRESH_CONCURRENCY:-4}
       OMCPA_UPDATE_CHECK_ENABLED: ${OMCPA_UPDATE_CHECK_ENABLED:-false}
       OMCPA_UPDATE_CHECK_ON_PAGE_LOAD: ${OMCPA_UPDATE_CHECK_ON_PAGE_LOAD:-false}
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
       # The tri-state switches are passed through with an empty default. An unset
       # variable must stay unset so the console's own switch is in force; writing a
       # hard `false` here would silently disable the web toggle.

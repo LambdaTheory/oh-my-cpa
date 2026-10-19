@@ -78,17 +78,23 @@ a message naming the variable.
 
 ### Quota refresh scheduler
 
-The scheduler actively reads each refreshable credential's quota from its provider on a
-per-account cadence. A credential is watched, active, normal or idle according to how recently
-it served a request, and a window at or above the watch threshold is read most often. A
-credential whose standard window is already current through the passive observation stream is
-read no faster than `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL`, because its own request headers
-already carry the reading. The credential floor is the hard minimum between two active reads
-of one credential; it is resolved per provider, so the watched tier's five minutes is
-reachable for Codex and Antigravity while Claude stays at ten minutes.
+Exactly one quota refresh mode runs outside demo mode:
+
+| Mode | Policy source | Behavior |
+| --- | --- | --- |
+| `interval` (default) | The `omc_quota_auto_refresh` preference, including the settings page and `quota_auto_refresh_get/set` | Reads due credentials every six hours by default and after observed resets; each round is capped at sixteen reads with concurrency four, and Meta is excluded |
+| `adaptive` | The `OMCPA_QUOTA_*` environment variables below | Uses watched, active, normal and idle tiers, reset/window-end reads, passive-observation widening and per-provider credential floors; it does not read `omc_quota_auto_refresh` |
+
+The adaptive scheduler reads each refreshable credential's quota from its provider on a
+per-account cadence. A credential whose standard window is already current through the passive
+observation stream is read no faster than `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL`. The credential
+floor is the hard minimum between two active reads of one credential; it is resolved per
+provider, so the watched tier's five minutes is reachable for Codex and Antigravity while
+Claude stays at ten minutes.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `OMCPA_QUOTA_SCHEDULER_MODE` | `interval` | Select `interval` or `adaptive`; any other value refuses startup |
 | `OMCPA_QUOTA_SCHEDULER_ENABLED` | `true` | Run the background quota refresh scheduler. Off in demo mode |
 | `OMCPA_QUOTA_WATCH_INTERVAL` | `5m` | Interval for a credential with recent traffic and a window at or above `OMCPA_QUOTA_WATCH_USED_PERCENT` |
 | `OMCPA_QUOTA_ACTIVE_INTERVAL` | `15m` | Interval for a credential with recent traffic below the watch threshold |
@@ -341,6 +347,20 @@ My CPA update ends the process that admitted it, so the next process follows the
 from start-up and records the outcome once the updater reports it finished.
 
 ## Database maintenance
+
+Schema 45 upgrades in order through migrations 046–048. Migration 046 adds credential
+warmup policy, state and receipt tables plus `quota_snapshots.warmup_json`; migration 047
+adds the self-hosted `fonts` and `font_faces` library; migration 048 adds
+`channel_model_prices` and `model_price_versions.channel`. Existing fork tables from
+migrations 041–045 remain in place. Startup creates and smoke-tests the encrypted
+pre-migration backup before applying 046; if any migration fails, its transaction rolls
+back and startup stops. Returning to an older executable requires restoring that backup,
+not editing `schema_migrations` or trying to reverse individual migrations.
+
+The published Compose files and the Dokploy template keep
+`OMCPA_UPDATER_ENABLED=false` by default and do not mount the Docker socket. To opt in,
+set the variable to `true`, recreate OMC, then run the explicit `updater install` command
+in `docs/install.md`; only the resulting updater container holds the socket.
 
 The System Information page can truncate the WAL or rebuild the database, and refuses
 the second while the first runs. Both wait for in-flight writes rather than interrupting
@@ -622,8 +642,8 @@ being filed under a period it does not describe (ADR 0071).
 
 ## Automatic quota refresh
 
-OMC Settings → Quota holds the deployment-wide automatic quota refresh policy (the
-`omc_quota_auto_refresh` preference, ADR 0094). **Refresh after a quota resets** is on
+In `interval` mode, OMC Settings → Quota holds the deployment-wide automatic quota
+refresh policy (the `omc_quota_auto_refresh` preference, ADR 0094). **Refresh after a quota resets** is on
 by default: about a minute after a window a stored reading reported has reset, that
 credential is read again once. **Scheduled quota refresh** reads every enabled credential whose reading is
 older than the interval - six hours by default, adjustable from 5 minutes to 24 hours,
