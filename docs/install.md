@@ -484,6 +484,9 @@ older executable requires restoring the corresponding data backup.
 
 Needs Go 1.25+, Node.js 22+, pnpm 11+ and a running CPA.
 
+Docker source builds need about **4 GB of available memory** to compile the SPA.
+On a host with less, add swap or build on a larger machine.
+
 ```bash
 git clone https://github.com/WizisCool/oh-my-cpa.git
 cd oh-my-cpa
