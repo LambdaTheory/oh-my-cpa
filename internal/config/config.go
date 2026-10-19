@@ -42,6 +42,11 @@ type Config struct {
 	// Empty disables it. It must be at least 16 characters and differ from the
 	// management key.
 	MCPReadOnlyKey string
+	Updater        UpdaterConfig
+	// GoogleFontsURL is the stylesheet API the font library installs Google Fonts
+	// families from (OMCPA_GOOGLE_FONTS_URL); a compatible mirror serves a deployment
+	// that cannot reach Google. Validated when the installer is built.
+	GoogleFontsURL string
 	// TrustedProxyCIDRs are the direct peer networks whose forwarding headers
 	// may be used for per-client login throttling. Empty means trust none.
 	TrustedProxyCIDRs []string
@@ -51,6 +56,31 @@ type Config struct {
 	// would touch real secret material. It is off unless OMCPA_DEMO_MODE is set,
 	// which is what keeps the self-hosted default byte-for-byte unchanged.
 	IsDemoMode bool
+}
+
+// DefaultUpdaterURL is the updater sidecar's address: the name both an installed
+// sidecar and the Compose service answer to on a network shared with the console.
+const DefaultUpdaterURL = "http://oh-my-cpa-updater:8090"
+
+// UpdaterConfig locates the sidecar that applies updates the console asks for.
+type UpdaterConfig struct {
+	// Enabled is false when the operator turned console updates off; the page then
+	// offers none and this process never contacts a sidecar.
+	Enabled bool
+	URL     string
+}
+
+func loadUpdaterConfig() (UpdaterConfig, error) {
+	enabled, err := parseBoolEnv("OMCPA_UPDATER_ENABLED", false)
+	if err != nil {
+		return UpdaterConfig{}, err
+	}
+	address := envOr("OMCPA_UPDATER_URL", DefaultUpdaterURL)
+	parsed, err := url.Parse(address)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return UpdaterConfig{}, fmt.Errorf("OMCPA_UPDATER_URL must be an http(s) URL, got %q", address)
+	}
+	return UpdaterConfig{Enabled: enabled, URL: address}, nil
 }
 
 // ReleaseConfig controls the release-observation surface: which published versions
@@ -453,6 +483,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	updaterConfig, err := loadUpdaterConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	if demoMode {
 		// The fixture database is the whole history, and there is no CPA queue to
 		// drain: leaving capture on would only poll an upstream that does not
@@ -508,6 +542,8 @@ func Load() (Config, error) {
 		TLSSkipVerify:     tlsSkipVerify,
 		TrustedProxyCIDRs: trustedProxyCIDRs,
 		Release:           releaseConfig,
+		Updater:           updaterConfig,
+		GoogleFontsURL:    strings.TrimSpace(os.Getenv("OMCPA_GOOGLE_FONTS_URL")),
 		CPA:               cpa,
 		IsDemoMode:        demoMode,
 	}, nil

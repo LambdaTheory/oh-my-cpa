@@ -507,6 +507,7 @@ func (h *Handler) operationsService() *operations.Service {
 		return mapAgentProviderError(err)
 	}
 	h.bindProviderOperations(service)
+	h.bindWarmupOperations(service)
 	return service
 }
 func (h *Handler) ensureAgent() error {

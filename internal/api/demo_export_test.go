@@ -110,12 +110,14 @@ func demoExportCases() []demoExportCase {
 		{Name: "resources", Path: "/api/v1/resources"},
 		{Name: "preferences", Path: "/api/v1/preferences"},
 		{Name: "custom-icons", Path: "/api/v1/custom-icons"},
+		{Name: "fonts", Path: "/api/v1/fonts"},
 		{Name: "custom-icon-content", Path: "/api/v1/custom-icons/00000000000000000000000000000001/content", Route: "/api/v1/custom-icons/{id}/content"},
 		{Name: "overview", Path: "/api/v1/management/overview"},
 		{Name: "system", Path: "/api/v1/management/system"},
 		{Name: "system-releases", Path: "/api/v1/management/system/releases"},
 		{Name: "system-repository", Path: "/api/v1/management/system/repository"},
 		{Name: "system-updates", Path: "/api/v1/management/system/updates"},
+		{Name: "system-updater", Path: "/api/v1/management/system/updater"},
 		{Name: "system-maintenance", Path: "/api/v1/management/system/maintenance"},
 		{Name: "config", Path: "/api/v1/management/config"},
 		{Name: "config-source", Path: "/api/v1/management/config/source"},
@@ -163,6 +165,10 @@ func demoExportCases() []demoExportCase {
 		// answer the page renders between flows, so the exported response is the one
 		// for a state the fixture can describe.
 		{Name: "oauth-status", Path: "/api/v1/management/oauth/status?state=demo-idle"},
+		{Name: "warmup-settings", Path: "/api/v1/management/quota/warmup/settings"},
+		{Name: "warmup-codex", Path: "/api/v1/management/quota/warmup/credentials/auth-codex-01", Route: "/api/v1/management/quota/warmup/credentials/{authIndex}"},
+		{Name: "warmup-codex-secondary", Path: "/api/v1/management/quota/warmup/credentials/auth-codex-02", Route: "/api/v1/management/quota/warmup/credentials/{authIndex}"},
+		{Name: "warmup-claude", Path: "/api/v1/management/quota/warmup/credentials/auth-claude-01", Route: "/api/v1/management/quota/warmup/credentials/{authIndex}"},
 		{Name: "quota", Path: "/api/v1/management/quota"},
 		// One credential's quota detail, for the page the quota list links into.
 		{Name: "quota-codex", Path: "/api/v1/management/quota/auth-codex-01"},
@@ -231,6 +237,12 @@ func demoExportCases() []demoExportCase {
 			demoExportCase{Name: "client-key-usage-" + preset, Path: "/api/v1/management/client-key-usage?" + window},
 		)
 	}
+	// The dashboard's live routing panel reads one fixed window ending at the
+	// export's pinned now, which the Worker re-bases with every other timestamp.
+	cases = append(cases, demoExportCase{Name: "usage-routing", Path: "/api/v1/usage/routing"})
+	// The demonstration has no collector, so its live stream answers 204 and the
+	// pages keep polling the dataset.
+	cases = append(cases, demoExportCase{Name: "usage-live", Path: "/api/v1/usage/live"})
 	// The all-time window has no span to turn into bounds: the server starts it at the
 	// first usage record. It is still reproducible, because the export pins the
 	// handler's clock to the reference instant. The key table does not offer it.
@@ -272,6 +284,7 @@ func demoExportCases() []demoExportCase {
 var demoExportRouteGaps = map[string]string{
 	"/api/v1/management/auth-files/safe-fields": "the fixture refuses the download the projection reads, by design and under test",
 	"/api/v1/ollama/accounts/{id}":              "the demonstration seeds no Ollama account, so there is no detail row to open",
+	"/api/v1/fonts/{id}/faces/{faceId}":         "the demonstration's font library is empty, so no face is ever declared to the browser",
 }
 
 // demoExportFirstEventPath builds the detail path for the first event the list carried.

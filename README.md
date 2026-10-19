@@ -132,6 +132,7 @@ services:
       OMCPA_CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?}
       OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
       OMCPA_DATA_DIR: /data
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - oh-my-cpa-data:/data
 
@@ -155,7 +156,7 @@ to CPA at `http://127.0.0.1:8317`.
 
 #### CLIProxyAPI is already installed
 
-Add the service under `services:` in the Compose file that runs CPA, and merge
+Add the services under `services:` in the Compose file that runs CPA, and merge
 `oh-my-cpa-data:` into the top-level `volumes:` key if one exists. `cli-proxy-api` is
 the service name in CPA's own Compose file; replace it if the service is named
 differently.
@@ -171,6 +172,7 @@ differently.
       OMCPA_CPA_MANAGEMENT_KEY: ${OMCPA_CPA_MANAGEMENT_KEY:?}
       OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
       OMCPA_DATA_DIR: /data
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - oh-my-cpa-data:/data
 
@@ -209,6 +211,7 @@ services:
       OMCPA_CPA_MANAGEMENT_KEY: ${OMCPA_CPA_MANAGEMENT_KEY:?}
       OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
       OMCPA_DATA_DIR: /data
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - oh-my-cpa-data:/data
 
@@ -225,6 +228,26 @@ OMCPA_MASTER_KEY=<output of: openssl rand -hex 32>
 
 Run `docker compose up -d`, then open **`http://127.0.0.1:8080/omc/`** and sign in with
 the management key.
+
+### Updating
+
+Console updates are off by default. To opt in, set `OMCPA_UPDATER_ENABLED=true`, recreate
+the `oh-my-cpa` service, then run the installer command below. **System Information** then
+shows **Update now** beside a newer release of Oh My CPA or CLIProxyAPI. The updater pulls the
+image, replaces the container with its settings, volumes and networks unchanged, and
+restores the previous container if the new one does not start.
+
+A deployment installed before this service existed gains it with one command on the
+Docker host; the Compose file is not edited:
+
+```bash
+docker run --rm --pull always -u 0 -v /var/run/docker.sock:/var/run/docker.sock wiziscool/oh-my-cpa:latest updater install
+```
+
+The command adds an `oh-my-cpa-updater` container and brings Oh My CPA up to the current
+release in the same step. `docker rm -f oh-my-cpa-updater` removes it. An image pinned to
+a version tag is never changed from the console. [Upgrading](docs/install.md#upgrading)
+describes each case and the manual alternative.
 
 ### Install a native executable
 
@@ -245,6 +268,12 @@ CPA hands each usage record to a single reader. If another usage tracker reads t
 CPA, stop it, or add `OMCPA_USAGE_INGEST_MODE: "off"` under `environment:` to use OMC
 for management only. Other management panels do not conflict.
 
+The optional `oh-my-cpa-updater` mounts the Docker socket, which amounts to control of Docker on that
+host. Console updates stay off unless `OMCPA_UPDATER_ENABLED=true` is set. Turn them off again by
+setting it to `false`, recreating `oh-my-cpa`, and removing the sidecar with
+`docker rm -f oh-my-cpa-updater`. Updates are then applied with
+`docker compose pull && docker compose up -d`.
+
 The [installation guide](docs/install.md) covers the hardened Compose files published
 with each release, remote access, HTTPS, building from source, upgrades and
 troubleshooting.
@@ -255,7 +284,7 @@ troubleshooting.
 <summary><b>Gateway & providers</b></summary>
 
 - **AI providers**: Codex, Claude, Gemini, Meta Muse, xAI, Vertex AI, Gemini Interactions, DeepSeek and OpenAI-compatible services, each with credentials, advanced model options, runtime retry/error policies, priority, weight, proxy and an enable switch enforced by the gateway.
-- **OAuth management**: sign in from the console for Codex, Claude, Antigravity, xAI, Kimi (kimi.com and kimi.ai), Devin and Meta Muse, or import a Vertex service account key. Auth files, manual token refresh, model lists, Meta quota, live xAI/Antigravity plan readings and credential-specific aliases are managed per credential; shared model aliases and exclusion rules apply provider-wide. Window capacity is estimated for Codex, Claude and supported Antigravity groups, with the previous cycle shown as a labelled reference.
+- **OAuth management**: sign in from the console for Codex, Claude, Antigravity, xAI, Kimi (kimi.com and kimi.ai), Devin and Meta Muse, or import a Vertex service account key. Auth files, manual token refresh, model lists, Meta quota, live xAI/Antigravity plan readings and credential-specific aliases are managed per credential; shared model aliases and exclusion rules apply provider-wide. Window capacity is estimated for Codex, Claude and supported Antigravity groups, with the previous cycle shown as a labelled reference. Quota readings refresh themselves about a minute after a window resets and every six hours by default, adjustable in OMC Settings. Codex/Claude window warmup adds opt-in reset and daily schedules, credential overrides and an optional confirmed tiny request. Approved schedules check current quota and billing before sending, then observe window activation.
 - **Client keys**: create, name and revoke gateway API keys. Names appear in request records and filters.
 - **Model catalog**: pull model lists straight from upstream providers.
 - **Playground**: test any routed model with text and images, streamed multi-turn answers and request diagnostics.
@@ -267,8 +296,9 @@ troubleshooting.
 <summary><b>Observability</b></summary>
 
 - **Dashboard**: request volume, token throughput, cache hit rate and cost over presets from 15 minutes to 90 days, an all-time window since installation, or any custom range, plus a year-long token heatmap. Statistics are kept permanently; request records roll out of a configurable retention.
+- **Live routing**: a rolling minute of which models were called and which credentials and providers CPA sent them to. Each new request travels the map out to its credential and back, rerouted attempts and cooldowns included. The panel updates as records are stored, falls back to a short poll when the live stream is unavailable, and is shown on desktop widths.
 - **Model panels**: token trend and usage ring by call model or by requested model, with cost shares.
-- **Request records**: multi-select facets and full-text search; a detail drawer with duration, TTFT, token breakdown and the raw per-request log. Each record keeps the model the upstream reported serving, and flags the ones where it differs from the model requested.
+- **Request records**: multi-select facets and full-text search; with auto-refresh on, new records appear as soon as they are stored; a detail drawer with duration, TTFT, token breakdown and the raw per-request log. Each record keeps the model the upstream reported serving, and flags the ones where it differs from the model requested.
 - **Background collection**: usage is ingested by stream or polling, even with no browser open.
 - **Logs and audit trail**: tail the gateway log, read the console's own service log, and review an append-only audit trail with filters and JSON export.
 - **Ollama monitoring**: keep several Ollama Cloud accounts and read each one's quota from its settings page with an encrypted session cookie. The cookie is never returned or logged, a missing percentage stays "not reported", and disabling collection never claims to stop inference.
@@ -283,6 +313,7 @@ troubleshooting.
 - **OpenRouter price book**: every served model priced from OpenRouter's public list, including long-context and time-of-day tiers.
 - **Linked and custom prices**: pin a model to an OpenRouter entry or set custom rates, with tier presets and a calculator.
 - **Channel multipliers**: scale everything one provider answers, for example a relay billed at 30% of list.
+- **Channel model prices**: give the same model different custom rates and time tiers on different channels, with shared prices as the default.
 
 </details>
 
@@ -293,8 +324,8 @@ troubleshooting.
 - **Automatic config backups**: an encrypted copy of `config.yaml` before every change, restorable from the console.
 - **Encryption at rest**: stored credentials and raw usage messages are AES-GCM encrypted.
 - **Audited sensitive actions**: revealing keys, downloading auth files and exporting logs are written to the audit log, and refused if that write fails.
-- **Offline operation**: every asset is embedded in the binary; no CDN is contacted.
-- **Personalization**: four interface languages, light and dark themes with custom palettes, a deployment time zone, and K/M/B or 万/亿 number units.
+- **Offline operation**: bundled assets are embedded in the binary; installed and uploaded fonts are stored and served by the deployment. The browser contacts no CDN.
+- **Personalization**: four interface languages, light and dark themes with custom palettes, interface and monospace fonts from a font library (bundled, uploaded or installed from Google Fonts and served by the console itself), a deployment time zone, and K/M/B or 万/亿 number units.
 
 </details>
 

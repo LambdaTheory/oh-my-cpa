@@ -147,7 +147,7 @@ Concrete route names are an implementation concern; the authorization boundary i
 ## 7. ADR
 
 The account-auto-management control semantics were accepted as
-[ADR 0096](adr/0096-account-auto-management-weekly-exhaustion.md) (account-level
+[ADR 0105](adr/0105-account-auto-management-weekly-exhaustion.md) (account-level
 weekly exhaustion disable and direct reset-time enable). Line B and line C are
 recorded in `docs/ollama-monitoring.md` and `docs/feishu-notifications.md`; the
 single-platform absorption decision remains with the parent session.
@@ -177,9 +177,9 @@ The rows above have been implemented as tests in the worktree (see
 
 1. Integration owner assignment and migration number: assigned as `043`–`045` (see §6).
 2. ADR coordination with the parent session: the account-auto-management semantics are
-   [ADR 0096](adr/0096-account-auto-management-weekly-exhaustion.md); the single-platform
+   [ADR 0105](adr/0105-account-auto-management-weekly-exhaustion.md); the single-platform
    absorption decision remains open with the parent session.
 3. The line-specific **To verify** items in §2.3, §3.3 and §4.3: the account line's
-   evidence/control questions are answered by ADR 0096; the Ollama and Feishu questions
+   evidence/control questions are answered by ADR 0105; the Ollama and Feishu questions
    are answered in `docs/ollama-monitoring.md` and `docs/feishu-notifications.md`. The
    real-network behaviour of both modules remains unverified from this worktree.

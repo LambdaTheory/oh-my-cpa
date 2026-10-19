@@ -66,6 +66,7 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_PUBLIC_URL", "OMCPA_VERSION", "OMCPA_CPA_BASE_URL", "OMCPA_CPA_USAGE_ADDR",
 		"OMCPA_CPA_MANAGEMENT_KEY", "OMCPA_TRUSTED_PROXY_CIDRS", DemoModeEnv, "PORT",
 		"OMCPA_UPDATE_CHECK_ENABLED", "OMCPA_OMC_REPO", "OMCPA_CPA_REPO", "OMCPA_MCP_READONLY_KEY",
+		"OMCPA_UPDATER_ENABLED", "OMCPA_UPDATER_URL", "OMCPA_GOOGLE_FONTS_URL",
 		"OMCPA_QUOTA_SCHEDULER_ENABLED", "OMCPA_QUOTA_WATCH_INTERVAL", "OMCPA_QUOTA_ACTIVE_INTERVAL",
 		"OMCPA_QUOTA_NORMAL_INTERVAL", "OMCPA_QUOTA_IDLE_INTERVAL", "OMCPA_QUOTA_WATCH_USED_PERCENT",
 		"OMCPA_QUOTA_WATCH_WINDOW", "OMCPA_QUOTA_NORMAL_WINDOW", "OMCPA_QUOTA_WINDOW_END_MARGIN",
@@ -73,6 +74,26 @@ func clearConfigEnv(t *testing.T) {
 		"OMCPA_QUOTA_BACKOFF_BASE", "OMCPA_QUOTA_BACKOFF_MAX", "OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER",
 	} {
 		t.Setenv(name, "")
+	}
+}
+
+func TestLoadUpdaterDefaultsOffAndRequiresExplicitOptIn(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Updater.Enabled {
+		t.Fatal("updater must stay off unless the operator explicitly enables it")
+	}
+
+	t.Setenv("OMCPA_UPDATER_ENABLED", "true")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Updater.Enabled || cfg.Updater.URL != DefaultUpdaterURL {
+		t.Fatalf("explicit updater opt-in = %+v", cfg.Updater)
 	}
 }
 

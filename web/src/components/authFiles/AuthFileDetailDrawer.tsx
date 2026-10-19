@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
 import {
   Tabs,
   Button,
@@ -66,7 +66,9 @@ interface AuthFileDetailDrawerProps {
   onSaved: (file?: ManagementAuthFile) => void;
   onDownload: (file: ManagementAuthFile) => void;
   quotaContent?: React.ReactNode;
-  initialSection?: 'overview' | 'configuration' | 'models';
+  warmupContent?: React.ReactNode;
+  hasExternalDraft?: boolean;
+  initialSection?: 'overview' | 'warmup' | 'configuration' | 'models';
   /**
    * Whether the safe fields may be written. The write is keyed by file name, so a
    * credential whose name does not identify one entry cannot be edited safely: the
@@ -155,6 +157,8 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
   onSaved,
   onDownload,
   quotaContent,
+  warmupContent,
+  hasExternalDraft = false,
   initialSection = 'overview',
   canEdit = false,
 }) => {
@@ -172,7 +176,7 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
   const [policyBaseline, setPolicyBaseline] = useState<CredentialPolicyDraft>(EMPTY_CREDENTIAL_POLICY_DRAFT);
   const [isPolicyChecked, setIsPolicyChecked] = useState(false);
   const [modelFilter, setModelFilter] = useState('');
-  const [activeSection, setActiveSection] = useState<'overview' | 'configuration' | 'models'>(initialSection);
+  const [activeSection, setActiveSection] = useState<'overview' | 'warmup' | 'configuration' | 'models'>(initialSection);
 
   const resetPolicy = useCallback((next: CredentialPolicyDraft) => {
     setPolicy(next);
@@ -183,6 +187,16 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
   const sessionCounterRef = useRef(0);
   const currentSessionRef = useRef<number>(0);
   const isPendingRef = useRef<boolean>(false);
+  const hasExternalDraftRef = useRef(hasExternalDraft);
+  useLayoutEffect(() => {
+    // A suspended render must not overwrite the draft state used by save completion.
+    hasExternalDraftRef.current = hasExternalDraft;
+  }, [hasExternalDraft]);
+  const closeAfterSaving = useCallback(() => {
+    // Saving another section must not discard a warmup draft, including one
+    // created while this field save was in flight.
+    if (!hasExternalDraftRef.current) onClose();
+  }, [onClose]);
 
   useEffect(() => {
     return () => {
@@ -263,7 +277,7 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
         }
         toast.success(t('af.save_fields_success'));
         setIsDirty(false);
-        onClose();
+        closeAfterSaving();
       }
     },
     onError: (err: unknown) => {
@@ -288,7 +302,7 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
 
   const handleAttemptClose = useCallback(() => {
     if (saveMutation.isPending || isPendingRef.current) return;
-    if (isDirty) {
+    if (isDirty || hasExternalDraft) {
       modal.confirm({
         title: t('af.unsaved_confirm_title'),
         icon: <ExclamationCircleOutlined />,
@@ -304,7 +318,7 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
     } else {
       onClose();
     }
-  }, [isDirty, modal, onClose, saveMutation.isPending, t]);
+  }, [isDirty, hasExternalDraft, modal, onClose, saveMutation.isPending, t]);
 
   // Back goes through the same guard the drawer's own X does, so an edit in progress is never
   // discarded by a physical key that the reader may have pressed by accident.
@@ -393,7 +407,9 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
 
     if (Object.keys(patch).length === 0) {
       isPendingRef.current = false;
-      onClose();
+      form.setFieldsValue(baseline);
+      setIsDirty(false);
+      closeAfterSaving();
       return;
     }
 
@@ -587,6 +603,12 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
                   </div>
                 ),
               },
+              ...(warmupContent ? [{
+                key: 'warmup',
+                label: <span className={styles['tab-label']}>{t('warmup.title')}{hasExternalDraft && <Tag tone="warn">{t('cfg.dirty_bar_unsaved')}</Tag>}</span>,
+                disabled: saveMutation.isPending,
+                children: warmupContent,
+              }] : []),
               {
                 key: 'configuration',
                 forceRender: true,

@@ -129,7 +129,7 @@ switch, the one-time recovery time and the web switch all live in the console un
 
 A failed enable persists its retry instant and attempt count, so a restart resumes the
 wait rather than retrying immediately. The loop performs a CPA write, so it never runs
-in demo mode. See ADR 0096.
+in demo mode. See ADR 0105.
 
 ### Ollama monitoring
 
@@ -180,6 +180,9 @@ without a value cannot pin the feature off. The console shows the effective sour
 | `OMCPA_UPDATE_CHECK_ON_PAGE_LOAD` | `true` | The check the System Information page makes when opened |
 | `OMCPA_OMC_REPO` / `OMCPA_CPA_REPO` | `WizisCool/oh-my-cpa` / `router-for-me/CLIProxyAPI` | `owner/name` the checks read, for a fork |
 | `OMCPA_DEMO_MODE` | `false` | Serve the console from the built-in fixture; see [Demo mode](#demo-mode) |
+| `OMCPA_UPDATER_ENABLED` | `false` | Set to `true` only after explicitly installing the socket-holding updater; see [Console updates](#console-updates) |
+| `OMCPA_UPDATER_URL` | `http://oh-my-cpa-updater:8090` | Where the console looks for the updater. The default is the service and container name every install method uses |
+| `OMCPA_GOOGLE_FONTS_URL` | `https://fonts.googleapis.com` | The Google Fonts stylesheet API the font library installs from, or a compatible mirror for a deployment that cannot reach Google. Requests honour `HTTPS_PROXY`; font files are downloaded only from Google's font hosts or the mirror's own site. Used only when an operator installs a family; uploading needs no network |
 
 ### MCP read-only key
 
@@ -286,6 +289,56 @@ making them, and the page says so when a check is refused for that reason. Relea
 are held in memory rather than stored, so after a restart the page names the versions
 and links to the source while the notes themselves are unavailable — see
 `docs/architecture.md` §10.
+
+## Console updates
+
+On a container deployment with an updater (ADR 0099), the System Information page offers
+**Update now** beside a product that has a newer release. `docs/install.md` ("Upgrading")
+is the operator's guide, including the one command that adds an updater to a deployment
+that predates it.
+
+The updater is the Oh My CPA image run as `oh-my-cpa updater serve`. It listens on
+`:8090` inside the Docker network and publishes no port. Its settings are read from its
+own environment, and an installation needs none of them:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_UPDATER_LISTEN_ADDR` | `:8090` | Listen address inside the container |
+| `OMCPA_UPDATER_SOCKET` | `/var/run/docker.sock` | The Docker socket as mounted in the container |
+| `OMCPA_UPDATER_OMC_CONTAINER` | found by image | The console container, when more than one Oh My CPA runs on the host |
+| `OMCPA_UPDATER_CPA_CONTAINER` | found from `OMCPA_CPA_BASE_URL` | The gateway container, when it cannot be found that way |
+| `OMCPA_UPDATER_LINK_NETWORK` | empty | Set by `updater install`: the network the updater keeps the console attached to. Empty when both are services of one Compose file |
+| `OMCPA_UPDATER_PUBLIC_KEY` | built in | Base64 Ed25519 public key that replaces the built-in release key, for a fork that signs its own releases |
+
+Security boundary:
+
+- The updater holds the Docker socket, which is control of Docker on that host. The
+  console does not, and stays read-only and unprivileged. Anyone who can already run
+  `docker` on the host gains nothing; anyone who can reach the updater's port without
+  its token gets `401`.
+- The token is an HMAC of `OMCPA_MASTER_KEY`. Neither container stores it, and it is
+  not logged. Changing the master key needs no step here: the updater reads the
+  console's current value from Docker.
+- The updater accepts a product name only. It never takes an image, a container name or
+  a command from the console, updates only the two containers it identified, and
+  refuses an image pinned to a version tag or digest.
+- Oh My CPA is replaced only by the image a release's signed manifest names, and never
+  by an older version. CLIProxyAPI is an upstream image this project cannot sign: its
+  update pulls the tag the container already uses.
+- A build without the release public key reports `signature_unavailable` and offers no
+  console update for Oh My CPA.
+
+Network use: applying an Oh My CPA update makes the console download
+`release-manifest.json` and its `.sig` from the release's assets on `github.com`,
+following redirects only to GitHub's own asset hosts over HTTPS, through the same proxy
+settings as the update check. The image pull is made by the Docker daemon with its own
+registry and proxy configuration.
+
+Audit: `system.update.apply` records the admission, or the refusal with its reason,
+before the updater is asked; `system.update.completed` records how that admission ended:
+the job's outcome, or the updater's refusal or silence when no job started. An Oh
+My CPA update ends the process that admitted it, so the next process follows the job
+from start-up and records the outcome once the updater reports it finished.
 
 ## Database maintenance
 
@@ -440,6 +493,12 @@ routes and the fixed model directory, including configuration containing client 
 secrets. Install only plugins you trust: the page is same-origin with the console and acts
 with the signed-in operator's authority, while the plugin already runs inside CPA.
 
+The host adapts same-origin native API and resource fetches to carry the OMC session,
+including pages that set `credentials: 'omit'`. This does not grant access without a
+console session or change credentials on external requests. Plugin scripts that identify
+their provider through direct `location.pathname` access receive the CPA-native resource
+path, while the frame itself remains under the configured OMC base path.
+
 A plugin page may ask for a management key of its own. The host compares a page's explicit
 Authorization or X-Management-Key with the stored CPA management key and answers a wrong one
 `401` itself; the wrong key is never sent to CPA, so it cannot count toward CPA's
@@ -508,11 +567,29 @@ those cells stay blank.
 ## OAuth model rules
 
 Open **Model rules** in OAuth management to edit CPA's provider-wide aliases or
-model exclusions. These settings affect every OAuth/file-backed credential of
-the selected provider, not just one file. Exact exclusions and `*` patterns match
-case-insensitively; `*` excludes all models. Exclusions run before alias mapping,
-so aliasing an excluded upstream model does not make it available again. Use the
-credential configuration tab for an individual file's exclusion fields.
+model exclusions. Aliases are provider-scoped; exclusions are defaults for
+OAuth/file-backed credentials without a non-empty own `excluded_models` list.
+A non-empty credential list replaces, rather than extends, the provider's
+`oauth.excluded-models`. A missing, empty or null credential list inherits the
+current provider rules. Use the credential configuration tab to edit an override;
+clearing it restores inheritance, not unrestricted availability.
+
+Exact exclusions and `*` patterns match case-insensitively. Provider `*` excludes
+all models only for inheriting credentials: with provider `["*"]` and credential
+`["model-b"]`, the credential uses only `["model-b"]`, so `model-a` is not blocked
+by provider `*`. Clearing that override makes the credential inherit `*` again.
+Exclusions run before alias mapping; an alias cannot restore a source hidden by
+the applicable rules. Deleting provider rules removes those defaults but leaves
+non-empty credential overrides unchanged; it does not guarantee that models are
+served again. CPA's per-credential model list is authoritative for availability.
+Disable a credential explicitly when it must stop serving.
+
+This precedence requires **CPA v8.0.33 or later**; upgrade an older gateway before
+relying on credential overrides. OMC's general v8.0.0 Management API baseline is
+unchanged. The behavior follows CPA's [credential override change](https://github.com/router-for-me/CLIProxyAPI/commit/69d0ff8e295aea349966b16f20e2966421bfeb18).
+The upstream regression
+[`TestCodexExcludedModelsCredentialPriorityAfterPatchAndReload`](https://github.com/router-for-me/CLIProxyAPI/blob/2422c6b0f5fe16495320fa29456493874c1977a0/sdk/cliproxy/service_excluded_models_priority_test.go)
+checks immediate PATCH effects, reloads and restored inheritance after clearing.
 
 The facade exposes GET/PATCH at `/api/v1/management/auth-files/model-aliases` and
 `/api/v1/management/auth-files/excluded-models`. An exclusion PATCH carries
@@ -542,6 +619,20 @@ A counted limit that already describes a period wins it, because it carries the
 absolute usage a share cannot, and a pool states no counts of its own. A pool key
 naming no known period keeps its own name as an unclassified window rather than
 being filed under a period it does not describe (ADR 0071).
+
+## Automatic quota refresh
+
+OMC Settings → Quota holds the deployment-wide automatic quota refresh policy (the
+`omc_quota_auto_refresh` preference, ADR 0094). **Refresh after a quota resets** is on
+by default: about a minute after a window a stored reading reported has reset, that
+credential is read again once. **Scheduled quota refresh** reads every enabled credential whose reading is
+older than the interval - six hours by default, adjustable from 5 minutes to 24 hours,
+or off - including credentials nobody has read, so the first minutes after an upgrade
+read every such credential. Each automatic read is a provider request made with the credential through CPA
+(`api-call`, or the plugin's quota endpoint for a plugin credential), at most sixteen per
+minute; a failed reset-driven read is retried every ten minutes for an hour. Meta credentials are only read on a manual
+refresh, because that read exchanges a key upstream. Turning both off restores
+operator-only reads. A demonstration never runs it.
 
 ## Meta quota and live subscription tiers
 
@@ -604,3 +695,67 @@ failure is logged without tokens or uploaded key material.
 The public demonstration's Agent and Playground offer one browser-local recorded example
 each. Send/retry/cancel do not invoke a provider or write the Worker. Other questions are
 refused. The server-side demo security classification is unchanged; ADR 0092 documents replay.
+
+## Credential window warmup
+
+Configure provider defaults from OAuth management's Warmup settings, or a complete
+credential override from its Window warmup tab. Reset mode is Off, Weekly, or Weekly and five-hour.
+Daily warmup defaults off with 06:00 as its editable time in the effective OMC timezone.
+Choose an available model; Claude's available Haiku models are listed first. Changing a
+model never silently selects a replacement. Saving an enabled policy authorizes automatic
+attempts once current billing and window checks permit them; a first manual activation
+is not required. Warm up now remains an optional, separately confirmed consuming action.
+Previously enabled policies begin participating on the next scheduler round after upgrade,
+including credentials with no prior activation observation; defaults remain off.
+
+Paid fallback must be affirmatively disabled by a fresh usage read. Claude uses
+`extra_usage.is_enabled`; Codex uses the credits standing (published `has_credits`,
+`unlimited` and balance). Missing evidence remains unknown. OMC does not change upstream
+billing settings or redeem a reset credit to make warmup eligible. A zero reading with
+an active fixed boundary is not an idle window. Model-scoped Sonnet, Opus and Fable
+limits can pause the selected family without blocking unrelated Haiku. Fable evidence
+accepts the legacy `iguana_necktie` (unless it carries dollar amounts, which make it the
+cloud session credit pool) or modern model-scoped `limits`; malformed modern
+evidence, including a present non-array or null `limits` field, remains unknown rather
+than falling back to an apparently available legacy limit.
+
+The background loop checks once per minute, with bounded four-way rounds of 16, and
+reuses stored quota observations targeted for refresh every five minutes. Daily starts
+missed by more than one hour are not replayed. If starting now would overlap the next
+daily time, reset-driven requests wait, including weekly triggers. Changing the OMC
+zone changes future calendar decisions, not stored instants.
+
+The credential section always shows selected-model activation observations and paid-fallback
+evidence. No activation observed is a neutral historical fact, while absent billing evidence
+reads Unknown and pauses requests. Current reasons distinguish active windows, missing quota
+and billing refusals. An unsupported response pauses automatic requests for the selected
+model until a confirmed recheck succeeds or an available replacement model is explicitly
+selected. Rechecks still obey unresolved-outcome suppression. Manual actions report an outcome
+through a toast; sent requests also update the durable last result in the Window warmup tab.
+Warm up now opens its confirmation on both HTTP and HTTPS deployments. Switching tabs or
+saving credential fields keeps a separate warmup draft open.
+
+A consuming request is recorded before it is sent. If pre-send revalidation refuses the
+request, its provisional cycle and daily identities are restored. A temporary startup
+recovery failure is logged and retried on later minute checks, not left stopped until restart. Activated, pending, skipped, failed,
+executing and uncertain outcomes are distinct. After a pending completion only quota
+reads are repeated; transport timeouts and restart-abandoned requests are uncertain
+and are not automatically resent. Definite rate-limit refusals get at most three
+retries after one, five and fifteen minutes, each preceded by fresh eligibility checks.
+Policy and execution records are included in normal SQLite backups. The latest 100
+receipts per credential are kept alongside the durable cycle and daily suppression.
+
+API routes under the configured API prefix:
+
+- `GET/PUT /management/quota/warmup/settings`: provider policy and revision.
+- `GET/PUT /management/quota/warmup/credentials/{authIndex}`: effective policy and state.
+- `POST /management/quota/warmup/credentials/{authIndex}/run`: confirmed, revision-bound
+  manual request with caller-stable `request_id`. Reuse that id only to recover its
+  original receipt; never retry an uncertain result with a new id.
+
+These are authenticated, typed projections, not a generic request proxy. Writes require
+confirmation and the current revision; no URL, prompt, request body or secret can be
+supplied. The public demonstration refuses consuming and policy-write routes.
+
+Warmup round ordering is oldest observation first. Fleets exceeding a round's capacity
+remain queued rather than increasing concurrency or skipping protection.

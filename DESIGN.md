@@ -25,6 +25,12 @@ colors:
   series-4: "#f43f5e"
   series-5: "#f59e0b"
   series-6: "#06b6d4"
+  route-1: "#3b82f6"          # live routing lanes, cool identities only; light mode uses the darker steps
+  route-2: "#8b5cf6"
+  route-3: "#06b6d4"
+  route-4: "#ec4899"
+  route-5: "#d946ef"
+  route-6: "#94a3b8"
   effort-1: "#94bfce"         # reasoning-effort scale, minimal → max; light mode uses the darker steps
   effort-2: "#4eccd3"
   effort-3: "#91b7fe"
@@ -153,13 +159,13 @@ components:
 
 Oh My CPA is a dedicated developer control plane for AI resources and proxy telemetry. Built upon an OpenCode-inspired minimalist console philosophy, the system delivers dense, honest, and high-frequency operational visibility without aesthetic clutter. It repudiates decorative gradients, glassmorphism, heavy shadows, and flying entrances in favor of strict terminal discipline.
 
-Depth is achieved purely through 1px hairline borders and subtle tonal shifts between dark background tiers (`#121214` base and `#1c1c1f` elevated surface). Typography is universally monospaced across Latin, Cyrillic, and CJK characters, anchoring every token count, timestamp, and latency reading on stable tabular columns. The interface follows the doctrine of "Quiet chrome, loud data"—the surrounding scaffolding remains dark and muted, reserving saturated chromatic accents exclusively for genuine operational states.
+Depth is achieved purely through 1px hairline borders and subtle tonal shifts between dark background tiers (`#121214` base and `#1c1c1f` elevated surface). Typography defaults to Sarasa Mono SC across Latin, Cyrillic, and CJK characters. Operators choose the interface and monospace roles separately; code and aligned data use the mono role with tabular numerals. The interface follows the doctrine of "Quiet chrome, loud data"—the surrounding scaffolding remains dark and muted, reserving saturated chromatic accents exclusively for genuine operational states.
 
 **Key Characteristics:**
 - **Terminal-Flat Structure**: Zero drop shadows (`box-shadow: none`), no rounded bubble aesthetics, crisp 1px borders.
-- **Monospace Everywhere**: Sarasa Mono SC, Berkeley Mono, and IBM Plex Mono stacks across labels, titles, inputs, and tabular numbers.
+- **Configurable Typography Roles**: Sarasa Mono SC is the default, with Berkeley Mono and IBM Plex Mono fallbacks. Interface text and code or aligned data use independently chosen UI and mono stacks.
 - **Quiet Chrome, Loud Data**: Dark charcoal scaffolding ensures that green, amber, red, and blue badges instantly telegraph system health.
-- **Immediate Feedback**: Motion budget capped at ≤ 100ms with zero spring physics, plus one 240ms `roll` exception shared by the dashboard's KPI readouts and the chart marks drawn from them, and a JavaScript-only 160ms `scroll` token for wheel notches and scrolling keys gliding to where they would have jumped; hover states land within the 50ms fast token, because a longer hover is a drag rather than an acknowledgement.
+- **Immediate Feedback**: Motion budget capped at ≤ 100ms with zero spring physics, plus one 240ms `roll` exception shared by the dashboard's KPI readouts and the chart marks drawn from them, and a JavaScript-only 160ms `scroll` token for wheel notches and scrolling keys gliding to where they would have jumped; the live routing map's own hop/glow/presence tokens play in full for every reader, because the trip is the panel's reading rather than decoration (ADR 0102); hover states land within the 50ms fast token, because a longer hover is a drag rather than an acknowledgement.
 
 ## Colors
 
@@ -173,9 +179,9 @@ The palette is anchored on warm charcoal darks with pure semantic status pigment
 ### Series (categorical)
 
 The dashboard's model panels colour a **category**, not a state: a model is whatever upstream name the
-deployment serves, so its hue carries identity and no verdict. These are the one decorative colour
-family in the app, and the only exception to the semantic-only rule above; see
-`docs/adr/0006-categorical-series-palette.md` and `docs/design.md` §2.
+deployment serves, so its hue carries identity and no verdict. Together with the routing lane palette
+below, these are the decorative colour families in the app, and the only exception to the semantic-only
+rule above; see `docs/adr/0006-categorical-series-palette.md` and `docs/design.md` §2.
 
 - **Slots** (`--series-1` … `--series-6`): blue `#3b82f6` / `#2563eb`, emerald `#10b981` / `#059669`,
   purple `#8b5cf6` / `#7c3aed`, coral `#f43f5e` / `#e11d48`, amber `#f59e0b` / `#b45309`, cyan
@@ -187,6 +193,23 @@ family in the app, and the only exception to the semantic-only rule above; see
   `scripts/test-chart-marks.ts` from the palette itself. The slots above are the OMC Dark/OMC Light pair;
   the six slots are **per-mode constants rather than derived tokens**, so every palette inherits its
   mode's set.
+
+### Routing lanes (categorical, cool only)
+
+The live routing map draws one lane per called model. Here a status-coloured line is worse than
+elsewhere: the lane has no legend, only the row it starts from, so green, amber or red would read as a
+verdict on the connection. Its six slots therefore stay on the cool side of the wheel.
+
+- **Slots** (`--route-1` … `--route-6`): blue `#3b82f6` / `#2563eb`, violet `#8b5cf6` / `#7c3aed`, cyan
+  `#06b6d4` / `#0891b2`, pink `#ec4899` / `#db2777`, fuchsia `#d946ef` / `#c026d3`, slate `#94a3b8` /
+  `#475569` (dark / light).
+- **Credential lanes** are not identities: they are always `--fg-2`, and dashed while the credential
+  rests. A lane and the dot travelling it never take `--success`, `--warn` or `--danger`; the verdict
+  is a tone-coloured wash and port ring on the node, plus the row's text.
+- Every slot clears 3:1 against the card, differs from that palette's status hues, and stays at least
+  ΔE 25 from its neighbours. `scripts/test-chart-marks.ts` asserts all three properties from the
+  palette itself; the values above are the OMC Dark/OMC Light pair, mirrored in `web/src/index.css` as
+  the pre-hydration fallback.
 
 
 ### Reasoning effort (ordinal)
@@ -231,6 +254,8 @@ saturated at the top; see `docs/design.md` §2.
 **Body Font:** "Sarasa Mono SC", "Sarasa UI SC", "Berkeley Mono", "IBM Plex Mono", ui-monospace, monospace
 **Label/Mono Font:** "Sarasa Mono SC", "Sarasa UI SC", "Berkeley Mono", "IBM Plex Mono", ui-monospace, monospace
 
+**Embedded font:** the complete Regular and Bold Sarasa Mono SC, cut into `unicode-range` woff2 shards: the core shard (ASCII, punctuation and the console's own copy) loads with the first frame, the rest only when a page draws one of their characters (ADR 0094). `pnpm subset-font` regenerates them.
+
 **Character:** Unified, technical, and precise. The monospaced character set across Chinese, English, Malay, and code symbols gives Oh My CPA the rhythm of an interactive terminal monitor while retaining high CJK legibility.
 
 ### Hierarchy
@@ -261,7 +286,7 @@ The application viewport uses a fixed shell architecture (`100dvh`, `body { over
 └──────────┴──────────────────────────────────────────┘
 ```
 
-- **Top Header**: Fixed 56px height, full-width with 1px bottom border (`#2c2c30`). Contains the navigation toggle, breadcrumb hierarchy, and five right-aligned actions: the project GitHub link, refresh, the theme mode control, the language menu, and sign out. The mode control is a **cycling button** — light → dark → follow-the-system, one icon per state (sun, moon, desktop) — because the palettes belong to the modes and are chosen on the OMC Settings page, where each candidate repaints the console as it is picked; the language stays a **menu** over `LANGUAGES`, because four languages, one of which the reader may not read, is exactly the case a list answers. The project GitHub link uses the existing local Octicons mark and opens `https://github.com/WizisCool/oh-my-cpa` in a new tab with `noopener noreferrer`; it shows no tooltip — the mark names it and the unfolding count answers the hover — while its accessible name follows the reading language, and it remains available in the demonstration. At rest the link is the mark alone; pointed at or focused, it unfolds the project's star count before the mark over `base` — a star glyph and the count, exact below a thousand and truncated thousands with two decimals above (`1.23k`) — once the server has read one, and under reduced motion it still waits for the pointer or focus but appears at once, without the transition. It is the first control of a right-aligned row and the label leads, so unfolding widens it away from the others and the mark stays under the pointer; a device with no hover shows the count throughout. A hairline separates the link from the console's own actions. All five actions are one component, `web/src/components/common/HeaderAction.tsx`: 32px high, borderless at rest, the same hover and the same label treatment for the star count and the language code. Each action keeps one width in every reading language — labels change length with the language, so sign out is an icon button named by its tooltip. On phones the action cluster keeps its full control widths with a 4px gap and 12px safe-area-aware edge padding; the navigation toggle does not shrink, and the current breadcrumb truncates with an ellipsis rather than overlapping actions. CPA connection status and version are reported on the System Information page only.
+- **Top Header**: Fixed 56px height (48px at 640px and below, `--app-header-height`), full-width with 1px bottom border (`#2c2c30`). Contains the navigation toggle, breadcrumb hierarchy, and five right-aligned actions: the project GitHub link, refresh, the theme mode control, the language menu, and sign out. The mode control is a **cycling button** — light → dark → follow-the-system, one icon per state (sun, moon, desktop) — because the palettes belong to the modes and are chosen on the OMC Settings page, where each candidate repaints the console as it is picked; the language stays a **menu** over `LANGUAGES`, because four languages, one of which the reader may not read, is exactly the case a list answers. The project GitHub link uses the existing local Octicons mark and opens `https://github.com/WizisCool/oh-my-cpa` in a new tab with `noopener noreferrer`; it shows no tooltip — the mark names it and the unfolding count answers the hover — while its accessible name follows the reading language, and it remains available in the demonstration. At rest the link is the mark alone; pointed at or focused, it unfolds the project's star count before the mark over `base` — a star glyph and the count, exact below a thousand and truncated thousands with two decimals above (`1.23k`) — once the server has read one, and under reduced motion it still waits for the pointer or focus but appears at once, without the transition. It is the first control of a right-aligned row and the label leads, so unfolding widens it away from the others and the mark stays under the pointer; a device with no hover shows the count throughout. A hairline separates the link from the console's own actions. All five actions are one component, `web/src/components/common/HeaderAction.tsx`: 32px high, borderless at rest, the same hover and the same label treatment for the star count and the language code. Each action keeps one width in every reading language — labels change length with the language, so sign out is an icon button named by its tooltip. On phones the action cluster keeps its full control widths with a 4px gap and 12px safe-area-aware edge padding; the navigation toggle does not shrink, and the current breadcrumb truncates with an ellipsis rather than overlapping actions. CPA connection status and version are reported on the System Information page only.
 - **Navigation Sidebar**: Fixed 236px width (58px collapsed), 1px right border. Houses grouped navigation categories: `Operate`, `Gateway`, `Observe`, `Control`.
 - **Navigation Sheet (phone)**: Below 900px the rail becomes a left sheet of `min(320px, 86vw)`, carrying the same two parts — brand and grouped nav. There is no bottom bar and no phone-specific menu: a phone has less room, not less to navigate, and a second navigation is a second place for the grouping to drift. The `vw` bound matters at a 320px viewport, where a fixed 320px sheet would leave no page visible behind the mask.
 - **Content Area**: Single-scroll container with responsive padding (32px desktop / 24px tablet / 16px mobile), inside a 1440px content column. The widths that follow: content column 1376px (1440 − 2×32), and a list frame 1376px (every list is its own hairline frame, or the body of a card that is). Every page measures these; a page that needs a different column states why where the rule is written (the configuration workbench's 920px reading column is the one case).
@@ -383,7 +408,7 @@ The geometric form language is compact, rectangular, and tightly controlled:
 - **Token Activity Heatmap**: The dashboard's token grid is the one sequential *quantity* encoding, so it uses a **continuous** ramp of the theme accent rather than four fixed steps or any status hue — "lots of tokens" and "credential healthy" must not be the same colour, and a stepped scale paints every day between two steps identically. Brightness is the square root of the day's volume against the window's busiest day, which keeps day-to-day differences visible across the several orders of magnitude a window spans. The shape is a contribution-graph field (one row per weekday, one column per week, a year of weeks) that shows as many of the newest weeks as fit at an 18px cell and stretches them to its panel's edge, so it never leaves a gutter; the older weeks scroll inside the panel behind a pinned weekday gutter, and a five-swatch key names the ramp's direction. The current week is a complete column: the days after today are drawn as normal unrecorded cells, because a day that has not happened is a day nothing is stored for. Every cell is interactive and lifts on hover with a compositor-only `transform` scale; clicking one opens its tooltip, so a day with nothing recorded says so rather than refusing the question. The tooltip prints the day's token volume in the console's token unit style, keeping the exact count on the value. The day's drill-down is a link inside the tooltip rather than the cell itself. The two zero states (recorded-but-empty, and nothing-stored) are solid fills ordered against the card at 1.04–1.06:1 and 1.16–1.22:1 (light to dark mode), never outlines — an outline over a year-long grid whose cells mostly predate the retention horizon renders as a wire mesh. The ramp is relative to the window rather than absolute, so the same shade means different volumes on two installs - which is why every cell carries its date and counts in text, and the shade is never the only encoding. DOM, not a chart mark.
 
 ### Shared primitives
-- **`AppDrawer`**: every side panel; widths `narrow` 420px, `medium` 600px, `wide` 760px, each capped at the viewport; named close control at the trailing end of the head; two-slot footer (`footerStart` note or reset, `footer` actions at the trailing edge) that wraps.
+- **`AppDrawer`**: every side panel; widths `narrow` 420px, `medium` 600px, `wide` 760px, each capped at the viewport; viewport dimensions land immediately while only the wrapper transform transitions, with the transition disabled under reduced motion; named close control at the trailing end of the head; two-slot footer (`footerStart` note or reset, `footer` actions at the trailing edge) that wraps.
 - **`SearchInput`**: every filter-as-you-type field; `--muted` search glyph, clear control, `label` as accessible name and default placeholder.
 - **`EmptyState`**: every empty region; a mark of three shortening 2px `--border` rules, one state line, optional second line and one action; `block` (with mark) for lists and sections, `compact` (no mark) inside panels and pickers.
 - **`SectionHeading`**: every section head at three weights - `section` (`--text-lg`/600), `group` (`--text-base`/600), `label` (`--text-xs`/600 uppercase `--muted`) - with optional count, description and trailing `extra`.
@@ -645,29 +670,42 @@ rough-progress bar and waiting activity run along the page's top edge. See `docs
 
 ### System version comparison
 
-The Versions & Updates card keeps two product rows separated by a single rule. Each row
-places product identity and its repository beside a concise semantic status. Below it,
-the running and latest published versions form a compact comparison, bounded to 320px
-with a quiet vertical divider. The release tag appears in the comparison, not again in
-the status. Existing `--fg` and `--fg-2` tokens carry versions and labels; only a known
-update target uses `--accent`. On narrow screens the comparison becomes two label/value
-rows, with long build tags wrapping within their own column.
+The Versions & Updates card is the page's first row and spans its full width. A product row is
+identity, comparison, status and actions at once, and a half-width cell wrapped every one of
+them; the full column is what lets each product sit on two calm lines instead of four crowded
+ones. The card keeps two product rows separated by a single rule.
 
-The change-log action occupies its own trailing space alongside the comparison. It is a
-32px-high text button with a document icon, a localized label and a muted actual release
-count; its accessible name identifies both product and count. On phones it follows the
-comparison on a separate line, keeping both readings aligned and the action label intact.
-The action appears only for actual entries; the repository link stays with the product
-identity. A known newer release adds an **Ignore this version** toggle before it, in the
-same 32px text-button form with a bell icon. Its label never changes: the pressed state is
-the struck bell, `--fg` ink and `aria-pressed`, and the outcome of each press is a toast,
-so neither the row nor the card moves when it is used. It is disabled until the stored
-dismissals have been read. Long comparison explanations belong below the readings rather than in the
-status slot. A missing-notes hint belongs only to a known change-log range; an empty or
-unchecked feed does not acquire a second warning about notes. A failed check retains the
-readings and shows its reason and, when available, the last successful check time.
-The log remains a Drawer and remote images remain links, never automatically fetched media.
-These are page-level arrangements using the existing visual tokens, not new theme mappings.
+Each row opens with product identity and its repository beside a concise semantic status. Below
+it, the running and latest published versions form a compact comparison, bounded to 320px with a
+quiet vertical divider. The release tag appears in the comparison, not again in the status.
+Existing `--fg` and `--fg-2` tokens carry versions and labels; only a known update target uses
+`--accent`. On narrow screens the comparison becomes two label/value rows, with long build tags
+wrapping within their own column.
+
+The row's trailing actions are one group at the row's right edge: the change-log action in its
+32px text-button form with a document icon, a localized label and a muted actual release count;
+an **Ignore this version** toggle before it when a known newer release exists, in the same 32px
+text-button form with a bell icon; and, last, the row's one filled control - the update action -
+so the primary action sits at the same right edge the page's own primary action takes. The
+ignore toggle's label never changes: the pressed state is the struck bell, `--fg` ink and
+`aria-pressed`, and the outcome of each press is a toast, so neither the row nor the card moves
+when it is used. It is disabled until the stored dismissals have been read.
+
+A replacement in flight draws the updater's four stages - pulling, stopping, starting,
+verifying - as a four-segment bar under the readings, with the stage's sentence beside it. The
+bar carries the step count, not a measured percentage: the stages are known and ordered, their
+durations are not. A product the updater will not replace from the page states its reason in a
+quiet line under the readings, marked with an information glyph rather than a warning tone,
+because a pinned image or a container that runs elsewhere is an operator's decision and not a
+fault. Long comparison explanations belong below the readings rather than in the status slot.
+
+A missing-notes hint belongs only to a known change-log range; an empty or unchecked feed does
+not acquire a second warning about notes. A failed check retains the readings and shows its
+reason and, when available, the last successful check time. The log remains a Drawer and remote
+images remain links, never automatically fetched media. The setup step that enables one-click
+updates stays inside this card, under the rows it explains, and takes its head from
+`SectionHeading`. These are page-level arrangements using the existing visual tokens, not new
+theme mappings.
 
 ### Update indicator
 
@@ -680,41 +718,52 @@ it says the deployment is behind a published release.
 
 ### System information status cards
 
-Maintenance, storage and component health present their selected readings immediately.
-Card titles wrap on narrow screens, and these arrangements use the existing theme tokens
-and system response without additional API requests.
+Under the versions card, maintenance, storage and component health sit in one row - three peer
+cards that share the column, wrap to fewer columns before their own readings would be squeezed,
+and stack into a single column below the 900px breakpoint. They present their selected readings
+immediately. Card titles wrap on narrow screens, and these arrangements use the existing theme
+tokens and system response without additional API requests.
 
-Maintenance pairs three short action names with one-sentence explanations and the
-console's standard outlined antd buttons. Button dimensions, typography, border,
-background and interaction states inherit the shared configuration. Admission refusals
-replace the ordinary explanation; running, failed and partial outcomes remain explicit.
-VACUUM requires confirmation of the exclusive write gate and measured disk requirements.
-Completed outcomes are independently dismissible; running work is not.
+Maintenance pairs three short action names with one-sentence explanations and the console's
+standard outlined antd buttons. Button dimensions, typography, border, background and
+interaction states inherit the shared configuration. Admission refusals replace the ordinary
+explanation; running, failed and partial outcomes remain explicit. VACUUM requires confirmation
+of the exclusive write gate and measured disk requirements. Completed outcomes are independently
+dismissible; running work is not.
 
-Storage prioritizes the total physical footprint above one shared label/value list.
-The three measured file sizes, journal mode and schema generation share identical label
-and right-aligned value columns at every viewport. Missing files read "not present"
-rather than zero. Physical footprint is not
-repeated as allocated pages or record counts; internal geometry, reusable pages and
-connection settings belong in the sanitized diagnostics bundle.
+Storage prioritizes the total physical footprint above one shared label/value list. The three
+measured file sizes, journal mode and schema generation share identical label and right-aligned
+value columns at every viewport. Missing files read "not present" rather than zero. Physical
+footprint is not repeated as allocated pages or record counts; internal geometry, reusable pages
+and connection settings belong in the sanitized diagnostics bundle.
 
-Component health has four divided rows, each with a component name, semantic status and
-one short inline operational summary. The gateway shows its credential count, Oh My CPA
-its start age and memory, SQLite its request count, and the collector the latest usage
-age. Each summary uses at most two paired facts, with labels beside values rather than
-separate metric grids. Positive ingestion backlog and collection gaps appear as warning
-readings; healthy zero values do not consume space. Missing observations remain explicit.
-The version card retains the compact comparison and separate change-log action above.
+Component health has four divided rows, each with a component name, semantic status and one
+short inline operational summary. The gateway shows its credential count, Oh My CPA its start
+age and memory, SQLite its request count, and the collector the latest usage age. Each summary
+uses at most two paired facts, with labels beside values rather than separate metric grids.
+Positive ingestion backlog and collection gaps appear as warning readings; healthy zero values
+do not consume space. Missing observations remain explicit.
 
 ## Content-first phone console (ADR 0055)
 
 - Phone breakpoint: 640px; navigation sheet: 900px. One-row header: navigation, ellipsised page
   name, refresh, More. Click-open theme/language/repository/sign-out tools show selected preferences,
   use 44px rows and dismiss with Back/Escape. Demo mode retains its marker and restrictions.
-- Page titles: 18px; horizontal content padding: 12px; compact gaps/padding: existing 8/12/16px
-  scale. `PageHeader.mobileActions` chooses primary phone actions explicitly. Secondary tools use
+- The top bar names the page, so the page `h1` stays in the document and is not drawn (ADR 0096);
+  a live subtitle and the actions take its row. Horizontal content padding: 12px; compact
+  gaps/padding: existing 8/12/16px scale. `PageHeader.mobileActions` chooses primary phone actions explicitly. Secondary tools use
   `ActionMenu`; additional provider/audit filters use `FilterDisclosure` with selected-state summary.
   Desktop actions, row-list rendering and request/conversation scrolling are unchanged. The phone conversation frame follows usable viewport height so input and Send stay above the keyboard.
+- Density (ADR 0096): `StatTiles` stays one strip; the dashboard grid keeps two columns; a list
+  row's controls share its headline's line when both fit; an OAuth credential is four lines. A
+  stacked request record is three lines of two facts (model+effort badge/cost in the primary
+  weight, provider/total tokens, time+verdict/latency in the quiet tone) drawn in the text
+  colours, with hue kept for the verdict's pip, a failure and the reasoning effort badge; every other measure is in the
+  detail drawer; the table above the `920px` container threshold is unchanged. The request
+  filters are two rows: search with the filter panel's trigger, then one swipeable strip of
+  single-tap choices; the list runs edge to edge.
+- A sheet slides opaque: the drawer panel's opacity is held at 1 and only the mask fades. A panel
+  on its way out keeps drawing what it held.
 - Configuration: non-sticky status/mode/tools row, search on its own row, locally scrolling categories,
   retained group headings/descriptions. Only dirty drafts show the measured-height bottom save/discard
   bar; content reserves its space. Save validation and a single confirmation remain shared.
@@ -857,3 +906,19 @@ keeps the same text, standalone reasoning, working timelines and inline generate
 in reading order. Call rows retain argument summaries, outcome and duration disclosures.
 PNG captures generated interfaces at their laid-out width, including kit charts and controls;
 unavailable figures keep a visible fallback note rather than silently disappearing.
+
+## Credential window warmup
+
+The OAuth toolbar offers a Warmup settings Drawer with Codex/Claude tabs, explicit model
+selection, reset mode and one daily time. Provider defaults are off; daily time is 06:00
+in the OMC timezone. Unsaved drafts guard close, native Back and provider switching.
+The credential Quota tab shows full-policy inheritance/override, next check, last result
+and pause reason, with an optional confirmed Warm up now action. Selected-model activation
+observations and paid-fallback evidence are always visible as two quiet facts. An absent
+activation observation is neutral history; the pause reason describes current window or billing state. Saving other credential
+fields keeps a warmup draft open. Run outcomes remain inline without a duplicate toast.
+Tiny requests consume quota;
+an approved enabled policy admits the first automatic attempt through current window and
+billing evidence. Unknown billing pauses requests; observed unsupported responses pause
+subsequent automatic requests for the same model. Reuse the existing tokens,
+responsive Drawer and semantic feedback without introducing global design tokens.

@@ -25,12 +25,13 @@ registered one; see `docs/adr/0011-theme-modes-and-derived-palettes.md`.
 
 Terminal-flat console. Depth comes from **1px borders + background shifts**,
 never shadows or gradients. Sarasa Mono SC first (Berkeley Mono, then IBM Plex
-Mono as fallbacks), 4px radii, dense but breathable spacing.
+Mono as fallbacks) unless the operator chooses another typeface, 4px radii, dense but
+breathable spacing.
 
 | Principle | Meaning |
 | --- | --- |
 | Flat | `box-shadow: none` globally; borders carry all structure |
-| Monospace | All text uses the mono stack; tabular numerals for data |
+| Typography roles | Interface text uses the UI stack; code and aligned data use the mono stack, with tabular numerals |
 | Quiet chrome, loud data | UI scaffolding stays muted; status color is reserved for real state |
 | Semantic color only | Green/red/amber mean enabled/error/warning — never decoration |
 
@@ -500,11 +501,10 @@ to `minmax(--heatmap-min-cell, 1fr)`, which divides the panel exactly. Dividing 
 whatever width the panel has was the earlier rule, and in a half-width column it left 8px squares
 in a strip a third the height of its neighbour.
 
-**It shares its row.** On desktop the field is the left half of a two-column row
-(`.dashboard-activity-row`), with credential quota on the right. The field sets the row's height:
-the quota list beside it takes whatever height that is and scrolls inside its own panel, and the
-ramp's key sits on the heatmap panel's bottom edge. Below 900px the row becomes a single column
-and the two panels stack.
+**It shares its row.** By default the field is the left half of a board row, with credential quota
+on the right (see Dashboard arrangement). The field sets the row's height: the quota list beside it
+takes whatever height that is and scrolls inside its own panel, and the ramp's key sits on the
+heatmap panel's bottom edge. Below 1100px each takes a row of its own and the two panels stack.
 
 **The current week is a complete column.** Its later days have not happened, so nothing is stored for
 them — the same fact as a day whose records were pruned, and they are drawn and treated identically
@@ -538,7 +538,7 @@ serving and blocked counts.
 **The list scrolls inside the panel.** Every credential is listed, so a large fleet is readable
 without leaving the dashboard, and the panel keeps the height of the row it shares: the list takes
 the height the activity grid gives the row (never less than three rows) and scrolls natively, by
-wheel, scrollbar or touch. Stacked below 900px it shows up to four and a half rows, the half row
+wheel, scrollbar or touch. Stacked below 1100px it shows up to four and a half rows, the half row
 being what says there is more.
 
 **It displays, with one control.** A row is not interactive — it scrolls under a finger, and a row
@@ -643,8 +643,8 @@ Rules:
 ### Categorical series palette
 
 The dashboard's model panels colour a **category**, not a state. A model is whatever upstream name the
-deployment happens to serve, so there is no good/bad axis for a hue to mean - which makes this the one
-place in the app where colour is decoration, and the reason §1's semantic-only rule carries an explicit
+deployment happens to serve, so there is no good/bad axis for a hue to mean - which makes this one of the
+places in the app where colour is decoration, and the reason §1's semantic-only rule carries an explicit
 exception rather than being quietly stretched. See `docs/adr/0006-categorical-series-palette.md`.
 
 The exception is scoped by **role**, not by hue: these six tokens belong to categorical marks. The
@@ -709,9 +709,139 @@ panels print every group's name and the list prints every group's numbers.
    identical or unreadable colours, and do not establish how the palette reads to a person with a
    colour-vision deficiency. See ADR 0006 for why that claim is not made.
 
+### Routing lane palette
+
+The live routing map has a second categorical use of hue, and a stricter one. Each drawn model's lane
+into the gateway carries a `--route-*` slot, and unlike a chart legend there is no swatch key between
+the line and the eye: the lane begins at the row it belongs to and its name sits there. A green, amber
+or red line would therefore read as a verdict on the connection rather than as the model's identity -
+the ambiguity that made the lanes status-coloured in the first place. Every slot stays on the cool side
+of the wheel, and the status hues remain on the node surfaces, where a wash or a ring is unmistakably
+about the request rather than about the line.
+
+| Slot | Dark | Light | Family |
+| --- | --- | --- | --- |
+| `--route-1` | `#3b82f6` | `#2563eb` | blue |
+| `--route-2` | `#8b5cf6` | `#7c3aed` | violet |
+| `--route-3` | `#06b6d4` | `#0891b2` | cyan |
+| `--route-4` | `#ec4899` | `#db2777` | pink |
+| `--route-5` | `#d946ef` | `#c026d3` | fuchsia |
+| `--route-6` | `#94a3b8` | `#475569` | slate |
+
+`scripts/test-chart-marks.ts` asserts for every registered palette that all six routing slots are
+distinct, clear 3:1 against the card, are not one of that palette's `success`/`warn`/`danger` values,
+and stay at least ΔE 25 from their neighbours. They are per-mode constants for the same reason the
+series slots are, and `web/src/index.css` carries the OMC Dark/OMC Light pair as the pre-hydration
+fallback.
+
+A credential's lane is not an identity: it is always the neutral `--fg-2`, and a lane whose credential
+is resting is dashed. Neither a lane nor the dot travelling on it ever takes a status hue; the verdict
+is drawn on the endpoint's surface (a tone-coloured wash and the port's ring) and stated in the row's
+text.
+
+### Dashboard arrangement
+
+The dashboard is one four-column board of widgets - the six KPI tiles, the two model panels, live
+routing, token activity, credential quota and the provider list - and its arrangement is the
+operator's: the order, each widget's width and which widgets are hidden are one stored preference
+(`omc_dashboard_layout`, modelled in `web/src/types/dashboardLayout.ts`). The document lists every
+widget it knows; a widget a later release adds is missing from an older one and is placed after the
+widget that precedes it in the default order, and shown, so a new panel never arrives switched off.
+
+- **Widths are columns of four.** Each widget offers only the widths it reads at: a KPI tile any of
+  them, the model panels, activity grid, quota list and provider list a half or wider, the routing
+  map three quarters or the full row. Below 1100px the board has two columns, so a quarter stays a
+  half and anything wider takes the whole row; a phone offers no width control because nothing it
+  chose would show.
+- **Arranging is a mode.** The header's grid button enters it; until then the board carries no
+  handles. Each cell becomes a dashed frame holding a toolbar - a drag handle, the widget's name,
+  step earlier and later, hide, and the width choice - over an `inert` picture of the widget, so a
+  drag cannot open a drill-down and the operator arranges what they will actually read. A drag is
+  armed from the handle only, and the drop marker is a 3px accent bar on the side the widget will
+  land (above or below a cell that spans the whole row). Hidden widgets wait in a tray above the
+  board, one restore button each.
+- **Nothing is stored until Done.** Arranging edits a draft: Cancel drops it, Restore default puts
+  the catalog back into it, and Done writes the whole document once and confirms in a toast. The
+  six KPI tiles are the only widgets a first load draws placeholders for, in the arranged order.
+
+### Dashboard live routing
+
+By default one wide card directly under the row the two model panels share, outside the window picker's reach: it always shows a
+rolling last minute, because it answers "which model is going to which credential right now", which a
+chosen span would turn into a report. There is no list of recent requests; that is the request list's.
+
+```text
+┌─ LIVE ROUTING  ● Live  [Last 60 s] ────────────────────────────────────────────────────────────────┐
+│  MODELS CALLED 3                                   CREDENTIALS & PROVIDERS 3                         │
+│  [◎] gpt-5.6-luna     12 req · 1.2 s ●╮                     ╭─● [o] Codex  sk-…c002  Answered last │
+│  [✳] claude-opus-5.5   6 req · 2.0 s ●─╲     ┌──────────┐ ╱                                       │
+│  [◇] glm-5.3-flash     2 req · 0.6 s ●──▶    │ [OMC]    │───● [o] Codex  sk-…c001  Rate limited ·   │
+│                                               │ Oh My CPA│ ╲                      back in 21 s      │
+│                                               │ Round    │  ╰─● [A] Claude sk-…cl01  6 req · 2.0 s  │
+│                                               └──────────┘                                         │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**It is the console's one lit surface**, by the product's decision: everywhere else depth is borders
+and background shifts (§1, §4), but this map shows live traffic, and the depth is what makes it read as
+something running rather than a diagram. The exception is scoped to it and held to three rules: depth
+sits on the gateway (a raised `--elevated` plate with a faint accent gradient and an accent sheen
+along its top edge, lifted by an accent glow on the dark page and by a neutral contact shadow with a
+faint accent bloom on the light one, where an accent glow alone turns muddy), on the rows (`--elevated` with a low shadow, and a glowing edge only while lit) and on
+the travelling dot (a glow in its own colour), over a faint dot grid fading to the panel's edges; no
+shadow is ever animated - each glow is an overlay whose opacity alone changes; and colour still
+means something - the models' routing colours on their lanes, marks and ports, the neutral credential
+lanes, the accent on the gateway, and status colour on a node surface where something is exceptional.
+
+- **The left column is only the model called** - the alias the caller named, else the model - with its
+  maker's mark, request count and mean latency. Volume is read from those counts and from the lanes'
+  width; the row prints no percentage and draws no share bar. No caller, client or key is drawn: the panel is about
+  where requests go. Each drawn model takes a categorical `--route-*` colour that it keeps for as long
+  as it stays on the panel; its port and its lane into the gateway carry it, and the name is always in
+  text beside it. The cool routing palette exists so a lane can never be read as a verdict (§2).
+- **The right column is the credential or provider that answered**, named as the request list names
+  it, through the same resolver: provider mark, provider, and the masked key or the OAuth account. The
+  state column says the one thing that is exceptional - `Rate limited`, `Quota exceeded` or `Cooling
+  down` with a countdown, in the warn tone - or else that it answered last (accent), or its count and
+  mean latency.
+- **The gateway** is the OMC mark on its own small tinted tile, the product name `Oh My CPA`, the
+  routing strategy CPA is configured with as a quiet chip, and the minute's attempts. A rail on each side is where the lanes dock, as long as
+  the fan of lanes it receives. While any request is on the map its rails and glow brighten, and they settle back over 600ms once the last one
+  has gone home.
+- **One lane per row.** A model has one lane into the gateway and a credential one lane out of it, the
+  lanes meeting the gateway side by side in their rows' order. Lanes per model and credential pair
+  tangled into a knot past a handful of each; which model went to which credential is what the
+  travelling requests show, in the model's colour. A credential's lane is always the neutral `--fg-2`,
+  and dashed while that credential rests; a lane never turns `--warn` or `--danger`, because a colour on
+  a line reads as a statement about the connection itself. The row's text and the node's wash carry the
+  verdict.
+- **Rows are ordered by name, never by volume**, so a count overtaking another does not reorder the
+  map under the reader. Volume decides only which seven models and seven credentials are drawn; the
+  rest are counted in a line below the column, and a resting credential is always drawn. Past four
+  rows in a column the rows tighten one step, never below a comfortable two-line row. When the panel itself is narrower than 940px
+  (`@container routingmap`, the rail open beside a laptop window), the lanes shorten and a
+  credential's state drops under its name instead of cutting the name to a letter.
+- **The header carries no counts**: the title, whether the panel is live, and the window. The rows
+  say how much went where, and the gateway how many attempts the minute held.
+- **The window rolls on the browser's clock.** An attempt belongs to the minute it finished in; when a
+  model's or credential's last attempt turns a minute old its row fades and drifts out toward its own
+  edge of the map, and the rows below close the gap. A model called for the first time in the minute
+  drifts in from the same edge (§7 rule 9).
+- **Light moves with the request, never ahead of it.** A row lights only when the travelling dot
+  docks in it, not when its record is read, and settles back over the glow beat; a lane brightens
+  behind the dot that crossed it and settles the same way (§7 rule 9). A row that has not been reached
+  by a dot - every row of the first read - stays at rest.
+- **An empty minute keeps the map's shape**: a dashed placeholder row on each side, joined to the
+  gateway by dashed lanes, says where models and credentials will appear, and leaves as the first
+  request's rows arrive.
+- **A phone does not show the panel.** The map needs its three columns to say anything, and a reduced
+  list of models and credentials would only repeat the request list, so below the phone breakpoint the
+  dashboard does not mount it - nor open its read and live stream.
+
 ### Dashboard model panels
 
-Two peer cards between the KPI tiles and the token activity grid, both driven by the window picker:
+Two peer widgets, by default sharing the row under the KPI tiles and above live routing, both driven
+by the window picker. They are placed independently and read one shared query:
 
 ```text
 ┌─ Token trend ──────────────────┐ ┌─ Model usage ─────────────────────────┐
@@ -746,6 +876,12 @@ The shared tooltip names each item by its own series key and lists measured zero
 stepped visibly on every steep section. The browser scales the bitmap down, so the geometry is unchanged
 and only its edges are averaged.
 
+**Chart canvases follow their container.** G2's `autoFit` refits a chart only on a window resize, so
+`useChartPlugins` also observes each chart's own container and refits it when that box changes size for
+any other reason - the console font arriving after the first paint and re-measuring the text beside a
+chart is the common one. A canvas left at its first size kept the model ring inscribed in a smaller
+square than its frame, with the total beside the hole.
+
 **No y-axis.** The reading is the shape of each line against its own baseline - which models rose, and
 when - and the numbers are in the tooltip and in the usage list beside it. An axis would take the width
 the lines need to add a scale nothing on the card refers to. The plot floor and the x labels stay: the
@@ -769,9 +905,9 @@ four, because those are the two a reader places the window with. The label forma
 `HH:mm` within a day, `MM-DD` beyond it - which is the only place the window's extent is stated, and
 keeps the outermost label narrow enough to sit inside the card's gutter.
 
-**The legend is app-owned DOM.** G2's legend is built from its own type scale, so it would be the one
-place in the console not set in the mono stack. It also has to be the same colour assignment the usage
-list uses, which is only guaranteed if one ranked list produces both.
+**The legend is app-owned DOM.** It follows the console's type scale and chosen interface font.
+It also has to be the same colour assignment the usage list uses, which is only guaranteed if one
+ranked list produces both.
 
 **The ring's centre is DOM**, and it is the window's own total rather than the KPI tile's. The two read
 on different cadences, so borrowing the tile's number would let the centre disagree with the slices
@@ -857,12 +993,33 @@ length, so the mask never reveals the secret's length.
 Font stack   "Sarasa Mono SC", "Sarasa UI SC", "Sarasa Term SC", "更纱黑体 SC",
              "Berkeley Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular,
              Menlo, Monaco, Consolas, "Liberation Mono", monospace
-Subset font  Build-time subsetted woff2 (~105KB per weight, Regular & Bold)
-             embedded in assets; local Sarasa Mono SC takes zero-latency priority.
+Font files   Complete Sarasa Mono SC, Regular & Bold, in unicode-range woff2
+             shards embedded in assets; local Sarasa Mono SC takes priority.
 Base size    14px (antd token fontSize)
 Line height  1.5
 Tabular      font-variant-numeric: tabular-nums on all numeric data
 ```
+
+**The embedded font is complete, and a page fetches only what it draws.** The woff2 files
+under `web/src/assets/fonts/sarasa/` are the whole of Sarasa Mono SC cut into shards with
+`unicode-range` (ADR 0094), so any character the font has - in the console's copy, an Agent
+answer or a model name - is drawn in it rather than in a system font. Shard 000 (ASCII,
+Latin-1, common punctuation and every character in `web/src`) is declared in render-blocking
+CSS by `core.css`; the rest are registered by `web/src/theme/sarasaFont.ts`, an
+asynchronous chunk started at startup, and fetched only when a page draws one of their
+characters, which then swaps in from the fallback. `pnpm subset-font` regenerates the
+shards, the manifest, `core.css` and `shardUrls.ts`; copy added since then still renders in
+Sarasa, from a deferred shard.
+
+**The typeface is two roles, and Sarasa is their default.** `--font-ui` (the root
+`font-family` and Ant Design's `fontFamily` token) and `--font-mono` (code, keys and
+aligned figures, and Ant Design's `fontFamilyCode`) are custom properties that
+`web/src/theme/fontLibrary.ts` overwrites on the root element from the `omc_fonts`
+preference. Components never name a family: they inherit, or read `var(--font-mono)`, so
+an operator's choice reaches every surface. The two that cannot use the cascade - the
+Monaco editor and canvas chart labels - read the resolved role with `currentFontStack`.
+Every role ends in the Sarasa stack, which draws any character a chosen family lacks
+(ADR 0100).
 
 **The type scale is seven variables**, defined in `web/src/index.css`:
 
@@ -943,14 +1100,15 @@ radius-sm     4px    inputs, buttons, tags, cards (the app's radius)
 radius-lg     6px    modals/drawers outer shell only
 thread scale  4 · 4 · 6 · 8px     conversation workspaces and approval cards (ADR 0086, below)
 space scale   4 · 8 · 12 · 16 · 20 · 24 · 32 · 48px
-section gap   32px (dashboard sections)
+section gap   32px (page sections); the dashboard board's cells are 16px apart
 card padding  20px (antd Card paddingLG)
 page head     title block left, actions right, 24px bottom margin
 header        56px tall, 1px bottom border
 sider         236px (58px collapsed), 1px right border
 ```
 
-Elevation: **zero shadows** on layout, card, drawer, modal, popover, dropdown.
+Elevation: **zero shadows** on layout, card, drawer, modal, popover, dropdown. The dashboard's live
+routing map is the one lit surface, and its scope is stated with it (§2, Dashboard live routing).
 `--focus-ring: 0 0 0 2px var(--accent)` is the only ring, and it is never drawn on a text field: a browser
 matches `:focus-visible` on every focused `input`/`textarea`, and those sit inside controls (Input with an
 affix, Select, pickers, number fields) that already mark focus on their outer box with the accent border
@@ -973,10 +1131,22 @@ and halo. Ringing the inner field too drew a second rectangle inside the control
 
 - `body { overflow: hidden }` — the shell is `100dvh`; sidebar and content
   scroll independently (`overscroll-behavior: contain`).
-- Nav groups: Operate / Gateway / Observe / Control. Group labels 10px
+- Nav groups: Operate / Gateway / Observe / Control, with the plugins group - management, the
+  store, then each plugin's own page - before Control. Group labels 10px
   uppercase `--meta`. Items: icon + label only, no subtitles. Selected item =
   2px `--fg` inset rule (`box-shadow: inset 2px 0 0 var(--fg)`) + `--fg` bold text,
   never a filled background block. Hover uses `--surface` for immediate feedback.
+- The rail is the operator's: which of its entries a deployment shows is a stored preference
+  (`omc_nav_hidden`, holding the *hidden* routes, so an entry a later release adds arrives
+  already visible), set from the OMC settings page - one row that opens the rail's own panel,
+  rather than sixteen rows grown onto a page of one-line settings - and applied to the expanded
+  rail, the collapsed rail and the phone sheet from one filtered model. The panel lists the model
+  the rail draws, including the pages a running plugin registered, so the two cannot disagree
+  about which destinations exist. A group whose every entry is hidden goes with
+  them, the OMC settings entry itself is shown switched on and inert - a preference that could
+  hide its own surface would leave the console unable to undo it - and everything else on the
+  shell reads the unfiltered model, so a page opened by URL still names itself in the breadcrumb
+  and the document title.
 - The rail ends with its navigation: CPA connection and version are read on the
   System Information page, not repeated in the shell.
 
@@ -1865,11 +2035,22 @@ Dashboard KPI, model-trend and model-donut tooltip rows share `web/src/charts/ch
 
 ## 7. Motion
 
+Drawer wrappers transition only their transform. Width and maximum width adopt the current
+viewport immediately, including during opening motion; resizing never interpolates a sheet
+past the viewport. Under reduced motion the wrapper transition is disabled entirely.
+The existing motion durations, palette and token mappings are unchanged.
+
 ```text
 hover / state colour   ≤ fast — the acknowledgement must land on the pointer's frame (rule 7)
 fast    50ms    antd motionDurationFast
 base    100ms   antd motionDurationMid and Slow: drawers, modals, route and data transitions
 roll    240ms   the dashboard's KPI readouts and the marks drawn from them (rules 8 and 5)
+route   300ms   one hop of a stored request across the dashboard's routing map (rule 9)
+land    420ms   a node's one-off acknowledgement of a hop landing on it (rule 9)
+glow    1200ms  a routing-map node or lane lighting as a request reaches it and settling back (rule 9)
+enter   300ms   a routing-map row arriving in the minute, drifting in (rule 9)
+exit    200ms   a routing-map row leaving the minute, accelerating away (rule 9)
+presence 300ms  a routing-map row or heading sliding to close or open a gap (rule 9)
 float   60ms    popovers and dropdowns — the click already said "open"
 scroll  160ms   a wheel notch or scrolling key gliding to where it would have jumped (easeOutCubic)
 ease    cubic-bezier(0.2, 0, 0, 1)
@@ -1879,8 +2060,12 @@ ease    cubic-bezier(0.2, 0, 0, 1)
 `base` and `float` as `--motion-fast`, `--motion-base` and `--motion-float` for every CSS transition
 and animation the console owns;
 `scripts/test-theme-presets.ts` parses both and asserts they equal the Ant Design tokens above, so the
-two spellings of one budget cannot drift apart again. `roll` is the only token with an exception
-attached, and it is scoped to the dashboard by rules 5 and 8. `scroll` is a JavaScript-only token
+two spellings of one budget cannot drift apart again. `roll` and `route` are the only tokens with an
+exception attached, both scoped to the dashboard: `roll` by rules 5 and 8, `route`, `land`, `glow`, `enter`,
+`exit` and `presence` by rule 9. The rule-9 tokens are JavaScript-only (`MOTION_ROUTE`,
+`MOTION_ROUTE_LAND`, `MOTION_ROUTE_GLOW`, `MOTION_ROUTE_ENTER`, `MOTION_ROUTE_EXIT` and
+`MOTION_ROUTE_PRESENCE` in `themeConfig.ts`) and drive Web Animations rather than a stylesheet; the
+gateway's 600ms settle is the routing panel's own `--motion-route-cool`. `scroll` is a JavaScript-only token
 (`MOTION_SCROLL` in `themeConfig.ts`) for the input glide below; no stylesheet animates a scroll.
 The separate `--motion-live-text` token (`MOTION_LIVE_TEXT`) is a 900ms linear loop for short
 work-in-flight labels, not a state-transition budget. `themePaletteCssVariables` and the root
@@ -1894,12 +2079,15 @@ applied and is how a wrong value hid for months), a transition on a layout prope
 keyframe animation with no `prefers-reduced-motion` counterpart, and a hover transitioning colour
 outside `fast`. The exceptions are listed in the checker's `EXCEPTIONS` table with the reason each is
 one, and an exception that stops matching a rule is itself a failure — the list cannot rot into
-things that were once true. Two kinds exist. A `layout` exception waives rule 1 for a disclosure,
+things that were once true. Three kinds exist. A `layout` exception waives rule 1 for a disclosure,
 where a reflow is the point and the alternative is an accordion that snaps open. A `duration`
 exception waives the token requirement for a loop whose period is how long one cycle takes rather
 than a transition between two states: the heatmap's re-read bar, the icon spinner, the generation
 loader, the streaming caret, the loading bar's waiting activity and the first-load placeholders'
 breath. §7 handles those by freezing or removing them under reduced motion rather than by shortening them.
+A `reduced` exception waives the reduced-motion counterpart for one selector whose motion is the
+reading rather than decoration: the live routing map's lane flow is the only one, and ADR 0102 records
+why the whole trip plays under the preference.
 `scripts/check-motion.test.mjs`
 exercises every rule in both directions on a fixture tree and asserts the repository itself is clean.
 Enforcing the reduced-motion rule immediately paid for itself: antd animates its floating panels in
@@ -1974,12 +2162,56 @@ Hard rules:
    the whole exception: those tiles change under a poll the reader did not ask for, a number
    that swaps in place is indistinguishable from a number that was already there, and the
    sweep is what says "this reading moved" without the page moving. Rule 5 gives the marks
-   drawn from those numbers the same token; nothing else in the console moves on a poll. For
+   drawn from those numbers the same token, and rule 9 lets a stored request travel the routing
+   map; nothing else in the console moves on a poll. For
    the digits the exception is cheap and scoped -
    glyphs transforming inside a 34px-tall box, so rules 1 and 2 hold as written, and a change
    of *unit* prints in place, because rolling 1.2 into 900 under a swapping unit word would
    show digits that never described the window. `prefers-reduced-motion` removes it and the
    value still updates. See ADR 0007 for the token and ADR 0008 for what rule 5 costs.
+9. **A stored request travels the routing map, and comes back** - Magpie's motion. When the
+   dashboard's live routing panel reads a request it has not shown, a glowing 9px dot in the model's
+   colour emerges from the model's port, travels its lane into the gateway and the credential's lane
+   out of it, moved on animation frames along each lane as it is drawn at that moment and eased in and
+   out over one `route` beat per hop (`MOTION_ROUTE`). The light passes through nodes rather than
+   resting on them: the dot fades in over the first fifth of each hop and sinks into the next port over
+   the last fifth, and the node it sinks into lights - its edge glows and its port sends out a ring -
+   rising quickly and settling back over the `glow` beat (`MOTION_ROUTE_GLOW`); a lane brightens behind
+   the dot that crossed it and settles the same way. A node lit again while it still glows rises from
+   the light it has, so a second request never blinks it dark first. The request waits in the
+   credential for a beat scaled from the attempt's real latency (120-480ms); then a wash in the
+   answer's tone spreads across the credential from its port, and the dot - still in the model's
+   colour - flies back through the gateway home to the model, or, on a refusal, back to the gateway and
+   on to the next credential CPA tried. A lane and the flow on it never take `--success`, `--warn` or
+   `--danger`: the verdict is a surface on the node, not a property of the connection (see §2's routing
+   lane palette). While a dot is on a lane or waits at its end, the lane's dashes flow in the direction
+   it travels, and while any dot is on the map the gateway's glow and rails brighten.
+   Rows arrive drifting a few pixels in from their own edge of the map as they fade in
+   (`MOTION_ROUTE_ENTER`), the rows of the first paint one after another; they leave the same way,
+   quicker and accelerating (`MOTION_ROUTE_EXIT`), and only then do the rows around them close the gap,
+   sliding by FLIP measured against the whole map so a column re-centring slides too
+   (`MOTION_ROUTE_PRESENCE`). Nothing scales or bounces. While rows move, the lanes are redrawn each
+   frame so none detaches from its row. This is the one motion that runs on a live signal rather than
+   on the reader's action, and it is allowed for the reason rule 8 is: a count that changes in place
+   does not say *which way* the request went, which is the reading the panel exists for. It is scoped
+   hard: opacity and transforms, except the lane flow, which animates the dash offset of the few lanes
+   in use and is the map's one loop; no shadow animates - every glow is an overlay whose opacity
+   changes; at most eight requests replay from one read, 70ms apart, and at most sixteen are on the map
+   at once, a burst past it being skipped rather than queued; the first read replays nothing, because
+   opening the dashboard is not the moment those requests ran, and neither does a request that
+   finished while the page was hidden - the live stream is closed then, so the read on return carries
+   them, and they are counted on the rows instead. Hiding the page ends every trip on the map: a
+   hidden page runs no animation frames, so a trip left running would complete every missed hop in a
+   frame each on return and replay the time away at speed. The trip is the one motion the console starts
+   on its own that plays in full under `prefers-reduced-motion`: a lane's flow, a dot's travel and a
+   row's entrance are the reading itself, and Windows' "Animation effects" switch - which many readers
+   turn off for speed rather than for vestibular reasons - is reported by Chromium as that query. The
+   map therefore keeps its animation for every reader; ADR 0102 records the scoped exception and the
+   trade-off. Counts never animate.
+
+   The map learns of a request when CPA stores its record, which is when it finished: CPA reports
+   nothing about a request while it runs. The trip therefore starts as soon as the record is read and
+   is kept short (about a second and a half door to door) so it reads as the request that just happened.
 
 ### Never hard-swap a view
 
@@ -1994,7 +2226,7 @@ custom range changes, manual refresh and background refetch.
 | Any request in flight | The app-wide 2px `.data-progress` bar, painted after a 200ms delay, whose fill hints at counted work and whose short activity marker reports waiting (below). Regions are never dimmed or unmounted. |
 | First load with no data yet | Render the real page frame with placeholders drawn at the content's geometry, not a bare full-page spinner swap. |
 | Error after data existed | Keep the stale data visible and surface a warning; only replace the page when nothing was ever loaded. |
-| Auto-refresh poll | The view does not move, though a reading and a mark may. The poll is not a view change, so it must not reset pagination, remount the list, expand a collapsed header, or relabel the data as "previous results". Two things may move: a dashboard KPI number rolling to its new value, and any dashboard chart mark morphing to its own new revision - the six KPI sparklines, and the model trend and usage ring, which re-read on their own endpoint rather than on the tiles' (rules 8 and 5). |
+| Auto-refresh poll | The view does not move, though a reading and a mark may. The poll is not a view change, so it must not reset pagination, remount the list, expand a collapsed header, or relabel the data as "previous results". Three things may move: a dashboard KPI number rolling to its new value, any dashboard chart mark morphing to its own new revision - the six KPI sparklines, and the model trend and usage ring, which re-read on their own endpoint rather than on the tiles' (rules 8 and 5) - and a newly stored request travelling the routing map (rule 9). |
 
 `prefers-reduced-motion` removes the fade, drops the bar's pending estimate (it
 steps only when a task settles) and freezes the placeholders' breath, but the
@@ -2004,9 +2236,17 @@ no-blank rule still applies — fall back to a static loading state.
 
 ADRs 0052 and 0054 record the task accounting, placeholder treatment and separate activity signal.
 
-**The fill hints at progress; the marker reports waiting.** Every non-silent query and every module
-download behind a Suspense boundary is a task (`web/src/utils/loadProgress.ts`,
-`web/src/utils/progressTasks.ts`). A settled task counts in full; a pending task earns capped
+**The fill hints at progress; the marker reports waiting.** Every query read the reader waits on and
+every module download behind a Suspense boundary is a task (`web/src/utils/loadProgress.ts`,
+`web/src/utils/progressTasks.ts`). A query read counts when nothing is on screen for it yet (a first
+load, a new key, a retry after a failure), when an action invalidated data that last read
+successfully, or when a query nobody polls is re-read (a refresh button). A polled query re-reading
+the data it already shows - including the poll after a failed one - is background refresh and never
+counts. The rule is read from the query (`isQueryProgressWork` in `web/src/utils/progressSources.ts`),
+so a poll needs no opt-in; because an interval tick and a manual `refetch()` look the same there, a
+refresh that must report waiting on a polled query invalidates it. `meta: { silent: true }` remains
+for reads the query cannot classify: a live read that moves to a new key per signal, and background
+reads silent even on their first load. A settled task counts in full; a pending task earns capped
 exponential credit toward 85% of its share. This is a rough estimate, not a measurable remaining
 duration or byte percentage. The fill never moves backwards, including when new work joins.
 
@@ -2247,13 +2487,14 @@ is what this section records.
 | --- | --- | --- |
 | `900px` | viewport | The shell changes shape: the rail becomes a sheet, page head and grid columns stack. |
 | `640px` | viewport | The device is a phone: list surfaces render labelled rows instead of a table, and controls take their touch sizes. |
-| `920px` | container (`reqstream`) | The request list's own width no longer fits its columns, so each record becomes a stacked row. |
+| `920px` | container (`reqstream`) | The request list's own width no longer fits its columns, so each record becomes a stacked record of three lines. |
 
 The third is a container query rather than a viewport breakpoint, and deliberately so: that
 list sits inside the page's content column, so the same viewport holds a different list width
 depending on whether the rail is open. "Do the columns still fit" is a question about the box
 the columns are in, and only the container can answer it. The same reasoning governs the
-dashboard's `@container modelusage (max-width: 500px)` panel stack.
+dashboard's `@container modelusage (max-width: 500px)` panel stack and the live routing map's
+`@container routingmap (max-width: 940px)` narrow layout.
 
 Above that threshold the request list **folds columns rather than scrolling sideways**. The grid
 has a floor - the sum of every column's width - and a window narrower than the floor used to get a
@@ -2273,6 +2514,37 @@ a defect: the request list carried a viewport `@media (max-width: 920px)` block 
 its container query, and it could only ever fire where the container already had (the
 container is at most `viewport − 64px`), so it was removed rather than left as an unexplained
 second breakpoint.
+
+### A stacked request record is three lines, in the text colours
+
+Below the container threshold a record is three lines of two facts each (ADR 0096):
+
+| Line | Leading | Trailing | Tone |
+| --- | --- | --- | --- |
+| 1 | model, the substituted or routed model beside it, then the reasoning effort badge and mode marks | cost | primary: `--text-base`, weight 600 |
+| 2 | provider and account | total tokens | `--fg-2`, weight 400 |
+| 3 | time, the control that copies the request id, verdict | latency | `--muted`, `--text-sm` |
+
+A record in a list is there to be recognised; the detail drawer, one tap away, is where it is
+read. First-token time, the token breakdown, the cache rate, speed, the credential kind, the
+caller's key and the client label are therefore not drawn in a stacked record. A phone-wide
+record that repeats every table column in small type cannot be scanned, however few pixels it
+takes.
+
+It is the table row's own DOM. The cells that hold two facts (time and id, total and breakdown,
+latency and first token) dissolve with `display: contents`, and the line breaks are those cells'
+pseudo-elements. Each line has one cell with a zero flex basis that gives way first, so a line is
+cut short rather than wrapped; the record is the same height at 320px and at 390px. The checkbox
+is placed in the record's left padding, so the three lines share one left edge and the model and
+provider marks form one column.
+
+**Hue is for the exception.** In the table each mark's tint has a column to itself. Folded into
+a few lines, a success fill, an effort hue and a credential kind land in one glance and none
+reads as a signal. A stacked record is therefore drawn in the text colours, and three things
+keep a hue: the verdict's pip, a failed verdict in full, and the reasoning effort badge, which
+is drawn exactly as the table draws it because it is the one mark that explains a record's cost
+and latency at a glance. The badge is never cut short: on its line the model's name gives way.
+The table above the threshold is unchanged.
 
 ### A page never moves sideways
 
@@ -2417,15 +2689,31 @@ because double-tap and pinch zoom are how a reader enlarges a dense table.
 
 ### Content-first phone tools
 
-At `640px` and below the shell header is one row: navigation, the ellipsised current page name,
-refresh and a labelled More trigger. The click-open tools menu shows the current theme and language,
+At `640px` and below the shell header is one 48px row (`--app-header-height`; 56px above):
+navigation, the ellipsised current page name, refresh and a labelled More trigger. The click-open tools menu shows the current theme and language,
 repository and sign-out; demo mode keeps its marker and write restrictions. Menu rows are at least
 44px high. Back or Escape dismisses the menu and restores its trigger focus; an action opening a
 modal gives focus to that modal. The `900px` navigation-sheet breakpoint is unchanged.
 
 `PageHeader.mobileActions` explicitly chooses primary phone actions and an `ActionMenu` for secondary
-tools; desktop `actions` stay unchanged. The phone title is 18px, content has 12px horizontal padding,
-and page/header/card gaps use the existing 8/12/16px scale. Additional provider and audit filters use
+tools; desktop `actions` stay unchanged. **The top bar names the page, so the page does not repeat
+it** (ADR 0096): the `h1` stays in the document for the outline and assistive technology and is not
+drawn, a live subtitle and the actions take its row, and a head that held only the title takes no
+room. Content has 12px horizontal padding, and page/header/card gaps use the existing 8/12/16px
+scale.
+
+**Counts and tiles keep their row.** `StatTiles` stays one strip of narrower tiles, a label too
+long for its tile cut rather than wrapped. The dashboard grid keeps two columns and its wide tiles
+span both. A list row's controls share its headline's line when both fit and fall to a line of
+their own, still at the trailing edge, when the headline needs the width. An OAuth credential is
+four lines: identity, state and its switch, traffic and the record's tools, the quota reading.
+
+**The request filters are two rows.** Search and the way into the full filter panel hold the first.
+The window, the verdict, the model and provider facets, the grouping and the model view are one
+strip that swipes inside itself and bleeds to the page edge, so a control cut off by the edge says
+there is more that way. The page head is one row of state and tools: auto refresh, the ingest
+verdict (the one item that gives way), the fold toggle and refresh. The window's bounds are not
+printed beside the window control that already states them. The list runs to the screen's edges. Additional provider and audit filters use
 `FilterDisclosure`, whose summary keeps the selected state visible. Existing responsive row lists,
 request-list inertia and conversation scroll ownership remain unchanged. The shared conversation frame bounds its phone height to the usable viewport, keeping input and Send above the software keyboard.
 
@@ -2461,6 +2749,15 @@ inner menu, confirmation or conflict dialog. The entry button regains focus afte
 `useVisibleViewport` follows keyboard resize and caret panning through `visualViewport` resize/scroll,
 with layout viewport fallback and pinch-zoom left to the browser. The editor and dirty actions fit
 inside those bounds; their observers/listeners are effect-owned and cleaned under StrictMode.
+
+### A sheet slides opaque
+
+antd starts a drawer's panel at 70% opacity and fades it in over the slide. On a phone a sheet is
+the width of the screen, so the page it covers stays readable through it for the whole slide: two
+layers of text on one surface. Drawer wrapper dimensions update immediately; only transform
+transitions normally, and reduced motion disables the wrapper transition entirely. The panel's opacity is held at 1 for every drawer, and the mask
+keeps its fade. A panel on its way out keeps drawing what it held: the request detail drawer
+remembers the record it showed, so what leaves is the record and not an emptied sheet.
 
 ### The viewport is not a fixed rectangle
 
@@ -2608,29 +2905,42 @@ available in Simplified Chinese, Traditional Chinese, English and Malay.
 
 ### System version comparison
 
-The Versions & Updates card keeps two product rows separated by a single rule. Each row
-places product identity and its repository beside a concise semantic status. Below it,
-the running and latest published versions form a compact comparison, bounded to 320px
-with a quiet vertical divider. The release tag appears in the comparison, not again in
-the status. Existing `--fg` and `--fg-2` tokens carry versions and labels; only a known
-update target uses `--accent`. On narrow screens the comparison becomes two label/value
-rows, with long build tags wrapping within their own column.
+The Versions & Updates card is the page's first row and spans its full width. A product row is
+identity, comparison, status and actions at once, and a half-width cell wrapped every one of
+them; the full column is what lets each product sit on two calm lines instead of four crowded
+ones. The card keeps two product rows separated by a single rule.
 
-The change-log action occupies its own trailing space alongside the comparison. It is a
-32px-high text button with a document icon, a localized label and a muted actual release
-count; its accessible name identifies both product and count. On phones it follows the
-comparison on a separate line, keeping both readings aligned and the action label intact.
-The action appears only for actual entries; the repository link stays with the product
-identity. A known newer release adds an **Ignore this version** toggle before it, in the
-same 32px text-button form with a bell icon. Its label never changes: the pressed state is
-the struck bell, `--fg` ink and `aria-pressed`, and the outcome of each press is a toast,
-so neither the row nor the card moves when it is used. It is disabled until the stored
-dismissals have been read. Long comparison explanations belong below the readings rather than in the
-status slot. A missing-notes hint belongs only to a known change-log range; an empty or
-unchecked feed does not acquire a second warning about notes. A failed check retains the
-readings and shows its reason and, when available, the last successful check time.
-The log remains a Drawer and remote images remain links, never automatically fetched media.
-These are page-level arrangements using the existing visual tokens, not new theme mappings.
+Each row opens with product identity and its repository beside a concise semantic status. Below
+it, the running and latest published versions form a compact comparison, bounded to 320px with a
+quiet vertical divider. The release tag appears in the comparison, not again in the status.
+Existing `--fg` and `--fg-2` tokens carry versions and labels; only a known update target uses
+`--accent`. On narrow screens the comparison becomes two label/value rows, with long build tags
+wrapping within their own column.
+
+The row's trailing actions are one group at the row's right edge: the change-log action in its
+32px text-button form with a document icon, a localized label and a muted actual release count;
+an **Ignore this version** toggle before it when a known newer release exists, in the same 32px
+text-button form with a bell icon; and, last, the row's one filled control - the update action -
+so the primary action sits at the same right edge the page's own primary action takes. The
+ignore toggle's label never changes: the pressed state is the struck bell, `--fg` ink and
+`aria-pressed`, and the outcome of each press is a toast, so neither the row nor the card moves
+when it is used. It is disabled until the stored dismissals have been read.
+
+A replacement in flight draws the updater's four stages - pulling, stopping, starting,
+verifying - as a four-segment bar under the readings, with the stage's sentence beside it. The
+bar carries the step count, not a measured percentage: the stages are known and ordered, their
+durations are not. A product the updater will not replace from the page states its reason in a
+quiet line under the readings, marked with an information glyph rather than a warning tone,
+because a pinned image or a container that runs elsewhere is an operator's decision and not a
+fault. Long comparison explanations belong below the readings rather than in the status slot.
+
+A missing-notes hint belongs only to a known change-log range; an empty or unchecked feed does
+not acquire a second warning about notes. A failed check retains the readings and shows its
+reason and, when available, the last successful check time. The log remains a Drawer and remote
+images remain links, never automatically fetched media. The setup step that enables one-click
+updates stays inside this card, under the rows it explains, and takes its head from
+`SectionHeading`. These are page-level arrangements using the existing visual tokens, not new
+theme mappings.
 
 ### Update indicator
 
@@ -2643,31 +2953,31 @@ it says the deployment is behind a published release.
 
 ### System information status cards
 
-Maintenance, storage and component health present their selected readings immediately.
-Card titles wrap on narrow screens, and these arrangements use the existing theme tokens
-and system response without additional API requests.
+Under the versions card, maintenance, storage and component health sit in one row - three peer
+cards that share the column, wrap to fewer columns before their own readings would be squeezed,
+and stack into a single column below the 900px breakpoint. They present their selected readings
+immediately. Card titles wrap on narrow screens, and these arrangements use the existing theme
+tokens and system response without additional API requests.
 
-Maintenance pairs three short action names with one-sentence explanations and the
-console's standard outlined antd buttons. Button dimensions, typography, border,
-background and interaction states inherit the shared configuration. Admission refusals
-replace the ordinary explanation; running, failed and partial outcomes remain explicit.
-VACUUM requires confirmation of the exclusive write gate and measured disk requirements.
-Completed outcomes are independently dismissible; running work is not.
+Maintenance pairs three short action names with one-sentence explanations and the console's
+standard outlined antd buttons. Button dimensions, typography, border, background and
+interaction states inherit the shared configuration. Admission refusals replace the ordinary
+explanation; running, failed and partial outcomes remain explicit. VACUUM requires confirmation
+of the exclusive write gate and measured disk requirements. Completed outcomes are independently
+dismissible; running work is not.
 
-Storage prioritizes the total physical footprint above one shared label/value list.
-The three measured file sizes, journal mode and schema generation share identical label
-and right-aligned value columns at every viewport. Missing files read "not present"
-rather than zero. Physical footprint is not
-repeated as allocated pages or record counts; internal geometry, reusable pages and
-connection settings belong in the sanitized diagnostics bundle.
+Storage prioritizes the total physical footprint above one shared label/value list. The three
+measured file sizes, journal mode and schema generation share identical label and right-aligned
+value columns at every viewport. Missing files read "not present" rather than zero. Physical
+footprint is not repeated as allocated pages or record counts; internal geometry, reusable pages
+and connection settings belong in the sanitized diagnostics bundle.
 
-Component health has four divided rows, each with a component name, semantic status and
-one short inline operational summary. The gateway shows its credential count, Oh My CPA
-its start age and memory, SQLite its request count, and the collector the latest usage
-age. Each summary uses at most two paired facts, with labels beside values rather than
-separate metric grids. Positive ingestion backlog and collection gaps appear as warning
-readings; healthy zero values do not consume space. Missing observations remain explicit.
-The version card retains the compact comparison and separate change-log action above.
+Component health has four divided rows, each with a component name, semantic status and one
+short inline operational summary. The gateway shows its credential count, Oh My CPA its start
+age and memory, SQLite its request count, and the collector the latest usage age. Each summary
+uses at most two paired facts, with labels beside values rather than separate metric grids.
+Positive ingestion backlog and collection gaps appear as warning readings; healthy zero values
+do not consume space. Missing observations remain explicit.
 
 ### Model Square directory
 
@@ -2752,7 +3062,10 @@ keep manual entry and default new mappings to retaining the original model (`for
 Exclusions use open checkbox rows, searchable catalog bulk actions and a separate
 list for typed IDs and wildcard rules. A wildcard-covered row identifies its rule
 and cannot be unchecked unless its own exact rule exists; the catch-all rule warns
-that every model will be excluded. The footer keeps Clear, Revert and Save reachable
+that every model is excluded only on credentials inheriting provider defaults.
+Non-empty credential lists replace these defaults; clearing a credential list
+restores inheritance. Alias warnings and provider-rule deletion confirmations
+scope their claims accordingly and leave availability to CPA. The footer keeps Clear, Revert and Save reachable
 on a phone. Existing palette, shape, typography and motion tokens are reused.
 
 ### Credential policies, Vertex import and gateway log tools
@@ -2791,3 +3104,24 @@ keeps the same text, standalone reasoning, working timelines and inline generate
 in reading order. Call rows retain argument summaries, outcome and duration disclosures.
 PNG captures generated interfaces at their laid-out width, including kit charts and controls;
 unavailable figures keep a visible fallback note rather than silently disappearing.
+
+### Credential window warmup
+
+The OAuth toolbar opens a viewport-bounded Warmup settings Drawer with Codex and Claude
+section tabs. A draft prevents provider switching; close and native Back require a
+discard decision. Each provider edits a model, reset mode and one optional daily start,
+showing the effective OMC timezone and daily-priority rule. Defaults are off and `06:00`.
+Saving confirms the effect on all current and future inheriting credentials.
+
+The credential Quota tab adds a Window warmup section with provider inheritance or a
+complete override, effective policy, next check, latest durable result and safe pause
+reason. Two quiet facts always show selected-model activation observations and the latest
+paid-fallback evidence, including unknown evidence. An absent activation observation is neutral
+history, not an instruction or readiness gate. The reason explains current window or billing
+state. Saving an enabled policy authorizes eligible automatic requests; manual activation
+remains optional. Its drafts survive tab changes, remain
+open after another section saves, and participate in the parent Drawer close guard.
+Manual activation requires confirmation naming the credential and model and explaining
+quota consumption. Pending and uncertain outcomes never read as activation success.
+Manual execution outcomes stay in the credential section without a duplicate toast;
+background confirmation updates that same result. The public demo cannot save or consume. Existing type, shape, spacing and semantic-feedback tokens are reused.

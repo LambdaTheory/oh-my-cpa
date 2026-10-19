@@ -92,7 +92,7 @@ Account auto-management, Ollama and Feishu are approved as the first batch of lo
 - **Data side**: confirm run status and, within available permissions, expose read-only, stable identity, availability and event information.
 - **Data side reports back**: how OMC stores the built-in agent's SOP/skills, and whether structured calculation tools plus daily automation and record persistence are feasible. No new integration is requested now.
 
-First-batch scope and its interface draft: `docs/omc-first-batch-spec.md`. Relevant OMC references: `docs/adr/0094-passive-quota-observations-and-read-only-mcp-key.md`, `docs/adr/0095-per-account-quota-refresh-scheduling-and-429-backoff.md`, `docs/agent-capabilities.md`, `migrations/041_quota_observations.sql`, `migrations/042_quota_observation_source.sql`, `internal/repository/quota.go`, `internal/operations/quota_observations.go`, `internal/quota/observations.go`.
+First-batch scope and its interface draft: `docs/omc-first-batch-spec.md`. Relevant OMC references: `docs/adr/0103-passive-quota-observations-and-read-only-mcp-key.md`, `docs/adr/0104-per-account-quota-refresh-scheduling-and-429-backoff.md`, `docs/agent-capabilities.md`, `migrations/041_quota_observations.sql`, `migrations/042_quota_observation_source.sql`, `internal/repository/quota.go`, `internal/operations/quota_observations.go`, `internal/quota/observations.go`.
 
 ## 8. Open questions
 

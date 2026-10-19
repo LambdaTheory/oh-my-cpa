@@ -11,6 +11,11 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 
 - **Release version**: The stable `vMAJOR.MINOR.PATCH` identity shared by an official OMC build, its published container and its GitHub Release. The running release version is a claim about the shipped build, not a user-selected upgrade target. Development and fork suffixes are intentionally incomparable with the stable release line; failed or absent observations never imply that a deployment is current.
 
+- **Updater**: The Oh My CPA image run as `oh-my-cpa updater serve` in its own container, `oh-my-cpa-updater`, holding the Docker socket (ADR 0099). It is the only component that replaces containers. The console never holds the socket; it asks the Updater to update a **product** (`omc` or `cpa`) and nothing more specific. An Updater is either declared as a Compose service or added to an existing deployment by `updater install`.
+- **Console update**: One confirmed action on System Information that replaces a product's container with a newer image. It is distinct from the **update check**, which only observes that a newer release exists. A Console update is offered only when the check reports `update_available` and the Updater reports the product `available`.
+- **Pinned image**: A configured image reference that carries a version tag or a digest. The Updater never changes a Pinned image, because the deployment's own Compose file would restore the older version over a migrated database. Only a floating tag such as `latest` is updated.
+- **Release manifest**: `release-manifest.json`, published with each release beside its Ed25519 signature: the version, the image repository and the multi-platform image digest. It is the only thing that authorizes a Console update of Oh My CPA. CLIProxyAPI has none; its update follows the tag its container already uses.
+
 - **Playground**: An ephemeral text-and-image debugging workspace for models already callable through CPA. The operator chooses an existing Client Key Alias (or its mask) and a client-visible Call Point returned by CPA's live `/v1/models` directory, and the Inference Endpoint the conversation is sent to. CPA retains normal routing and protocol adaptation; choosing a model does not pin a provider or Credential. Each explicit send or retry can spend provider entitlement.
 - **Inference Endpoint**: One of the three surfaces CPA serves a client key on, named `chat` (Chat Completions, `/v1/chat/completions`), `responses` (`/v1/responses`) or `messages` (`/v1/messages`). The Playground and the Agent send the same conversation to whichever is chosen: the server writes that endpoint's body and reads its stream back into the same events, so a Turn looks the same whichever answered (ADR 0088). It is a name from a closed set, never a path or URL.
 - **Playground Turn**: One immutable request snapshot and its streamed answer, measured timings, reported usage and bounded diagnostic events. Failed or stopped partial answers remain visible but do not enter later context as completed assistant messages. A Turn carries CPA's `request_id` once CPA has picked a credential for it, and that id (within the Turn's own time window, since CPA's ids restart with CPA) is how the Turn opens its one request record; a Turn without an id has no request link. Retrying the last turn reuses its original snapshot; edited settings apply to the next new turn. The single latest session (selected key fingerprint, Call Point, Inference Endpoint, parameters, custom request body, and active conversation turns with large image payloads redacted) is persisted server-side as the `playground_session` Preference, allowing operators to resume debugging across devices. Starting a new conversation discards stored turns. No key secrets are stored, and an inline image past the storage limit (16 KiB of data URL) is replaced by a placeholder in every retained copy of the turn - the message it was attached to and the request snapshot, which also carries earlier turns' images as history. A restored conversation replays without those placeholders rather than sending a URL the gateway would reject. This does not change CPA or upstream logging policies.
@@ -58,7 +63,7 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **Credential selection**: The workspace includes CPA credentials and Ollama monitoring accounts in one selection, preserving source-specific opaque targets internally. Rows and automation lists show friendly account labels without standalone indexes or index prefixes; missing names use localized account copy. Batch enable/disable controls CPA credential availability or Ollama periodic collection respectively, never Ollama inference routing. Default quota refresh includes enabled supported records from both sources, counts the same planned targets it sends, and explains disabled or unsupported skips.
 - **Authorization Provider ID**: The console's id for an OAuth sign-in provider. It is declared per sign-in provider (for example the Claude display family starts `anthropic`), may come from a plugin's `oauth_provider`, and is resolved without fuzzy matching from the display key. The id CPA's shared login endpoint expects can differ: the management client translates it when it starts a flow (`anthropic` is sent as `provider=claude`), and a plugin's id passes through unchanged.
 - **OAuth Model Alias**: A CPA-owned, provider-scoped mapping from an upstream OAuth/file-backed model ID to a client-visible model ID. It is global to the provider rather than to one credential; Oh My CPA replaces one provider's mapping through an allowlisted facade and verifies CPA's readback before reporting success.
-- **OAuth Model Exclusion**: A CPA-owned, provider-wide rule that hides upstream models from every OAuth/file-backed credential of that provider. Exact model IDs and patterns with `*` are case-insensitive; all other characters are literal. The rule `*` hides every model. These rules are independent of a credential's own excluded-model fields, and are applied before OAuth aliases, so an alias cannot restore an excluded upstream model. Empty rules remove that provider's exclusions. The Model Rules task edits aliases and exclusions separately under one provider identity.
+- **OAuth Model Exclusion**: A CPA-owned exclusion default for OAuth/file-backed credentials of a provider (the override precedence below requires CPA v8.0.33 or later): a non-empty credential `excluded_models` list replaces, rather than extends, the provider's `oauth.excluded-models`; a missing, empty or null credential list inherits the current provider rules. Exact IDs and `*` patterns match case-insensitively before OAuth aliases, so provider `*` excludes every model only on inheriting credentials; clearing a credential override restores inheritance, and CPA remains authoritative for availability.
 - **Authorization Flow Shape**: How an OAuth sign-in is completed, and the distinction the sign-in page renders. A **redirect flow** ends at a callback URL carrying the authorization code, which an operator on a remote browser may have to paste back (Devin's callback is a loopback address on the CPA host, so pasting is the normal path there rather than a fallback); a **device flow** asks the operator to confirm a short code on the vendor's own page while the console polls (Kimi, Kimi International, Meta Muse). Kimi's two account systems - kimi.com and kimi.ai - are separate login providers (`kimi`, `kimi-ai`) that share one provider tab; quota observation follows the recognized account system without trying the token against both hosts. Missing account-system metadata is a compatibility limitation. The shape is declared once per provider rather than inferred from its name, and CPA reports it when a flow starts so the console renders the box that actually applies.
 - **Endpoint**: A network destination, represented by a base URL and related connection details. An Endpoint is where traffic goes, not necessarily who provides the service.
 - **Provider Model Pull**: The console's server-side model-list request to an
@@ -77,13 +82,14 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **Configuration Change Set**: What a visual or Keys-page save sends: the v8 paths the draft changed, each with its new value or marked removed, against the revision the draft was loaded at. CPA writes each path in place, so settings the save does not name are neither sent nor overwritten. A path, value or name CPA does not accept is refused without writing that request, with CPA's reason (`config_rejected`). Earlier valid requests in the same change set may already have been written; those saves return `config_partially_applied` without rolling them back.
 - **Unclaimed Resource**: A CPA resource discovered by Oh My CPA that has no confirmed local user identity or override yet. Discovery, the claim status column, and `PATCH /resources/{id}/override` all still exist, but the console no longer routes a triage page: since navigation aligned with gateway surfaces, CPA runtime resources are managed directly through Providers and OAuth management pages instead. The discovery engine persists rows into `discovered_resources` and `cpa_bindings` (queried via `/resources`), so the domain model remains load-bearing even without a dedicated triage screen.
 - **Model Price**: The current CPA model catalog is the maintenance scope. Each catalog identity has one current price projection: four per-1M-token rates (prompt, completion, cache read, cache write), a model multiplier and optional Price Tiers. OpenRouter's public model list is the only automatic source; a cache rate it does not publish is the prompt rate, never zero.
-- **Pricing Provider Membership**: The exact set of current model identities a configured API-key provider or OAuth provider serves, captured with the complete CPA pricing catalog. It is presentation grouping, not a separate provider-specific price: a model can belong to several providers and still has one Model Price. Provider group labels and icons reuse the management identity; model labels remain text-only with a metadata extension point. Groups sort by routing priority and name, and models use case-aware natural name ordering. An alias with conflicting routed targets has an empty price target and remains unpriced unless an operator supplies a link or custom price; it does not invalidate the rest of the catalog.
+- **Pricing Provider Membership**: The exact set of current model identities a configured API-key provider or OAuth provider serves, captured with the complete CPA pricing catalog. A model has a shared Model Price and may have a custom override per recorded CPA channel and upstream model (ADR 0101). A routing prefix is not a channel identity. Provider group labels and icons reuse the management identity; model labels remain text-only with a metadata extension point. Groups sort by routing priority and name, and models use case-aware natural name ordering. An alias with conflicting routed targets has an empty price target and remains unpriced unless an operator supplies a link or custom price; it does not invalidate the rest of the catalog.
 - **Price Mode**: How a Model Price is maintained. `auto` follows the automatic OpenRouter match, `linked` follows an OpenRouter model the operator chose (a pin), `custom` uses the operator's own rates. Syncs refresh `auto` and `linked` and never touch `custom`; a name that only resembles an OpenRouter model is offered as a suggestion, never matched. A price synced from models.dev before OpenRouter became the source is a legacy `auto` row until a sync matches it.
 - **Price Candidate**: An OpenRouter model a `custom` or `linked` Model Price could follow that the operator has not answered — typically one OpenRouter started listing after the price was set by hand. A custom price's candidate is its automatic match, else its first suggestion; a linked price's is an automatic match different from its link. Saving the price or ignoring the candidate records it as answered, so only a different candidate is announced again. Following one is an ordinary mode change; ignoring one changes no price.
-- **Price Tier**: A conditional override of a price's rates: a long-context threshold over the request's full input (cached tokens included), a time-of-day window read from the request's own timestamp on the tier's **billing time zone** (an IANA zone naming the vendor's clock; UTC when the tier names none, and independent of the OMC Time Zone), or both. Exactly one tier governs a request - the highest threshold, then a windowed tier - and rates it leaves out inherit the base price.
+- **Price Tier**: A conditional override of a price's rates: a set of upstream service tiers the request was billed on, a long-context threshold over the request's full input (cached tokens included), a time-of-day window read from the request's own timestamp on the tier's **billing time zone** (an IANA zone naming the vendor's clock; UTC when the tier names none, and independent of the OMC Time Zone), or any combination. Exactly one tier governs a request - a service-tier tier, then the highest threshold, then a windowed tier - and rates it leaves out inherit the base price; an explicit zero rate is free, not inherited.
+- **Billed Service Tier**: The service tier a request is priced on: the response service tier CPA reported, or the requested tier when the response names none. `auto` and empty name no tier, so such a request matches no service-tier Price Tier.
 - **Channel Multiplier**: A multiplier on every request one CPA provider label (`usage_events.provider`) answered, on top of the model's price: a relay that resells at 30% of list is 0.3. It is versioned and locked per request like a price; a channel without one is 1×.
 - **Price Version**: An immutable, time-effective price (or channel multiplier) snapshot. A change creates a new version; deleting a current price creates a tombstone so future requests stay unpriced while existing snapshots remain valid.
-- **Request Cost Snapshot**: The price version, channel version, tier and USD nanos amount selected in the same transaction as a usage event, using the request timestamp. It is never recalculated from the current price projection; the request detail recomputes a breakdown from the locked versions only to explain it.
+- **Request Cost Snapshot**: The price version, channel version, tier (including the Billed Service Tier it matched) and USD nanos amount selected in the same transaction as a usage event, using the request timestamp. It is never recalculated from the current price projection; the request detail recomputes a breakdown from the locked versions only to explain it.
 - **Diagnostic Client Address**: The exact connection peer and the ordered
   `X-Forwarded-For` chain associated with one request record. They are preserved
   for the protected single-record detail, never exposed by the request list,
@@ -414,27 +420,27 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   instant changed, or every fifteen minutes while steady; a malformed or missing window
   produces no observation, and an absent window is unknown, never zero. Observations are
   kept for a fixed 365 days, independent of Request Record retention, and the
-  `quota_observations_list` read capability exposes them (ADR 0094).
+  `quota_observations_list` read capability exposes them (ADR 0103).
 - **Active Quota Observation**: A quota window recorded from a refresh this deployment
   performed, stored in the same timeline as a Passive Quota Observation but under
   `source='active'`, with the window's scope and model. A refresh records one for each
   window that states a period and a used share; a refresh that failed records none. It is
   how a quiet credential, a model-scoped window or a closed cycle becomes part of the
-  history the passive stream cannot describe (ADR 0095).
+  history the passive stream cannot describe (ADR 0104).
 - **Quota Refresh Tier**: The per-account cadence the background scheduler reads a
   credential at: watched, active, normal or idle, chosen by how recently it served a
   request and the highest used share among its windows. A credential whose standard window
   is already current through the passive stream is read no faster than the passive floor.
   A window whose reset has just passed is read once, and a window close to its reset with
   traffic but no recorded reading is read so the next cycle has a previous-cycle figure
-  (ADR 0095).
+  (ADR 0104).
 - **Quota Refresh Backoff**: The park applied after an upstream answers 429, for its
   `Retry-After` or a doubling wait when none is given. It is shared by the scheduler, the
   manual refresh endpoint and the `quota_refresh` capability: while parked, each refuses
   with `rate_limited_backoff` and a retry time instead of probing the upstream. It is held
-  in memory only, so a restart clears it (ADR 0095).
+  in memory only, so a restart clears it (ADR 0104).
 - **Account Auto-Management**: OMC's control of one credential's `disabled` state from
-  account-level evidence (ADR 0096). It disables only on a **new** standard weekly (7d)
+  account-level evidence (ADR 0105). It disables only on a **new** standard weekly (7d)
   reading that states 100% used with its reset still in the future, and enables directly
   at that recorded reset without a pre-enable probe. The roster is opt-in: a credential is
   under control only once an operator adopts it, a credential discovered later is not
@@ -491,6 +497,20 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   own status instead of as an absence, so the console never asks the operator to
   repeat the read that just came back empty; a credential nobody has read keeps the
   idle reading that does ask for one.
+- **Quota Auto Refresh**: The background re-reading of stored quota observations,
+  under the deployment-wide `omc_quota_auto_refresh` policy edited on OMC Settings
+  (ADR 0094). It has two independent triggers. A **reset-driven read** (on by default)
+  reads a credential once, about a minute after a window its latest reading reported
+  has reset, so an exhausted credential reads as recovered without anyone asking; a
+  credential nobody has read has no reset to wait for. A **scheduled read** (every six
+  hours by default; 5 minutes to 24 hours, or off) reads every credential whose reading is that
+  old, including one nobody has read. Automatic reads are the manual refresh with the
+  same persistence rule - a failed read never replaces the last good one - and are not
+  repeated every minute when they fail: a failed reset-driven read is retried every ten
+  minutes during the hour after the reset, and a failed scheduled read waits a whole
+  interval. Disabled credentials, providers with no probe,
+  an `auth_index` two credentials claim, and Meta credentials (whose read exchanges a
+  key upstream and is an audited operator action) are never read automatically.
 - **Estimated Window Capacity**: What a whole Quota Window is worth: usage this
   deployment recorded in the indicated cycle and metered model scope divided by
   the share upstream reports as used. It is capacity at 100%, not a forecast of
@@ -525,8 +545,36 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   and column layout, and the console's own display settings — the token unit
   style (`omc_token_style`), TPS calculation mode (`omc_tps_calculation_mode`),
   the model display view (`omc_models_view`), request list model brand icons
-  (`omc_request_model_icons`, boolean, default true), the theme (`omc_theme`) and scroll smoothing
-  (`omc_scroll_smoothing`).
+  (`omc_request_model_icons`, boolean, default true), the theme (`omc_theme`), scroll smoothing
+  (`omc_scroll_smoothing`), the typeface roles (`omc_fonts`), the rail entries the
+  console hides (`omc_nav_hidden`) and the dashboard's widget arrangement
+  (`omc_dashboard_layout`).
+- **Dashboard Arrangement**: The order, width and visibility of the dashboard's widgets, stored as
+  the `omc_dashboard_layout` preference - every widget the console knows, in reading order, with its
+  width in columns of four and whether it is hidden. A widget a later release adds is missing from an
+  older document and is placed where the default order puts it, visible. It is edited in an
+  arrangement mode on the dashboard itself and stored only when the operator chooses Done. Like the
+  rail visibility it is console state: it changes what the dashboard draws, never what is served or
+  read for another page. See [[Preference]].
+- **Sidebar Visibility**: Which of the rail's entries this console shows, stored as the
+  `omc_nav_hidden` preference - the set of *hidden* route keys, so a destination a later release
+  adds arrives already visible rather than waiting to be re-enabled. The entries are turned off
+  in a panel that a single row on OMC Settings opens - the panel lists the same model the rail
+  draws, so a plugin's page or a later release's destination appears there without a second list
+  to maintain - and the row states how many entries are out of the rail, so the page reads without
+  opening it. It is console state rather
+  than a deployment capability: it changes nothing about what the gateway serves, the pages it
+  hides stay reachable by URL, the filter applies to the expanded rail, the collapsed rail and
+  the phone sheet from one model, and OMC Settings - the page that owns the choice - cannot be
+  hidden. See [[Preference]].
+- **Font Library**: The deployment's installed typefaces, from which the two
+  **Font Roles** are chosen: `ui` (the interface) and `mono` (code, identifiers and
+  aligned figures), stored as `omc_fonts` (`builtin:<id>` or `font:<library id>`; a
+  role left out uses the bundled Sarasa Mono SC). A family arrives by upload or by
+  installing from Google Fonts, which the *server* downloads; either way its files are
+  stored in the database and served from the console's own origin, so the browser never
+  loads a font from another host and an installed family needs no network. Deleting a
+  family returns the roles that used it to the default (ADR 0100).
 - **Scroll Smoothing**: Whether a wheel notch or a scrolling key glides to its
   destination instead of jumping — `on` (default), `system` (glide unless the
   system reports reduced motion) or `off`, stored as `omc_scroll_smoothing`.
@@ -767,3 +815,35 @@ execution. Agent replay needs no configured caller key or model; an open approva
 sending in both demo and normal mode. Agent replay state lasts for the page lifetime. No
 operation identifier in a recording authorizes a live action. The activity fixture is a deterministic synthetic year
 with normally distributed daily variation, quieter weekends and a small set of idle dates.
+
+## Credential window warmup
+
+- **Window Warmup** is an explicitly approved tiny consuming request on one exact Codex
+  or Claude OAuth credential. It starts idle subscription windows; it does not replenish
+  quota, redeem reset entitlements, clear cooldowns or guarantee a monetary charge.
+- **Warmup Policy** has a selected model, reset mode (`off`, `weekly`, `all`), a daily
+  enable flag and one `HH:mm` daily time. Provider defaults apply to existing and future
+  inheriting credentials; overrides replace the complete policy. Automation defaults
+  off and the daily time defaults to `06:00` in the effective OMC Time Zone.
+- **Activation Observation** records a quota-observed activation for a credential identity
+  and selected model. It describes a completed attempt, not automatic readiness. An enabled,
+  approved policy admits its first automatic attempt through current model, billing and
+  window evidence. HTTP completion without observed activation is pending, then uncertain
+  after bounded confirmation reads.
+- **Paid Fallback Evidence** is `disabled`, `enabled` or `unknown`, with its source and
+  observation instant. Missing fields never mean disabled. Enabled or unknown paid
+  fallback pauses every consuming warmup request; reset credits are not billing evidence.
+  The console labels it "Paid overage" ("超额付费") and a policy "warmup settings"; console
+  copy describes what warmup does for the user (starts the credential's quota window) rather
+  than restating its guards. A credential's warmup leads with a status (on, off or paused and
+  why; next run; last run; charges), shows an inherited policy as plain rules, and reports a
+  manual run's outcome as a toast.
+- Only main five-hour and overall weekly windows are activation targets. Zero usage with
+  a fixed future boundary remains active; missing or malformed evidence is unknown.
+  Explicit unused windows or repeated full-duration sliding boundaries can establish idle.
+- The daily start takes precedence when a new five-hour window would overlap it. A running
+  window skips that daily start. Missed daily starts are recovered only within one hour;
+  daylight-saving repeated hours retain one calendar task identity.
+- Early quota resets invalidate the prior cycle after observation. Redeeming a Codex reset
+  credit retains its independent success even if cooldown clearing, refresh or warmup fails.
+  Claude reset grants remain display-only.

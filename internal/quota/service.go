@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/warmup"
 )
 
 // Official Upstream URLs
@@ -39,13 +40,17 @@ const (
 )
 
 // Official upstream headers, plus the model id the xAI paid-account health probe
-// sends. The user-agent strings impersonate each vendor's official CLI because
-// the quota endpoints reject anything else.
+// sends. The user-agent strings impersonate each vendor's official client because
+// the quota endpoints reject anything else, and both vendors also refuse clients
+// below a version floor: Cloud Code withholds newer models from Antigravity Hub
+// builds older than 2.23.0, and Grok rejects CLI versions older than 1.0.13. The
+// versions follow the stable fallbacks CPA itself sends when it cannot reach the
+// vendors' update channels, so they move with each CPA baseline.
 const (
 	CodexUserAgent       = "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)"
-	AntigravityUserAgent = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)"
-	XaiGrokClientVersion = "0.2.91"
-	XaiGrokUserAgent     = "grok-pager/0.2.91 grok-shell/0.2.91 (macos; aarch64)"
+	AntigravityUserAgent = "antigravity/hub/2.23.0 darwin/arm64"
+	XaiGrokClientVersion = "1.0.46"
+	XaiGrokUserAgent     = "grok-pager/" + XaiGrokClientVersion + " grok-shell/" + XaiGrokClientVersion + " (macos; aarch64)"
 	XaiPaidHealthModel   = "grok-4.5"
 )
 
@@ -116,12 +121,22 @@ type CPAClient interface {
 
 // Service manages live upstream quota fetching, normalization, and actions.
 type Service struct {
-	client CPAClient
+	client         CPAClient
+	now            func() time.Time
+	warmupEvidence *warmup.Observation
 }
 
 // NewService creates a quota service bound to a CPA management client.
 func NewService(client CPAClient) *Service {
-	return &Service{client: client}
+	return &Service{client: client, now: time.Now}
+}
+
+func NewServiceWithClock(client CPAClient, clock func() time.Time) *Service {
+	service := NewService(client)
+	if clock != nil {
+		service.now = clock
+	}
+	return service
 }
 
 // DetectProvider maps file Type and Provider to a standard quota provider key.
@@ -281,7 +296,13 @@ func resolveCodexAccountID(file management.AuthFile) string {
 
 // RefreshCredentialQuota performs a live upstream query using full AuthFile metadata.
 func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.AuthFile, prior *NormalizedQuota) (*NormalizedQuota, error) {
-	nowMS := time.Now().UnixMilli()
+	// A service is shared by concurrent batch reads; evidence belongs to one reading.
+	s = &Service{client: s.client, now: s.now}
+	if s.now == nil {
+		s.now = time.Now
+	}
+	nowMS := s.now().UnixMilli()
+	s.warmupEvidence = nil
 	authIndex := strings.TrimSpace(file.AuthIndex)
 	stdProvider := DetectProvider(file.Type, file.Provider)
 	caps := CapabilitiesForFile(file)
@@ -439,6 +460,9 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 		result.Status = QuotaStatusUnpublished
 	}
 
+	if fetchErr == nil {
+		result.WarmupEvidence = s.warmupEvidence
+	}
 	EvaluateStatusAndRecommendation(result, nowMS)
 	return result, nil
 }
@@ -469,6 +493,8 @@ func (s *Service) fetchCodexQuota(ctx context.Context, file management.AuthFile,
 		return nil, nil, nil, errors.New(sanitizeError(resp.StatusCode, normBody))
 	}
 
+	observation := warmup.ParseObservation("codex", normBody, nowMS)
+	s.warmupEvidence = &observation
 	plan, windows, credits, err := ParseCodexUsage(normBody, nowMS)
 	if err != nil {
 		return nil, nil, nil, err
@@ -616,9 +642,20 @@ func (s *Service) fetchClaudeQuota(ctx context.Context, file management.AuthFile
 		return plan, nil, nil, errors.New(sanitizeError(usageResp.StatusCode, normUsage))
 	}
 
+	observation := warmup.ParseObservation("claude", normUsage, nowMS)
+	s.warmupEvidence = &observation
 	windows, extraUsage, err := ParseClaudeUsage(normUsage, nowMS)
 	if err != nil {
 		return plan, nil, nil, err
+	}
+	// Balances and extra usage come from the usage read, so a failed profile
+	// read must not drop them: they ride on a plan whose type stays unknown.
+	balances := ParseClaudeBalances(normUsage)
+	if plan == nil && (len(balances) > 0 || extraUsage != nil) {
+		plan = &QuotaPlan{Tier: "unknown"}
+	}
+	if plan != nil {
+		plan.Balances = balances
 	}
 	return plan, windows, extraUsage, nil
 }

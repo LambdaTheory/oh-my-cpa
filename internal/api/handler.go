@@ -29,6 +29,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	appcrypto "github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/fontasset"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/ollama"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -59,9 +60,26 @@ type Handler struct {
 	// maintenance runs the database-wide maintenance actions; nil until
 	// SetMaintenance, and nil in a deployment that does not offer them.
 	maintenance MaintenanceManager
+	// updater is the sidecar that applies updates; nil until SetUpdater, and nil in a
+	// demonstration. manifests downloads the signed manifest a console update needs.
+	updater         UpdateManager
+	manifests       ManifestSource
+	isContainerised bool
+	// updatePollInterval overrides how often a running update is re-read; tests set it.
+	updatePollInterval time.Duration
+	// updateWatchers counts the goroutines waiting to record an update's outcome;
+	// stopUpdateWatchers ends their wait at shutdown, so none writes to a closed database.
+	updateWatchers     sync.WaitGroup
+	updateWatchContext context.Context
+	stopUpdateWatchers context.CancelFunc
 	// pluginLogos inlines the logos plugins publish, so the browser never fetches a
 	// plugin's own host; see management_plugin_logos.go.
 	pluginLogos *pluginLogoFetcher
+	// fontInstaller downloads Google Fonts families for the font library. It is built on
+	// first use from the configured stylesheet URL; tests set it to a local fixture.
+	fontInstaller     *fontasset.GoogleInstaller
+	fontInstallerErr  error
+	fontInstallerOnce sync.Once
 	// pluginIdentities remembers the name and logo each installed plugin is listed under
 	// in the store, for a plugin CPA has not loaded and so reports by id alone.
 	pluginIdentities *pluginIdentityCache
@@ -75,6 +93,9 @@ type Handler struct {
 	startTime      time.Time
 	limiter        *loginLimiter
 	trustedProxies []*net.IPNet
+	// quotaAutoRefresh is the background quota refresh's memory of its own attempts.
+	quotaAutoRefresh quotaAutoRefreshState
+	warmupRuntime    warmupRuntime
 	// providerWrites serialises whole-list provider configuration writes; see
 	// management_provider_writes.go for why one global permit is required.
 	providerWrites providerWriteGate
@@ -262,6 +283,12 @@ func (h *Handler) routes() chi.Router {
 				v1.Delete("/custom-icons/{id}", h.deleteCustomIcon)
 				v1.Get("/custom-icons/{id}/content", h.customIconContent)
 				v1.Head("/custom-icons/{id}/content", h.customIconContent)
+				v1.Get("/fonts", h.listFonts)
+				v1.Post("/fonts/google", h.installGoogleFont)
+				v1.Post("/fonts/upload", h.uploadFont)
+				v1.Delete("/fonts/{id}", h.deleteFont)
+				v1.Get("/fonts/{id}/faces/{faceId}", h.fontFaceContent)
+				v1.Head("/fonts/{id}/faces/{faceId}", h.fontFaceContent)
 				v1.Get("/preferences", h.listPreferences)
 				v1.Put("/preferences/{key}", h.putPreference)
 				v1.Get("/usage/ingest-status", h.dashboardIngestStatus)
@@ -283,6 +310,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/usage/events/{id}", h.getUsageEvent)
 				v1.Get("/usage/events/{id}/request-log", h.downloadUsageEventRequestLog)
 				v1.Get("/usage/facets", h.listUsageFacets)
+				v1.Get("/usage/live", h.usageLive)
+				v1.Get("/usage/routing", h.usageRouting)
 				v1.Get("/management/auth-files", h.listManagementAuthFiles)
 				v1.Get("/management/auth-files/safe-fields", h.getManagementAuthFileSafeFields)
 				v1.Get("/management/auth-files/model-aliases", h.listManagementOAuthModelAliases)
@@ -335,6 +364,11 @@ func (h *Handler) routes() chi.Router {
 				v1.Post("/management/quota/clear-cooldown", h.clearCredentialCooldown)
 				v1.Post("/management/quota/refresh", h.refreshCredentialQuota)
 				v1.Post("/management/quota/redeem-credit", h.redeemCodexResetCredit)
+				v1.Get("/management/quota/warmup/settings", h.getWarmupSettings)
+				v1.Put("/management/quota/warmup/settings", h.putWarmupSettings)
+				v1.Get("/management/quota/warmup/credentials/{authIndex}", h.getWarmupCredential)
+				v1.Put("/management/quota/warmup/credentials/{authIndex}", h.putWarmupCredential)
+				v1.Post("/management/quota/warmup/credentials/{authIndex}/run", h.postWarmupRun)
 				v1.Get("/management/quota/{authIndex}", h.getCredentialQuotaDetail)
 				// Account-level auto-management: the adopted roster, the resolved
 				// master switch, and the per-account switches, one-time batch
@@ -359,6 +393,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/management/system/repository", h.getSystemRepository)
 				v1.Get("/management/system/updates", h.getSystemUpdates)
 				v1.Post("/management/system/check-updates", h.postSystemCheckUpdates)
+				v1.Get("/management/system/updater", h.getSystemUpdater)
+				v1.Post("/management/system/updater/apply", h.postSystemUpdaterApply)
 				v1.Get("/management/system/maintenance", h.getSystemMaintenance)
 				v1.Post("/management/system/maintenance/checkpoint", h.postSystemMaintenanceCheckpoint)
 				v1.Post("/management/system/maintenance/vacuum", h.postSystemMaintenanceVacuum)

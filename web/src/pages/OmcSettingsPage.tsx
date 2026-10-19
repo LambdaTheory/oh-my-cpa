@@ -31,6 +31,17 @@ import { useScrollSmoothingPreference } from '../hooks/useScrollSmoothing';
 import { SCROLL_SMOOTHING_PREFERENCES, type ScrollSmoothingPreference } from '../utils/scrollSmoothingPreference';
 import { SectionHeading } from '../components/common/SectionHeading';
 import { FeishuSettingsPanel } from '../components/feishu/FeishuSettingsPanel';
+import { SettingRow } from '../components/common/SettingRow';
+import { FontSettings } from '../components/settings/FontSettings';
+import { SidebarNavSettings } from '../components/settings/SidebarNavSettings';
+import { usePreference } from '../hooks/usePreference';
+import {
+  DEFAULT_QUOTA_AUTO_REFRESH,
+  QUOTA_AUTO_REFRESH_INTERVALS,
+  QUOTA_AUTO_REFRESH_PREFERENCE,
+  parseQuotaAutoRefresh,
+  type QuotaAutoRefreshSettings,
+} from '../types/quotaAutoRefresh';
 
 
 const MODE_LABEL_KEYS: Record<ThemeModePreference, string> = {
@@ -67,6 +78,10 @@ const ROLE_LABEL_KEYS: Record<ContrastRole, string> = {
  * beside the dashboard's own readouts. Each control writes the same underlying setting its shortcut
  * writes, so the two cannot disagree, and an operator configuring a fresh deployment has one place
  * to look instead of discovering each control where it happens to surface.
+ *
+ * **The sidebar group comes last** because it is the setting here an operator touches once: it lists
+ * the rail's own destinations, so taking an entry out of the rail is done by reading the entries the
+ * rail has rather than by recalling what the console contains.
  *
  * **The appearance group is a mode and two palettes, not a list of palettes.** The header's control
  * answers "light or dark" and nothing else; which palette each of those two modes uses is a
@@ -189,6 +204,8 @@ export const OmcSettingsPage: React.FC = () => {
         />
       </div>
 
+      <QuotaAutoRefreshGroup />
+
       <div className="settings-group omc-settings-group">
         <SectionHeading className="settings-group-head" title={t('omc.section_appearance')} />
         <SettingRow
@@ -215,6 +232,7 @@ export const OmcSettingsPage: React.FC = () => {
         )}
         <PaletteSetting mode="light" />
         <PaletteSetting mode="dark" />
+        <FontSettings />
         <SettingRow
           label={t('omc.language')}
           control={
@@ -266,6 +284,64 @@ export const OmcSettingsPage: React.FC = () => {
         />
         <FeishuSettingsPanel />
       </div>
+      <SidebarNavSettings />
+    </div>
+  );
+};
+
+/**
+ * QuotaAutoRefreshGroup is the background quota refresh policy the server's loop reads.
+ *
+ * Unlike every other row on this page it changes what the deployment does on its own, not how the
+ * console reads: each automatic read is a request to a provider made with the credential. The two
+ * rows are the two independent triggers, so either can be used without the other.
+ */
+const QuotaAutoRefreshGroup: React.FC = () => {
+  const t = useT();
+  const preference = usePreference<QuotaAutoRefreshSettings>(QUOTA_AUTO_REFRESH_PREFERENCE, DEFAULT_QUOTA_AUTO_REFRESH, parseQuotaAutoRefresh);
+  const settings = preference.value;
+  const formatInterval = (minutes: number) => {
+    if (minutes === 0) return t('omc.quota_auto_refresh_off');
+    return minutes % 60 === 0
+      ? t('omc.quota_auto_refresh_hours', { n: minutes / 60 })
+      : t('omc.quota_auto_refresh_minutes', { n: minutes });
+  };
+  // A value written elsewhere (the Agent accepts any supported interval) is kept selectable, so the
+  // control never shows a preset the deployment is not actually running.
+  const intervals: number[] = [...QUOTA_AUTO_REFRESH_INTERVALS];
+  if (!intervals.includes(settings.interval_minutes)) {
+    intervals.push(settings.interval_minutes);
+    intervals.sort((left, right) => left - right);
+  }
+  return (
+    <div className="settings-group omc-settings-group">
+      <SectionHeading className="settings-group-head" title={t('omc.section_quota')} />
+      <SettingRow
+        label={t('omc.quota_auto_refresh_interval')}
+        description={t('omc.quota_auto_refresh_interval_desc')}
+        control={
+          <Select<number>
+            value={settings.interval_minutes}
+            disabled={!preference.loaded}
+            options={intervals.map((minutes) => ({ value: minutes, label: formatInterval(minutes) }))}
+            onChange={(minutes) => { void preference.set({ ...settings, interval_minutes: minutes }); }}
+            aria-label={t('omc.quota_auto_refresh_interval')}
+            popupMatchSelectWidth={false}
+          />
+        }
+      />
+      <SettingRow
+        label={t('omc.quota_refresh_on_reset')}
+        description={t('omc.quota_refresh_on_reset_desc')}
+        control={
+          <Switch
+            checked={settings.refresh_on_reset}
+            disabled={!preference.loaded}
+            onChange={(checked) => { void preference.set({ ...settings, refresh_on_reset: checked }); }}
+            aria-label={t('omc.quota_refresh_on_reset')}
+          />
+        }
+      />
     </div>
   );
 };
@@ -458,26 +534,3 @@ const PaletteTokenRow: React.FC<{
     </div>
   );
 };
-
-/**
- * SettingRow is one labelled setting: name on the left, control on the right.
- *
- * The description is optional because most of these settings name themselves -
- * "Theme" needs no sentence - and copy that only restates the label is the
- * decorative text `docs/design.md` §3 rules out. A description survives only
- * where it states a fact the label cannot: what a unit style changes, or what
- * an abbreviated number is rounded from.
- */
-const SettingRow: React.FC<{ label: string; description?: string; control: React.ReactNode }> = ({
-  label,
-  description,
-  control,
-}) => (
-  <div className="settings-toggle-row">
-    <div className="settings-toggle-info">
-      <div className="settings-toggle-title">{label}</div>
-      {description && <div className="settings-toggle-desc">{description}</div>}
-    </div>
-    <div className="settings-toggle-control">{control}</div>
-  </div>
-);

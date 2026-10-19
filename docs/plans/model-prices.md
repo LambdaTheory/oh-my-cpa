@@ -32,6 +32,22 @@ decision record is ADR 0030; the request-time lock it extends is ADR 0003.
 
 ## Price structure
 
+A model's shared price can be overridden with custom rates and tiers for one
+recorded CPA channel (`usage_events.provider`). Migration 048 stores these in
+`channel_model_prices`, keyed by `(channel, model)`, and appends their history to
+`model_price_versions` with a channel discriminator. Requests choose an available
+channel version first, otherwise the shared version, both at request time. Removing
+an override appends a tombstone and restores shared pricing for later requests.
+The existing channel multiplier applies to either price. Shared automatic matching,
+links and custom prices retain their existing semantics; channel overrides are custom.
+
+The editor's `GET|PUT|DELETE /v1/pricing/models/{model}` accepts an optional `channel`
+query parameter. A write must name a model in that channel's persisted membership.
+Scoped reads return the effective price and `is_inherited`; the price book includes
+`channel_models` when overrides exist. Model Square maps call names through its
+actual routes and provider membership, keeping prefixes, aliases and upstream
+names separate. Several targets are offered individually instead of selecting one.
+
 A price is four rates per 1M tokens (prompt, completion, cache read, cache
 write), a model multiplier, and an optional list of **tiers**:
 
@@ -46,10 +62,22 @@ write), a model multiplier, and an optional list of **tiers**:
   is placed on that zone's wall clock at its own instant, so a zone's daylight
   saving moves the window with the vendor. The zone is unrelated to the OMC
   Time Zone, which only decides how the console displays time (ADR 0063);
-- a tier carrying both applies only when both hold.
+- a **service-tier tier** (`service_tiers`, such as `["priority","fast"]`)
+  applies when the request was billed on one of the named upstream service
+  tiers. The billed tier is the `response_service_tier` CPA reported, or the
+  requested `service_tier` when the response names none (an older gateway or a
+  silent upstream); `auto` and empty name no tier and never match. Names are
+  compared lowercased and trimmed. Which provider spellings share a rate is
+  listed in the price itself: no mapping between `fast` and `priority` is built
+  in;
+- a tier carrying several conditions applies only when all of them hold.
 
-Exactly one tier governs a request: the highest applicable threshold, then a
-windowed tier over an unwindowed one, then stored order. Rates a tier leaves
+Exactly one tier governs a request: a service-tier tier over one without, then
+the highest applicable threshold, then a windowed tier over an unwindowed one,
+then stored order. Providers publish a priority lane as its own rate card, so a
+priority long-context price is one tier carrying both `service_tiers` and
+`min_prompt_tokens`; without it, a priority request above the threshold pays the
+priority lane's rates, never a stack of both. Rates a tier leaves
 out inherit the base price. `pricing.Quote` is the single implementation; the
 console's editor preview mirrors it in `web/src/types/pricingDisplay.ts` and
 the logic suite pins the two against the same cases.
@@ -252,7 +280,7 @@ Model membership is collected during the same complete CPA catalog sweep as alia
 
 `GET /v1/pricing` includes `providers`, with id, family, display name, channel, priority, OAuth marker, model membership, an optional icon override and a hostname-only endpoint hint for the existing provider icon resolver. URL userinfo, paths and query parameters are excluded. The facade resolves current provider name/icon preferences at read time; the frontend uses the same default provider marks and plugin-owned logos as provider management. Individual model names are text-only; `pricingModelIdentity` is the metadata extension point.
 
-Groups sort by descending routing priority, then natural provider name and stable id. Models sort naturally by name, case-insensitively first and uppercase first for case-only ties. Membership uses exact model identities: two names differing only in case remain distinct. A model served by multiple providers appears in each relevant group, but all entries edit the same global price. Models without recorded membership appear in an explicit unconfirmed group rather than a guessed maker group.
+Groups sort by descending routing priority, then natural provider name and stable id. Models sort naturally by name, case-insensitively first and uppercase first for case-only ties. Membership uses exact model identities: two names differing only in case remain distinct. Each provider/model membership has one row showing its channel override when configured, otherwise the shared price. Priced rows label channel-specific or inherited shared pricing and retain separate editing actions for both scopes. Coverage and mode counts use these effective membership rows, including models priced only on a channel. Usage beside these rows remains the model's deployment-wide 30-day usage. Models without recorded membership appear in an explicit unconfirmed group rather than a guessed maker group.
 
 Search, price-mode filters and a provider selector operate on the grouped book. One global page renders at most 20 membership rows across all groups on desktop and phones. Unpriced models occupy their normal sorted position and show any suggested link beside their name. The OpenRouter picker searches ids, canonical slugs and display names with separator-tolerant search; it paginates all matches in groups of 12 instead of truncating the catalog. Channel multipliers use 20-row pages and reuse known provider aliases/icons; a channel shared by several configured providers names those providers together.
 

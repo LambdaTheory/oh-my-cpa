@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/timezone"
 )
@@ -34,9 +35,13 @@ var knownPreferences = map[string]bool{
 	repository.PreferenceRequestModelIcons:   true,
 	repository.PreferenceTheme:               true,
 	repository.PreferenceScrollSmoothing:     true,
+	repository.PreferenceFonts:               true,
+	repository.PreferenceNavHidden:           true,
+	repository.PreferenceDashboardLayout:     true,
 	repository.PreferencePlaygroundSession:   true,
 	repository.PreferenceAgentTarget:         true,
 	repository.PreferenceUpdateDismissals:    true,
+	repository.PreferenceQuotaAutoRefresh:    true,
 }
 
 // preferenceValue is a stored JSON document kept exactly as the client sent it.
@@ -98,9 +103,21 @@ func (h *Handler) putPreference(writer http.ResponseWriter, request *http.Reques
 		writeError(writer, http.StatusBadRequest, "preference value must be a JSON document")
 		return
 	}
+	// The automatic quota refresh policy decides when the server makes provider requests on
+	// its own, so its shape is enforced on the way in rather than guessed at by the loop.
+	if key == repository.PreferenceQuotaAutoRefresh {
+		if _, err := quota.ParseAutoRefreshSettings(body); err != nil {
+			writeError(writer, http.StatusBadRequest, quota.ErrInvalidAutoRefreshSettings.Error())
+			return
+		}
+	}
 	if err := h.repo.PutPreference(request.Context(), key, string(body)); err != nil {
 		if errors.Is(err, repository.ErrCustomIconMissing) || errors.Is(err, repository.ErrCustomIconName) {
 			writeCustomIconError(writer, err)
+			return
+		}
+		if errors.Is(err, repository.ErrFontMissing) || errors.Is(err, repository.ErrFontReference) {
+			writeFontError(writer, err)
 			return
 		}
 		if errors.Is(err, timezone.ErrInvalid) {
