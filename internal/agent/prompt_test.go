@@ -94,7 +94,15 @@ func TestPromptFitsItsBudget(t *testing.T) {
 
 func TestPromptIncludesQuotaPredictionSOP(t *testing.T) {
 	prompt := SystemPrompt(PromptContext{AnchorMS: 1})
-	for _, phrase := range []string{"quota_prediction", "Separate fact, projection and unknown", "sufficient priced usage", "Never suggest auto routing"} {
+	for _, phrase := range []string{
+		"OMC management assistant for one Oh My CPA deployment",
+		"OMC names, organises and observes the CLIProxyAPI",
+		"Call independent capabilities together in one round",
+		"Routine usage statistics need the requested grouping",
+		"Correlation is not cause",
+		"not total tokens alone",
+		"quota_prediction", "Separate fact, projection and unknown", "sufficient priced usage", "Never suggest auto routing",
+	} {
 		if !strings.Contains(prompt, phrase) {
 			t.Fatalf("prompt is missing %q", phrase)
 		}

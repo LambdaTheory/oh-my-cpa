@@ -102,7 +102,7 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 		Logger: h.logger, Now: h.now,
 	})
 	api.prediction = feishu.NewPredictionJob(api.service, func(ctx context.Context) ([]feishu.PredictionDigestItem, error) {
-		prediction, err := h.operationsService().QuotaPrediction(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.QuotaPredictionInput{})
+		prediction, err := h.operationsService().QuotaPrediction(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.QuotaPredictionInput{FindingsOnly: true})
 		if err != nil {
 			return nil, err
 		}

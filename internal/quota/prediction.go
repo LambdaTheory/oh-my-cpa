@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-const PredictionFreshWindow = 15 * time.Minute
+const (
+	predictionMinimumFreshWindow = 2 * time.Hour
+	predictionMaximumFreshWindow = 24 * time.Hour
+)
 
 const (
 	PredictionVerdictWillExhaust = "will_exhaust"
@@ -32,12 +35,16 @@ const (
 	PredictionReasonNoPrice                  = "no_price"
 	PredictionReasonInsufficientPricedUsage  = "insufficient_priced_usage"
 	PredictionReasonUsageUnavailable         = "usage_unavailable"
+	PredictionReasonInvalidUsedPercent       = "invalid_used_percent"
+	PredictionReasonInvalidObservation       = "invalid_observation"
+	PredictionReasonArithmeticUnsafe         = "arithmetic_unsafe"
 )
 
 type PredictionObservation struct {
 	ObservedAtMS int64
 	UsedPercent  float64
 	ResetAtMS    *int64
+	Source       string
 }
 
 type PredictionInput struct {
@@ -67,15 +74,15 @@ type WindowPrediction struct {
 
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	result = WindowPrediction{
-		UsedPercent:  input.Window.UsedPercent,
+		UsedPercent:  nil,
 		ResetAtMS:    input.Window.ResetAtMS,
 		ObservedAtMS: input.ObservedAtMS,
 		Verdict:      PredictionVerdictUnknown,
 		Evidence:     PredictionEvidenceUnknown,
 		Reasons:      []string{},
 	}
-	if input.ObservedAtMS > 0 {
-		age := max(int64(0), (input.NowMS-input.ObservedAtMS)/1000)
+	if input.ObservedAtMS > 0 && input.NowMS >= input.ObservedAtMS {
+		age := (input.NowMS - input.ObservedAtMS) / 1000
 		result.DataAgeSeconds = &age
 	}
 	if input.Status == "error" || input.Status == "stale" {
@@ -85,12 +92,18 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		}
 		return result
 	}
-	if input.Window.UsedPercent == nil || math.IsNaN(*input.Window.UsedPercent) || math.IsInf(*input.Window.UsedPercent, 0) {
+	if input.Window.UsedPercent == nil {
 		result.Reasons = append(result.Reasons, CapacityReasonNoReading)
 		return result
 	}
+	if !validPredictionPercent(*input.Window.UsedPercent) {
+		result.Reasons = append(result.Reasons, PredictionReasonInvalidUsedPercent)
+		return result
+	}
+	usedPercent := *input.Window.UsedPercent
+	result.UsedPercent = &usedPercent
 	defer appendPredictionUsage(&result, input)
-	if input.ObservedAtMS <= 0 || input.NowMS-input.ObservedAtMS > PredictionFreshWindow.Milliseconds() {
+	if input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS || input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
 		result.Reasons = append(result.Reasons, PredictionReasonReadingStale)
 		return result
 	}
@@ -104,11 +117,20 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.Reasons = append(result.Reasons, reason)
 		return result
 	}
+	if input.ObservedAtMS < fromMS || input.Window.ResetAtMS == nil || input.ObservedAtMS > *input.Window.ResetAtMS {
+		result.Reasons = append(result.Reasons, PredictionReasonBoundaryUnknown)
+		return result
+	}
 	if input.Window.HasIncompleteHistory {
 		result.Reasons = append(result.Reasons, PredictionReasonIncompleteHistory)
 		return result
 	}
-	if input.Window.HasMidCycleReset || predictionHasReset(input.Observations, fromMS, toMS) {
+	observations, invalidObservations := collapsePredictionObservations(input, fromMS, toMS)
+	if invalidObservations {
+		result.Reasons = append(result.Reasons, PredictionReasonInvalidObservation)
+		return result
+	}
+	if input.Window.HasMidCycleReset || predictionHasReset(observations) {
 		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
 		return result
 	}
@@ -118,14 +140,22 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.ExhaustionETAMS = &result.ObservedAtMS
 		return result
 	}
-	points := predictionPoints(input, fromMS, toMS)
+	points := predictionPoints(observations, input.Window.ResetAtMS)
 	if len(points) < 2 {
 		result.Reasons = append(result.Reasons, PredictionReasonInsufficientObservations)
 		return result
 	}
-	rate := predictionSlope(points)
+	rate, ok := predictionSlope(points)
+	if !ok {
+		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		return result
+	}
 	cycleDurationMS := *input.Window.ResetAtMS - fromMS
 	elapsedFraction := float64(input.ObservedAtMS-fromMS) / float64(cycleDurationMS)
+	if !isFinite(elapsedFraction) {
+		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		return result
+	}
 	if rate <= 0 {
 		result.Reasons = append(result.Reasons, PredictionReasonNoPositiveTrend)
 		if elapsedFraction < 0.25 {
@@ -136,7 +166,12 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		}
 		result.Evidence = PredictionEvidenceProjection
 		result.BurnRatePerHour = floatPointer(0)
-		result.ProjectedPercentAtReset = floatPointer(roundPrediction(*input.Window.UsedPercent, 2))
+		projected, ok := roundPrediction(*input.Window.UsedPercent, 2)
+		if !ok {
+			result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+			return result
+		}
+		result.ProjectedPercentAtReset = floatPointer(projected)
 		if input.Window.UsedPercent != nil && elapsedFraction > 0.5 && *input.Window.UsedPercent < 50 {
 			result.Verdict = PredictionVerdictUnderUsed
 		} else {
@@ -146,14 +181,34 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	}
 
 	result.Evidence = PredictionEvidenceProjection
-	result.BurnRatePerHour = floatPointer(roundPrediction(rate, 4))
+	roundedRate, ok := roundPrediction(rate, 4)
+	if !ok {
+		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		return result
+	}
+	result.BurnRatePerHour = floatPointer(roundedRate)
 	hoursToReset := float64(*input.Window.ResetAtMS-input.ObservedAtMS) / float64(time.Hour/time.Millisecond)
 	projected := *input.Window.UsedPercent + rate*hoursToReset
-	result.ProjectedPercentAtReset = floatPointer(roundPrediction(projected, 2))
+	projected, ok = roundPrediction(projected, 2)
+	if !ok {
+		result.BurnRatePerHour = nil
+		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		return result
+	}
+	result.ProjectedPercentAtReset = floatPointer(projected)
 	hoursToExhaustion := (100 - *input.Window.UsedPercent) / rate
-	if hoursToExhaustion >= 0 {
-		eta := input.ObservedAtMS + int64(hoursToExhaustion*float64(time.Hour/time.Millisecond))
-		result.ExhaustionETAMS = &eta
+	if isFinite(hoursToExhaustion) && hoursToExhaustion >= 0 {
+		if durationMS, safe := roundedInt64(hoursToExhaustion * float64(time.Hour/time.Millisecond)); safe {
+			if eta, safe := addInt64(input.ObservedAtMS, durationMS); safe {
+				result.ExhaustionETAMS = &eta
+			} else {
+				appendPredictionReason(&result, PredictionReasonArithmeticUnsafe)
+			}
+		} else {
+			appendPredictionReason(&result, PredictionReasonArithmeticUnsafe)
+		}
+	} else {
+		appendPredictionReason(&result, PredictionReasonArithmeticUnsafe)
 	}
 	switch {
 	case result.ExhaustionETAMS != nil && projected >= 100 && *result.ExhaustionETAMS < *input.Window.ResetAtMS:
@@ -166,46 +221,26 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	return result
 }
 
-func predictionPoints(input PredictionInput, fromMS, toMS int64) []PredictionObservation {
-	points := make([]PredictionObservation, 0, len(input.Observations)+1)
-	for _, observation := range input.Observations {
-		if observation.ObservedAtMS < fromMS || observation.ObservedAtMS > toMS || math.IsNaN(observation.UsedPercent) || math.IsInf(observation.UsedPercent, 0) {
-			continue
-		}
-		if observation.ResetAtMS != nil && input.Window.ResetAtMS != nil && absInt64(*observation.ResetAtMS-*input.Window.ResetAtMS) > 1000 {
+func predictionPoints(observations []PredictionObservation, resetAtMS *int64) []PredictionObservation {
+	points := make([]PredictionObservation, 0, len(observations))
+	for _, observation := range observations {
+		if observation.ResetAtMS != nil && resetAtMS != nil && resetDifferenceExceeds(*observation.ResetAtMS, *resetAtMS, 1000) {
 			continue
 		}
 		points = append(points, observation)
 	}
-	if input.Window.UsedPercent != nil {
-		points = append(points, PredictionObservation{ObservedAtMS: input.ObservedAtMS, UsedPercent: *input.Window.UsedPercent, ResetAtMS: input.Window.ResetAtMS})
-	}
-	sort.SliceStable(points, func(first, second int) bool { return points[first].ObservedAtMS < points[second].ObservedAtMS })
-	deduplicated := points[:0]
-	for _, point := range points {
-		if len(deduplicated) > 0 && deduplicated[len(deduplicated)-1].ObservedAtMS == point.ObservedAtMS {
-			deduplicated[len(deduplicated)-1] = point
-			continue
-		}
-		deduplicated = append(deduplicated, point)
-	}
-	return deduplicated
+	return points
 }
 
-func predictionHasReset(observations []PredictionObservation, fromMS, toMS int64) bool {
-	points := append([]PredictionObservation(nil), observations...)
-	sort.SliceStable(points, func(first, second int) bool { return points[first].ObservedAtMS < points[second].ObservedAtMS })
+func predictionHasReset(points []PredictionObservation) bool {
 	var previous *PredictionObservation
 	for index := range points {
 		point := &points[index]
-		if point.ObservedAtMS < fromMS || point.ObservedAtMS > toMS {
-			continue
-		}
 		if previous != nil {
 			if previous.UsedPercent > point.UsedPercent+capacityResetTolerancePercent {
 				return true
 			}
-			if previous.ResetAtMS != nil && point.ResetAtMS != nil && absInt64(*previous.ResetAtMS-*point.ResetAtMS) > 1000 {
+			if previous.ResetAtMS != nil && point.ResetAtMS != nil && *previous.ResetAtMS > point.ObservedAtMS && resetDifferenceExceeds(*previous.ResetAtMS, *point.ResetAtMS, 1000) {
 				return true
 			}
 		}
@@ -214,7 +249,7 @@ func predictionHasReset(observations []PredictionObservation, fromMS, toMS int64
 	return false
 }
 
-func predictionSlope(points []PredictionObservation) float64 {
+func predictionSlope(points []PredictionObservation) (float64, bool) {
 	origin := float64(points[0].ObservedAtMS)
 	var sumX, sumY, sumXY, sumXX float64
 	for _, point := range points {
@@ -227,14 +262,18 @@ func predictionSlope(points []PredictionObservation) float64 {
 	}
 	count := float64(len(points))
 	denominator := count*sumXX - sumX*sumX
-	if denominator <= 0 {
-		return 0
+	if denominator <= 0 || !isFinite(denominator) {
+		return 0, false
 	}
-	return (count*sumXY - sumX*sumY) / denominator
+	rate := (count*sumXY - sumX*sumY) / denominator
+	return rate, isFinite(rate)
 }
 
 func appendPredictionUsage(result *WindowPrediction, input PredictionInput) {
-	if input.Window.UsedPercent == nil || *input.Window.UsedPercent < CapacityMinUsedPercent {
+	if input.Window.UsedPercent == nil || !validPredictionPercent(*input.Window.UsedPercent) {
+		return
+	}
+	if *input.Window.UsedPercent < CapacityMinUsedPercent {
 		appendPredictionReason(result, PredictionReasonLowUsage)
 		return
 	}
@@ -261,8 +300,16 @@ func appendPredictionUsage(result *WindowPrediction, input PredictionInput) {
 		return
 	}
 	scale := *result.ProjectedPercentAtReset / *input.Window.UsedPercent
-	tokens := int64(math.Round(float64(input.Usage.Tokens) * scale))
-	cost := int64(math.Round(float64(input.Usage.CostNanos) * scale))
+	if !isFinite(scale) || scale < 0 || input.Usage.Tokens < 0 || input.Usage.CostNanos < 0 {
+		appendPredictionReason(result, PredictionReasonArithmeticUnsafe)
+		return
+	}
+	tokens, tokensSafe := roundedInt64(float64(input.Usage.Tokens) * scale)
+	cost, costSafe := roundedInt64(float64(input.Usage.CostNanos) * scale)
+	if !tokensSafe || !costSafe {
+		appendPredictionReason(result, PredictionReasonArithmeticUnsafe)
+		return
+	}
 	result.ProjectedTokensAtReset = &tokens
 	result.ProjectedCostNanosAtReset = &cost
 }
@@ -276,16 +323,122 @@ func appendPredictionReason(result *WindowPrediction, reason string) {
 	result.Reasons = append(result.Reasons, reason)
 }
 
-func roundPrediction(value float64, places int) float64 {
+func roundPrediction(value float64, places int) (float64, bool) {
 	factor := math.Pow10(places)
-	return math.Round(value*factor) / factor
+	if !isFinite(value) || !isFinite(factor) || !isFinite(value*factor) {
+		return 0, false
+	}
+	rounded := math.Round(value*factor) / factor
+	return rounded, isFinite(rounded)
 }
 
 func floatPointer(value float64) *float64 { return &value }
 
-func absInt64(value int64) int64 {
-	if value < 0 {
-		return -value
+func predictionFreshWindow(window QuotaWindow) time.Duration {
+	bound := predictionMinimumFreshWindow
+	if window.PeriodHours != nil && *window.PeriodHours > 0 && isFinite(*window.PeriodHours) {
+		windowBoundNanos := *window.PeriodHours * float64(time.Hour) / 4
+		if windowBoundNanos >= float64(math.MaxInt64) {
+			bound = predictionMaximumFreshWindow
+		} else if windowBound := time.Duration(windowBoundNanos); windowBound > bound {
+			bound = windowBound
+		}
 	}
-	return value
+	if bound > predictionMaximumFreshWindow {
+		return predictionMaximumFreshWindow
+	}
+	return bound
+}
+
+func collapsePredictionObservations(input PredictionInput, fromMS, toMS int64) ([]PredictionObservation, bool) {
+	points := make([]PredictionObservation, 0, len(input.Observations)+1)
+	invalid := false
+	for _, observation := range input.Observations {
+		if observation.ObservedAtMS < fromMS || observation.ObservedAtMS > toMS {
+			continue
+		}
+		if !validPredictionPercent(observation.UsedPercent) {
+			invalid = true
+			continue
+		}
+		points = append(points, observation)
+	}
+	points = append(points, PredictionObservation{
+		ObservedAtMS: input.ObservedAtMS, UsedPercent: *input.Window.UsedPercent,
+		ResetAtMS: input.Window.ResetAtMS, Source: "current",
+	})
+	sort.Slice(points, func(first, second int) bool {
+		if points[first].ObservedAtMS != points[second].ObservedAtMS {
+			return points[first].ObservedAtMS < points[second].ObservedAtMS
+		}
+		firstPriority, secondPriority := predictionSourcePriority(points[first].Source), predictionSourcePriority(points[second].Source)
+		if firstPriority != secondPriority {
+			return firstPriority < secondPriority
+		}
+		if points[first].UsedPercent != points[second].UsedPercent {
+			return points[first].UsedPercent < points[second].UsedPercent
+		}
+		return resetSortValue(points[first].ResetAtMS) < resetSortValue(points[second].ResetAtMS)
+	})
+	deduplicated := points[:0]
+	for _, point := range points {
+		if len(deduplicated) > 0 && deduplicated[len(deduplicated)-1].ObservedAtMS == point.ObservedAtMS {
+			deduplicated[len(deduplicated)-1] = point
+			continue
+		}
+		deduplicated = append(deduplicated, point)
+	}
+	return deduplicated, invalid
+}
+
+func predictionSourcePriority(source string) int {
+	switch source {
+	case ObservationSourcePassive:
+		return 1
+	case ObservationSourceActive:
+		return 2
+	case "current":
+		return 3
+	default:
+		return 0
+	}
+}
+
+func resetSortValue(value *int64) int64 {
+	if value == nil {
+		return math.MinInt64
+	}
+	return *value
+}
+
+func validPredictionPercent(value float64) bool {
+	return isFinite(value) && value >= 0 && value <= 100
+}
+
+func isFinite(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+
+func roundedInt64(value float64) (int64, bool) {
+	if !isFinite(value) || value >= float64(math.MaxInt64) || value < float64(math.MinInt64) {
+		return 0, false
+	}
+	rounded := math.Round(value)
+	if rounded >= float64(math.MaxInt64) || rounded < float64(math.MinInt64) {
+		return 0, false
+	}
+	return int64(rounded), true
+}
+
+func addInt64(first, second int64) (int64, bool) {
+	if second > 0 && first > math.MaxInt64-second {
+		return 0, false
+	}
+	if second < 0 && first < math.MinInt64-second {
+		return 0, false
+	}
+	return first + second, true
+}
+
+func resetDifferenceExceeds(first, second, tolerance int64) bool {
+	difference := math.Abs(float64(first) - float64(second))
+	return !isFinite(difference) || difference > float64(tolerance)
 }

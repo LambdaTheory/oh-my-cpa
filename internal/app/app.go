@@ -273,8 +273,8 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 	var predictionJob *feishu.PredictionJob
 	if feishuErr == nil && feishuAPI != nil {
 		feishuService = feishuAPI.Service()
-		if job := feishuAPI.PredictionJob(); job != nil && job.Ready() {
-			predictionJob = job
+		if !cfg.IsDemoMode {
+			predictionJob = feishuAPI.PredictionJob()
 		}
 	}
 

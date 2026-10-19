@@ -3,12 +3,15 @@ package operations
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"path/filepath"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
@@ -24,13 +27,14 @@ func TestQuotaPredictionMasksReadOnlyIdentityAndBoundsRows(t *testing.T) {
 	reset := now.Add(4 * time.Hour).UnixMilli()
 	period := 10.0
 	used := 60.0
-	service := &Service{Repo: repo, Quotas: func(context.Context) ([]Quota, error) {
-		items := make([]Quota, 0, 120)
-		for index := 0; index < 120; index++ {
-			items = append(items, Quota{AuthIndex: "auth-" + strings.Repeat("x", index%20), Name: "vincent@example.com", Provider: "codex", Status: "healthy", ObservedAtMS: now.UnixMilli(), Windows: []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}}})
-		}
-		return items, nil
-	}}
+	resources := make([]domain.DiscoveredResource, 0, 120)
+	for index := 0; index < 120; index++ {
+		authIndex := fmt.Sprintf("auth-%03d", index)
+		resources = append(resources, predictionResource(authIndex, "vincent@example.com", "codex"))
+		seedPredictionSnapshot(t, repo, authIndex, "codex", now.UnixMilli(), []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	}
+	seedPredictionResources(t, repo, resources)
+	service := &Service{Repo: repo}
 	result, err := service.QuotaPrediction(capability.WithReadOnly(capability.WithAnchor(context.Background(), now.UnixMilli()), true), QuotaPredictionInput{})
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +59,7 @@ func TestQuotaPredictionRejectsReadOnlyAuthIndex(t *testing.T) {
 		t.Fatal(openErr)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	service := &Service{Repo: repository.New(database), Quotas: func(context.Context) ([]Quota, error) { return nil, nil }}
+	service := &Service{Repo: repository.New(database)}
 	_, err := service.QuotaPrediction(capability.WithReadOnly(context.Background(), true), QuotaPredictionInput{AuthIndex: "private"})
 	if err == nil || err.Error() != "invalid_parameters" {
 		t.Fatalf("error = %v", err)
@@ -72,9 +76,9 @@ func TestQuotaPredictionRegistersForAgentAndReadOnlyMCP(t *testing.T) {
 	now := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
 	reset := now.Add(4 * time.Hour).UnixMilli()
 	period, used := 10.0, 25.0
-	service := &Service{Repo: repo, Quotas: func(context.Context) ([]Quota, error) {
-		return []Quota{{AuthIndex: "auth-1", Name: "vincent@example.com", Provider: "codex", Status: "healthy", ObservedAtMS: now.UnixMilli(), Windows: []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}}}}, nil
-	}}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("auth-1", "vincent@example.com", "codex")})
+	seedPredictionSnapshot(t, repo, "auth-1", "codex", now.UnixMilli(), []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	service := &Service{Repo: repo}
 	registry := capability.NewRegistry()
 	if err := service.registerQuotaPrediction(registry); err != nil {
 		t.Fatal(err)
@@ -99,5 +103,174 @@ func TestQuotaPredictionRegistersForAgentAndReadOnlyMCP(t *testing.T) {
 		if !principal.IsReadOnly && (item.AuthIndex != "auth-1" || item.CredentialLabel != "vincent@example.com") {
 			t.Fatalf("agent output = %+v", item)
 		}
+	}
+}
+
+func TestQuotaPredictionJoinsStoredObservationKinds(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-kinds.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(6 * time.Hour)
+	reset := start.Add(10 * time.Hour).UnixMilli()
+	period := 10.0
+	tests := []struct {
+		name, provider, authIndex, windowID, scope, model, wantKind string
+	}{
+		{"claude standard weekly", "claude", "claude-weekly", "seven_day", "standard", "", "weekly"},
+		{"claude sonnet weekly", "claude", "claude-sonnet", "seven_day_sonnet", "model", "claude-sonnet", "model_scoped"},
+		{"antigravity group", "antigravity", "ag-group", "ag_claude", "group", "claude-sonnet", "model_scoped"},
+	}
+	resources := make([]domain.DiscoveredResource, 0, len(tests))
+	for _, test := range tests {
+		resources = append(resources, predictionResource(test.authIndex, test.name, test.provider))
+		first, current := 10.0, 60.0
+		window := quota.QuotaWindow{ID: test.windowID, Scope: test.scope, Model: test.model, UsedPercent: &first, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+		seedPredictionObservation(t, repo, test.authIndex, test.provider, start.Add(time.Hour).UnixMilli(), window)
+		window.UsedPercent = &current
+		seedPredictionObservation(t, repo, test.authIndex, test.provider, observed.UnixMilli(), window)
+		seedPredictionSnapshot(t, repo, test.authIndex, test.provider, observed.UnixMilli(), []quota.QuotaWindow{window})
+	}
+	seedPredictionResources(t, repo, resources)
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != len(tests) {
+		t.Fatalf("items = %+v", result.Items)
+	}
+	for _, test := range tests {
+		found := false
+		for _, item := range result.Items {
+			if item.AuthIndex != test.authIndex {
+				continue
+			}
+			found = true
+			if item.WindowKind != test.wantKind || item.Verdict == quota.PredictionVerdictUnknown || item.BurnRatePerHour == nil {
+				t.Fatalf("%s prediction = %+v", test.name, item)
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s", test.name)
+		}
+	}
+}
+
+func TestQuotaPredictionStableAcrossStoredInputOrder(t *testing.T) {
+	build := func(order []string) QuotaPredictionResult {
+		t.Helper()
+		database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "stable.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		repo := repository.New(database)
+		now := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
+		reset, period := now.Add(4*time.Hour).UnixMilli(), 10.0
+		usedByModel := map[string]float64{"a-model": 21, "m-model": 22, "z-model": 23}
+		windows := make([]quota.QuotaWindow, 0, len(order))
+		for _, model := range order {
+			modelUsed := usedByModel[model]
+			windows = append(windows, quota.QuotaWindow{ID: "seven_day_sonnet", Scope: "model", Model: model, UsedPercent: &modelUsed, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
+		}
+		seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("same-auth", "same@example.com", "claude")})
+		seedPredictionSnapshot(t, repo, "same-auth", "claude", now.UnixMilli(), windows)
+		result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithReadOnly(capability.WithAnchor(context.Background(), now.UnixMilli()), true), QuotaPredictionInput{Limit: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := build([]string{"z-model", "a-model", "m-model"})
+	second := build([]string{"m-model", "z-model", "a-model"})
+	firstJSON, _ := json.Marshal(first)
+	secondJSON, _ := json.Marshal(second)
+	if !slices.Equal(firstJSON, secondJSON) || first.Omitted != 1 || second.Omitted != 1 {
+		t.Fatalf("unstable result:\n%s\n%s", firstJSON, secondJSON)
+	}
+}
+
+func TestBoundQuotaPredictionReturnsMarshalError(t *testing.T) {
+	invalid := math.NaN()
+	result := QuotaPredictionResult{Items: []QuotaPredictionItem{{BurnRatePerHour: &invalid}}}
+	if err := boundQuotaPrediction(&result); err == nil {
+		t.Fatal("non-finite prediction marshalled without an error")
+	}
+}
+
+func TestQuotaPredictionFindingsBypassCapabilityTruncation(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-findings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	now := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
+	reset, period := now.Add(4*time.Hour).UnixMilli(), 10.0
+	first, current := 10.0, 70.0
+	firstWindows := make([]quota.QuotaWindow, 0, 101)
+	currentWindows := make([]quota.QuotaWindow, 0, 101)
+	for index := 0; index < 101; index++ {
+		id := fmt.Sprintf("custom-%03d", index)
+		firstWindows = append(firstWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &first, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
+		currentWindows = append(currentWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &current, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
+	}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("many", "many@example.com", "custom")})
+	for _, observation := range []struct {
+		at      int64
+		windows []quota.QuotaWindow
+	}{{now.Add(-5 * time.Hour).UnixMilli(), firstWindows}, {now.UnixMilli(), currentWindows}} {
+		if _, err := repo.RecordActiveQuotaObservations(context.Background(), &quota.NormalizedQuota{AuthIndex: "many", Provider: "custom", Status: "healthy", ObservedAtMS: observation.at, Windows: observation.windows}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedPredictionSnapshot(t, repo, "many", "custom", now.UnixMilli(), currentWindows)
+	service := &Service{Repo: repo}
+	public, err := service.QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, err := service.QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), QuotaPredictionInput{FindingsOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(public.Items)+public.Omitted != 101 || public.Omitted == 0 || len(findings.Items) != 101 || findings.Omitted != 0 {
+		t.Fatalf("public=%d/%d findings=%d/%d", len(public.Items), public.Omitted, len(findings.Items), findings.Omitted)
+	}
+}
+
+func predictionResource(authIndex, name, driver string) domain.DiscoveredResource {
+	return domain.DiscoveredResource{ResourceKey: "auth-index:auth-file:" + authIndex, CPAResourceType: "auth-file", CPAAuthIndex: authIndex, CPAResourceName: name, CPADriver: driver, Status: domain.ResourceStatusUnclaimed}
+}
+
+func seedPredictionResources(t *testing.T, repo *repository.Repository, resources []domain.DiscoveredResource) {
+	t.Helper()
+	if err := repo.UpsertInstance(context.Background(), domain.CPAInstance{ID: "prediction", Name: "Prediction", BaseURL: "http://cpa", ManagementKeyCiphertext: []byte("cipher"), ManagementKeyNonce: []byte("nonce"), CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertDiscoveredResources(context.Background(), "prediction", resources, time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedPredictionSnapshot(t *testing.T, repo *repository.Repository, authIndex, provider string, observedAtMS int64, windows []quota.QuotaWindow) {
+	t.Helper()
+	encoded, err := json.Marshal(windows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: authIndex, Provider: provider, Status: "healthy", WindowsJSON: string(encoded), ObservedAtMS: observedAtMS}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seedPredictionObservation(t *testing.T, repo *repository.Repository, authIndex, provider string, observedAtMS int64, window quota.QuotaWindow) {
+	t.Helper()
+	value := &quota.NormalizedQuota{AuthIndex: authIndex, Provider: provider, Status: "healthy", ObservedAtMS: observedAtMS, Windows: []quota.QuotaWindow{window}}
+	if _, err := repo.RecordActiveQuotaObservations(context.Background(), value); err != nil {
+		t.Fatal(err)
 	}
 }

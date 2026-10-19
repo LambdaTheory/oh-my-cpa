@@ -2336,6 +2336,7 @@ fix a defect with a new migration, never by editing `schema_migrations`
 | Account auto-management | `app.Run` → `automation.Manager` | Best effort; plans stay in the database for the next pass, and capture and the HTTP server continue. It performs a CPA write, so it is disabled in demo mode; `OMCPA_ACCOUNT_AUTOMATION_ENABLED=false` forbids the loop and `OMCPA_ACCOUNT_AUTOMATION_ENABLED=true` forces it on regardless of the web switch (ADR 0096) |
 | Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. The same instance also drains the create/update trigger queue and answers the console's manual refresh, so all three share one lock, one two-scrape concurrency cap and one persisted backoff. It scrapes `ollama.com`, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
 | Feishu notifications | `app.Run` → `feishu.Service` | Best effort; the long connection and the classification loop are started with the process and stopped before the database closes. A disabled, forced-off or degraded configuration is inert and never fails startup; it is never started in demo mode |
+| Feishu quota prediction | `app.Run` → `feishu.PredictionJob` | Best effort; the job remains loaded but inert while Feishu is disabled or degraded, becomes active after a ready settings reload, and falls back to the ordinary summary when prediction has no finding or cannot be read. It is never built in demo mode |
 | Release sweep | `app.Run` → `release.Service` | Best effort; the stored index and its timestamps go stale, and the page says so. Every six hours, first run delayed by one interval so a restart loop cannot become a request loop |
 | Usage-fact fold + data lifecycle | `ingest.Maintenance` inside the pipeline | Retried on its own interval; errors surface in ingest status |
 | Database maintenance | `repository.MaintenanceService`, started by an operator request | Never started automatically; a job's outcome is retained in process memory and recorded on the audit trail. The retained record is served by both reads, and the console shows only a job it observed rather than that record — see §11 |
@@ -3252,9 +3253,10 @@ same half-open cycle. It derives boundaries through `WindowCycleRange`, rejects 
 incomplete or reset history, and keeps missing projections as null reasoned evidence.
 
 `internal/operations/quota_prediction.go` owns capability validation, filters, identity
-projection and the 100-row/32-KiB bounds. It reads the normalized quota overview and joins
-`quota_observations` plus `usage_events` through repository methods; it performs no
-provider quota refresh. Read-only MCP masking happens after the shared projection.
+projection and the 100-row/32-KiB bounds. It assembles inputs only from persisted safe
+credential metadata, the newest quota snapshots, passive and active `quota_observations`,
+and `usage_events`; it never calls the CPA management gateway. Read-only MCP masking happens
+after deterministic sorting by hidden stored identity, and those identities are not returned.
 
 `internal/feishu/prediction_digest.go` is the daily prediction component. At configured
 summary minutes the Feishu loop evaluates it before the legacy scheduled summary. A

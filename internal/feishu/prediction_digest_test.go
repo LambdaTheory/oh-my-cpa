@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -124,9 +125,12 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 	web, overlay := readyConfig()
 	now := time.Date(2026, 10, 19, 10, 0, 30, 0, time.UTC)
 	store := NewMemoryStore()
+	sender := newFakeSender()
 	used, projected := 60.0, 120.0
 	service := NewService(Options{
 		Web: web, Overlay: overlay, Store: store, Now: func() time.Time { return now },
+		Source: &fakeReportSource{}, SenderFactory: func(Resolved) Sender { return sender },
+		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
@@ -134,7 +138,7 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
 	})
 	job.Activate()
-	if !service.isPredictionSchedulerActive {
+	if !service.predictionSchedulerActive.Load() {
 		t.Fatal("prediction job did not claim the scheduled summary")
 	}
 	if err := job.Run(ctx); err != nil {
@@ -147,7 +151,135 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 	if len(state.Outbox) != 1 || !strings.HasPrefix(state.Outbox[0].Kind, predictionKindPrefix) {
 		t.Fatalf("immediate prediction outbox = %+v", state.Outbox)
 	}
-	if service.isPredictionSchedulerActive {
+	if service.predictionSchedulerActive.Load() {
 		t.Fatal("prediction job retained schedule ownership after stopping")
 	}
+	if sends, _ := sender.counts(); sends != 1 {
+		t.Fatalf("prediction sends = %d", sends)
+	}
+	if payload := sender.lastCard(); payload == nil || !strings.Contains(marshalTestJSON(payload), "OMC 额度预测") {
+		t.Fatalf("prediction payload = %+v", payload)
+	}
+}
+
+func TestPredictionJobBecomesReadyAfterReload(t *testing.T) {
+	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	sender := newFakeSender()
+	service := NewService(Options{
+		Web:   Config{Enabled: false, SummaryTimes: []string{"10:00"}, Timezone: "UTC"},
+		Store: NewMemoryStore(), Source: &fakeReportSource{}, Now: func() time.Time { return now },
+		SenderFactory: func(Resolved) Sender { return sender }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
+	})
+	used, projected := 60.0, 120.0
+	reads := make(chan struct{}, 1)
+	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
+		reads <- struct{}{}
+		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+	})
+	job.tick(context.Background())
+	if len(reads) != 0 {
+		t.Fatal("disabled job read its source")
+	}
+	job.interval = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- job.Run(ctx) }()
+	web, overlay := readyConfig()
+	service.Reload(context.Background(), web, overlay)
+	select {
+	case <-reads:
+	case <-time.After(time.Second):
+		t.Fatal("prediction did not become active after reload")
+	}
+	deadline := time.After(time.Second)
+	for {
+		if sends, _ := sender.counts(); sends == 1 {
+			break
+		}
+		select {
+		case <-sender.signal:
+		case <-deadline:
+			t.Fatal("prediction was not sent after reload")
+		}
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPredictionMinuteSuppressesConcurrentStartupDigest(t *testing.T) {
+	web, overlay := readyConfig()
+	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	sender := newFakeSender()
+	service := NewService(Options{
+		Web: web, Overlay: overlay, Store: NewMemoryStore(),
+		Source: &fakeReportSource{report: Report{GeneratedAt: now, Providers: []ProviderReport{{
+			Provider: "claude", Accounts: []AccountReport{{Key: "a1", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(95, nil)}}},
+		}}}, has: true},
+		Renderer: NewPlainReportRenderer(time.UTC), Now: func() time.Time { return now },
+		SenderFactory: func(Resolved) Sender { return sender }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
+	})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	used, projected := 60.0, 120.0
+	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
+		close(started)
+		<-release
+		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+	})
+	job.Activate()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		job.tick(context.Background())
+	}()
+	<-started
+	service.tick(context.Background())
+	if sends, _ := sender.counts(); sends != 0 {
+		t.Fatalf("startup loop sent while prediction owned the minute: %d", sends)
+	}
+	close(release)
+	<-done
+	if sends, _ := sender.counts(); sends != 1 {
+		t.Fatalf("combined loops sent %d digests, want exactly one", sends)
+	}
+	state, err := service.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.Bootstrapped || !sameSummaryMinute(state.LastSummaryAt, readyPredictionConfig(), now) {
+		t.Fatalf("persisted minute claim = %+v", state)
+	}
+}
+
+func TestPredictionOwnershipDoesNotSuppressImmediateAlert(t *testing.T) {
+	web, overlay := readyConfig()
+	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	sender := newFakeSender()
+	service := NewService(Options{
+		Web: web, Overlay: overlay, Store: NewMemoryStore(),
+		Source: &fakeReportSource{report: Report{GeneratedAt: now, Providers: []ProviderReport{{
+			Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
+		}}}, has: true},
+		Renderer: NewPlainReportRenderer(time.UTC), Now: func() time.Time { return now },
+		SenderFactory: func(Resolved) Sender { return sender }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
+	})
+	service.predictionSchedulerActive.Store(true)
+	service.tick(context.Background())
+	if sends, _ := sender.counts(); sends != 1 {
+		t.Fatalf("immediate alert sends = %d", sends)
+	}
+	state, err := service.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Outbox) != 1 || state.Outbox[0].Kind != AlertCredential {
+		t.Fatalf("outbox = %+v", state.Outbox)
+	}
+}
+
+func marshalTestJSON(value any) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
 }

@@ -239,8 +239,9 @@ The module is wired into the running process:
 
 The service owns a separate read-only prediction-digest component. It reads stored quota
 prediction findings at configured `SummaryTimes` and never calls the Agent, an LLM or an
-upstream quota endpoint. The component is evaluated only while the resolved configuration
-is ready, and tests inject both its prediction source and sender.
+upstream quota endpoint. The process keeps the component loaded for every non-demo service;
+it remains inert while configuration is disabled or degraded and begins evaluating after a
+ready settings reload without a restart. Tests inject both its prediction source and sender.
 
 At a scheduled minute, one or more `will_exhaust` or `under_used` windows are combined
 into one card titled `OMC 额度预测 · HH:MM`. The service records that minute in the existing

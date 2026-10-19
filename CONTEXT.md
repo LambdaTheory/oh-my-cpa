@@ -357,11 +357,16 @@ A **quota prediction** is a read-only projection of one normalized quota window 
 current reset boundary. It is not capacity, an upstream guarantee or a routing instruction.
 Its verdicts are **will exhaust**, **under-used**, **on track** and **unknown**.
 
-Prediction evidence has three tiers. **Fact** is a directly observed current reading or a
-classification supported without a positive future trend. **Projection** is arithmetic
+Prediction evidence has three tiers. **Fact** is a directly observed current reading at
+or above exhaustion. **Projection** is arithmetic
 from at least two passive or active observations in the same cycle. **Unknown** means the
 required boundary, freshness, history, trend or usage evidence is absent or invalid.
 Unknown values remain missing with a reason and are never written as zero.
+
+Freshness follows the window rather than a fixed fifteen-minute sample: the accepted age
+is at least the two-hour idle refresh cadence, grows to one quarter of the quota window,
+and is capped at twenty-four hours. This keeps an idle five-hour or weekly subscription
+eligible for an under-use projection without presenting an arbitrarily old reading as current.
 
 Reset-time token and cost values are projections from OMC-recorded current-cycle usage,
 not capacity estimates. They exist only when at least five percent is used, traffic was

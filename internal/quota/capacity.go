@@ -1,6 +1,9 @@
 package quota
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 // CapacityMinUsedPercent is the lowest used share an estimate is derived from.
 // Upstream reports whole percentage points, so the reading is only known to
@@ -120,7 +123,15 @@ func WindowCycleRange(window QuotaWindow, observedAtMS, nowMS int64) (fromMS, to
 	if resetAtMS <= nowMS {
 		return 0, 0, CapacityReasonExpired
 	}
-	fromMS = resetAtMS - int64(*window.PeriodHours*3600*1000)
+	periodMSFloat := *window.PeriodHours * float64(time.Hour/time.Millisecond)
+	if math.IsNaN(periodMSFloat) || math.IsInf(periodMSFloat, 0) || periodMSFloat <= 0 || periodMSFloat >= float64(math.MaxInt64) {
+		return 0, 0, CapacityReasonBoundaryUnknown
+	}
+	periodMS := int64(periodMSFloat)
+	if resetAtMS < math.MinInt64+periodMS {
+		return 0, 0, CapacityReasonBoundaryUnknown
+	}
+	fromMS = resetAtMS - periodMS
 	toMS = min(observedAtMS, resetAtMS)
 	if toMS <= fromMS {
 		return 0, 0, CapacityReasonBoundaryUnknown

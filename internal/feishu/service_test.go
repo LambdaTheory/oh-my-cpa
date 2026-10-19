@@ -17,6 +17,7 @@ type fakeSender struct {
 	replies   int
 	texts     []string
 	chatIDs   []string
+	cards     []map[string]any
 	failSends int
 	signal    chan struct{}
 }
@@ -25,7 +26,7 @@ func newFakeSender() *fakeSender {
 	return &fakeSender{signal: make(chan struct{}, 32)}
 }
 
-func (f *fakeSender) SendCard(_ context.Context, chatID string, _ map[string]any) error {
+func (f *fakeSender) SendCard(_ context.Context, chatID string, card map[string]any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failSends > 0 {
@@ -34,8 +35,18 @@ func (f *fakeSender) SendCard(_ context.Context, chatID string, _ map[string]any
 	}
 	f.sends++
 	f.chatIDs = append(f.chatIDs, chatID)
+	f.cards = append(f.cards, card)
 	f.notify()
 	return nil
+}
+
+func (f *fakeSender) lastCard() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.cards) == 0 {
+		return nil
+	}
+	return f.cards[len(f.cards)-1]
 }
 
 func (f *fakeSender) ReplyText(_ context.Context, _ string, text string) error {

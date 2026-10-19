@@ -48,9 +48,7 @@ func (job *PredictionJob) Activate() {
 	if job == nil || job.service == nil {
 		return
 	}
-	job.service.stateMu.Lock()
-	job.service.isPredictionSchedulerActive = true
-	job.service.stateMu.Unlock()
+	job.service.predictionSchedulerActive.Store(true)
 }
 
 func (job *PredictionJob) Run(ctx context.Context) error {
@@ -58,14 +56,7 @@ func (job *PredictionJob) Run(ctx context.Context) error {
 		return nil
 	}
 	job.Activate()
-	defer func() {
-		job.service.stateMu.Lock()
-		job.service.isPredictionSchedulerActive = false
-		job.service.stateMu.Unlock()
-	}()
-	if !job.Ready() {
-		return nil
-	}
+	defer job.service.predictionSchedulerActive.Store(false)
 	job.tick(ctx)
 	interval := job.interval
 	if interval <= 0 {
@@ -88,12 +79,17 @@ func (job *PredictionJob) tick(ctx context.Context) {
 		return
 	}
 	service := job.service
-	service.stateMu.Lock()
-	defer service.stateMu.Unlock()
 	resolved := service.resolvedNow()
 	now := service.now()
 	if !resolved.Ready() || !scheduledMinute(resolved, now) {
 		return
+	}
+	// The prediction source is deliberately read before the persisted state. A
+	// held source cannot block the service loop, and the later load incorporates
+	// any immediate alerts the service saved while prediction was evaluating.
+	items, sourceErr := job.source(ctx)
+	if sourceErr != nil {
+		service.logger.WarnContext(ctx, "feishu prediction digest read failed", "error", sourceErr)
 	}
 	state, err := service.store.Load(ctx)
 	if err != nil {
@@ -101,7 +97,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 		service.logger.WarnContext(ctx, "feishu prediction state load failed", "error", err)
 		return
 	}
-	queued := job.maybeQueue(ctx, state, resolved, now)
+	queued := sourceErr == nil && job.queueFindings(state, resolved, now, items)
 	if !queued {
 		var report Report
 		var hasReport bool
@@ -117,7 +113,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 		return
 	}
 	if !withinQuiet(resolved, now) {
-		service.deliverOutbox(ctx, state, resolved)
+		service.deliverOutbox(ctx, resolved)
 	}
 }
 
@@ -128,6 +124,13 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 	items, err := job.source(ctx)
 	if err != nil {
 		job.service.logger.WarnContext(ctx, "feishu prediction digest read failed", "error", err)
+		return false
+	}
+	return job.queueFindings(state, resolved, now, items)
+}
+
+func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, items []PredictionDigestItem) bool {
+	if state == nil || !resolved.Ready() || !scheduledMinute(resolved, now) || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return false
 	}
 	findings := make([]PredictionDigestItem, 0, len(items))

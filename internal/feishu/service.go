@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -87,8 +88,8 @@ type Service struct {
 
 	lastError string
 
-	stateMu                     sync.Mutex
-	isPredictionSchedulerActive bool
+	deliveryMu                sync.Mutex
+	predictionSchedulerActive atomic.Bool
 }
 
 // NewService builds the bot. It never returns an error: an invalid configuration
@@ -591,27 +592,25 @@ func (s *Service) runLoop(ctx context.Context) {
 }
 
 func (s *Service) tick(ctx context.Context) {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
 	resolved := s.resolvedNow()
 	if !resolved.Ready() {
 		return
 	}
-	state, err := s.store.Load(ctx)
-	if err != nil {
-		s.setLastError(err)
-		s.logger.WarnContext(ctx, "feishu state load failed", "error", err)
-		return
-	}
 	now := s.now()
 	quiet := withinQuiet(resolved, now)
-
 	var (
 		rep Report
 		has bool
 	)
 	if s.source != nil {
 		rep, has = s.source.ReadReport(ctx)
+	}
+
+	state, err := s.store.Load(ctx)
+	if err != nil {
+		s.setLastError(err)
+		s.logger.WarnContext(ctx, "feishu state load failed", "error", err)
+		return
 	}
 	state.ChannelTracks = updateTracks(state.ChannelTracks, rep, has, now)
 
@@ -653,9 +652,14 @@ func (s *Service) tick(ctx context.Context) {
 		s.promoteQueued(state)
 	}
 
-	s.maybeStartupSummary(ctx, state, resolved, rep, has, result.Opened, now)
-	if !s.isPredictionSchedulerActive {
+	predictionOwnsMinute := s.predictionSchedulerActive.Load() && scheduledMinute(resolved, now)
+	if !predictionOwnsMinute {
+		s.maybeStartupSummary(ctx, state, resolved, rep, has, result.Opened, now)
 		s.maybeScheduledSummary(state, resolved, rep, has, now)
+	} else {
+		// The prediction loop owns this startup minute. Mark the one-time startup
+		// digest consumed so the next ordinary tick cannot send it late.
+		state.Bootstrapped = true
 	}
 
 	state.UpdatedAt = now
@@ -665,7 +669,7 @@ func (s *Service) tick(ctx context.Context) {
 		return
 	}
 	if !quiet {
-		s.deliverOutbox(ctx, state, resolved)
+		s.deliverOutbox(ctx, resolved)
 	}
 }
 
@@ -759,7 +763,7 @@ func allItemsResolved(state *State, notification Notification) bool {
 // maybeStartupSummary sends the one-time startup summary, persisted so a settings
 // reload never resends it. Nothing is sent when there is nothing to report.
 func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolved Resolved, rep Report, has bool, opened []PendingItem, now time.Time) {
-	if state.Bootstrapped {
+	if state.Bootstrapped || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return
 	}
 	state.Bootstrapped = true
@@ -812,16 +816,39 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 	state.queueNotification(summaryNotification(open, tight, now))
 }
 
-func (s *Service) deliverOutbox(ctx context.Context, state *State, resolved Resolved) {
+func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
 	dispatcher := s.currentDispatcher()
 	if dispatcher == nil || resolved.ChatID == "" {
 		return
 	}
-	state.Outbox = dispatcher.deliverDue(ctx, resolved.ChatID, state.Outbox)
+	// Only delivery itself is serialized. Report and prediction sources are read
+	// before this point, so a slow Feishu request cannot block either scheduler.
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	state, err := s.store.Load(ctx)
+	if err != nil {
+		s.setLastError(err)
+		return
+	}
+	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, state.Outbox)
+	latest, err := s.store.Load(ctx)
+	if err != nil {
+		s.setLastError(err)
+		return
+	}
+	byID := make(map[string]Notification, len(delivered))
+	for _, notification := range delivered {
+		byID[notification.ID] = notification
+	}
+	for index, notification := range latest.Outbox {
+		if updated, ok := byID[notification.ID]; ok {
+			latest.Outbox[index] = updated
+		}
+	}
 	now := s.now()
-	state.prune(now)
-	state.UpdatedAt = now
-	if err := s.store.Save(ctx, state); err != nil {
+	latest.prune(now)
+	latest.UpdatedAt = now
+	if err := s.store.Save(ctx, latest); err != nil {
 		s.setLastError(err)
 		s.logger.WarnContext(ctx, "feishu outbox save failed", "error", err)
 	}
