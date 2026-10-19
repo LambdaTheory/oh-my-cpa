@@ -42,6 +42,11 @@ type Config struct {
 	// Empty disables it. It must be at least 16 characters and differ from the
 	// management key.
 	MCPReadOnlyKey string
+	Updater        UpdaterConfig
+	// GoogleFontsURL is the stylesheet API the font library installs Google Fonts
+	// families from (OMCPA_GOOGLE_FONTS_URL); a compatible mirror serves a deployment
+	// that cannot reach Google. Validated when the installer is built.
+	GoogleFontsURL string
 	// TrustedProxyCIDRs are the direct peer networks whose forwarding headers
 	// may be used for per-client login throttling. Empty means trust none.
 	TrustedProxyCIDRs []string
@@ -51,6 +56,31 @@ type Config struct {
 	// would touch real secret material. It is off unless OMCPA_DEMO_MODE is set,
 	// which is what keeps the self-hosted default byte-for-byte unchanged.
 	IsDemoMode bool
+}
+
+// DefaultUpdaterURL is the updater sidecar's address: the name both an installed
+// sidecar and the Compose service answer to on a network shared with the console.
+const DefaultUpdaterURL = "http://oh-my-cpa-updater:8090"
+
+// UpdaterConfig locates the sidecar that applies updates the console asks for.
+type UpdaterConfig struct {
+	// Enabled is false when the operator turned console updates off; the page then
+	// offers none and this process never contacts a sidecar.
+	Enabled bool
+	URL     string
+}
+
+func loadUpdaterConfig() (UpdaterConfig, error) {
+	enabled, err := parseBoolEnv("OMCPA_UPDATER_ENABLED", false)
+	if err != nil {
+		return UpdaterConfig{}, err
+	}
+	address := envOr("OMCPA_UPDATER_URL", DefaultUpdaterURL)
+	parsed, err := url.Parse(address)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return UpdaterConfig{}, fmt.Errorf("OMCPA_UPDATER_URL must be an http(s) URL, got %q", address)
+	}
+	return UpdaterConfig{Enabled: enabled, URL: address}, nil
 }
 
 // ReleaseConfig controls the release-observation surface: which published versions
@@ -118,11 +148,18 @@ type UsageConfig struct {
 	CollectErrors bool
 }
 
-// QuotaConfig controls the background per-account quota refresh scheduler. It
-// decides how often each credential's quota is actively read from its provider
-// based on how recently it served traffic; the console and MCP keep working
-// without it and refresh on demand.
+type QuotaSchedulerMode string
+
+const (
+	QuotaSchedulerModeInterval QuotaSchedulerMode = "interval"
+	QuotaSchedulerModeAdaptive QuotaSchedulerMode = "adaptive"
+)
+
+// QuotaConfig controls the selected background quota refresh scheduler. Interval
+// mode uses the stored operator preference; adaptive mode uses the tier settings
+// below. The console and MCP keep working without either loop and refresh on demand.
 type QuotaConfig struct {
+	SchedulerMode QuotaSchedulerMode
 	// SchedulerEnabled gates the background loop only.
 	SchedulerEnabled bool
 	// Tier intervals. A credential that served a request in WatchWindow and has
@@ -453,6 +490,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	updaterConfig, err := loadUpdaterConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	if demoMode {
 		// The fixture database is the whole history, and there is no CPA queue to
 		// drain: leaving capture on would only poll an upstream that does not
@@ -508,6 +549,8 @@ func Load() (Config, error) {
 		TLSSkipVerify:     tlsSkipVerify,
 		TrustedProxyCIDRs: trustedProxyCIDRs,
 		Release:           releaseConfig,
+		Updater:           updaterConfig,
+		GoogleFontsURL:    strings.TrimSpace(os.Getenv("OMCPA_GOOGLE_FONTS_URL")),
 		CPA:               cpa,
 		IsDemoMode:        demoMode,
 	}, nil
@@ -700,6 +743,13 @@ func loadUsageConfig() (UsageConfig, error) {
 // depends on how many credentials a deployment holds and how tightly its
 // providers meter.
 func loadQuotaConfig() (QuotaConfig, error) {
+	mode := QuotaSchedulerMode(strings.TrimSpace(os.Getenv("OMCPA_QUOTA_SCHEDULER_MODE")))
+	if mode == "" {
+		mode = QuotaSchedulerModeInterval
+	}
+	if mode != QuotaSchedulerModeInterval && mode != QuotaSchedulerModeAdaptive {
+		return QuotaConfig{}, fmt.Errorf("OMCPA_QUOTA_SCHEDULER_MODE must be interval or adaptive: %q", mode)
+	}
 	enabled, err := parseBoolEnv("OMCPA_QUOTA_SCHEDULER_ENABLED", true)
 	if err != nil {
 		return QuotaConfig{}, err
@@ -772,6 +822,7 @@ func loadQuotaConfig() (QuotaConfig, error) {
 		concurrency = parsed
 	}
 	return QuotaConfig{
+		SchedulerMode:             mode,
 		SchedulerEnabled:          enabled,
 		WatchInterval:             watchInterval,
 		ActiveInterval:            activeInterval,

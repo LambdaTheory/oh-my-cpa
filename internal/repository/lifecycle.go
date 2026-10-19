@@ -68,6 +68,10 @@ type TableLifecycle struct {
 // whose rows should roll declares a rule and is deleted by the same batched,
 // horizon-publishing engine as everything else; it does not write its own loop.
 var TABLE_LIFECYCLES = map[string]TableLifecycle{
+	"channel_model_prices":       {Kind: LifecycleReplaced, Reason: "operator prices keyed by the usage channel and upstream model; history lives in model_price_versions"},
+	"credential_warmup_policies": {Kind: LifecyclePermanent, Reason: "operator-approved scheduling policies, bound to instance and exact credential identity"},
+	"credential_warmup_state":    {Kind: LifecycleOwnerBounded, Reason: "one scheduling record per credential; preserved for restart deduplication"},
+	"credential_warmup_runs":     {Kind: LifecycleOwnerBounded, Reason: "newest 100 request receipts per credential, trimmed on write"},
 	"usage_events": {Kind: LifecycleRolling, Reason: "request records; their usage survives in the facts",
 		Rules: []LifecycleRule{{Policy: LifecycleUsageDetail, Expired: `timestamp_ms < ?`, IsGatedByUsageFacts: true}}},
 	"error_events": {Kind: LifecycleRolling, Reason: "error detail shown beside request records",
@@ -99,6 +103,8 @@ var TABLE_LIFECYCLES = map[string]TableLifecycle{
 	"discovered_resources":          {Kind: LifecyclePermanent, Reason: "one row per upstream resource ever seen"},
 	"resource_overrides":            {Kind: LifecyclePermanent, Reason: "operator-owned naming"},
 	"custom_icons":                  {Kind: LifecyclePermanent, Reason: "operator uploads, removed only by the operator"},
+	"fonts":                         {Kind: LifecyclePermanent, Reason: "the operator's font library, removed only by the operator"},
+	"font_faces":                    {Kind: LifecyclePermanent, Reason: "the files of a library family, deleted with it"},
 	"model_prices":                  {Kind: LifecyclePermanent, Reason: "the price book"},
 	"pricing_channels":              {Kind: LifecyclePermanent, Reason: "the channel multipliers"},
 	"pricing_model_links":           {Kind: LifecyclePermanent, Reason: "operator-owned price links"},

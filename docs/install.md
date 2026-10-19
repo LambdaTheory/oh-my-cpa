@@ -100,12 +100,16 @@ What the directory holds afterwards:
 - OMC's database lives in the `oh-my-cpa-data` Docker volume, which the image already
   owns as user `10001`.
 - `.env` holds both keys.
+- A bare `docker compose up -d` starts only CPA and OMC. It does not start an updater or
+  mount `/var/run/docker.sock`.
+- Console updates are disabled by default. [Upgrading](#upgrading) explains the optional
+  socket-holding updater and the explicit opt-in required to install it.
 
 ## Add to the existing Compose file
 
 Runs OMC as one more service in the Compose file that already runs CPA.
 
-1. Add the service under `services:`. If the file already has a top-level `volumes:`
+1. Add the services under `services:`. If the file already has a top-level `volumes:`
    key, add `oh-my-cpa-data:` under it instead of repeating the key.
 
    ```yaml
@@ -119,6 +123,7 @@ Runs OMC as one more service in the Compose file that already runs CPA.
          OMCPA_CPA_MANAGEMENT_KEY: ${OMCPA_CPA_MANAGEMENT_KEY:?}
          OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
          OMCPA_DATA_DIR: /data
+         OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
        volumes:
          - oh-my-cpa-data:/data
 
@@ -155,8 +160,8 @@ Runs OMC as one more service in the Compose file that already runs CPA.
 
 Effect on the existing deployment:
 
-- `docker compose up -d oh-my-cpa` creates the OMC container only. The CPA container
-  keeps running; it is not recreated or restarted, and its configuration, keys and
+- `docker compose up -d oh-my-cpa` creates that container only.
+  The CPA container keeps running; it is not recreated or restarted, and its configuration, keys and
   volumes are unchanged.
 - OMC's database lives in the `oh-my-cpa-data` Docker volume.
 - Other settings go in the `environment:` block under the names in
@@ -188,6 +193,7 @@ changed.
          OMCPA_CPA_MANAGEMENT_KEY: ${OMCPA_CPA_MANAGEMENT_KEY:?}
          OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
          OMCPA_DATA_DIR: /data
+         OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
        volumes:
          - oh-my-cpa-data:/data
 
@@ -344,10 +350,14 @@ These are the variables the two release Compose files accept. Compose reads
 | `OMCPA_NETWORK_NAME` | `oh-my-cpa` / `oh-my-cpa-standalone` | Docker network name (full stack / OMC only) |
 | `OMCPA_NETWORK_EXTERNAL` | `false` | OMC only: `true` joins a network that already exists |
 | `OMCPA_UPDATE_CHECK_ENABLED`, `OMCPA_UPDATE_CHECK_ON_PAGE_LOAD` | `true` | Set both to `false` on a machine with no internet |
+| `OMCPA_UPDATER_ENABLED` | `false` | Set to `true` only when explicitly opting into the socket-holding updater |
 | `OMCPA_OLLAMA_COLLECTOR_ENABLED` | `true` | Set to `false` to stop the Ollama quota scraper without removing accounts |
 | `OMCPA_FEISHU_ENABLED` | unset | Leave unset so the console's own switch is in force; `false` forces the bot off, with `OMCPA_FEISHU_FORCE_DISABLED` taking precedence |
 
 Everything else OMC reads is in `docs/operations.md`.
+Credential-specific OAuth model exclusions override provider defaults only with CPA
+v8.0.33 or later. Check the gateway version before relying on that precedence;
+`docs/operations.md` describes the rule.
 
 ## Reaching the console from elsewhere
 
@@ -474,6 +484,9 @@ older executable requires restoring the corresponding data backup.
 
 Needs Go 1.25+, Node.js 22+, pnpm 11+ and a running CPA.
 
+Docker source builds need about **4 GB of available memory** to compile the SPA.
+On a host with less, add swap or build on a larger machine.
+
 ```bash
 git clone https://github.com/WizisCool/oh-my-cpa.git
 cd oh-my-cpa
@@ -535,10 +548,76 @@ it cannot reach CPA.
 
 ## Upgrading
 
-Back up `.env` and OMC's data first, then pull the new image in the directory that
-holds the Compose file. `docs/ops/sqlite-operations.md` is the backup runbook; its
-commands use the release Compose files. With the files in this guide the data is in the
-Docker volume `<project>_oh-my-cpa-data`, and `docker volume inspect` prints its path.
+Upgrades migrate the database and there is no downgrade: the way back to an older
+version is to restore a backup. OMC takes an encrypted backup by itself before it
+applies a migration; `docs/ops/sqlite-operations.md` is the runbook for backups taken by
+hand, and for restoring one. Back up `.env` separately.
+
+### From the console
+
+Console updates are disabled by default. Before this section applies, set
+`OMCPA_UPDATER_ENABLED=true` in `deploy/.env`, recreate `oh-my-cpa`, and install the
+sidecar with the command under "Enabling console updates on an existing deployment".
+The published `compose.full.yml` and `compose.omc.yml` intentionally contain no updater
+service, so an ordinary `docker compose up` never mounts the Docker socket.
+
+When a newer release exists, **System Information** shows **Update now** beside Oh My
+CPA or CLIProxyAPI. Confirming it makes the `oh-my-cpa-updater` container:
+
+1. pull the new image. For Oh My CPA this is the exact image named by the release's
+   signed manifest; for CLIProxyAPI it is the tag the container already uses;
+2. stop the running container and start a replacement with the same environment,
+   volumes, ports, networks and Compose labels;
+3. wait for the replacement to report healthy, then remove the old container. A
+   replacement that exits or stays unhealthy is removed and the old container is started
+   again under its own name.
+
+Updating Oh My CPA disconnects the console for a few seconds and the page reloads on
+the new version. Updating CLIProxyAPI restarts the gateway, which interrupts requests in
+flight. Each update and its outcome are written to the audit log.
+
+The action is not offered in three cases, and the page says which:
+
+| Case | What to do |
+| --- | --- |
+| The image is pinned to a version tag or digest, for example `OMCPA_IMAGE=wiziscool/oh-my-cpa:vX.Y.Z` | Change the pin and redeploy. The console leaves a pinned image alone, because the next `docker compose up` would put the pinned version back over a database that has already been migrated |
+| CPA does not run as a container on the same Docker host | Update CPA where it runs |
+| The build carries no release signing key, as a build from source does | Update by hand, below |
+
+### Enabling console updates on an existing deployment
+
+After setting `OMCPA_UPDATER_ENABLED=true` and recreating the console, install the optional
+sidecar with one command on the Docker host. The Compose file is not edited:
+
+```bash
+docker run --rm --pull always -u 0 -v /var/run/docker.sock:/var/run/docker.sock wiziscool/oh-my-cpa:latest updater install
+```
+
+The command:
+
+- finds the running Oh My CPA container, whichever of the Compose files in this guide
+  started it. When more than one is running, add `--container <name>`; when CPA runs as
+  a container the updater cannot identify, add `--cpa-container <name>`;
+- creates a container named `oh-my-cpa-updater` from the same image, on a network of the
+  same name, and attaches the console to that network. The console finds the updater by
+  that name; no setting is added to either container, and CPA is not touched;
+- replaces the console with the current release when it is older, with the rollback
+  described above. A pinned console is left as it is.
+
+`--pull always` fetches the current image: the host already holds an older
+`wiziscool/oh-my-cpa:latest`, which has no updater. `-u 0` is needed because the Docker
+socket belongs to root. Running the command again
+repairs or refreshes the installation. `docker rm -f oh-my-cpa-updater` removes it, and
+the console then shows the command again in place of the update action.
+
+The updater container holds the Docker socket, which amounts to control of Docker on
+that host. It runs with a read-only filesystem and no capabilities, publishes no port,
+and accepts only two requests from the console: report status, and update Oh My CPA or
+CLIProxyAPI. `docs/operations.md` describes the boundary.
+
+### By hand
+
+In the directory that holds the Compose file:
 
 ```bash
 docker compose pull oh-my-cpa
@@ -550,9 +629,9 @@ With a release Compose file, add `-f deploy/compose.full.yml` or
 
 This upgrades OMC and leaves CPA as it is. To move to a specific version, change the
 `image:` tag to `wiziscool/oh-my-cpa:vX.Y.Z`, or set `OMCPA_IMAGE` in `deploy/.env` with
-a release Compose file. Upgrades migrate the database and there is no downgrade: the way
-back to an older version is to restore the backup. How releases are published is in
-`docs/releasing.md`.
+a release Compose file. With the files in this guide the data is in the Docker volume
+`<project>_oh-my-cpa-data`, and `docker volume inspect` prints its path. How releases
+are published is in `docs/releasing.md`.
 
 ## Constraints
 

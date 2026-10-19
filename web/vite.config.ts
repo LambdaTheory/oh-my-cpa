@@ -84,7 +84,11 @@ export default defineConfig(({ command }) => ({
     assetsDir: 'assets',
     sourcemap: false,
     chunkSizeWarningLimit: 1200,
+    // Keep the chunk-render phase below the Docker build's memory ceiling without
+    // changing the emitted bundle graph.
+    reportCompressedSize: false,
     rollupOptions: {
+      maxParallelFileOps: 2,
       output: {
         manualChunks: (id) => {
           // Vite's shared preload helper is called by every `React.lazy` route, so

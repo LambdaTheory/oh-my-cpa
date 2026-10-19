@@ -20,6 +20,7 @@
 import { runScenarioQueue } from './probe-scheduler.mjs';
 import { appendProbeTiming } from './probe-timings.mjs';
 import { createPreferenceFixture } from './preferences-fixture.mjs';
+import { createSystemUpdaterFixture } from './system-updater-fixture.mjs';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { randomUUID } from 'node:crypto';
@@ -208,6 +209,15 @@ export function defaultRoutes() {
       (url, method, request) => respondPreference(url, method, request.postData()),
     ],
 
+    // The live usage stream answers as a deployment without a collector does, so
+    // every reader falls back to its poll and a scenario's fixtures stay the only
+    // source of records. A probe about the stream itself declares its own entry.
+    [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/usage/live', () => ({ status: 204, json: undefined })],
+    // The dashboard's live routing panel: a quiet gateway, unless a scenario says otherwise.
+    [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/usage/routing', () => ({
+      as_of_ms: Date.now(), window_ms: 60_000, records: [], has_more: false, cooldowns: [],
+    })],
+    [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/config', () => ({ scalars: {} })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/custom-icons'), () => ({ icons: [] })],
     // The OMC settings page renders the Feishu panel, so its two reads are part of the
     // default surface a route's shell can reach. An inert, not-configured document is the
@@ -231,6 +241,7 @@ export function defaultRoutes() {
     // populated inventory as a scenario entry the dispatcher checks first.
     [(url, method) => method === 'GET' && url.pathname.endsWith('/ollama/accounts'), () => ({ accounts: [] })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/ollama/quota'), () => ({ accounts: [] })],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/api/v1/fonts'), () => ({ fonts: [] })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/auth-files'), () => ({ files: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/quota'), () => ({ summary: { total_credentials: 0, healthy_count: 0, warning_count: 0, exhausted_count: 0, cooldown_count: 0, attention_count: 0 }, quotas: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/providers'), () => ({ providers: [], total: 0 })],
@@ -239,6 +250,9 @@ export function defaultRoutes() {
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/plugins', () => ({ plugins: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/system/repository', () => ({ stargazers_count: null })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/system/updates', () => ({ omc_version: uncheckedVersion('omc'), cpa_version: uncheckedVersion('cpa') })],
+    // A native install: the state in which the page draws nothing about updating, so scenarios
+    // that are not about it see the page they were written against.
+    [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/system/updater', (url, method) => createSystemUpdaterFixture({ state: 'not_containerised' })(url, method).json],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/api-keys', () => ({ keys: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/pricing/attention', () => ({ unpriced: [] })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/dashboard/models', () => ({ window: dashboardBody().window, total_tokens: 0, models: [], partial_errors: [] })],

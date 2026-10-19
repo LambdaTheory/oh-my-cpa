@@ -31,6 +31,7 @@ type PricingManager interface {
 	SetModelMode(ctx context.Context, change pricing.ModeChange) (pricing.ModelPrice, error)
 	SetModelModeChecked(context.Context, pricing.ModeChange, func([]pricing.ModelPrice) error) (pricing.ModelPrice, error)
 	DeletePrice(ctx context.Context, model string) (bool, error)
+	DeleteChannelPrice(context.Context, string, string) (bool, error)
 	DeletePriceChecked(context.Context, string, func([]pricing.ModelPrice) error) (bool, error)
 	ListChannels(ctx context.Context) ([]pricing.ChannelMultiplier, error)
 	SetChannel(ctx context.Context, channel pricing.ChannelMultiplier) (pricing.ChannelMultiplier, error)
@@ -73,12 +74,78 @@ func projectPricingUsage(usage repository.PricingUsage) pricingUsageDTO {
 	return dto
 }
 
+type pricingPriceTierDTO struct {
+	ServiceTiers     []string `json:"service_tiers,omitempty"`
+	MinPromptTokens  int64    `json:"min_prompt_tokens,omitempty"`
+	UTCStart         *int     `json:"utc_start,omitempty"`
+	UTCEnd           *int     `json:"utc_end,omitempty"`
+	TimeZone         string   `json:"time_zone,omitempty"`
+	PromptPricePer1M *float64 `json:"prompt_price_per_1m,omitempty"`
+	CompletionPer1M  *float64 `json:"completion_price_per_1m,omitempty"`
+	CacheReadPer1M   *float64 `json:"cache_read_price_per_1m,omitempty"`
+	CacheWritePer1M  *float64 `json:"cache_write_price_per_1m,omitempty"`
+}
+
+type pricingModelPriceDTO struct {
+	Model            string                `json:"model"`
+	Channel          string                `json:"channel,omitempty"`
+	PromptPricePer1M float64               `json:"prompt_price_per_1m"`
+	CompletionPer1M  float64               `json:"completion_price_per_1m"`
+	CacheReadPer1M   float64               `json:"cache_read_price_per_1m"`
+	CacheWritePer1M  float64               `json:"cache_write_price_per_1m"`
+	PriceMultiplier  float64               `json:"price_multiplier"`
+	Tiers            []pricingPriceTierDTO `json:"tiers"`
+	Source           string                `json:"source"`
+	UpstreamID       string                `json:"upstream_id"`
+	MatchKind        string                `json:"match_kind"`
+	Mode             string                `json:"mode,omitempty"`
+	SyncedAtMS       int64                 `json:"synced_at_ms"`
+	UpdatedAtMS      int64                 `json:"updated_at_ms"`
+}
+
+func projectPricingModel(row pricing.ModelPrice) pricingModelPriceDTO {
+	var tiers []pricingPriceTierDTO
+	if row.Tiers != nil {
+		tiers = make([]pricingPriceTierDTO, len(row.Tiers))
+		for index, tier := range row.Tiers {
+			tiers[index] = pricingPriceTierDTO{
+				ServiceTiers:    tier.ServiceTiers,
+				MinPromptTokens: tier.MinPromptTokens, UTCStart: tier.UTCStart, UTCEnd: tier.UTCEnd, TimeZone: tier.TimeZone,
+				PromptPricePer1M: tier.PromptPricePer1M, CompletionPer1M: tier.CompletionPer1M,
+				CacheReadPer1M: tier.CacheReadPer1M, CacheWritePer1M: tier.CacheWritePer1M,
+			}
+		}
+	}
+	return pricingModelPriceDTO{
+		Model: row.Model, Channel: row.Channel, PromptPricePer1M: row.PromptPricePer1M, CompletionPer1M: row.CompletionPer1M,
+		CacheReadPer1M: row.CacheReadPer1M, CacheWritePer1M: row.CacheWritePer1M, PriceMultiplier: row.PriceMultiplier,
+		Tiers: tiers, Source: row.Source, UpstreamID: row.UpstreamID, MatchKind: row.MatchKind, Mode: row.Mode,
+		SyncedAtMS: row.SyncedAtMS, UpdatedAtMS: row.UpdatedAtMS,
+	}
+}
+
 type pricingModelDTO struct {
-	pricing.ModelPrice
+	pricingModelPriceDTO
 	Usage pricingUsageDTO `json:"usage_30d"`
 	// Candidate is an OpenRouter model a custom or linked price could follow
 	// that the operator has not seen yet.
 	Candidate *pricing.Candidate `json:"candidate,omitempty"`
+}
+
+// History omits current-row bookkeeping, preserving its existing wire format.
+type pricingVersionPriceDTO struct {
+	pricingModelPriceDTO
+	MatchKind   string `json:"match_kind,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	SyncedAtMS  int64  `json:"synced_at_ms,omitempty"`
+	UpdatedAtMS int64  `json:"updated_at_ms,omitempty"`
+}
+
+type pricingPriceVersionDTO struct {
+	ID              int64                  `json:"id"`
+	Available       bool                   `json:"available"`
+	EffectiveFromMS int64                  `json:"effective_from_ms"`
+	Price           pricingVersionPriceDTO `json:"price"`
 }
 
 type pricingUnpricedDTO struct {
@@ -170,7 +237,7 @@ func (h *Handler) listPricing(writer http.ResponseWriter, request *http.Request)
 	}
 	models := make([]pricingModelDTO, 0, len(rows))
 	for _, row := range rows {
-		dto := pricingModelDTO{ModelPrice: row, Usage: projectPricingUsage(modelUsage[row.Model])}
+		dto := pricingModelDTO{pricingModelPriceDTO: projectPricingModel(row), Usage: projectPricingUsage(modelUsage[row.Model])}
 		if candidate, ok := candidates[row.Model]; ok {
 			dto.Candidate = &candidate
 		}
@@ -239,6 +306,20 @@ func (h *Handler) listPricing(writer http.ResponseWriter, request *http.Request)
 			"running": h.pricing.IsRunning(),
 			"state":   state,
 		},
+	}
+	if h.repo != nil {
+		overrides, err := h.repo.ListChannelModelPrices(ctx)
+		if err != nil {
+			writeInternalError(writer, err)
+			return
+		}
+		if len(overrides) > 0 {
+			prices := make([]pricingModelPriceDTO, len(overrides))
+			for index, row := range overrides {
+				prices[index] = projectPricingModel(row)
+			}
+			response["channel_models"] = prices
+		}
 	}
 	if len(partial) > 0 {
 		response["partial"] = partial
@@ -329,6 +410,21 @@ func (h *Handler) getPricingModel(writer http.ResponseWriter, request *http.Requ
 			break
 		}
 	}
+	channel := strings.TrimSpace(request.URL.Query().Get("channel"))
+	isInherited := channel != ""
+	if channel != "" && h.repo != nil {
+		overrides, err := h.repo.ListChannelModelPrices(ctx)
+		if err != nil {
+			writeInternalError(writer, err)
+			return
+		}
+		for index := range overrides {
+			if overrides[index].Channel == channel && overrides[index].Model == model {
+				current, isInherited = &overrides[index], false
+				break
+			}
+		}
+	}
 	suggestions, err := h.pricing.Suggestions(ctx, model, pricingSuggestionLimit)
 	if err != nil {
 		slog.Warn("pricing suggestions unavailable", "model", model, "error", err)
@@ -346,18 +442,37 @@ func (h *Handler) getPricingModel(writer http.ResponseWriter, request *http.Requ
 		automatic = map[string]any{"model": match.Model, "match_kind": match.Kind}
 	}
 	var candidate any
-	if current != nil {
+	if current != nil && channel == "" {
 		if found, err := h.pricing.Candidates(ctx, []pricing.ModelPrice{*current}); err != nil {
 			slog.Warn("pricing candidate unavailable", "model", model, "error", err)
 		} else if value, ok := found[model]; ok {
 			candidate = value
 		}
 	}
-	response := map[string]any{"model": model, "price": current, "suggestions": suggestions, "automatic": automatic,
-		"candidate": candidate, "versions": []repository.PriceVersion{}, "profile": repository.TokenProfile{}}
+	var price *pricingModelPriceDTO
+	if current != nil {
+		projected := projectPricingModel(*current)
+		price = &projected
+	}
+	response := map[string]any{"model": model, "price": price, "suggestions": suggestions, "automatic": automatic,
+		"candidate": candidate, "versions": []pricingPriceVersionDTO{}, "profile": repository.TokenProfile{}}
+	if channel != "" {
+		response["channel"], response["is_inherited"] = channel, isInherited
+	}
 	if h.repo != nil {
-		if versions, err := h.repo.ListModelPriceVersions(ctx, model, 50); err == nil && versions != nil {
-			response["versions"] = versions
+		if versions, err := h.repo.ListModelPriceVersions(ctx, model, 50, channel); err == nil && versions != nil {
+			projected := make([]pricingPriceVersionDTO, len(versions))
+			for index, version := range versions {
+				projected[index] = pricingPriceVersionDTO{
+					ID: version.ID, Available: version.Available, EffectiveFromMS: version.EffectiveFromMS,
+					Price: pricingVersionPriceDTO{
+						pricingModelPriceDTO: projectPricingModel(version.Price.ModelPrice),
+						MatchKind:            version.Price.MatchKind, Mode: version.Price.Mode,
+						SyncedAtMS: version.Price.SyncedAtMS, UpdatedAtMS: version.Price.UpdatedAtMS,
+					},
+				}
+			}
+			response["versions"] = projected
 		}
 		if profile, err := h.repo.QueryModelTokenProfile(ctx, model, h.now().Add(-pricingProfileWindow).UnixMilli()); err == nil {
 			response["profile"] = profile
@@ -426,6 +541,7 @@ func (h *Handler) updatePricingModel(writer http.ResponseWriter, request *http.R
 		return
 	}
 	change := body.ModeChange(model)
+	change.Channel = strings.TrimSpace(request.URL.Query().Get("channel"))
 	if change.Mode == pricing.ModeCustom {
 		candidate := change.Price
 		candidate.PriceMultiplier = change.Multiplier
@@ -447,12 +563,12 @@ func (h *Handler) updatePricingModel(writer http.ResponseWriter, request *http.R
 		return
 	}
 	if err := h.recordAudit(request, "pricing.model.update", "pricing", model, "success", map[string]any{
-		"mode": change.Mode, "upstream_id": row.UpstreamID,
+		"mode": change.Mode, "upstream_id": row.UpstreamID, "channel": change.Channel,
 	}); err != nil {
 		writeInternalError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"price": row})
+	writeJSON(writer, http.StatusOK, map[string]any{"price": projectPricingModel(row)})
 }
 
 // dismissPricingCandidate records that the operator saw a model's candidate
@@ -497,13 +613,20 @@ func (h *Handler) deletePricingModel(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusBadRequest, "model path parameter is required")
 		return
 	}
-	deleted, err := h.pricing.DeletePrice(request.Context(), model)
+	channel := strings.TrimSpace(request.URL.Query().Get("channel"))
+	var deleted bool
+	var err error
+	if channel == "" {
+		deleted, err = h.pricing.DeletePrice(request.Context(), model)
+	} else {
+		deleted, err = h.pricing.DeleteChannelPrice(request.Context(), channel, model)
+	}
 	if err != nil {
 		writeInternalError(writer, err)
 		return
 	}
 	if err := h.recordAudit(request, "pricing.model.delete", "pricing", model, "success", map[string]any{
-		"deleted": deleted,
+		"deleted": deleted, "channel": channel,
 	}); err != nil {
 		writeInternalError(writer, err)
 		return

@@ -37,6 +37,10 @@ for the target architecture and injects `internal/config.BuildVersion` from the 
 tag. The final Alpine image runs as uid/gid `10001:10001` with `/data` as its only
 persistent writable directory. Its own `deploy/healthcheck.sh` normalizes the prefix
 through `deploy/base-path.sh`; `degraded` is process readiness, not gateway connectivity.
+The same image is the updater when its command is `updater serve` (ADR 0099): the probe
+then asks the updater instead, so that role needs no health check of its own. The
+release Compose files start no updater. When installed explicitly, the updater
+sidecar alone mounts the Docker socket.
 
 Docker Hub distributes `wiziscool/oh-my-cpa` for amd64 and arm64. The full Compose
 file pulls CPA and OMC with loopback host ports; OMC-only Compose attaches to a fresh
@@ -59,6 +63,12 @@ match CPA's Darwin/Windows/Linux/FreeBSD amd64/arm64 coverage. They build the SP
 then cross-compile CGO-free Go with the same version injection and embedded IANA zone
 data. The extracted host Linux package is smoke-tested; foreign targets are build
 coverage, not claims of target-native execution. ADR 0066 records the asset contract.
+The release job also signs `release-manifest.json` (version, image repository and the
+pushed multi-platform digest) with the Ed25519 key in its `RELEASE_SIGNING_KEY` secret,
+after the native assets are verified and before anything is uploaded; the job fails when
+the key is absent or does not match `internal/updater/release_public_key.txt`, which is
+the key compiled into the binary. `scripts/release-workflow.mjs` holds that ordering and
+the secret's confinement to the release job as workflow invariants.
 `docs/releasing.md` records the maintainer workflow
 and ADR 0056 the publication ordering and immutable version identity.
 
@@ -95,6 +105,7 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/domain` | Durable entities (`CPAInstance`, resources) | — |
 | `internal/crypto` | AES-GCM envelope for secrets at rest | — |
 | `internal/iconasset` | Static image validation, bounded decoding, MIME verification and XML-allowlisted SVG reconstruction | — |
+| `internal/fontasset` | Font container recognition by signature, weight/style/family description from `OS/2`, `fvar` and `name`, and the Google Fonts installer (stylesheet parsing, host-confined slice download) | — |
 | `internal/security` | Redaction, keyed-HMAC fingerprints, display masks | — |
 | `internal/applog` | The OMC service log: an `slog` handler that tees every record the stderr handler accepts into a bounded, redacted in-memory ring the console reads | `security` |
 | `internal/auth` | Admin session cookie: sign, verify, rotate | — |
@@ -106,13 +117,14 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/cpa/gateway` | Fixed-endpoint CPA client for the Playground, Agent and Model Square: client-key auth, model directory, bounded SSE lines, and complete tool-call assembly for the Agent loop | — |
 | `internal/cpa/discovery` | Normalize CPA resources into the local identity model | `management`, `crypto`, `domain`, `security` |
 | `internal/cpa/configyaml` | The masked configuration view and per-value secret restoration, v8 file detection, and the plugin-system settings edit | — |
-| `internal/repository` | SQLite schema, migrations, queries, transactional invariants | `iconasset`, `crypto`, `domain`, `pricing`, `quota`, `security`, `usage` |
+| `internal/repository` | SQLite schema, migrations, queries, transactional invariants | `iconasset`, `fontasset`, `crypto`, `domain`, `pricing`, `quota`, `security`, `usage` |
 | `internal/usage/ingest` | Collector loop, decode processor, usage-fact fold, passive-observation backfill and data-lifecycle maintenance | `repository`, `management`, `security`, `usage` |
-| `internal/quota` | Per-provider quota probes, normalization, the passive response-header parser, the active-observation projection, and the per-account refresh scheduler with its 429 backoff | `management`, `security`, `usage` |
+| `internal/quota` | Per-provider quota probes, normalization, balance and warmup evidence, the passive response-header parser, the active-observation projection, and the per-account refresh scheduler with its 429 backoff | `management`, `security`, `usage` |
 | `internal/automation` | Account-level auto-management: the pure weekly-exhaustion decision, the persisted plan and retry schedule, and the background pass that disables and enables a credential through the shared operations write path | `repository`, `security` |
 | `internal/ollama` | Ollama quota monitoring: the fixed-settings-page scraper, the cookie decrypt seam, the persisted safe snapshot and the collection loop | `quota` |
 | `internal/feishu` | The Feishu notification bot: the read-only report DTO, the denoise policy, the card renderer, the sender/source seams, the dedup store and the module lifecycle (long connection plus classification loop) | — |
 | `internal/release` | Published-version observation: version comparison, the release feed client, the stored index, and the project's star count for the header link | `repository` |
+| `internal/updater` | The updater role of the binary (`oh-my-cpa updater serve\|install\|healthcheck`, ADR 0099): a Docker Engine API client over the unix socket, container replacement with rollback, signed-manifest verification, the two-request control service, the one-command installer, and the client the console uses to reach it | `release` |
 | `internal/demo` | The publication fixture: an in-process CPA stand-in, the seeded history, and the capture state the console renders | `domain`, `pricing`, `quota`, `repository`, `security`, `usage`, `usage/ingest` |
 | `internal/capability` | Agent capability declarations, JSON Schema validation, permission/risk rules, pending-operation store, executor audit | `repository`, `crypto` |
 | `internal/operations` | Shared management operations (usage analysis, requests, providers, OAuth, quota, keys, config, pricing, system, model directory) used by both console handlers and capabilities | `capability`, `cpa/management`, `cpa/gateway`, `modelcatalog`, `pricing`, `quota`, `repository` |
@@ -202,7 +214,22 @@ HTML/CSS/JavaScript references and runtime fetch, Request, XMLHttpRequest and Ev
 requests are rebased for the same surfaces. Rebased Request bodies are buffered before
 fetching so reconstructing a Request does not turn a JSON body into an HTTP/1-incompatible
 streaming upload; method, headers, overrides and cancellation signal are retained.
-External origins and already-hosted URLs remain unchanged. The same-origin frame operates with the signed-in operator's authority; installation
+Same-origin requests to these host surfaces carry the console session even when a plugin
+uses `credentials: 'omit'`; explicit management and client Authorization headers retain
+their existing, separate validation rules. This includes statically rebased and already-hosted
+URLs; external origins and unrelated paths keep their original credential mode.
+`management_plugin_host_shim.js` is embedded in the Go binary and tested directly in Node.
+Executable inline and external JavaScript is parsed with `tdewolff/parse`: direct
+`location.pathname` access (also through global `window`, `self`, `globalThis` or `document`)
+uses a live CPA-native resource-path view. The pathname adapter replaces only the
+matched property token with the equal-width `_omcPath` accessor on the native Location;
+all other script bytes, comments and source-map coordinates are preserved by that step.
+The actual frame URL stays under the console
+mount; native resource URLs passed to history push/replace are rebased too, so removing
+a query-string key keeps relative assets, reloads and scoped session cookies working. Locally bound
+objects, string/regex literals and non-executable script data are not pathname-rewritten.
+Scripts needing adaptation must parse successfully; refusal returns `502` with
+`code: plugin_adaptation_refused` and does not expose parser source snippets. The same-origin frame operates with the signed-in operator's authority; installation
 is the trust decision. Demo refuses the entire host. No model inference or arbitrary-target
 bridge is provided by this route tree.
 
@@ -822,12 +849,20 @@ global OAuth exclusions share a separate Model Rules Drawer, with independent
 section drafts; switching provider or closing cannot discard an unsaved section
 without a guard. Its names and brand marks match the provider filter tabs. `CredentialQuotaBody` is the single quota renderer used by the
 workspace and its detail panel. The list always renders a compact quota summary;
-the Quota tab always renders the full quota body. Configuration and Models are
-separate tabs with query eligibility bound to the selected tab. The configuration
+the Quota tab always renders the full quota body. Codex and Claude credentials expose
+a separate Window warmup tab for rules, status and confirmed manual runs. Warmup drafts
+survive tab switches. Configuration and Models are separate tabs with query eligibility
+bound to the selected tab. The configuration
 form remains mounted so drafts survive tab switches; its dirty-close guard applies
 to the entire Drawer. Credential identity includes the auth index when resetting
 form sessions and caching models. Historical density URL values and preference
 fields remain readable compatibility data, but do not change the overview layout.
+`oauth_management_view_v1` stores page size, status, quota condition and sort order.
+Explicit URL dimensions override the saved defaults without persisting navigation;
+editing a control saves the effective view and resets pagination. Reset filters
+persists the default status, quota and sort while preserving page size. If the
+preference read fails, the controls remain usable through URL state; saves stay
+disabled until the stored document has been read successfully.
 
 A quota refresh reports its outcome once, as a toast, so it never pushes the
 credential list down (ADR 0045). A run without a failing target - including one
@@ -923,17 +958,17 @@ Query for server state.
 | `api/client.ts` | The one typed HTTP client and the shared session/error plumbing; every ordinary endpoint is declared here. The Playground's `pages/playground/api.ts` and the Agent's `agent/transport.ts` wrap `requestResponse` and `agent/sse.ts` for their SSE routes, without duplicating auth or retry policy |
 | `agent/` | The Agent's framework-free run layer (ADR 0041): AG-UI request building and event parsing (`protocol.ts`), the chunk-safe SSE reader the Playground shares (`sse.ts`), the transport, the run reducer, the wire types and the canvas document and kit (`canvasDocument.ts`, `canvasKit.ts`) and the browser-side exports (`export.ts`: file names; `conversationSnapshot.ts`, `conversationHtml.ts`, `conversationStyles.ts`, `conversationControls.ts` and `conversationDownload.ts`: the portable conversation page and image) |
 | `types/` | Wire types, including the request-record view model split by responsibility (`usageEventQuery.ts` for the URL and filter contract, `usageEventViewPreference.ts` for the stored view, `usageEventIdentity.ts` for the credential and provider behind a row, `usageEventGrouping.ts` for how records bucket, `usageEventLabels.ts` for what a row prints, `usageEventMetrics.ts` for its numbers and `usageEventCadence.ts` for the page's timing constants), `usageEventViewActions.ts` (the view's URL and persistence rewrites), `pluginOAuthProviders.ts` (which logo an installed plugin publishes for the auth provider it registers, and whether a URL may be rendered as an image at all), `tokenDisplay.ts` (the one layer every user-facing token number is formatted through) and `rollingNumber.ts` (the animated shape of a reading) |
-| `hooks/` | `usePreference`, `useProgressTask` (counts a component's lifetime, such as a Suspense fallback's, as loading-bar work), `useCustomIcons` (shared revisioned custom-icon metadata), `useLastIntentQueue` (React binding) over `lastIntentQueue` (the framework-free controller) and `disposableSlot` (effect-scoped resource lifetime), `useLogTail` (CPA's gateway tail, positioned by CPA's cursor), `useServiceLogTail` (the service log, positioned by its sequence number), `useVisibleNow`, `useIsNarrowViewport` (900px, the shell), `useIsPhoneViewport` (640px, lists and control sizes), `useVisibleViewport` (effect-owned usable-viewport bounds; pure policy in `types/visibleViewport.ts`), `useFocusedRegion` (in-place workspace isolation and focus cleanup), `useOverlayHistory` (React binding) over `overlayHistory` (the framework-free overlay/history policy: one sentinel per open Drawer or Modal, so the platform's Back dismisses the topmost one), `usePluginOAuthLogos` (the plugin list read once, projected to provider-key logos), `usePrefersReducedMotion` (the app-owned reduced-motion switch the canvas marks need, since neither `@antv/g2` nor `@ant-design/plots` reads the preference) |
+| `hooks/` | `usePreference`, `useProgressTask` (counts a component's lifetime, such as a Suspense fallback's, as loading-bar work), `useCustomIcons` (shared revisioned custom-icon metadata), `useLastIntentQueue` (React binding) over `lastIntentQueue` (the framework-free controller) and `disposableSlot` (effect-scoped resource lifetime), `useLogTail` (CPA's gateway tail, positioned by CPA's cursor), `useServiceLogTail` (the service log, positioned by its sequence number), `useVisibleNow`, `useLiveRevision` (binds the shared live usage channel in `api/usageLive.ts` to a query revision, §6 "The live change signal"), `useIsNarrowViewport` (900px, the shell), `useIsPhoneViewport` (640px, lists and control sizes), `useVisibleViewport` (effect-owned usable-viewport bounds; pure policy in `types/visibleViewport.ts`), `useFocusedRegion` (in-place workspace isolation and focus cleanup), `useOverlayHistory` (React binding) over `overlayHistory` (the framework-free overlay/history policy: one sentinel per open Drawer or Modal, so the platform's Back dismisses the topmost one), `usePluginOAuthLogos` (the plugin list read once, projected to provider-key logos), `usePrefersReducedMotion` (the app-owned reduced-motion switch the canvas marks need, since neither `@antv/g2` nor `@ant-design/plots` reads the preference) |
 | `i18n/` | `index.tsx` owns the base `[zh, en]` dictionary and the `t()` context; `language.ts` is the reading-language registry and locale helpers; `locales/zh-Hant.ts` and `locales/ms.ts` are the complete additional catalogs |
 | `theme/` | `palette.ts` (the nine authored tokens, the seventeen-token derivation, the registered palettes and the resolution of a mode plus a selection into a palette), `themePreference.ts` (the stored preference document, its parse and its migration from the earlier bare palette id), `ThemeContext.tsx` (the preference, the system follow, the in-progress edit, and the server sync), `themeConfig.ts` (antd tokens and CSS-variable projection), `colorMath.ts` (OKLCH mixing, luminance and contrast - the one authority for every ratio in the console), `cacheScale.ts` and `heatmapRamp.ts` (the two sequential ramps' stops) |
 | `utils/` | `scrollSmoothing.ts` (the console-wide wheel and keyboard glide, ADR 0046: discrete wheel notches and scrolling keys glide over the `scroll` token, virtualized lists are driven through their own wheel handling and get a glide's first step inside the input event, so the glide adds no latency to their own jump (ADR 0047), trackpads and touch are never glided; loaded on demand by `hooks/useScrollSmoothing.ts` and switched by the `omc_scroll_smoothing` preference, whose words live in `scrollSmoothingPreference.ts` so the engine stays out of the main entry), `maskKey.ts` (the console's one caller-key mask shape, kept branch for branch with the server's `security.MaskSecret`), `externalUrl.ts` (the http/https link rule), `modelOptions.ts` (model-input filtering), `smoothScroll.ts` (the gesture/correction scroll schedule), `clipboard.ts` (the one copy path, below), `download.ts` (`saveBlob`, the one download path: it attaches the anchor and releases the object URL on a delay, because revoking it in the click's own task cancels the save in Firefox and Safari), `format.ts` (`formatBytes`), `loadProgress.ts` (the loading bar's pure, clock-injected model: batches, settled and pending credit, the show delay and the never-backwards smoothing), `progressController.ts` (the injected clock, scheduling and hidden/reduced-motion lifecycle) and `progressTasks.ts` (the module-level registry of non-query work in flight, and the source shape the bar reads) |
-| `components/common/` | What more than one page renders: the shared primitives a page composes instead of an antd component - `AppDrawer` (every side panel: three widths, named close, two-slot footer), `SearchInput` (every filter-as-you-type field), `EmptyState` (every empty region), `SectionHeading` (every section head, three weights), `Tag` and `ToggleTag` (a short fact about a row, five tones), `ConfirmAction` (a confirmation anchored to its trigger), `SelectionBar` (the actions on ticked rows), `Toolbar` (the row above a list), `Panel` (the framed surface), `FactList` (a label/value list), `Pager` (page navigation), `Meter` (a reading on a track), `Count` (a row count beside its label) and `CopyButton`; the shell (`AppLayout`, `HeaderNav`, `AuthGate`, `PreferenceMenus`, and `HeaderAction`, the one control every header and sign-in action is built from); the page chrome every route opens with - `PageHeader` (title, subtitle or live summary, desktop `actions` and explicit `mobileActions`), `ActionMenu` (click-open secondary tools, focus and overlay history), `FilterDisclosure` (phone-only extra filters with selected-state summary), `timeRange/TimeRangePicker` (the one window picker the dashboard and the request list both adapt: presets first and an inline range calendar one level down, in a popover or a bottom sheet; its rules are `timeRange/rangeDraft.ts`), `RefreshButton` (the one refresh glyph and size, spinning rather than locking while a read is in flight), `PanelTitle` (a card's glyph, title and its one control), `StatusLabel` (a state as pip + word), `Switch` (the one on/off control, a native `role="switch"` button with the console's own drawing; `pnpm check:feedback` refuses antd's), `FactList` (label/value rows), `StatTiles` (counted tiles that double as a list's filter), the loading feedback (ADRs 0052 and 0054: `ProgressBar` draws rough task progress from `utils/loadProgress.ts` through `utils/progressController.ts`, with an independent CSS waiting-activity segment, `DataProgress` feeds it the non-silent queries and `utils/progressTasks.ts`; `Placeholder.tsx` holds the eager shell/sign-in kit, while `ContentPlaceholder.tsx` keeps paragraph/table compositions behind route imports; `utils/progressSources.ts` merges sources only for the loaded shell; the kit is composed by `PageLoading`, `RouteLoading`, `SuspenseFallback` and the shell's `ShellLoading`), `CodeFrame` with `CopyButton` (a code block and its copy action, shared by the transcripts and the setup snippets); `SecretInput` (a secret that is not the console login, masked by style so the browser's password manager leaves it alone); and the list a surface renders at both widths - `ResponsiveList.tsx` (table on a wide viewport, rows below 640px, with loading-before-empty, blocked-is-not-empty and clamped paging decided once) over `PhoneRow.tsx` (headline, summary, labelled fields, controls) and `phoneRowFields.ts` (derives a row's fields, and one column's rendered cell, from the *table's own* column array, so a list has one description of a record at both widths and a column cannot silently disappear on a phone; see ADR 0012) |
+| `components/common/` | What more than one page renders: the shared primitives a page composes instead of an antd component - `AppDrawer` (every side panel: three widths, named close, two-slot footer), `SearchInput` (every filter-as-you-type field), `EmptyState` (every empty region), `SectionHeading` (every section head, three weights), `Tag` and `ToggleTag` (a short fact about a row, five tones), `ConfirmAction` (a confirmation anchored to its trigger), `SelectionBar` (the actions on ticked rows), `Toolbar` (the row above a list), `Panel` (the framed surface), `FactList` (a label/value list), `Pager` (page navigation), `Meter` (a reading on a track), `Count` (a row count beside its label) and `CopyButton`; the shell (`AppLayout`, `HeaderNav`, `AuthGate`, `PreferenceMenus`, and `HeaderAction`, the one control every header and sign-in action is built from); the page chrome every route opens with - `PageHeader` (title, subtitle or live summary, desktop `actions` and explicit `mobileActions`), `ActionMenu` (click-open secondary tools, focus and overlay history), `FilterDisclosure` (phone-only extra filters with selected-state summary), `timeRange/TimeRangePicker` (the one window picker the dashboard and the request list both adapt: presets first and an inline range calendar one level down, in a popover or a bottom sheet; its rules are `timeRange/rangeDraft.ts`), `RefreshButton` (the one refresh glyph and size, spinning rather than locking while a read is in flight), `PanelTitle` (a card's glyph, title and its one control), `StatusLabel` (a state as pip + word), `Switch` (the one on/off control, a native `role="switch"` button with the console's own drawing; `pnpm check:feedback` refuses antd's), `FactList` (label/value rows), `StatTiles` (counted tiles that double as a list's filter), the loading feedback (ADRs 0052 and 0054: `ProgressBar` draws rough task progress from `utils/loadProgress.ts` through `utils/progressController.ts`, with an independent CSS waiting-activity segment, `DataProgress` feeds it the reads the reader waits on (`isQueryProgressWork`) and `utils/progressTasks.ts`; `Placeholder.tsx` holds the eager shell/sign-in kit, while `ContentPlaceholder.tsx` keeps paragraph/table compositions behind route imports; `utils/progressSources.ts` classifies query reads and merges sources only for the loaded shell; the kit is composed by `PageLoading`, `RouteLoading`, `SuspenseFallback` and the shell's `ShellLoading`), `CodeFrame` with `CopyButton` (a code block and its copy action, shared by the transcripts and the setup snippets); `SecretInput` (a secret that is not the console login, masked by style so the browser's password manager leaves it alone); and the list a surface renders at both widths - `ResponsiveList.tsx` (table on a wide viewport, rows below 640px, with loading-before-empty, blocked-is-not-empty and clamped paging decided once) over `PhoneRow.tsx` (headline, summary, labelled fields, controls) and `phoneRowFields.ts` (derives a row's fields, and one column's rendered cell, from the *table's own* column array, so a list has one description of a record at both widths and a column cannot silently disappear on a phone; see ADR 0012) |
 | `components/workspace/` | The conversation workspace the Playground and the Agent share: `WorkspaceLayout` (the Playground's frame: head with title and actions; main column; resizable side panel that becomes a Back-aware Drawer below 900px), `useResizablePanel` (pointer and keyboard resizing that writes the width to the DOM during a drag and commits it once), `AssistantThread` (assistant-ui's thread viewport: follows the newest message while the reader is at the bottom, holds their place once they scroll away, and offers "back to latest" only then), `AssistantComposer` (assistant-ui's composer with Ant Design controls: attachments, the queue of messages sent during a run, the `/` command and `@` mention lists a page may hand it, recall of sent messages with Up, and Enter and the send button both asking the runtime to send, because the framework's own send controls decide from state that reaches them a task after the page changed it), `ContextReadout` (the share of the model's reference context window a conversation occupies, from `contextShare.ts`), `ModelMarkdown` (safe `@ant-design/x-markdown` rendering with allowlisted code highlighting inside the shared `CodeFrame`), `ReasoningBlock` (a collapsible reasoning disclosure that follows its newest output while it streams and folds when the stream ends), `ReasoningEffortPicker`, `ComposerPicker` (the one keyboard-navigated list behind the composer's `/` commands and `@` mentions, navigated by `pickerNavigation.ts`), `TargetChip` (the composer's target as a chip), `EndpointPicker` (the inference endpoint as a chip, ADR 0088), `ModelMark` (a call point's maker's mark), and `GenerationLoader` (the waiting figure a run in flight shows). The side panel is the Playground's: its parameters beside its request debug view. The Agent has its own shell (ADR 0076), opens a call's details under the call (ADR 0084), and keeps its capability directory and connection guide in a Drawer |
 | `components/feedback/` | Every notification and failure surface (ADR 0045): `useToast` (an action's outcome, including report toasts with per-target reasons), `LoadFailure` (a region's failed read, in its place, with Retry) and `Notice` (a condition, or a refusal beside its input; drawn by the module itself as a callout headed by an untranslated tone code, without antd's `Alert`). `toastContent.ts` holds the pure parts - `readableReason`, grouping, lifetimes. `pnpm check:feedback` keeps raw antd `Alert`, `message`, `notification` and information-only dialogs out of the rest of `web/src` |
 | `components/logs/` | The Logs page's two sources: `CpaLogPanel` (the gateway tail and error files), `ServiceLogPanel` (the service log), and `LogList`, the scrolling tail both render into - it follows the newest line until the reader scrolls away and mounts only the newest chunk. `CpaLogPanel` renders into a host element it moves to the document body for its fullscreen viewer, because a routed page sits inside a transformed container that would confine `position: fixed`. Wire types and pure helpers (line parsing, the filters and their per-value counts) live in `types/logs.ts` |
 | `components/audit/` | The audit page's `AuditTrail`: the page head with refresh and export, the outcome tiles (`StatTiles`, each count a filter), the search, category and range filters, and the trail as one `ResponsiveList` frame per day (on a phone, one tappable row per entry: the sentence and its outcome over its time and target); `AuditEventDrawer` shows one entry in full and steps to its neighbours; `auditText.ts` turns an action and a result into the sentence and word a reader sees. Wire types, URL state and facet counting live in `types/audit.ts` |
 | `components/plugins/` | The plugin management page's three tabs: `InstalledPluginsPanel` (each plugin's state in words - running, enabled but not running, disabled - its switch, direct settings action and an overflow menu for safe external links and confirmed removal), `PluginStorePanel` (the store as cards with the registry's icon, author, tags, repository and homepage links, and the install dialog that asks a third-party install for the typed plugin id), `PluginSettingsPanel` (the plugin system switch, the third-party registries and the store authentication rules) and `PluginConfigDrawer` (a plugin's declared fields as typed controls, with the JSON view of the same document). The pure rules sit beside them: `pluginConfigForm.ts` (draft to document, per-field validation, undeclared keys and CPA's `store` install record carried through), `pluginConfig.ts` (JSON parsing that refuses a duplicate key) and `pluginStoreLogic.ts` (store filters and the settings draft's validation). `pluginRuntime.ts` waits for the gateway to load or unload a switched plugin. `pages/PluginsPage.tsx` owns the tab, which is the path (`/plugins`, `/plugins/store`, `/plugins/settings`), and reads the store only once its tab is opened. `pluginPages.ts` turns the plugin list into the pages plugins registered; `AppLayout` lists them in the navigation's Plugins group, reading the plugin list once per shell, and `pages/PluginPageHost.tsx` shows one at `/plugin-pages/<id>/<n>` in a frame on the plugin host, inside a console-written parent document that states the colour mode as `data-theme` (ADR 0060) |
-| `components/`, `pages/` | Feature UI; one page per route, no page owns another. A page composes its surface rather than carrying it: `pages/UsageEventsPage.tsx` renders `components/usage/`'s toolbar, header and rows and takes its state from that directory's hooks; each of those components imports the stylesheet that draws it (`RequestList.css` for the rows and their header, `RequestToolbar.css`, `RequestFilterChips.css`, `RequestFoldControls.css`, `RequestExportDialog.css`, `UsageEventDrawer.css`, `RequestFailureDetail.css`, and `requestMarks.css` for the marks the list and the detail share), so `pages/UsageEventsPage.css` holds only the page's own layout. The dashboard, the configuration panel, key management and the log viewer do the same with one stylesheet per directory (`components/dashboard/dashboard.css`, `components/config/config.css`, `components/keys/keys.css`, `components/logs/logs.css`), which leaves `web/src/index.css` the tokens, the Ant Design overrides, the shell, the shared primitives and the classes more than one surface uses; `pages/ProvidersPage.tsx` renders `components/providers/`'s table and editor, and `pages/ConfigPage.tsx` renders `components/config/`'s renderers. The framework-free policies of a surface stay beside it: `components/usage/` carries `searchDebounce.ts`, `pollingPolicy.ts`, `timeRangePolicy.ts`, `syncPresentation.ts`, `chipDisplay.ts` `requestListTouch.ts` (the request list under a finger: it follows the finger, coasts and folds the header, in place of the virtualizer's touch emulation, ADR 0048) and the export of selected requests (`requestSelection.ts` decides the selection and what a redaction withholds, `requestSheetModel.ts` lays the image out as data, `requestExportJson.ts` builds the JSON document, and only `requestSheetPainter.ts` touches a canvas - so what an export can contain is asserted without a browser), and `components/config/` carries `payloadRules.ts`, `configDirty.ts` and `configPatch.ts` |
+| `components/`, `pages/` | Feature UI; one page per route, no page owns another. A page composes its surface rather than carrying it: `pages/UsageEventsPage.tsx` renders `components/usage/`'s toolbar, header and rows and takes its state from that directory's hooks; each of those components imports the stylesheet that draws it (`RequestList.css` for the rows and their header, `RequestToolbar.css`, `RequestFilterChips.css`, `RequestFoldControls.css`, `RequestExportDialog.css`, `UsageEventDrawer.css`, `RequestFailureDetail.css`, and `requestMarks.css` for the marks the list and the detail share), so `pages/UsageEventsPage.css` holds only the page's own layout. The dashboard, the configuration panel, key management and the log viewer do the same with one stylesheet per directory (`components/dashboard/dashboard.css`, `components/config/config.css`, `components/keys/keys.css`, `components/logs/logs.css`), which leaves `web/src/index.css` the tokens, the Ant Design overrides, the shell, the shared primitives and the classes more than one surface uses; `pages/ProvidersPage.tsx` renders `components/providers/`'s table and editor, and `pages/ConfigPage.tsx` renders `components/config/`'s renderers. The framework-free policies of a surface stay beside it: `components/usage/` carries `searchDebounce.ts`, `pollingPolicy.ts`, and `components/dashboard/routing/` carries `routingPackets.ts` (the imperative packet player, §7 rule 9 in `docs/design.md`), `usePresence.ts` and `rowMotion.ts` (rows entering, leaving and sliding on the map) beside the routing model in `types/usageRouting.ts`; `timeRangePolicy.ts`, `syncPresentation.ts`, `chipDisplay.ts` `requestListTouch.ts` (the request list under a finger: it follows the finger, coasts and folds the header, in place of the virtualizer's touch emulation, ADR 0048) and the export of selected requests (`requestSelection.ts` decides the selection and what a redaction withholds, `requestSheetModel.ts` lays the image out as data, `requestExportJson.ts` builds the JSON document, and only `requestSheetPainter.ts` touches a canvas - so what an export can contain is asserted without a browser), and `components/config/` carries `payloadRules.ts`, `configDirty.ts` and `configPatch.ts` |
 
 OAuth workspace sorting constructs its numeric/base-sensitive name collator lazily
 within one sort invocation, resolving the runtime default locale afresh. Numeric
@@ -1067,8 +1102,9 @@ stylesheets and the inline `transition:` strings in components, and fails on a
 duration that is not a `--motion-*` token, a transition on a layout property (or
 on `all`), a keyframe animation with no `prefers-reduced-motion` counterpart, and
 a hover transitioning colour outside the fast token; the disclosures that need a
-layout animation are listed in its `EXCEPTIONS` table with a reason each, and a
-stale entry is itself a failure. The budget it enforces is stated in
+layout animation, and the routing map's lane flow that plays under reduced motion
+(ADR 0102), are listed in its `EXCEPTIONS` table with a reason each, and a stale
+entry is itself a failure. The budget it enforces is stated in
 `docs/design.md` §7, and the reasoning behind the hover bound is ADR 0009.
 
 The type and radius scales are held the same way. `pnpm check:style-tokens` reads
@@ -1076,6 +1112,18 @@ every stylesheet and fails on a font size that the scale owns but is written as 
 number, a fractional font size, a 2–4px corner written as a number, and a
 `--text-*` or `--radius-*` reference that no stylesheet defines or that carries a
 fallback (`docs/design.md` §3 and §4).
+
+The console font ships complete (ADR 0094). `web/src/assets/fonts/sarasa/` holds Sarasa
+Mono SC cut into `unicode-range` shards by `pnpm subset-font` (`scripts/subset-font.mjs`,
+with the pure planning in `scripts/font-shards.mjs`), plus `manifest.json`, `core.css` and
+`shardUrls.ts` (one static `?url` import per shard, so built modules hold only hashed URLs).
+`index.css` imports `core.css`, which declares only shard 000 of each weight, so startup
+waits for one file per weight. At startup `main.tsx` also starts an asynchronous import of
+`web/src/theme/sarasaFont.ts`, which registers every other shard through the `FontFace`
+API; a browser fetches one only when a page draws a character it holds. Exports embed the
+shards their text draws through the same module (`shardsForText` in
+`web/src/theme/fontShards.ts`). `scripts/font-shards.test.mjs` holds the committed shards,
+manifest, core stylesheet and URL module to each other.
 
 
 ### Route error recovery
@@ -1311,7 +1359,8 @@ CPA queue / subscription
                          rolls request records and decoded payloads out
   → /management/dashboard, /management/dashboard/tail,
     /management/dashboard/token-heatmap, /management/dashboard/models,
-    /management/dashboard/providers, /usage/events
+    /management/dashboard/providers, /usage/events, /usage/routing
+  → ingest.Changes       "stored data changed" → GET /usage/live (SSE)
 ```
 
 The pipeline exists because CPA's queue is destructive and short-lived: the only
@@ -1337,6 +1386,69 @@ RESP `LPOP`, and an unreachable RESP endpoint degrades to the HTTP usage queue
 4s → 8s → 10s, then capped) while a full batch drains with no delay. A wrong
 management key triggers a long cooldown instead of retrying, because CPA bans a
 client IP after repeated failures.
+
+### The live change signal
+
+A page that shows request records learns that one was stored from a signal, not
+from a cadence. The path from CPA to the screen has no fixed wait in it:
+
+- In `subscribe` mode the runner writes a pushed record to `usage_inboxes` as soon
+  as the subscription buffer is empty, rather than on the flush tick. A record
+  received from the destructive channel exists nowhere else, so the write carries
+  no deadline while the collector runs; only a shutdown starts the final-flush
+  timeout that bounds it.
+- The runner's capture handlers wake the decode processor, which otherwise idles on
+  its interval, and the processor publishes to `ingest.Changes` after each commit
+  that stored an event. Error events are read as they arrive, not on the flush
+  tick, and each capture publishes too, since a cooldown changes what the routing
+  panel draws.
+- `ingest.Changes` is a coalescing hub: each subscriber holds a one-slot channel and
+  a publish never blocks, so a burst of commits becomes one pending signal per
+  reader and a slow reader cannot stall the decoder. Readers are capped at
+  `MAX_CHANGE_SUBSCRIBERS`; past it `/usage/live` answers 503.
+- `GET /usage/live` is a server-sent event stream that carries no data: `ready` on
+  connect, `usage` when something changed (at most one per 250 ms), and a comment
+  heartbeat every 20 s. It ends after five minutes so a session that signed out
+  cannot keep a stream; the browser reconnects and the reconnect re-authenticates.
+  Without a collector (ingestion off, demonstration mode) it answers 204; the public
+  demonstration's Worker streams signals for its simulated traffic instead.
+- In the browser, `web/src/api/usageLive.ts` opens one stream per tab, shared by
+  every reader, closes it while the tab is hidden, and retries a 204 or 503 itself
+  after 30 s because EventSource does not. `useLiveRevision` turns signals into a
+  revision a query keys on, holding a signal that arrives during a read so it costs
+  exactly one follow-up read. Every reader treats `ready` as a signal, so whatever
+  changed while it was disconnected is read on reconnect, and each reader keeps its
+  10 s poll for as long as no stream is open.
+
+A signal never carries rows: each reader re-reads with its own filters and cursor,
+so a merged or missed signal cannot lose a record.
+
+### Live routing
+
+`GET /usage/routing` answers the attempts of a rolling `USAGE_ROUTING_WINDOW` (one
+minute), entirely from request records: CPA writes one per attempt, so a record is a
+route a request took, and records sharing a `request_id` are one request CPA rerouted
+(counted once, and as an error a caller saw only when its last attempt failed). An
+attempt belongs to the minute it finished in (`timestamp_ms + latency_ms`). Without
+`after` the answer is the whole minute, newest first and capped at
+`MAX_ROUTING_RECORDS` (`has_more` says the cap was hit); with `after=<record id>` it is
+only what was recorded since. Credentials resting now come from the newest
+`error_events` row per auth index whose retry or recovery time is still ahead.
+Records are projected exactly as the request list projects them, so the dashboard's
+routing panel (`components/dashboard/routing/`) names models and credentials the way
+the list does.
+
+The panel holds the minute in the browser: it reads the whole minute once, then on
+each live usage signal reads after the newest record it holds, merges, and ages
+records out on a one-second clock aligned to the server's `as_of_ms`; an incremental
+read that hit the cap restarts the window from it. The model it draws
+(`types/usageRouting.ts`) groups attempts into requests, folds models and credentials
+past the drawn limit into a count, and reconciles rows into entering, present and
+exiting so a row can animate out before it is removed. Nothing is inferred from
+configuration, and nothing is drawn as in flight: a request travels the map once its
+record is stored. The trip and the row motion play for every reader, including one
+whose system reports `prefers-reduced-motion: reduce`, because the travel is the
+panel's reading; the exception is scoped in `docs/design.md` §7 rule 9 and ADR 0102.
 
 ### Manual sync versus background collection
 
@@ -1982,17 +2094,27 @@ openrouter.ai/api/v1/models ──▶ pricing_upstream_catalog (last complete do
                     pricing_model_links;
                     custom rows win)
 operator ──▶ pricing_channels ──triggers──▶ pricing_channel_versions (immutable)
+operator ──▶ channel_model_prices ──triggers──▶ model_price_versions (channel-scoped)
 ```
 
 `usage_events` stores, in the event's own insert transaction and by the request
 timestamp, the price version id, the channel version id (absent means 1×), the
 index of the tier the request qualified for, and integer USD nanos computed by
-`pricing.Quote`. Historical totals never join the mutable tables, so a later edit
+`pricing.Quote`. The tier is selected on the request's billed service tier (the
+reported response tier, else the requested one), which is re-derived from the
+event's own immutable tier columns when the breakdown is explained. Historical totals never join the mutable tables, so a later edit
 cannot rewrite an invoice. A request with no effective price version is stored
 with pricing status `unpriced` (`legacy_unpriced` for rows that predate migration
 019), cost absent, and is never backfilled. The request detail recomputes a
 breakdown from the locked versions for display; the stored amount stays
 authoritative.
+
+Migration 048 adds optional custom prices keyed by the recorded CPA channel and
+upstream model (ADR 0101). Request locking first resolves that scope's history;
+an absent or tombstoned override selects the shared model history. The existing
+channel multiplier still applies. Shared histories use an empty channel, so old
+version ids and locked amounts remain unchanged. The editor carries the channel
+separately from the model and validates writes against provider membership.
 
 A sync downloads outside the write lock, then re-reads prices and pins under it,
 so an operator's pin set during the download is honoured. Catalog reconciliation
@@ -2005,9 +2127,9 @@ price editor in place (`web/src/components/pricing/`).
 `internal/quota` calls CPA's `/api-call` with the credential under observation to
 reach the provider's own usage endpoint. Targets are restricted to
 `AllowedURLPrefixes` — a compile-time allowlist of official HTTPS endpoints — and
-the resulting snapshot is normalized and stored in `quota_snapshots`. This is the
-only place Oh My CPA uses CPA as a request proxy, and it is server-initiated:
-there is no user-supplied URL or generic `/api-call` surface.
+the resulting snapshot is normalized and stored in `quota_snapshots`. Quota observations
+and the fixed credential warmup adapters are the only server-initiated CPA request
+proxies (ADR 0097): there is no user-supplied URL or generic `/api-call` surface.
 
 Beside that refresh path, the rate-limit headers an upstream already publishes on every
 response are read without any probe. `internal/quota/passive.go` parses them, and
@@ -2021,7 +2143,7 @@ maintenance loop backfills retained request records through a `quota_observation
 `TABLE_LIFECYCLES`, independent of request-record retention. At read time, a standard five-hour
 or weekly window with a newer passive observation is shown from that reading, marked with its
 instant and source, while the capacity estimate stays on the snapshot. `quota_snapshots` remains
-the current normalized reading; `quota_observations` is append-only history (ADR 0094, ADR 0095).
+the current normalized reading; `quota_observations` is append-only history (ADR 0103, ADR 0104).
 
 Kimi international credentials use the single allowlisted
 `https://api.kimi.ai/coding/v1/usages` endpoint rather than the domestic Kimi host.
@@ -2122,6 +2244,30 @@ storage, and joins operate on a copied slice. Late-ingested events inside an obs
 range therefore revise both current estimates and historical references on the next
 read. Reset detection is limited to observed/retained evidence, not a complete upstream
 lifecycle. There are no new tables, migrations or routing inputs (ADR 0058 and ADR 0059).
+
+Readings are also refreshed in the background. `OMCPA_QUOTA_SCHEDULER_MODE=interval`
+is the default and selects ADR 0094's `Handler.RunQuotaAutoRefresh`; `adaptive` selects
+ADR 0104's per-account `quota.Scheduler`. Exactly one loop runs, and neither runs in demo
+mode. The interval loop in `internal/api/quota_auto_refresh.go` wakes every minute, reads the
+`omc_quota_auto_refresh` preference, lists the credentials and their latest snapshots,
+and asks `quota.AutoRefreshTrigger` (`internal/quota/auto_refresh.go`) which are due: a
+reset-driven read once a stored window's `reset_at_ms` plus a one-minute grace has
+passed the observation (a failed one is retried every ten minutes during the following
+hour), and a scheduled read once the newer of the observation and the process's last
+attempt is `interval_minutes` old, less a thirty-second slack for the observation being
+stamped after its tick. Due credentials - reset-driven first,
+then oldest reading first, at most sixteen per round and four at a time - go through
+`RefreshCredentialQuota` and `persistNormalizedQuotaSnapshot`, exactly as a manual
+refresh does. Attempts are remembered in process memory because a failed read is not
+persisted, and a round failure is logged when it starts or changes rather than every
+minute. `app.Run` joins the loop before returning, as it does the pipeline. Disabled credentials, providers without a probe, duplicated `auth_index`
+claims and Meta (whose observation is an audited key exchange) are skipped. The
+preference API refuses any document for this key other than
+`{"interval_minutes": 0 | 5-1440, "refresh_on_reset": bool}` with
+`invalid_quota_auto_refresh`, and `internal/operations/quota_auto_refresh.go` registers
+`quota_auto_refresh_get` and `quota_auto_refresh_set` over the same preference. The OAuth
+management workspace polls the stored overview every minute, as the dashboard's
+Credential Quota panel already does, so a background reading appears on an open page.
 
 Codex reset-credit redemption is offered in the credential Drawer's Quota tab and never
 from a list row, because it spends an irreversible entitlement; it is offered whenever the
@@ -2262,11 +2408,12 @@ demo never opens the connection.
 | Instances & identity | `cpa_instances`, `discovered_resources`, `resource_overrides`, `connections`, `cpa_bindings` | Encrypted management key; bindings survive upstream removal. `connections` is provisioned by migration 006 for the Connection entity but no code reads or writes it yet — treat it as reserved, not as a live table |
 | Usage | `usage_inboxes`, `usage_events`, `error_events`, `ingest_gaps`, `usage_facts_15m`, `usage_facts_daily`, `usage_aggregation_checkpoints`, `data_lifecycle_state` | Milliseconds; raw payloads encrypted, and stored once: with a cipher configured `raw_message` is empty and only the ciphertext is kept. Migration 035 replaces the hourly and daily overview rollups with the permanent usage facts and adds `data_lifecycle_state` (what each rolling policy has removed, and up to which instant). Every table declares its lifecycle in `TABLE_LIFECYCLES` (`internal/repository/lifecycle.go`). Migration 034 adds `usage_events.response_model` (the model the upstream reported serving, empty when unknown) and `model_substituted`, decided at ingestion by `usage.IsModelSubstituted`, with a partial index for the substituted rows; earlier rows stay unknown. Migration 037 adds `usage_events.fail_status_code` and `fail_body` (the status a failed request ended with and the upstream's redacted, bounded error body, from the `fail` block of CPA's usage record); `0` and empty mean unknown, and the list projection carries the status only. Migration 038 adds `usage_events.response_headers`, the filtered upstream header snapshot as a JSON object (`usage.FilterResponseHeaders` drops transport and credential-bearing headers and bounds the rest); only `GetUsageEvent` reads it. Migration 039 adds `usage_events.access_provider` and `is_native_key` (which access provider authenticated the caller and whether the caller's key is CPA's native configured key, from CPA's usage record); an empty `access_provider` means a gateway that predates them, while `is_native_key` is meaningful whenever a path is present, and only `GetUsageEvent` reads them |
 | Custom icons | `custom_icons` | Migration 032 adds durable sanitized image BLOBs, stable IDs and content revisions; confirmed deletion atomically clears matching provider overrides and deletes the asset |
+| Font library | `fonts`, `font_faces` | Migration 047: one row per installed family (`source` `google` or `upload`) and one per `@font-face` (weight range, style, `unicode-range`, container format, file BLOB, position). Faces cascade with their family; deletion clears the `omc_fonts` roles that used it in the same transaction. Both tables are hidden from `database_query` |
 | Pricing | `model_prices`, `model_price_versions`, `pricing_sync_state`, `pricing_model_catalog`, `pricing_catalog_state`, `pricing_model_links`, `pricing_upstream_catalog`, `pricing_channels`, `pricing_channel_versions`, `pricing_match_reviews` | Price and channel versions are append-only via triggers; migration 028 added tiers, links, the stored OpenRouter snapshot and channels, and `usage_events.channel_version_id`/`price_tier`. Migration 029 added `pricing_catalog_state.providers_json`; the pricing repository refuses to run before migration 29. Migration 031 added `pricing_match_reviews` (the OpenRouter model last answered for a custom or linked price); match-review reads and writes refuse to run before migration 31 |
 | Agent | `agent_documents` | Encrypted latest Agent session, capability operations and attached images (migrations 026 and 036). Sessions retain whole history until reset or explicit replacement, with no session size cap; images follow their references and are deleted only after a reset is persisted. Terminal operations are retained 7 days and purged lazily during Agent requests |
 | Operations | `audit_events`, `ui_preferences`, `quota_snapshots`, `schema_migrations` | Audit has no update or delete path — only `RecordAuditEvent` writes and read queries (`ListAuditEvents`, `QueryAuditEvents`) exist, and export itself is audited; the schema carries no enforcement trigger, so the guarantee lives in the repository API. Migration 027 adds `idx_audit_events_request_action`, which the trail's attempt folding looks up |
 | CPA configuration | `cpa_config_backups`, `cpa_config_backup_settings` | Encrypted copies of the stored CPA configuration file, kept before every configuration write (migration 030, ADR 0037; migration 033 adds each copy's `layout` and `reason` and the single-row retention table, ADR 0051). v8 copies are kept to the operator's retention (default 20, 5–100), pre-v8 copies to the latest ten; `cpa_config_backups` is hidden from `database_query` |
-| Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migration 043. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`); `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0096) |
+| Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migration 043. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`); `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
 | Ollama monitoring | `ollama_accounts` | Migration 044. One row per operator account: AES-GCM encrypted session cookie, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries the cookie |
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
 | Release observation | `release_index`, `release_check_state` | Migrations 024 and 025; `truncated` is added by 025, so a database that applied 024 before it existed still gains the column. `release_index` holds one row per published version (tag, name, publication time, prerelease flag) and is **replaced as a unit per product** by `PublishReleaseSnapshot`, because a feed that stops listing a withdrawn release must stop the console claiming it exists. `release_check_state` holds one row per product — the last attempt and success times, the redacted failure reason, the latest tag, the ETag and the truncation flag — and is written by `RecordReleaseCheckAttempt`/`PublishReleaseSnapshot`/`RecordReleaseCheckFailure`, read by `ListReleases` and `GetReleaseCheckState(ForRepository)`. A release's prose body is **never stored**: it lives in bounded process memory for the life of the process, so an index without notes still names the versions and links to the source (see §10) |
@@ -2285,11 +2432,13 @@ once for both the gateway's version header and its credential count), the plugin
 provider counts, and the database, collector, record-count and admission reads - so the page
 waits for its slowest read rather than for the sum of them.
 
-The management system surface is seven routes: `GET /management/system` (the page),
+The management system surface is nine routes: `GET /management/system` (the page),
 `GET /management/system/releases` (one product's merged change log), `GET
 /management/system/repository` (the project's star count for the header link), `GET
 /management/system/updates` (both products' stored version answers for the shell's update
-indicator), `POST
+indicator), `GET /management/system/updater` (whether this deployment can apply updates,
+per product, and the running or last update), `POST /management/system/updater/apply`
+(start one; see [Console updates](#console-updates-adr-0099)), `POST
 /management/system/check-updates` (a check, subject to the floor), `GET
 /management/system/maintenance` (the running or last job) and `POST
 /management/system/maintenance/{checkpoint,vacuum}`. The check answers `200` with the two
@@ -2300,7 +2449,9 @@ built without the corresponding service, which is how a deployment that does not
 surface behaves. The repository and updates routes are the exception, because the shell reads
 them on every page: they always answer `200`, the first with a null `stargazers_count`
 whenever no count is known and the second with both products `indeterminate` /
-`not_checked_yet` when there is no release service.
+`not_checked_yet` when there is no release service. The updater status route is the other
+exception: it answers `200` with `state: disabled` when no updater is wired, because a
+missing updater is a state of the deployment the page explains.
 
 The updates route never reads the feed. It reports what the sweep or the page's own check
 last stored, in the same per-product shape the page uses, so the shell can ask on every page
@@ -2325,6 +2476,15 @@ inside its transaction to sanitize historical rows. Rollback is forward-only:
 fix a defect with a new migration, never by editing `schema_migrations`
 (`docs/ops/sqlite-operations.md`).
 
+The fork occupies migrations 041–045. A schema 45 deployment keeps those tables
+and advances through 046 (credential warmup), 047 (font library), and 048 (channel
+model prices). The migration backup is created and smoke-tested before 046; each
+subsequent migration commits separately. A failed migration stops startup, and
+restoring an older executable requires restoring the matching pre-upgrade database
+backup. The repository's synthetic upgrade test checks both sets of tables, a
+pre-existing fork row, and the gap-free 041–048 upgrade sequence without duplicate
+versions. Versions 010–014 were never part of this repository's migration history.
+
 ## 10. Background loops
 
 | Loop | Owner | Failure behaviour |
@@ -2332,8 +2492,8 @@ fix a defect with a new migration, never by editing `schema_migrations`
 | HTTP server | `app.Run` | Fatal; shutdown drains 10s |
 | Usage pipeline | `app.Run` → `ingest.Pipeline` | Fatal; a stopped collector must not serve silently stale numbers. `Run` returns only after every stage has stopped, and `app.Run` waits for it before the database closes, whichever loop ended first |
 | Pricing sync | `app.Run` → `pricing.Service` | Best effort; prices go stale, capture continues |
-| Quota refresh scheduler | `app.Run` → `quota.Scheduler` | Best effort; readings go stale, capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0095) |
-| Account auto-management | `app.Run` → `automation.Manager` | Best effort; plans stay in the database for the next pass, and capture and the HTTP server continue. It performs a CPA write, so it is disabled in demo mode; `OMCPA_ACCOUNT_AUTOMATION_ENABLED=false` forbids the loop and `OMCPA_ACCOUNT_AUTOMATION_ENABLED=true` forces it on regardless of the web switch (ADR 0096) |
+| Quota refresh | `app.Run` → `api.Handler.RunQuotaAutoRefresh` or `quota.Scheduler` | Best effort; `OMCPA_QUOTA_SCHEDULER_MODE` selects exactly one interval or adaptive loop. Readings go stale if it stops, while capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0094, ADR 0104) |
+| Account auto-management | `app.Run` → `automation.Manager` | Best effort; plans stay in the database for the next pass, and capture and the HTTP server continue. It performs a CPA write, so it is disabled in demo mode; `OMCPA_ACCOUNT_AUTOMATION_ENABLED=false` forbids the loop and `OMCPA_ACCOUNT_AUTOMATION_ENABLED=true` forces it on regardless of the web switch (ADR 0105) |
 | Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. The same instance also drains the create/update trigger queue and answers the console's manual refresh, so all three share one lock, one two-scrape concurrency cap and one persisted backoff. It scrapes `ollama.com`, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
 | Feishu notifications | `app.Run` → `feishu.Service` | Best effort; the long connection and the classification loop are started with the process and stopped before the database closes. A disabled, forced-off or degraded configuration is inert and never fails startup; it is never started in demo mode |
 | Feishu quota prediction | `app.Run` → `feishu.PredictionJob` | Best effort; the job remains loaded but inert while Feishu is disabled or degraded, becomes active after a ready settings reload, and falls back to the ordinary summary when prediction has no finding or cannot be read. It is never built in demo mode |
@@ -2437,6 +2597,75 @@ last successful check time so the reader can judge its age. The routine
 "last checked" readout was deliberately dropped from the cards - it was the same
 timestamp on every one of them - so staleness is now something the page states when a
 check fails rather than a number a reader has to interpret.
+
+### Console updates (ADR 0099)
+
+Applying an update is a second process's job. The console container cannot replace
+itself and must not hold the Docker socket, so `internal/updater` runs as a sidecar from
+the same image and the console talks to it over the Docker network:
+
+```text
+System Information page
+  └─ POST /management/system/updater/apply {product}
+       ├─ updater status: ready? product available? (else 409 with the reason as `code`)
+       ├─ omc only: stored release answer says update_available
+       │            └─ internal/release downloads release-manifest.json + .sig (forwarded unread)
+       ├─ audit system.update.apply = admitted   (a failed audit write refuses the update)
+       └─ POST http://oh-my-cpa-updater:8090/v1/update   Authorization: Bearer HMAC(master key)
+            ├─ omc: verify signature, repository and non-regressing version; pull repo@digest; tag
+            ├─ cpa: pull the configured tag
+            ├─ stop old, rename it to <name>-omc-previous, create + start replacement, await healthy
+            │      └─ on failure: remove replacement, rename back, start old, re-point the tag
+            └─ omc only: replace the updater itself, handing the finished job to its successor
+```
+
+`GET /management/system/updater` reduces every way of not having an updater to a state
+the page can explain: `ready`, `not_installed` (a containerised console with no answer,
+which the install command fixes), `not_containerised` (a native install), `disabled`
+(`OMCPA_UPDATER_ENABLED=false`) and `rejected` (an updater that does not accept this
+console's token). The read is `200` in all of them. Products carry `action` and
+`reason`: `pinned`, `not_a_local_container`, `signature_unavailable`,
+`container_not_found`, `ambiguous_container`. Demo mode wires no updater: the read
+answers `disabled` and the apply route is refused by the demo policy.
+
+Three invariants hold the design together:
+
+- **The updater decides what it touches.** Its control surface takes a product name. The
+  console container, the gateway container and the image reference are resolved by the
+  updater from Docker's own state, never supplied by the caller.
+- **Verification happens where the authority is.** The console forwards the manifest and
+  signature as bytes; the updater, which holds the socket, checks them against the key
+  compiled into its own binary.
+- **The outcome is recorded by whoever is alive.** A gateway update finishes while the
+  admitting process still runs, and a goroutine writes `system.update.completed`. A
+  console update kills that process, so `Handler.RecordInterruptedUpdate` follows the
+  updater's last job from the moment the next process starts. That process starts while
+  the job is still verifying it, and the updater then replaces itself, so the follow
+  waits through unfinished stages and failed reads, for at most fifteen minutes. The
+  audit event is keyed by the job ID so the two paths cannot both record it. Shutdown
+  ends both waits before the database closes (`Handler.CloseUpdateWatchers`); an outcome
+  left unrecorded is picked up by the next process.
+
+The updater role has one loop of its own, `Service.KeepLinked`: an installed updater
+lives outside the deployment's Compose project, so it follows Docker's container-start
+events and re-attaches the console to the shared network whenever Compose recreates it.
+A Compose-declared updater shares the project network and runs no such loop.
+
+The updater keeps a job in memory only. A restart mid-replacement is finished by
+`Service.Reconcile`, which looks for a `-omc-previous` container: with a healthy
+replacement the leftover is removed, without one it is restored. A replacement whose
+health check has not yet passed counts as without one, since it was interrupted
+mid-verification. The updater's own pair is the exception: a successor running
+`Reconcile` is up, whatever its health check reports yet.
+
+On the page, `useConsoleUpdate` follows one job. While it does, a failed read or a
+`not_installed` answer is not shown, because both are what a console restart looks like
+from the browser; the last answer from a working updater stands until the job reports
+its end, the updater forgets it, or ten minutes pass without an answer. One update reports
+one end, keyed by its job id: neither the answer still held while the console gives up nor
+an updater that comes back naming the job it had lost can make the page end the same update
+twice, or follow it again. A finished console update reloads the page, since the scripts it
+holds belong to the old version.
 
 ## 11. Database maintenance and the write gate
 
@@ -2629,20 +2858,12 @@ explicit development coverage; it is not how the harness currently runs.
 
 ### 12.0.1 Three verification moments
 
-Verification is organised by *when it runs*, because what a developer pays is
-waiting, and a gate that costs minutes gets routed around:
-
-| Moment | Runs | Cost guidance |
-| --- | --- | --- |
-| Development iteration | `pnpm test:fast`, plus `pnpm check:ui` when the change touches interaction, layout or a browser lifecycle | Scope-dependent; use printed check and scenario timings |
-| Feature complete, and before declaring done or pushing | `pnpm verify` and `pnpm check:ui` | Tens of seconds of static gates plus the scenarios the change reaches |
-| Pull request | CI: static gates, full built acceptance, the full probe catalog in shards, demo | Runs beside the author; its checks gate the merge |
-
-`pnpm verify:full` runs everything CI runs, locally. It is for changes to the build,
-the embedded distribution, the browser harness or the workflow, and for reproducing a
-CI failure. ADR 0032 records why the full catalog moved from a local pre-push duty to
-a required CI check: it used to be enforced only by local discipline and by master CI
-after merge, while every developer paid for it serially before each push.
+Verification is organised by *when it runs*, because what a developer pays is waiting
+and a gate that costs minutes gets routed around. The moments table and the rules that
+keep the gates honest live in `AGENTS.md` §5; `docs/testing.md` is the working guide.
+ADR 0032 records why the full catalog moved from a local pre-push duty to a required CI
+check: it used to be enforced only by local discipline and by master CI after merge,
+while every developer paid for it serially before each push.
 
 The rule that keeps this honest is that a *narrow* plan must never be **silent**.
 `scripts/affected-checks.mjs` and `scripts/acceptance/check-ui-plan.mjs` both widen
@@ -2734,8 +2955,8 @@ broad gates rather than nothing.
   policy and is tested directly. The one claim that stays in the browser is that a
   real pending timer survives a real clear-all, because it depends on a React state
   update and a URL write happening between the two.
-- **Refresh sequencing cannot be replaced by a poll-decision test.** A
-  `shouldPoll()` unit test says nothing about whether the page serialises the pull
+- **Refresh sequencing cannot be replaced by a read-policy test.** A
+  `createLiveReadPolicy()` unit test says nothing about whether the page serialises the pull
   before the reads, so the probe holds the response and observes the ordering.
 - **The copy path is split between a unit test and the browser.** Which route a copy
   takes - the async Clipboard API, or the selection path a plain-HTTP origin needs -
@@ -2881,7 +3102,7 @@ Gzip estimates are not HTTP transfer measurements or execution-time guarantees.
 
 Ordinary growth is advisory. Hard anomaly ceilings allow substantial headroom:
 startup JS 3 MiB raw / 1 MiB gzip, startup CSS 256 / 96 KiB, largest JS 4 MiB raw,
-all JS 16 MiB raw, distribution 20 MiB raw and Lobe SVGs 2 MiB raw. Reports retain
+all JS 16 MiB raw, distribution 32 MiB raw (ADR 0094: the complete font) and Lobe SVGs 2 MiB raw. Reports retain
 per-file sizes, source ownership and the largest JS files for investigation.
 `scripts/bundle-baseline.mjs` compares only an exact-revision reference: an explicit
 `BUNDLE_BASELINE` file or the successful push CI artifact for `BUNDLE_BASE_SHA`.
@@ -3146,8 +3367,8 @@ with.
 (`web/src/components/workspace/useConversationExport.ts`). `conversationSnapshot.ts` projects what the
 page displays into a `ConversationSnapshot` - never the stored session - and drops execution
 identities (key fingerprints, tokens, operation and run ids) at any depth. `conversationHtml.ts` renders
-that snapshot to one HTML string: the palette's resolved tokens as custom properties, the console's
-font embedded as data, Markdown rendered without raw HTML, remote images demoted to links, a canvas as the same
+that snapshot to one HTML string: the palette's resolved tokens as custom properties, the font
+shards its text draws embedded as data, Markdown rendered without raw HTML, remote images demoted to links, a canvas as the same
 sandboxed frame, and a Content-Security-Policy that allows no network. Its only script is the fixed
 `conversationControls.ts` (search, side panel, copy, table sorting, print). The PNG is the same
 document laid out as an 840px share card in a sandboxed, script-free iframe. Generated interfaces are first drawn in separate opaque-origin, network-blocked frames using the shared `canvasCapture.ts` path, inserted as PNG data images, then the document is rasterized through an
@@ -3298,6 +3519,14 @@ The session-authenticated routes are `GET`/`POST /custom-icons`, `POST /custom-i
 
 Operations registers the same repository-backed CRUD for Agent/MCP. Lists are bounded to twenty metadata records per page; capability uploads remain subject to the existing 32 KiB tool envelope. Deletion requires confirmation tied to the icon's content revision, with a reference-count/default-reset preview. Its transaction rechecks the revision and removes all current matching overrides. Audit entries omit arguments/results. The shared frontend icon renderer resolves custom artwork using one metadata query and authenticated same-origin image URLs, with safe placeholders on failed reads. Mutation invalidation updates all mounted references. Plugin logos keep precedence; a plugin-owned provider never falls back to operator-uploaded artwork.
 
+## Font library
+
+The console's two typeface roles (`ui`, `mono`) are stored as the `omc_fonts` preference and resolved by `web/src/types/fonts.ts` into CSS stacks; `web/src/theme/fontLibrary.ts` writes them to `--font-ui` and `--font-mono` on the root element, declares library faces with `FontFace` (family name `omc-font-<id>`, the stored `unicode-range`, files from the face endpoint), and mirrors the resolved choice in localStorage (`omc-fonts`) so `main.tsx` paints it before the first render. `useConsoleFonts` reads the library only when a role uses it. The settings controls live in `web/src/components/settings/FontSettings.tsx`: two role pickers in Appearance, with installing, uploading and deleting families kept in a modal library dialog (ADR 0100).
+
+`internal/fontasset` recognises WOFF2, WOFF, TrueType and OpenType by signature and describes a face from its `OS/2` weight and italic bit, its `fvar` weight axis and its `name` family (typographic family first); WOFF tables are inflated, WOFF2 falls back to the file name. Files are bounded to 32 MiB. The Google installer requests `css2?family=<name>:wght@400;700` (falling back to the family alone for single-weight families) with a browser identity that yields woff2 slices, merges rules that share one file into one face spanning both weights, and downloads with eight in parallel under a three-minute budget and a 96 MiB family ceiling. Every stylesheet URL and redirect must stay on Google's font hosts or the configured base's site.
+
+The session-authenticated routes are `GET /fonts` (families with face declarations, no bytes), `POST /fonts/google` (`{family}`), `POST /fonts/upload` (multipart `file` parts and an optional `family`, at most twelve files and 96 MiB), `DELETE /fonts/{id}`, and `GET`/`HEAD /fonts/{id}/faces/{faceId}`. The two transfer routes lift the server's 30-second read and write deadlines to four minutes for their own request. Face responses carry the font MIME type, nosniff, a sandbox CSP and `private, max-age=31536000, immutable`, because a face's bytes never change under its id. Invalid files and family names return 400, oversize 413, a missing family or face 404 (also for a Google family that does not exist), a full library (32 families) 409, and an unreachable Google 502, with stable `font_*` codes. Preference writes validate `font:` references inside their transaction. The demo allows the reads, has an empty library and refuses installs, uploads and deletions.
+
 ## Phone configuration and editor lifetime
 
 `ConfigPage` owns a source-session wrap override and focused state independently of `useConfigDraft`.
@@ -3392,9 +3621,10 @@ The directory also shows each model's price and recent requests, and hands off t
 price editor and the request list. It owns none of that data. The coupling is confined to
 one pure module, `web/src/types/modelSquareLedger.ts`, and rests on one contract:
 
-- **Join key.** The client call name CPA advertises in `/v1/models` is the same string as
-  the price book's `model` and the request records' `model_alias`. Nothing else is joined,
-  and no name is normalised on the way.
+- **Join keys.** Request counts use the client call name as `model_alias`. Price reads and
+  edits follow the directory's explicit route to its upstream model and the provider's
+  recorded channel. No prefix is stripped heuristically. Several route targets remain
+  separate choices, and a single-price summary stays unknown when those targets differ.
 - **Reads.** `GET /pricing` under the shared `PRICING_QUERY_KEYS.book` cache key
   (`web/src/components/pricing/pricingQueries.ts`), so a price saved in the editor reaches
   the rows without a read of their own; and `GET /usage/facets?preset=24h`, whose
@@ -3449,3 +3679,60 @@ script permission with same-origin permission: model markup runs only in the exi
 sandbox, its bounded response becomes an image, and the outer snapshot is script-disabled.
 A missing figure retains an explicit unavailable-image note; all transcript pages must encode
 before any PNG is downloaded.
+
+## Credential window warmup (ADRs 0097 and 0098)
+
+`internal/warmup` owns policies, explicit billing/activation evidence, pure calendar and
+cycle decisions, and fixed tiny-request adapters. `internal/api/warmup.go` orchestrates
+credential eligibility, audit-before-send, per-credential execution exclusion, fresh
+quota reads and completion verification. Operations exposes the same implementation to
+confirmed Agent/MCP writes. CPA retains token substitution and credential-specific
+transport; neither browser nor model can supply an upstream URL or read OAuth tokens.
+
+The quota service parses `warmup_evidence` from the same successful provider usage read.
+It carries paid fallback as a three-state value rather than collapsing omitted or false
+fields. `quota_snapshots.warmup_json` preserves that evidence through scheduled refresh,
+manual refresh and reset-credit redemption. A per-reading service copy keeps evidence
+isolated when the existing batch refresh shares a service concurrently.
+
+Migration 046 adds `credential_warmup_policies` (instance/scope/identity),
+`credential_warmup_state` (one instance/credential scheduling record) and
+`credential_warmup_runs` (newest 100 receipts per instance/credential). Policies require
+confirmation and a revision; credential overrides include a keyed identity fingerprint and provider
+in their storage key. CPA's opaque account field is hashed, never persisted or returned. Identity replacement discards prior activation observations and scheduling state. The three
+secret-free tables are explicitly classified for lifecycle and read-only queries.
+
+The application starts and joins the minute warmup loop alongside quota auto-refresh.
+Disabled policies cause no upstream usage reads. Enabled credentials are checked in
+bounded rounds of 16 with at most four concurrent contexts, targeting fresh evidence
+every five minutes and reusing newer stored quota evidence. Every consuming attempt
+performs a fresh read first. Auto and manual requests share a credential lock and durable
+receipts. A pre-send revalidation refusal restores the prior cycle, daily task and activation
+basis because no consuming request occurred. Restart-abandoned executing receipts are
+uncertain; they are not resubmitted. A transient startup recovery error is diagnosed and
+retried on the minute ticks; consuming rounds wait for successful recovery.
+Definite rate-limit refusals use one/five/fifteen-minute backoff, with at most three
+retries; a successful response is checked immediately and at most twice more without
+resending. A manual run while that check is still pending is refused (`activation_pending`)
+without sending and without cutting the pending check short. The Codex backend streams
+each output item in `response.output_item.done` and usually leaves `response.completed`'s
+output empty, so the adapter judges completion from both. An idle Codex window reports a
+reset that slides with every read; activation is a reset that stopped sliding, moved only
+by the delay between the first read and the send, observed at least 30 seconds later. An approved enabled policy admits the first automatic attempt and an explicitly
+selected new model through fresh quota and billing evidence. The legacy `protocol_verified`
+and `verified_model` state fields record observed activation; they do not admit or suppress
+execution. An observed unsupported protocol response pauses automatic requests for the
+same model, while a confirmed manual action can recheck compatibility. Its optional
+`protocol_pause` model/reason is persisted independently of the latest result in the existing
+state JSON; legacy latest-result refusals are carried forward before replacement. A rate-limited
+or unresolved recheck retains the pause; observed activation for that model clears it.
+A different explicitly selected model is evaluated independently. A changed model is
+not silently substituted. Read projections preserve the current window or billing reason
+rather than replacing it with historical activation status (ADR 0098).
+
+The facade adds warmup settings, credential policy/state and manual-run routes under
+`/management/quota/warmup`. The public demo exports settings and representative
+credential state but refuses policy writes and consumption, and never starts the loop.
+
+Warmup round ordering is oldest observation first. Fleets exceeding a round's capacity
+remain queued rather than increasing concurrency or skipping protection.

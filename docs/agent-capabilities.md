@@ -313,6 +313,9 @@ a new capability must not add them:
   model-visible capability arguments or previews;
 - arbitrary URL, CPA, or HTTP proxying; SQL beyond the read-only query surface above
   (no writes, no hidden table, no redacted column); filesystem; shell; or host maintenance;
+- applying an update to Oh My CPA or CLIProxyAPI. Replacing a container is host
+  maintenance: it stays a console action with its own confirmation (ADR 0099), and the
+  system information capability only reports that a newer release exists;
 - plugin installation, execution, or configuration, including the plugin system settings;
 - raw configuration YAML writes - only the named scalar allowlist
   (`request_retry`, `max_retry_interval`, `max_retry_credentials`,
@@ -328,6 +331,9 @@ a new capability must not add them:
   stay console-only because either can carry credential material into a preview;
 - approval, secret submission, or OAuth completion for an operation an external agent
   prepared.
+- which entries this console's rail shows: it is console state stored in the preferences
+  document rather than a deployment capability, no capability reads or writes it, and the pages
+  it hides stay reachable by URL.
 
 A capability that cannot be implemented safely must be omitted here and recorded in
 the pull request with the reason, rather than added with a weaker check.
@@ -429,7 +435,7 @@ rotate the key if that trust changes.
 analytics but not administer. It is a separate bearer credential for the same endpoint,
 holds no session and approves nothing, lists and runs only `read` capabilities, and its
 results mask the local part of email-shaped account labels. See
-[Read-only MCP key](#read-only-mcp-key) (ADR 0094).
+[Read-only MCP key](#read-only-mcp-key) (ADR 0103).
 
 Tests: `internal/mcpbridge/bridge_test.go` (stdio round trip, transport refusals,
 approval link, status wait, refusal codes, the complete tool schema),
@@ -463,11 +469,12 @@ a page, and none returns a secret.
 - `pricing_catalog_search` (`query`, `offset`): the stored OpenRouter snapshot matched
   on id, name and canonical slug, exact ids first, with rates and tiers.
 - `pricing_quote`: one hypothetical request (`input_tokens`, optional output and cache
-  tokens, `timestamp_ms`, `channel`) priced against `model`'s stored price or a
+  tokens, `timestamp_ms`, `channel`, `service_tier`) priced against `model`'s stored price or a
   `proposed` object shaped like `pricing_set`'s input. It returns the resolved `price`,
   the `breakdown` with the governing `tier_index`, and `cost_usd`. Nothing is written.
 - `requests_cost_breakdown` (`id`): a recorded request's pricing status, stored nanos,
-  locked price and channel versions, tier and per-bucket rates; `resource_missing` for
+  locked price and channel versions, tier, the billed `service_tier` with its
+  `service_tier_source` (`response` or `request`) and per-bucket rates; `resource_missing` for
   an unknown id.
 
 A time-of-day tier's `utc_start`/`utc_end` are HHMM on the clock named by `time_zone`,
@@ -516,9 +523,23 @@ returns the saved mode. Both are available to Agent and MCP administrators under
 the existing policy. The write shares the console's `omc_tps_calculation_mode`
 preference and invalidates `preferences`; no secret or OAuth handoff is involved.
 It changes request-record and Playground TPS readouts, not original timings or usage.
-Exclusion subtracts measurable first-token latency and otherwise uses total latency;
+Exclusion subtracts measurable first-token latency and otherwise uses total latency,
+as it also does for records that report reasoning tokens (hidden reasoning precedes
+the first token, so the residual window never contained it);
 inclusion always uses total latency. Tests cover both adapters, shared preference
 reads/writes, defaults, invalid values and administrator refusal.
+
+### Automatic quota refresh capabilities
+
+`quota_auto_refresh_get` is a low-risk read returning
+`{ "interval_minutes": 360, "refresh_on_reset": true }` by default; an absent or
+unreadable stored field resolves to its default. `quota_auto_refresh_set` is a low-risk write that
+requires both fields, accepts `interval_minutes` of 0 (schedule off) or 5-1440, returns
+`invalid_parameters` otherwise and returns the saved policy. Both are available to Agent
+and MCP administrators. The write shares the console's `omc_quota_auto_refresh`
+preference, which the server's background loop reads every minute (ADR 0094), and
+invalidates `preferences`; no secret or OAuth handoff is involved. Tests cover both
+adapters, defaults, invalid values and administrator refusal.
 
 ### Browser connection recovery
 
@@ -652,7 +673,7 @@ with `tool_result_too_large` and a detail telling the caller to narrow the windo
 truncated. Each row names its `source`, its `scope` (`standard`, `model` or `group`) and its
 `model` (empty for a standard window). `event_key` is not projected.
 
-The rows come from `quota_observations` (ADR 0094, ADR 0095), an append-only history. A passive
+The rows come from `quota_observations` (ADR 0103, ADR 0104), an append-only history. A passive
 row is written in the same transaction as the request record: a window is recorded only when its
 percentage or reset changed, or every fifteen minutes while steady, under `source='passive'` and
 `scope='standard'`. An active row is the result of a completed refresh, recorded for each window
@@ -663,7 +684,7 @@ never zero.
 
 ### Quota refresh scheduling and backoff
 
-The deployment reads each refreshable credential's quota on its own cadence (ADR 0095); an agent
+The deployment reads each refreshable credential's quota on its own cadence (ADR 0104); an agent
 does not need to drive it. A refresh that reaches an upstream which answered 429 is refused with
 `rate_limited_backoff` and a detail naming the retry time, and the credential and its provider are
 parked until then; the manual endpoint and the `quota_refresh` tool share that state, so a
@@ -715,8 +736,16 @@ and `models`. Its preview names the provider and shows before/after rules; execu
 requires the operator's confirmation and rechecks the map revision under the shared
 whole-config write gate. It reuses the console facade's rule validation and verified
 CPA readback, then invalidates the exclusion map, credential model lists, Model Square and pricing.
-An empty list removes only that provider's rules. The wildcard `*` hides every model
-for that provider's OAuth credentials, so it must remain visible in the preview.
+An empty list removes only that provider's defaults, leaving non-empty credential
+`excluded_models` overrides unchanged. A non-empty credential list replaces, rather
+than extends, the provider defaults; a missing, empty or null list inherits the
+current provider rules. This precedence requires CPA v8.0.33 or later; upgrade
+older gateways before relying on credential overrides. The wildcard `*` hides every model only on inheriting
+credentials, so it must remain visible in the preview without implying a universal
+block. For example, provider `["*"]` with credential `["model-b"]` does not block
+`model-a` on that credential through the provider rule. Clearing the credential
+list restores inheritance of `*`, not unrestricted availability. CPA remains
+authoritative for availability; use its per-credential model list to check it.
 These capabilities are available through the built-in Agent and stdio MCP registry,
 without a new adapter or any secret-bearing response.
 
@@ -730,7 +759,7 @@ whether a standard weekly reading exists with its used share. It returns no cred
 material, and it is read-only by construction: the console's
 `/api/v1/account-automation` write routes are session-and-same-origin authenticated and
 the read-only MCP key cannot reach them, so the agent cannot adopt, switch, cancel or
-set a recovery time. See ADR 0096.
+set a recovery time. See ADR 0105.
 
 ### Ollama and Feishu status
 
@@ -751,3 +780,19 @@ The browser's trusted Plugin Host (ADR 0067) is not an Agent/MCP capability. It 
 secret-bearing configuration only through an authenticated console session; models and
 external agents continue to use the declared sanitized capability registry and its
 confirmation/revision rules. No arbitrary native path or URL becomes a tool argument.
+
+## Credential warmup capabilities
+
+`quota_warmup_settings_get` and `quota_warmup_credential_get` are bounded read projections
+of provider defaults, effective policy, model, next check, activation observations and pause reason.
+The optional `state.protocol_pause` carries bounded model/reason evidence independently of the
+latest receipt; a rate-limited recheck does not restore automatic compatibility.
+`quota_warmup_settings_set`, `quota_warmup_credential_set` and `quota_warmup_run` are
+high-risk writes exposed to both Agent and MCP. Their prepare result binds confirmation
+to the provider-policy or credential revision; provider-default approval states its
+impact on current and future inheriting credentials. Saving an enabled policy authorizes
+its first automatic consuming attempt through the same billing and window checks, without
+requiring prior manual activation. Manual approval authorizes one optional tiny consuming
+request and post-request activation observation, not token access or reset-credit redemption.
+The shared implementation enforces unknown/paid billing protection and
+uncertainty-aware idempotency; uncertain results must never be automatically replayed.

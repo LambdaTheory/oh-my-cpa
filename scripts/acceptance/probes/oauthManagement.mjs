@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import { createWarmupFixture } from '../warmup-fixture.mjs';
 import { fulfillFixture } from '../browser-guard.mjs';
 import { settleLayout, until } from '../harness.mjs';
 
@@ -427,6 +429,27 @@ export async function oauthManagement({ base, page, check }) {
       (await page.locator('.oauth-management-page .ant-select').count()) >= 3,
     );
   }
+
+  await page.goto(`${base}/oauth-management`, { waitUntil: 'domcontentloaded' });
+  await page.getByTestId('oauth-credential-record').first().waitFor();
+  const filters = page.getByRole('button', { name: 'More filters', exact: true });
+  if (await filters.getAttribute('aria-expanded') !== 'true') await filters.click();
+  await page.getByRole('combobox', { name: 'Sort', exact: true }).click();
+  const savedSort = page.waitForResponse((response) => response.url().endsWith('/preferences/oauth_management_view_v1')
+    && response.request().method() === 'PUT' && response.ok());
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'Priority (High to Low)' }).click();
+  await savedSort;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.getByRole('combobox', { name: 'Sort', exact: true }).waitFor();
+  check('OAuth sort control retains its selection after reload',
+    (await page.locator('#oauth-collection-filters').innerText()).includes('Priority (High to Low)'));
+  await page.goto(`${base}/oauth-management`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('combobox', { name: 'Sort', exact: true }).waitFor();
+  await until(async () => (await page.getByTestId('oauth-credential-record').first().getAttribute('data-auth-index')) === 'auth-02',
+    { label: 'saved priority sort after reload' });
+  check('OAuth priority sorting survives a fresh entry and orders the collection',
+    (await page.locator('#oauth-collection-filters').innerText()).includes('Priority (High to Low)')
+      && (await page.getByTestId('oauth-credential-record').first().getAttribute('data-auth-index')) === 'auth-02');
 }
 
 
@@ -459,7 +482,8 @@ async function verifyFullTokenCapacity({ base, page, check }) {
       await until(async () => page.getByTestId('oauth-credential-record').first().evaluate((element) => {
         const own = getComputedStyle(element).gridTemplateColumns;
         const tracks = own.startsWith('subgrid') ? getComputedStyle(element.parentElement.parentElement).gridTemplateColumns : own;
-        return tracks.split(' ').length === (window.innerWidth <= 640 ? 1 : 6);
+        // A phone record is two tracks: the facts, and the control that ends the line.
+        return tracks.split(' ').length === (window.innerWidth <= 640 ? 2 : 6);
       }), { label: 'the credential row to adopt the target viewport' });
       await settleLayout(page);
       if (width === 1440) {
@@ -700,10 +724,25 @@ async function checkOAuthModelRules({ page, base, check }) {
   await page.unroute('**/management/auth-files/excluded-models');
 }
 
+function oauthWarmupFixtureRoute() {
+  const credentials = new Map();
+  const settings = createWarmupFixture();
+  return [(url) => url.pathname.includes('/management/quota/warmup/'), (url, method, body) => {
+    const match = url.pathname.match(/\/warmup\/credentials\/([^/]+)(?:\/run)?$/);
+    if (!match) return settings(url, method, body);
+    const authIndex = decodeURIComponent(match[1]);
+    const file = files.find(entry => entry.auth_index === authIndex);
+    if (!file || !['codex', 'claude'].includes(file.provider)) return { status: 404, json: { code: 'resource_not_found', error: 'resource_not_found' } };
+    if (!credentials.has(authIndex)) credentials.set(authIndex, createWarmupFixture({ authIndex, provider: file.provider, name: file.name }));
+    return credentials.get(authIndex)(url, method, body);
+  }];
+}
+
 export const oauthManagementFixtures = {
   files,
   quota,
-  routes: [
+  get routes() { return [
+    oauthWarmupFixtureRoute(),
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/auth-files/safe-fields'), url => {
       const file = files.find(file => file.name === url.searchParams.get('name'));
       return { name:file?.name, priority:file?.priority, weight:file?.weight, note:file?.note??'', disable_cooling:false, websockets:false, using_api:false, model_aliases:[], excluded_models:[] };
@@ -735,7 +774,7 @@ export const oauthManagementFixtures = {
       flow: 'redirect',
     })],
     [(url) => url.pathname.endsWith('/management/oauth/status'), () => ({ status: 'wait', message: 'waiting' })],
-  ],
+  ]; },
 };
 
 /**
@@ -1087,4 +1126,132 @@ export async function oauthPluginConnections(fixtures) {
   const oauthStarts = [];
   fixtures.page.on('request', request => { if (request.url().includes('/management/oauth/start')) oauthStarts.push(request.url()); });
   await fixtures.step('key and interactive plugin connections', () => verifyPluginConnections({...fixtures,oauthStarts}));
+}
+
+export async function oauthWindowWarmup({ page, base, check }) {
+  const fixture = createWarmupFixture({ authIndex: 'auth-02', provider: 'claude' });
+  const consumingRequests = [];
+  const handler = async route => {
+    const request = route.request();
+    if (request.method() === 'POST') consumingRequests.push(JSON.parse(request.postData()));
+    const result = fixture(new URL(request.url()), request.method(), request.postData());
+    await fulfillFixture(route, { status: result.status, contentType: 'application/json', body: JSON.stringify(result.json) });
+  };
+  const fieldHandler = async route => {
+    const input = route.request().postDataJSON();
+    await route.fulfill({ json: { status: 'ok', file: { ...files[1], note: input.note }, fields: { name: files[1].name, note: input.note, disable_cooling: false, websockets: false, using_api: false, excluded_models: [], model_aliases: [] } } });
+  };
+  await page.route('**/management/quota/warmup/**', handler);
+  await page.route('**/management/auth-files/fields', fieldHandler);
+  const checkRuleAlignment = async (surface, label) => {
+    const geometry = await surface.getByRole('switch').evaluateAll(switches => switches.map(control => {
+      const switchBox = control.getBoundingClientRect();
+      const labelBox = document.querySelector(`label[for="${CSS.escape(control.id)}"]`).getBoundingClientRect();
+      const bodyBox = control.parentElement.nextElementSibling.getBoundingClientRect();
+      return { switchLeft: switchBox.left, labelLeft: labelBox.left, bodyLeft: bodyBox.left,
+        centreOffset: Math.abs(switchBox.y + switchBox.height / 2 - labelBox.y - labelBox.height / 2) };
+    }));
+    check(`${label} aligns switches, labels and supporting controls`, geometry.length === 2
+      && geometry.every(row => row.centreOffset <= 1 && Math.abs(row.labelLeft - row.bodyLeft) <= 1)
+      && Math.abs(geometry[0].switchLeft - geometry[1].switchLeft) <= 1
+      && Math.abs(geometry[0].labelLeft - geometry[1].labelLeft) <= 1, JSON.stringify(geometry));
+  };
+  try {
+    await page.goto(`${base}/oauth-management`);
+    await page.getByTestId('oauth-warmup-settings-open').click();
+    const drawer = page.locator('.ant-drawer-content-wrapper').filter({ has: page.locator('.ant-drawer-title').filter({ hasText: 'Warmup settings' }) });
+    await drawer.waitFor({ state: 'visible' });
+    await drawer.getByText('The five-hour window runs 06:00–11:00 (UTC)', { exact: true }).waitFor();
+    for (const reducedMotion of ['no-preference', 'reduce']) {
+      await page.emulateMedia({ reducedMotion });
+      const transition = await drawer.evaluate(element => {
+        const style = getComputedStyle(element);
+        return { property: style.transitionProperty, duration: style.transitionDuration };
+      });
+      if (reducedMotion === 'reduce') {
+        check('warmup drawer has no transition under reduced motion', transition.property === 'none' && transition.duration === '0s', JSON.stringify(transition));
+      } else {
+        check('warmup drawer animates position without interpolating viewport dimensions', transition.property === 'transform', JSON.stringify(transition));
+      }
+      for (const width of [1440, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        await settleLayout(page);
+        const geometry = await drawer.evaluate(element => {
+          const bounds = element.getBoundingClientRect(); const body = element.querySelector('.ant-drawer-body');
+          return { left: bounds.left, right: bounds.right, overflow: body.scrollWidth - body.clientWidth };
+        });
+        await checkRuleAlignment(drawer, `settings ${width}px (${reducedMotion})`);
+        check(`warmup settings ${width}px stay in the viewport (${reducedMotion})`, geometry.left >= -1 && geometry.right <= width + 1 && geometry.overflow <= 1, JSON.stringify(geometry));
+        await fs.mkdir('tmp/warmup-proof', { recursive: true });
+        await page.screenshot({ path: `tmp/warmup-proof/settings-${width}-${reducedMotion}.png` });
+      }
+    }
+    await drawer.getByRole('tab', { name: 'Claude', exact: true }).click();
+    await checkRuleAlignment(drawer, 'Claude settings phone');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await settleLayout(page);
+    await checkRuleAlignment(drawer, 'Claude settings desktop');
+    await drawer.getByRole('switch', { name: 'Warm up daily at a set time' }).click();
+    await page.goBack();
+    const confirmation = page.getByRole('dialog').filter({ hasText: 'Unsaved' });
+    await confirmation.waitFor({ state: 'visible' });
+    check('Back asks before discarding an unsaved warmup policy', await drawer.isVisible());
+    await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await confirmation.waitFor({ state: 'hidden' });
+    await drawer.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.goBack();
+    await drawer.waitFor({ state: 'hidden' });
+    check('Back closes a reverted warmup editor without leaving OAuth management', page.url().includes('/oauth-management'));
+    const record = page.getByTestId('oauth-credential-record').filter({ hasText: 'credential-02.json' });
+    await record.getByRole('button', { name: /^Details:/ }).click();
+    const warmup = page.getByTestId('credential-warmup');
+    check('quota tab does not mix in warmup controls', await warmup.count() === 0);
+    await page.getByRole('tab', { name: 'Window warmup', exact: true }).click();
+    await warmup.getByRole('button', { name: 'Warm up now', exact: true }).waitFor();
+    await page.evaluate(() => Object.defineProperty(window.crypto, 'randomUUID', { configurable: true, value: undefined }));
+    await warmup.getByRole('button', { name: 'Warm up now', exact: true }).click();
+    const manualConfirmation = page.locator('.ant-modal-confirm');
+    await manualConfirmation.waitFor();
+    check('manual warmup names the selected model and does not consume before confirmation', consumingRequests.length === 0 && (await manualConfirmation.innerText()).includes('claude-haiku-test'));
+    await manualConfirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await manualConfirmation.waitFor({ state: 'hidden' });
+    check('cancelling manual warmup sends no consuming request', consumingRequests.length === 0);
+    await warmup.getByRole('button', { name: 'Warm up now', exact: true }).click();
+    await manualConfirmation.waitFor();
+    await manualConfirmation.getByRole('button', { name: 'Warm up now', exact: true }).click();
+    await until(() => consumingRequests.length === 1, { label: 'one confirmed warmup request' });
+    await warmup.getByTestId('warmup-last-result').getByText('Quota window started', { exact: true }).waitFor();
+    check('manual warmup sends a confirmed revision-bound id without arbitrary upstream fields', consumingRequests[0].confirmed === true && typeof consumingRequests[0].request_id === 'string' && Object.keys(consumingRequests[0]).sort().join(',') === 'confirmed,request_id,revision');
+    await warmup.getByText('Custom', { exact: true }).click();
+    await warmup.getByRole('switch', { name: 'Warm up as soon as a window resets' }).waitFor();
+    const detail = page.locator('.ant-drawer-content-wrapper').filter({ has: warmup });
+    await detail.getByRole('tab', { name: 'Configuration' }).click();
+    const note = detail.getByRole('textbox', { name: 'Note' });
+    await note.waitFor();
+    await until(() => detail.getByRole('textbox', { name: 'Prefix' }).isEnabled(), { label: 'safe credential fields loaded' });
+    await note.fill('Keep the warmup draft');
+    const savedFields = page.waitForResponse(response => response.url().endsWith('/management/auth-files/fields') && response.request().method() === 'PATCH');
+    await detail.getByRole('button', { name: 'Save Fields', exact: true }).click();
+    await savedFields;
+    await detail.getByRole('tab', { name: /Window warmup/ }).click();
+    await until(() => warmup.getByRole('button', { name: 'Save', exact: true }).isEnabled(), { label: 'warmup draft remains unsaved after field save' });
+    check('credential field save leaves the warmup draft and detail drawer open', await detail.isVisible());
+    await detail.locator('.ant-drawer-close').click();
+    const discardWarmup = page.locator('.ant-modal-confirm');
+    await discardWarmup.waitFor();
+    check('preserved warmup draft still requires an explicit discard decision', (await discardWarmup.innerText()).includes('Discard unsaved changes?'));
+    await discardWarmup.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await warmup.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await warmup.getByText('Custom', { exact: true }).click();
+    await checkRuleAlignment(warmup, 'credential desktop');
+    await page.screenshot({ path: 'tmp/warmup-proof/credential-1440.png' });
+    await page.setViewportSize({ width: 320, height: 900 });
+    await settleLayout(page);
+    await warmup.scrollIntoViewIfNeeded();
+    const detailBody = page.locator('.ant-drawer-body').filter({ has: warmup });
+    await checkRuleAlignment(warmup, 'credential phone');
+    check('credential warmup controls fit the phone drawer', await detailBody.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+    await page.screenshot({ path: 'tmp/warmup-proof/credential-320.png' });
+
+  } finally { await page.unroute('**/management/quota/warmup/**', handler); await page.unroute('**/management/auth-files/fields', fieldHandler); }
 }

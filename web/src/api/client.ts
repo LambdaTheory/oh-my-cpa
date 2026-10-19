@@ -1,5 +1,7 @@
+import type { WarmupCredential, WarmupPolicy, WarmupResult, WarmupSettings } from '../types/warmup';
 import type { ModelSquareDirectory } from '../types/modelSquare';
 import type { CustomIcon } from '../types/customIcons';
+import type { InstalledFont } from '../types/fonts';
 import { getAppConfig } from '../types/config';
 import { isDemoMode } from '../types/demoMode';
 import {
@@ -50,6 +52,8 @@ import {
   SystemUpdatesResponse,
   SystemProductVersion,
   SystemMaintenanceResponse,
+  SystemUpdaterResponse,
+  ReleaseProduct,
 } from '../types/system';
 import type {
   PluginConfigResponse,
@@ -108,6 +112,7 @@ export interface LogsStatus {
   logging_to_file: boolean;
   request_log: boolean;
 }
+import type { UsageRoutingResponse } from '../types/usageRouting';
 import { UsageEventPage, UsageEventDetail, UsageFacetsResponse, parseUsageIngestRefresh, type UsageIngestRefresh } from '../types/usageEvents';
 
 export class ApiError extends Error {
@@ -357,6 +362,22 @@ export interface AuthSession {
 }
 
 export const api = {
+  getWarmupSettings(): Promise<WarmupSettings> {
+    return request('/management/quota/warmup/settings', { method: 'GET' });
+  },
+  saveWarmupSettings(provider: 'codex' | 'claude', policy: WarmupPolicy, revision: string): Promise<WarmupSettings> {
+    return request('/management/quota/warmup/settings', { method: 'PUT', body: JSON.stringify({ provider, policy, revision, confirmed: true }) });
+  },
+  getWarmupCredential(authIndex: string): Promise<WarmupCredential> {
+    return request(`/management/quota/warmup/credentials/${encodeURIComponent(authIndex)}`, { method: 'GET' });
+  },
+  saveWarmupCredential(authIndex: string, inherit: boolean, policy: WarmupPolicy, revision: string): Promise<WarmupCredential> {
+    return request(`/management/quota/warmup/credentials/${encodeURIComponent(authIndex)}`, { method: 'PUT', body: JSON.stringify({ inherit, policy, revision, confirmed: true }) });
+  },
+  runWarmup(authIndex: string, requestId: string, revision: string): Promise<WarmupResult> {
+    return request(`/management/quota/warmup/credentials/${encodeURIComponent(authIndex)}/run`, { method: 'POST', body: JSON.stringify({ request_id: requestId, revision, confirmed: true }) });
+  },
+
   async getCustomIcons(): Promise<CustomIcon[]> {
     const response = await request<{ icons: CustomIcon[] }>('/custom-icons');
     return response.icons;
@@ -372,6 +393,23 @@ export const api = {
   },
   async deleteCustomIcon(id: string): Promise<void> {
     return request(`/custom-icons/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+  async getFonts(): Promise<InstalledFont[]> {
+    const response = await request<{ fonts: InstalledFont[] }>('/fonts');
+    return response.fonts;
+  },
+  /** The server downloads the family and stores it; the browser never contacts Google. */
+  async installGoogleFont(family: string, signal?: AbortSignal): Promise<InstalledFont> {
+    return request('/fonts/google', { method: 'POST', body: JSON.stringify({ family }), signal });
+  },
+  async uploadFont(files: File[], family?: string): Promise<InstalledFont> {
+    const formData = new FormData();
+    if (family) formData.append('family', family);
+    files.forEach((file) => formData.append('file', file, file.name));
+    return request('/fonts/upload', { method: 'POST', body: formData });
+  },
+  async deleteFont(id: string): Promise<void> {
+    return request(`/fonts/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
   customIconURL(id: string, revision: number): string {
     return `${getAppConfig().apiBaseUrl}/custom-icons/${encodeURIComponent(id)}/content?revision=${revision}`;
@@ -831,6 +869,14 @@ export const api = {
     return request<UsageFacetsResponse>(`/usage/facets${query ? `?${query}` : ''}`, { method: 'GET' });
   },
 
+  /**
+   * getUsageRouting reads the live routing window: the whole minute, or with
+   * `after` only the attempts recorded since that record.
+   */
+  async getUsageRouting(after?: number): Promise<UsageRoutingResponse> {
+    return request<UsageRoutingResponse>(`/usage/routing${after ? `?after=${after}` : ''}`, { method: 'GET' });
+  },
+
   async getUsageIngestStatus(): Promise<unknown> {
     return request<unknown>('/usage/ingest-status', { method: 'GET' });
   },
@@ -1094,6 +1140,18 @@ export const api = {
     return request<SystemUpdatesResponse>('/management/system/updates', { method: 'GET' });
   },
 
+  async getSystemUpdater(): Promise<SystemUpdaterResponse> {
+    return request<SystemUpdaterResponse>('/management/system/updater', { method: 'GET' });
+  },
+
+  /** Asks the updater to replace one product; 202 means admitted, not finished. */
+  async applySystemUpdate(product: ReleaseProduct): Promise<SystemUpdaterResponse> {
+    return request<SystemUpdaterResponse>('/management/system/updater/apply', {
+      method: 'POST',
+      body: JSON.stringify({ product }),
+    });
+  },
+
   async checkUpdates(): Promise<{
     omc_version: SystemProductVersion;
     cpa_version: SystemProductVersion;
@@ -1185,12 +1243,14 @@ export const api = {
     return request<{ models: UpstreamModel[] }>('/pricing/catalog', { method: 'GET' });
   },
 
-  async getPricingModel(model: string): Promise<PricingModelDetail> {
-    return request<PricingModelDetail>(`/pricing/models/${encodeURIComponent(model)}`, { method: 'GET' });
+  async getPricingModel(model: string, channel?: string): Promise<PricingModelDetail> {
+    const scope = channel ? `?${new URLSearchParams({ channel })}` : '';
+    return request<PricingModelDetail>(`/pricing/models/${encodeURIComponent(model)}${scope}`, { method: 'GET' });
   },
 
-  async updatePricingModel(model: string, payload: PricingModelUpdate): Promise<{ price: ModelPrice }> {
-    return request<{ price: ModelPrice }>(`/pricing/models/${encodeURIComponent(model)}`, {
+  async updatePricingModel(model: string, payload: PricingModelUpdate, channel?: string): Promise<{ price: ModelPrice }> {
+    const scope = channel ? `?${new URLSearchParams({ channel })}` : '';
+    return request<{ price: ModelPrice }>(`/pricing/models/${encodeURIComponent(model)}${scope}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
@@ -1203,8 +1263,9 @@ export const api = {
     });
   },
 
-  async deletePricingModel(model: string): Promise<{ deleted: boolean }> {
-    return request<{ deleted: boolean }>(`/pricing/models/${encodeURIComponent(model)}`, {
+  async deletePricingModel(model: string, channel?: string): Promise<{ deleted: boolean }> {
+    const scope = channel ? `?${new URLSearchParams({ channel })}` : '';
+    return request<{ deleted: boolean }>(`/pricing/models/${encodeURIComponent(model)}${scope}`, {
       method: 'DELETE',
     });
   },

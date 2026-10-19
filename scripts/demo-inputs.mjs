@@ -20,6 +20,13 @@ export const INPUTS = [
   'internal/demo/ingest.go',
   'internal/demo/release.go',
   'internal/api/management_quota.go',
+  'internal/api/warmup.go',
+  'internal/api/agent_warmup.go',
+  'internal/warmup/types.go',
+  'internal/warmup/policy.go',
+  'internal/warmup/observation.go',
+  'internal/repository/warmup.go',
+  'internal/operations/warmup.go',
   'internal/api/management_oauth_excluded_models.go',
   'internal/api/management_oauth_model_aliases.go',
   'internal/cpa/management/client_oauth.go',
@@ -81,6 +88,8 @@ export const INPUTS = [
   // missing from this list, which meant the two files that most directly shape a served
   // response were the two the digest did not cover.
   'deploy/cloudflare/worker.mjs',
+  // The live routing read and the live stream are composed here rather than captured.
+  'deploy/cloudflare/liveRouting.mjs',
   'scripts/generate-demo-data.mjs',
   // The dataset states the pinned Go toolchain as the gateway's runtime version.
   'scripts/tools-versions.json',

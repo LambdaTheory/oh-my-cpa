@@ -24,6 +24,10 @@ type RateLimitError struct {
 
 func (e *RateLimitError) Error() string { return "rate_limited_backoff" }
 
+// IsRateLimited lets bounded consuming adapters preserve this refusal without
+// importing quota and turning it into an uncertain transport failure.
+func (e *RateLimitError) IsRateLimited() bool { return true }
+
 func (e *RateLimitError) FailureDetail() string {
 	if e.RetryAfter > 0 {
 		return "upstream rate limited; retry after " + e.RetryAfter.Round(time.Second).String()
@@ -41,6 +45,17 @@ func rateLimitFrom(err error) *RateLimitError {
 		return rateErr
 	}
 	return nil
+}
+
+// NewRateLimitError builds the typed refusal all consuming callers propagate.
+func NewRateLimitError(provider, authIndex string, headers map[string][]string) *RateLimitError {
+	retryAfter, hasRetryAfter := parseRetryAfter(headers)
+	return &RateLimitError{
+		Provider:      strings.TrimSpace(provider),
+		AuthIndex:     strings.TrimSpace(authIndex),
+		RetryAfter:    retryAfter,
+		HasRetryAfter: hasRetryAfter,
+	}
 }
 
 // Backoff is the in-memory record of when each credential and provider may next
@@ -61,7 +76,10 @@ type Backoff struct {
 
 	credentials map[string]time.Time
 	providers   map[string]time.Time
-	attempts    map[string]int
+	// providerOwners records which credential created the current provider park,
+	// so one concurrent sibling's successful probe cannot clear another's refusal.
+	providerOwners map[string]string
+	attempts       map[string]int
 }
 
 // NewBackoff builds a backoff registry with the exponential fallback bounds.
@@ -69,22 +87,30 @@ func NewBackoff(base, maximum time.Duration) *Backoff {
 	if base <= 0 {
 		base = DefaultBackoffBase
 	}
+	if maximum <= 0 {
+		maximum = DefaultBackoffMax
+	}
 	if maximum < base {
 		maximum = base
 	}
 	return &Backoff{
-		now:         time.Now,
-		Base:        base,
-		Max:         maximum,
-		credentials: map[string]time.Time{},
-		providers:   map[string]time.Time{},
-		attempts:    map[string]int{},
+		now:            time.Now,
+		Base:           base,
+		Max:            maximum,
+		credentials:    map[string]time.Time{},
+		providers:      map[string]time.Time{},
+		providerOwners: map[string]string{},
+		attempts:       map[string]int{},
 	}
 }
 
 // DefaultBackoffBase is the first wait a 429 without a Retry-After produces. It
 // is exported so the config layer and this package cannot drift.
 const DefaultBackoffBase = 5 * time.Minute
+
+// DefaultBackoffMax matches the process default when a caller supplies a zero-value
+// configuration, including focused handler tests that do not load environment settings.
+const DefaultBackoffMax = 6 * time.Hour
 
 // CredentialBlocked reports whether the credential is parked and until when.
 func (b *Backoff) CredentialBlocked(authIndex string, now time.Time) (bool, time.Time) {
@@ -153,10 +179,14 @@ func (b *Backoff) Record(provider, authIndex string, retryAfter time.Duration, h
 	}
 	if strings.TrimSpace(provider) != "" {
 		b.providers[provider] = until
+		b.providerOwners[provider] = strings.TrimSpace(authIndex)
 	}
 }
 
-// Clear forgets a credential's and provider's park, after a successful probe.
+// Clear forgets a successful credential's park. The provider park leaves only if
+// that same credential created it; a sibling whose attempt was already in flight
+// may succeed after another credential was refused, but it has no right to end
+// that refusal.
 func (b *Backoff) Clear(provider, authIndex string) {
 	if b == nil {
 		return
@@ -168,7 +198,10 @@ func (b *Backoff) Clear(provider, authIndex string) {
 		delete(b.attempts, authIndex)
 	}
 	if strings.TrimSpace(provider) != "" {
-		delete(b.providers, provider)
+		if b.providerOwners[provider] == strings.TrimSpace(authIndex) {
+			delete(b.providers, provider)
+			delete(b.providerOwners, provider)
+		}
 	}
 }
 

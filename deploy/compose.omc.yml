@@ -26,11 +26,13 @@ services:
       OMCPA_USAGE_INGEST_MODE: ${OMCPA_USAGE_INGEST_MODE:-auto}
       OMCPA_UPDATE_CHECK_ENABLED: ${OMCPA_UPDATE_CHECK_ENABLED:-true}
       OMCPA_UPDATE_CHECK_ON_PAGE_LOAD: ${OMCPA_UPDATE_CHECK_ON_PAGE_LOAD:-true}
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - ${OMCPA_DATA_PATH:-../oh-my-cpa-data}:/data
     restart: unless-stopped
     extra_hosts:
       - host.docker.internal:host-gateway
+
 networks:
   default:
     name: ${OMCPA_NETWORK_NAME:-oh-my-cpa-standalone}

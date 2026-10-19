@@ -60,7 +60,7 @@ async function gotoConsole(page, base, route, readySelector) {
 /** The automation drawer, re-opened after a reload if it was dropped. */
 async function openAutomationDrawer(page) {
   await page.locator('.oauth-management-page').waitFor({ state: 'visible' });
-  const drawer = page.locator('.ant-drawer:visible').filter({ hasText: 'Account Automation' });
+  const drawer = page.locator('.ant-drawer-open').filter({ hasText: 'Account Automation' });
   if (await drawer.count() === 0) {
     await page.getByTestId('oauth-management-automation-open').click();
     await drawer.waitFor({ state: 'visible' });
@@ -271,6 +271,24 @@ export async function accountAutomation({ base, page, check }) {
   check('a hand-filled recovery time is a future instant and reaches the missing-reset account',
     typeof automationState.manualReset?.reset_at_ms === 'number' && automationState.manualReset.reset_at_ms > Date.now(),
     JSON.stringify(automationState.manualReset));
+  await roster.locator('.ant-drawer-close').click();
+  await until(async () => (await page.locator('.ant-drawer-open').filter({ hasText: 'Account Automation' }).count()) === 0,
+    { label: 'the account automation drawer to close' });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.locator('.terminal-page-head .terminal-page-actions').getByRole('button', { name: 'More', exact: true }).click();
+  const automationEntry = page.getByTestId('oauth-management-automation-open-mobile');
+  const ollamaEntry = page.getByTestId('oauth-management-ollama-open-mobile');
+  check('account automation and Ollama management remain reachable from the phone toolbar',
+    await automationEntry.isVisible() && await automationEntry.isEnabled()
+      && await ollamaEntry.isVisible() && await ollamaEntry.isEnabled());
+  await automationEntry.click();
+  const phoneDrawer = await openAutomationDrawer(page);
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/account-automation-phone.png' });
+  check('the account automation drawer fits the phone viewport', await phoneDrawer.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth;
+  }));
 }
 
 // ── Lane B: Ollama accounts ──────────────────────────────────────────────────
@@ -546,6 +564,17 @@ export async function ollamaAccounts({ base, page, check }) {
   await monitorRow.scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'tmp/credential-ollama-selection-phone.png' });
   check('the mixed workspace fits a phone without horizontal overflow', await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  await page.locator('.terminal-page-head .terminal-page-actions').getByRole('button', { name: 'More', exact: true }).click();
+  const ollamaEntry = page.getByTestId('oauth-management-ollama-open-mobile');
+  await ollamaEntry.click();
+  const phoneDrawer = page.locator('.ant-drawer-open').filter({ hasText: 'Ollama Accounts' });
+  await phoneDrawer.waitFor({ state: 'visible' });
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/ollama-management-phone.png' });
+  check('the Ollama management drawer remains usable from the phone toolbar', await phoneDrawer.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    return rect.left >= 0 && rect.right <= window.innerWidth;
+  }));
 }
 
 // ── Lane C: Feishu settings ───────────────────────────────────────────────────
@@ -665,4 +694,12 @@ export async function feishuSettings({ base, page, check }) {
   await until(() => feishuState.testPosts === 1, { label: 'the confirmed test card to be sent' });
   check('only an explicit confirmation sends the test card, exactly once', feishuState.testPosts === 1);
   await settleLayout(page);
+  await page.screenshot({ path: 'tmp/feishu-settings-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.getByText('Feishu Notifications', { exact: true }).first().scrollIntoViewIfNeeded();
+  await settleLayout(page);
+  check('the Feishu settings panel remains reachable without phone-width overflow',
+    await page.getByPlaceholder('cli_a1b2c3d4...').isVisible()
+      && await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+  await page.screenshot({ path: 'tmp/feishu-settings-phone.png', fullPage: true });
 }
