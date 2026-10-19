@@ -37,6 +37,23 @@ func TestBackoffZeroValueBoundsKeepTheProductionMaximum(t *testing.T) {
 	}
 }
 
+func TestBackoffDoesNotLetASiblingClearTheProviderPark(t *testing.T) {
+	backoff := NewBackoff(5*time.Minute, 6*time.Hour)
+	now := time.Now()
+	backoff.Record("claude", "cl-1", 90*time.Second, true, now)
+
+	backoff.Clear("claude", "cl-2")
+	if blocked, _ := backoff.Blocked("claude", "cl-1", now); !blocked {
+		t.Fatal("a sibling's success cleared another credential's park")
+	}
+
+	// Only the credential that created the current provider park may release it.
+	backoff.Clear("claude", "cl-1")
+	if blocked, _ := backoff.ProviderBlocked("claude", now); blocked {
+		t.Fatal("the owning credential failed to clear the provider park")
+	}
+}
+
 func TestBackoffDoublesWithoutRetryAfterAndCaps(t *testing.T) {
 	backoff := NewBackoff(5*time.Minute, 20*time.Minute)
 	now := time.Now()

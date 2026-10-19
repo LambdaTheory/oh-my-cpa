@@ -126,6 +126,47 @@ func TestManualRefreshHonoursAndRecordsRateLimitBackoff(t *testing.T) {
 	}
 }
 
+func TestManualBatchRefreshReturnsRateLimitBackoff(t *testing.T) {
+	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, isRateLimited: true, retryAfter: 120}
+	handler := newQuotaAutoRefreshHandler(t, fixture)
+	now := time.Now().UTC()
+	handler.nowFn = func() time.Time { return now }
+
+	appServer := httptest.NewServer(handler.Router())
+	defer appServer.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	login, err := client.Post(appServer.URL+"/api/auth/login", "application/json", bytes.NewBufferString(`{"password":"management-secret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	login.Body.Close()
+
+	for _, attempt := range []string{"first", "second"} {
+		response, err := client.Post(appServer.URL+"/api/v1/management/quota/refresh", "application/json", bytes.NewBufferString(`{"auth_indexes":["codex-reset"]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		if response.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(body), "rate_limited_backoff") {
+			t.Fatalf("%s batch refresh = %d %s, want rate_limited_backoff", attempt, response.StatusCode, body)
+		}
+		if got := fixture.usageReads("codex-reset"); got != 1 {
+			t.Fatalf("%s batch refresh upstream reads = %d, want 1", attempt, got)
+		}
+		var refusal struct {
+			RetryAtMS int64 `json:"retry_at_ms"`
+		}
+		if err := json.Unmarshal(body, &refusal); err != nil || refusal.RetryAtMS <= now.UnixMilli() {
+			t.Fatalf("%s batch refusal carried no retry time: %s (%v)", attempt, body, err)
+		}
+	}
+}
+
 func TestAgentQuotaRefreshRefusesASharedBackoff(t *testing.T) {
 	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}}
 	handler := newQuotaAutoRefreshHandler(t, fixture)

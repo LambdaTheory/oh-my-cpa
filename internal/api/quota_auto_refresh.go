@@ -143,8 +143,15 @@ func (h *Handler) runQuotaAutoRefreshRound(ctx context.Context) (quotaAutoRefres
 	due := make([]dueCredential, 0)
 	for _, authIndex := range authIndexes {
 		file := filesByIndex[authIndex]
+		provider := quota.DetectProvider(file.Type, file.Provider)
+		// A parked credential or provider is not eligible work. Filtering before
+		// counting and truncating keeps a fleet-wide 429 from consuming the round
+		// limit while still-readable credentials wait behind it.
+		if blocked, _ := h.quotaBackoffBlocked(provider, authIndex); blocked {
+			continue
+		}
 		candidate := quota.AutoRefreshCandidate{
-			Provider:        quota.DetectProvider(file.Type, file.Provider),
+			Provider:        provider,
 			IsDisabled:      file.Disabled,
 			IsSupported:     quota.CapabilitiesForFile(file).RefreshSupported,
 			LastAttemptAtMS: lastAttempts[authIndex],

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -158,6 +159,8 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 	}
 	svc := quota.NewService(client)
 	results := make([]*quota.NormalizedQuota, len(targetIndexes))
+	var rateMu sync.Mutex
+	var firstRateLimit *quota.RateLimitError
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 4)
 
@@ -176,6 +179,14 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 			prior := h.loadPriorNormalizedQuota(ctx, authIdx)
 			refreshed, rErr := h.readCredentialQuota(ctx, svc, f, prior)
 			if rErr != nil {
+				var rateLimit *quota.RateLimitError
+				if errors.As(rErr, &rateLimit) {
+					rateMu.Lock()
+					if firstRateLimit == nil {
+						firstRateLimit = rateLimit
+					}
+					rateMu.Unlock()
+				}
 				return
 			}
 			if refreshed != nil {
@@ -187,6 +198,17 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 		}(i, cleanIdx, file)
 	}
 	wg.Wait()
+
+	// A batch is not a successful empty collection when one credential was parked:
+	// partial success already changes durable state, so the caller still needs 429
+	// to schedule the remaining work.
+	rateMu.Lock()
+	rateLimit := firstRateLimit
+	rateMu.Unlock()
+	if rateLimit != nil {
+		writeQuotaRateLimited(writer, h.now().Add(rateLimit.RetryAfter))
+		return
+	}
 
 	out := make([]*quota.NormalizedQuota, 0, len(results))
 	for _, r := range results {

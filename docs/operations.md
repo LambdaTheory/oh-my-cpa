@@ -115,7 +115,8 @@ An upstream 429 parks the credential and its provider for the `Retry-After` (or 
 exponential wait). The manual endpoint, Agent/MCP `quota_refresh`, the selected background
 loop and credential warmup's consuming requests share the park. Quota refreshes refuse with
 `rate_limited_backoff` and a retry time; warmup waits without probing upstream again. A
-successful quota read clears it. The state is in memory only, so a restart clears it.
+successful quota read clears its own credential park, while a provider park is released only by
+the read that created the current refusal. The state is in memory only, so a restart clears it.
 
 ### Account auto-management
 

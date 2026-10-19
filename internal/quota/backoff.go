@@ -76,7 +76,10 @@ type Backoff struct {
 
 	credentials map[string]time.Time
 	providers   map[string]time.Time
-	attempts    map[string]int
+	// providerOwners records which credential created the current provider park,
+	// so one concurrent sibling's successful probe cannot clear another's refusal.
+	providerOwners map[string]string
+	attempts       map[string]int
 }
 
 // NewBackoff builds a backoff registry with the exponential fallback bounds.
@@ -91,12 +94,13 @@ func NewBackoff(base, maximum time.Duration) *Backoff {
 		maximum = base
 	}
 	return &Backoff{
-		now:         time.Now,
-		Base:        base,
-		Max:         maximum,
-		credentials: map[string]time.Time{},
-		providers:   map[string]time.Time{},
-		attempts:    map[string]int{},
+		now:            time.Now,
+		Base:           base,
+		Max:            maximum,
+		credentials:    map[string]time.Time{},
+		providers:      map[string]time.Time{},
+		providerOwners: map[string]string{},
+		attempts:       map[string]int{},
 	}
 }
 
@@ -175,10 +179,14 @@ func (b *Backoff) Record(provider, authIndex string, retryAfter time.Duration, h
 	}
 	if strings.TrimSpace(provider) != "" {
 		b.providers[provider] = until
+		b.providerOwners[provider] = strings.TrimSpace(authIndex)
 	}
 }
 
-// Clear forgets a credential's and provider's park, after a successful probe.
+// Clear forgets a successful credential's park. The provider park leaves only if
+// that same credential created it; a sibling whose attempt was already in flight
+// may succeed after another credential was refused, but it has no right to end
+// that refusal.
 func (b *Backoff) Clear(provider, authIndex string) {
 	if b == nil {
 		return
@@ -190,7 +198,10 @@ func (b *Backoff) Clear(provider, authIndex string) {
 		delete(b.attempts, authIndex)
 	}
 	if strings.TrimSpace(provider) != "" {
-		delete(b.providers, provider)
+		if b.providerOwners[provider] == strings.TrimSpace(authIndex) {
+			delete(b.providers, provider)
+			delete(b.providerOwners, provider)
+		}
 	}
 }
 

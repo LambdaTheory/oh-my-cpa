@@ -65,7 +65,9 @@ none is present. `RefreshCredentialQuota` propagates it. Both background modes, 
 share one in-memory registry: a 429 parks the credential and its provider, and
 while parked each path answers `rate_limited_backoff` with a retry time instead of
 probing again. Credential warmup's consuming requests also respect the park and wait without
-probing. A successful quota read clears the park.
+probing. A successful quota read clears its own credential park; a provider park is released
+only by the read whose 429 created it, so a sibling whose attempt was already in flight cannot
+erase a fresh refusal.
 
 Every successful refresh records each window with a stated period and used share
 into the observation timeline as `source='active'` (migration 042), under a

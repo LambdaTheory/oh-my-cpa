@@ -23,6 +23,7 @@ import (
 type quotaAutoRefreshFixture struct {
 	mu            sync.Mutex
 	reads         map[string]int
+	filesJSON     string
 	isUsageFailed bool
 	isRateLimited bool
 	retryAfter    int
@@ -48,9 +49,14 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 		case "/v8/management/credentials":
 			fixture.mu.Lock()
 			isSingle := fixture.isSingle
+			filesJSON := fixture.filesJSON
 			fixture.mu.Unlock()
 			if isSingle {
 				_, _ = writer.Write([]byte(`{"files":[{"id":"f-reset","name":"codex-reset.json","auth_index":"codex-reset","type":"codex","provider":"codex"}]}`))
+				return
+			}
+			if filesJSON != "" {
+				_, _ = writer.Write([]byte(filesJSON))
 				return
 			}
 			_, _ = writer.Write([]byte(`{"files": [
@@ -244,7 +250,7 @@ func TestQuotaAutoRefreshSharesRateLimitBackoffAndClearsAfterSuccess(t *testing.
 		t.Fatal("interval refresh did not park the credential")
 	}
 	now = now.Add(5 * time.Minute)
-	if round, err = handler.runQuotaAutoRefreshRound(ctx); err != nil || round.Due != 1 || round.Failed != 1 || fixture.usageReads("codex-reset") != 1 {
+	if round, err = handler.runQuotaAutoRefreshRound(ctx); err != nil || round.Due != 0 || round.Failed != 0 || fixture.usageReads("codex-reset") != 1 {
 		t.Fatalf("parked round = %+v err=%v reads=%d", round, err, fixture.usageReads("codex-reset"))
 	}
 
@@ -262,6 +268,48 @@ func TestQuotaAutoRefreshSharesRateLimitBackoffAndClearsAfterSuccess(t *testing.
 	var active int
 	if err := handler.repo.SQL().QueryRowContext(ctx, `SELECT COUNT(*) FROM quota_observations WHERE source='active'`).Scan(&active); err != nil || active == 0 {
 		t.Fatalf("successful interval refresh recorded no active observations: count=%d err=%v", active, err)
+	}
+}
+
+func TestQuotaAutoRefreshRoundLimitIsNotSpentOnParkedCredentials(t *testing.T) {
+	ctx := context.Background()
+
+	files := make([]string, 0, QUOTA_AUTO_REFRESH_ROUND_LIMIT+1)
+	providers := []string{"claude", "kimi", "xai", "devin", "antigravity"}
+	for i := 0; i < QUOTA_AUTO_REFRESH_ROUND_LIMIT; i++ {
+		provider := providers[i%len(providers)]
+		authIndex := fmt.Sprintf("parked-%02d", i)
+		files = append(files, fmt.Sprintf(
+			`{"id":"f-%s","name":"%s.json","auth_index":"%s","type":"%s"}`,
+			authIndex, authIndex, authIndex, provider,
+		))
+	}
+	files = append(files, `{"id":"f-readable","name":"codex-readable.json","auth_index":"codex-readable","type":"codex","provider":"codex"}`)
+	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, filesJSON: `{"files":[` + strings.Join(files, ",") + `]}`}
+	handler := newQuotaAutoRefreshHandler(t, fixture)
+	now := time.Now().UTC()
+	handler.nowFn = func() time.Time { return now }
+
+	observedAtMS := now.Add(-5 * time.Hour).UnixMilli()
+	for i := 0; i < QUOTA_AUTO_REFRESH_ROUND_LIMIT; i++ {
+		authIndex := fmt.Sprintf("parked-%02d", i)
+		saveAutoRefreshSnapshot(t, handler, authIndex, providers[i%len(providers)], observedAtMS, now.Add(-2*time.Minute).UnixMilli())
+		handler.quotaBackoff.Record(providers[i%len(providers)], authIndex, time.Minute, true, now)
+	}
+	saveAutoRefreshSnapshot(t, handler, "codex-readable", "codex", observedAtMS, now.Add(-2*time.Minute).UnixMilli())
+	setAutoRefreshPolicy(t, handler, `{"interval_minutes":60,"refresh_on_reset":false}`)
+
+	round, err := handler.runQuotaAutoRefreshRound(ctx)
+	if err != nil || round.Due != 1 || round.Refreshed != 1 || round.Failed != 0 {
+		t.Fatalf("round = %+v err=%v, want only the readable credential", round, err)
+	}
+	if got := fixture.usageReads("codex-readable"); got != 1 {
+		t.Fatalf("codex-readable reads = %d, want 1", got)
+	}
+	for i := 0; i < QUOTA_AUTO_REFRESH_ROUND_LIMIT; i++ {
+		if got := fixture.usageReads(fmt.Sprintf("parked-%02d", i)); got != 0 {
+			t.Fatalf("parked-%02d reads = %d, want 0", i, got)
+		}
 	}
 }
 
