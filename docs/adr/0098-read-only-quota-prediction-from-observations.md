@@ -43,4 +43,3 @@ Prediction quality is bounded by observation freshness and local request coverag
 return unknown for a window that upstream can answer but OMC has not observed often enough,
 and cost may be omitted while the percentage projection remains valid. The capability and
 digest perform no upstream quota probe, LLM call, route change, disablement or model switch.
-

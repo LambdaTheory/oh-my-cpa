@@ -58,8 +58,8 @@ type App struct {
 	// feishu is the notification bot: the long connection, the classification loop and
 	// the outbound sender. Nil in demo mode.
 	feishu *feishu.Service
-	// prediction runs the independent daily Feishu quota digest. It is nil when
-	// Feishu was not built or was not ready at process start.
+	// prediction runs the independent daily Feishu quota digest. It is nil only
+	// when Feishu was not built, and otherwise becomes active when Feishu is ready.
 	prediction *feishu.PredictionJob
 	// upstream is the in-process CPA fixture. It is non-nil only in demo mode, and
 	// it is the reason a demo deployment can boot with no gateway at all.

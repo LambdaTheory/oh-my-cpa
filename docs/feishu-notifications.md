@@ -15,7 +15,7 @@ and what remains unverified. The approved scope is in
 
 | Path | Responsibility |
 | --- | --- |
-| `internal/feishu/` | The bot: report DTO, policy, renderer, sender seam, dedup, service lifecycle, websocket source. |
+| `internal/feishu/` | The bot: report DTO, policy, renderer, sender seam, dedup, service lifecycle, websocket source, and the scheduled quota prediction digest in `prediction_digest.go`. |
 | `internal/repository/feishu_notifications.go` | Persistence for the settings, the encrypted secret and the runtime document. |
 | `internal/api/feishu.go` | The settings/status/test routes and the `feishu.Store` adapter. |
 | `migrations/045_feishu_notifications.sql` | The schema. |
@@ -251,7 +251,9 @@ delivery through the same outbox; failed sends use the same bounded retry schedu
 
 Each row shows the credential label, window, current used percentage, projected percentage
 at reset and verdict. Projected cost and tokens appear only when priced usage is sufficient.
-The footer states the newest data time and that the result is a projection, not a guarantee.
+Exhaustion findings are prioritised within the card's bounded finding set. The footer states
+the newest data time, that the result is a projection rather than a guarantee, and how many
+additional findings were omitted when the bound was reached.
 
 ## Remaining risk
 

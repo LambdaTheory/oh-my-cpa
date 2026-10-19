@@ -122,7 +122,7 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/quota` | Per-provider quota probes, normalization, balance and warmup evidence, the passive response-header parser, the active-observation projection, and the per-account refresh scheduler with its 429 backoff | `management`, `security`, `usage` |
 | `internal/automation` | Account-level auto-management: the pure weekly-exhaustion decision, the persisted plan and retry schedule, and the background pass that disables and enables a credential through the shared operations write path | `repository`, `security` |
 | `internal/ollama` | Ollama quota monitoring: the fixed-settings-page scraper, the cookie decrypt seam, the persisted safe snapshot and the collection loop | `quota` |
-| `internal/feishu` | The Feishu notification bot: the read-only report DTO, the denoise policy, the card renderer, the sender/source seams, the dedup store and the module lifecycle (long connection plus classification loop) | — |
+| `internal/feishu` | The Feishu notification bot: the read-only report DTO, denoise policy, card renderer, sender/source seams, dedup store, module lifecycle (long connection plus classification loop), and `prediction_digest.go` scheduled quota prediction job | — |
 | `internal/release` | Published-version observation: version comparison, the release feed client, the stored index, and the project's star count for the header link | `repository` |
 | `internal/updater` | The updater role of the binary (`oh-my-cpa updater serve\|install\|healthcheck`, ADR 0099): a Docker Engine API client over the unix socket, container replacement with rollback, signed-manifest verification, the two-request control service, the one-command installer, and the client the console uses to reach it | `release` |
 | `internal/demo` | The publication fixture: an in-process CPA stand-in, the seeded history, and the capture state the console renders | `domain`, `pricing`, `quota`, `repository`, `security`, `usage`, `usage/ingest` |
@@ -3478,13 +3478,16 @@ projection and the 100-row/32-KiB bounds. It assembles inputs only from persiste
 credential metadata, the newest quota snapshots, passive and active `quota_observations`,
 and `usage_events`; it never calls the CPA management gateway. Read-only MCP masking happens
 after deterministic sorting by hidden stored identity, and those identities are not returned.
+The internal Feishu projection filters first, prioritises exhaustion findings, and caps the
+card input at 178 rows while carrying an omitted count to the renderer.
 
 `internal/feishu/prediction_digest.go` is the daily prediction component. At configured
 summary minutes the Feishu loop evaluates it before the legacy scheduled summary. A
 `will_exhaust` or `under_used` finding queues one card through the same persisted outbox
 and claims that minute; without a finding, the existing summary path runs unchanged. The
 component shares timezone, chat, quiet hours, sender and retry behavior and remains inert
-when Feishu is not ready.
+when Feishu is not ready. Its footer discloses omitted findings before the renderer's fixed
+card-element ceiling can hide them.
 
 ## 15. Where to look next
 

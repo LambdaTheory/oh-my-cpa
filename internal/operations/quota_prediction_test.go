@@ -7,6 +7,7 @@ import (
 	"math"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,7 +202,51 @@ func TestBoundQuotaPredictionReturnsMarshalError(t *testing.T) {
 	}
 }
 
-func TestQuotaPredictionFindingsBypassCapabilityTruncation(t *testing.T) {
+func TestBoundQuotaPredictionTruncatesByteTail(t *testing.T) {
+	large := strings.Repeat("x", 20*1024)
+	result := QuotaPredictionResult{Items: []QuotaPredictionItem{
+		{CredentialLabel: large, Verdict: quota.PredictionVerdictUnknown},
+		{CredentialLabel: large, Verdict: quota.PredictionVerdictUnknown},
+	}}
+	if err := boundQuotaPrediction(&result); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Omitted != 1 || len(encoded) > quotaPredictionByteLimit {
+		t.Fatalf("byte-tail result = %d items, %d omitted, %d bytes", len(result.Items), result.Omitted, len(encoded))
+	}
+}
+
+func TestQuotaPredictionPassiveOverlayPreservesKnownReset(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-passive.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	now := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
+	reset, period, used := now.Add(4*time.Hour).UnixMilli(), 10.0, 20.0
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("passive", "passive@example.com", "codex")})
+	seedPredictionSnapshot(t, repo, "passive", "codex", now.Add(-time.Hour).UnixMilli(), []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	if _, err := repo.SQL().ExecContext(context.Background(),
+		`INSERT INTO quota_observations (auth_index, provider, window_kind, scope, model, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source)
+		 VALUES ('passive', 'codex', 'weekly', 'standard', '', 600, 30, NULL, 'healthy', ?, 'passive-weekly', ?, 'passive')`,
+		now.UnixMilli(), now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ResetAtMS == nil || *result.Items[0].ResetAtMS != reset || slices.Contains(result.Items[0].Reasons, quota.PredictionReasonBoundaryUnknown) {
+		t.Fatalf("passive overlay prediction = %+v", result.Items)
+	}
+}
+
+func TestQuotaPredictionFindingsArePrioritizedAndCapped(t *testing.T) {
 	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-findings.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -210,11 +255,15 @@ func TestQuotaPredictionFindingsBypassCapabilityTruncation(t *testing.T) {
 	repo := repository.New(database)
 	now := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
 	reset, period := now.Add(4*time.Hour).UnixMilli(), 10.0
-	first, current := 10.0, 70.0
-	firstWindows := make([]quota.QuotaWindow, 0, 101)
-	currentWindows := make([]quota.QuotaWindow, 0, 101)
-	for index := 0; index < 101; index++ {
+	first := 10.0
+	firstWindows := make([]quota.QuotaWindow, 0, 181)
+	currentWindows := make([]quota.QuotaWindow, 0, 181)
+	for index := 0; index < 181; index++ {
 		id := fmt.Sprintf("custom-%03d", index)
+		current := 70.0
+		if index < 3 {
+			current = 20
+		}
 		firstWindows = append(firstWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &first, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
 		currentWindows = append(currentWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &current, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
 	}
@@ -237,8 +286,13 @@ func TestQuotaPredictionFindingsBypassCapabilityTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(public.Items)+public.Omitted != 101 || public.Omitted == 0 || len(findings.Items) != 101 || findings.Omitted != 0 {
+	if len(public.Items)+public.Omitted != 181 || public.Omitted == 0 || len(findings.Items) != quotaPredictionFindingsLimit || findings.Omitted != 3 {
 		t.Fatalf("public=%d/%d findings=%d/%d", len(public.Items), public.Omitted, len(findings.Items), findings.Omitted)
+	}
+	for _, item := range findings.Items {
+		if item.Verdict != quota.PredictionVerdictWillExhaust {
+			t.Fatalf("lower-priority finding displaced exhaustion finding: %+v", item)
+		}
 	}
 }
 

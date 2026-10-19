@@ -101,10 +101,10 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 		Web: web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
 		Logger: h.logger, Now: h.now,
 	})
-	api.prediction = feishu.NewPredictionJob(api.service, func(ctx context.Context) ([]feishu.PredictionDigestItem, error) {
+	api.prediction = feishu.NewPredictionJob(api.service, func(ctx context.Context) (feishu.PredictionDigest, error) {
 		prediction, err := h.operationsService().QuotaPrediction(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.QuotaPredictionInput{FindingsOnly: true})
 		if err != nil {
-			return nil, err
+			return feishu.PredictionDigest{}, err
 		}
 		items := make([]feishu.PredictionDigestItem, 0, len(prediction.Items))
 		for _, item := range prediction.Items {
@@ -115,7 +115,7 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 				ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
 			})
 		}
-		return items, nil
+		return feishu.PredictionDigest{Items: items, Omitted: prediction.Omitted}, nil
 	})
 	return api, nil
 }

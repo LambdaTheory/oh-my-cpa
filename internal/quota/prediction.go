@@ -278,7 +278,7 @@ func appendPredictionUsage(result *WindowPrediction, input PredictionInput) {
 		return
 	}
 	if input.UsageReason != "" {
-		appendPredictionReason(result, PredictionReasonUsageUnavailable)
+		appendPredictionReason(result, input.UsageReason)
 		return
 	}
 	if input.Usage == nil {

@@ -567,7 +567,9 @@ exceed 100. A read-only MCP principal must omit `auth_index`, receives no auth i
 the result and sees `credential_label` through `accountLabelForCaller`. Agent and console
 callers retain both fields. The result is also bounded to 32 KiB and reports every removed
 tail row through `omitted`. The internal Feishu findings projection filters verdicts before
-these public result bounds, so a finding cannot disappear behind a non-finding row.
+these public result bounds, prioritises `will_exhaust`, and retains at most 178 findings to
+fit the card envelope. Its `omitted` count is disclosed in the prediction card footer, so a
+finding cannot disappear silently behind either a non-finding row or renderer truncation.
 
 Each item states the current used percentage, reset and observation times, data age,
 burn rate, projected used percentage at reset, optional projected tokens and cost,

@@ -23,7 +23,12 @@ type PredictionDigestItem struct {
 	Verdict                   string
 }
 
-type PredictionSource func(context.Context) ([]PredictionDigestItem, error)
+type PredictionDigest struct {
+	Items   []PredictionDigestItem
+	Omitted int
+}
+
+type PredictionSource func(context.Context) (PredictionDigest, error)
 
 type PredictionJob struct {
 	service  *Service
@@ -87,31 +92,37 @@ func (job *PredictionJob) tick(ctx context.Context) {
 	// The prediction source is deliberately read before the persisted state. A
 	// held source cannot block the service loop, and the later load incorporates
 	// any immediate alerts the service saved while prediction was evaluating.
-	items, sourceErr := job.source(ctx)
+	digest, sourceErr := job.source(ctx)
 	if sourceErr != nil {
 		service.logger.WarnContext(ctx, "feishu prediction digest read failed", "error", sourceErr)
 	}
+	var report Report
+	var hasReport bool
+	if sourceErr != nil || !hasPredictionFindings(digest.Items) {
+		if service.source != nil {
+			report, hasReport = service.source.ReadReport(ctx)
+		}
+	}
+	service.stateMu.Lock()
 	state, err := service.store.Load(ctx)
 	if err != nil {
+		service.stateMu.Unlock()
 		service.setLastError(err)
 		service.logger.WarnContext(ctx, "feishu prediction state load failed", "error", err)
 		return
 	}
-	queued := sourceErr == nil && job.queueFindings(state, resolved, now, items)
+	queued := sourceErr == nil && job.queueFindings(state, resolved, now, digest)
 	if !queued {
-		var report Report
-		var hasReport bool
-		if service.source != nil {
-			report, hasReport = service.source.ReadReport(ctx)
-		}
 		service.maybeScheduledSummary(state, resolved, report, hasReport, now)
 	}
 	state.UpdatedAt = now
 	if err := service.store.Save(ctx, state); err != nil {
+		service.stateMu.Unlock()
 		service.setLastError(err)
 		service.logger.WarnContext(ctx, "feishu prediction state save failed", "error", err)
 		return
 	}
+	service.stateMu.Unlock()
 	if !withinQuiet(resolved, now) {
 		service.deliverOutbox(ctx, resolved)
 	}
@@ -121,20 +132,29 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 	if job.source == nil || state == nil || !resolved.Ready() || !scheduledMinute(resolved, now) || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return false
 	}
-	items, err := job.source(ctx)
+	digest, err := job.source(ctx)
 	if err != nil {
 		job.service.logger.WarnContext(ctx, "feishu prediction digest read failed", "error", err)
 		return false
 	}
-	return job.queueFindings(state, resolved, now, items)
+	return job.queueFindings(state, resolved, now, digest)
 }
 
-func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, items []PredictionDigestItem) bool {
+func hasPredictionFindings(items []PredictionDigestItem) bool {
+	for _, item := range items {
+		if item.Verdict == "will_exhaust" || item.Verdict == "under_used" {
+			return true
+		}
+	}
+	return false
+}
+
+func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
 	if state == nil || !resolved.Ready() || !scheduledMinute(resolved, now) || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return false
 	}
-	findings := make([]PredictionDigestItem, 0, len(items))
-	for _, item := range items {
+	findings := make([]PredictionDigestItem, 0, len(digest.Items))
+	for _, item := range digest.Items {
 		if item.Verdict == "will_exhaust" || item.Verdict == "under_used" {
 			findings = append(findings, item)
 		}
@@ -143,11 +163,11 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 		return false
 	}
 	state.LastSummaryAt = now
-	state.queueNotification(predictionNotification(findings, resolved, now))
+	state.queueNotification(predictionNotification(findings, digest.Omitted, resolved, now))
 	return true
 }
 
-func predictionNotification(items []PredictionDigestItem, resolved Resolved, now time.Time) Notification {
+func predictionNotification(items []PredictionDigestItem, omitted int, resolved Resolved, now time.Time) Notification {
 	alerts := make([]Alert, 0, len(items)+1)
 	newestObservedAtMS := int64(0)
 	for _, item := range items {
@@ -167,6 +187,9 @@ func predictionNotification(items []PredictionDigestItem, resolved Resolved, now
 	footer := "数据截至时间未知；预测是基于已记录观测与使用历史的推演，不是保证。"
 	if newestObservedAtMS > 0 {
 		footer = "数据截至 " + time.UnixMilli(newestObservedAtMS).In(resolved.Location).Format("2006-01-02 15:04") + "；预测是基于已记录观测与使用历史的推演，不是保证。"
+	}
+	if omitted > 0 {
+		footer += fmt.Sprintf(" 另有 %d 项预测发现未展示；请在 OMC 中查看完整预测。", omitted)
 	}
 	alerts = append(alerts, Alert{Kind: predictionKindPrefix, Title: "数据说明", Facts: []string{footer}, OccurredAt: now})
 	localMinute := now.In(resolved.Location).Format("15:04")

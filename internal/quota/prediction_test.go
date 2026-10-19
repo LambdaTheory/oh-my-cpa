@@ -196,3 +196,17 @@ func TestPredictWindowUnderUsedAndUsageReasons(t *testing.T) {
 		t.Fatalf("low usage = %+v", got)
 	}
 }
+
+func TestPredictWindowPreservesSpecificUsageReason(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	window, reset := predictionWindow(start, 60)
+	observed := start.Add(6 * time.Hour).UnixMilli()
+	got := PredictWindow(PredictionInput{
+		Window: window, ObservedAtMS: observed, NowMS: observed,
+		Observations: []PredictionObservation{{ObservedAtMS: start.Add(time.Hour).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset}},
+		UsageReason:  CapacityReasonScopeUnknown,
+	})
+	if !slices.Contains(got.Reasons, CapacityReasonScopeUnknown) || slices.Contains(got.Reasons, PredictionReasonUsageUnavailable) {
+		t.Fatalf("usage reasons = %v", got.Reasons)
+	}
+}

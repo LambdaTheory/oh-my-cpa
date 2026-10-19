@@ -3,7 +3,9 @@ package feishu
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -20,9 +22,9 @@ func TestPredictionDigestQueuesOnceAndSuppressesSummary(t *testing.T) {
 	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
 	used, projected := 60.0, 120.0
 	reads := 0
-	job := &PredictionJob{service: NewService(Options{Web: Config{Enabled: true}, Overlay: Overlay{AppSecret: stringPointer("secret")}}), source: func(context.Context) ([]PredictionDigestItem, error) {
+	job := &PredictionJob{service: NewService(Options{Web: Config{Enabled: true}, Overlay: Overlay{AppSecret: stringPointer("secret")}}), source: func(context.Context) (PredictionDigest, error) {
 		reads++
-		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
 	}}
 	state := EmptyState()
 	resolved := readyPredictionConfig()
@@ -39,8 +41,8 @@ func TestPredictionDigestQueuesOnceAndSuppressesSummary(t *testing.T) {
 
 func TestPredictionDigestLeavesSummaryWhenNoFinding(t *testing.T) {
 	now := time.Date(2026, 10, 19, 17, 0, 0, 0, time.UTC)
-	job := &PredictionJob{service: NewService(Options{Web: Config{Enabled: true}, Overlay: Overlay{AppSecret: stringPointer("secret")}}), source: func(context.Context) ([]PredictionDigestItem, error) {
-		return []PredictionDigestItem{{Verdict: "on_track"}}, nil
+	job := &PredictionJob{service: NewService(Options{Web: Config{Enabled: true}, Overlay: Overlay{AppSecret: stringPointer("secret")}}), source: func(context.Context) (PredictionDigest, error) {
+		return PredictionDigest{Items: []PredictionDigestItem{{Verdict: "on_track"}}}, nil
 	}}
 	state := EmptyState()
 	if job.maybeQueue(context.Background(), state, readyPredictionConfig(), now) || len(state.Outbox) != 0 || !state.LastSummaryAt.IsZero() {
@@ -50,7 +52,7 @@ func TestPredictionDigestLeavesSummaryWhenNoFinding(t *testing.T) {
 
 func TestPredictionDigestDoesNotRunOutsideReadyService(t *testing.T) {
 	reads := 0
-	job := &PredictionJob{service: NewService(Options{}), source: func(context.Context) ([]PredictionDigestItem, error) { reads++; return nil, nil }}
+	job := &PredictionJob{service: NewService(Options{}), source: func(context.Context) (PredictionDigest, error) { reads++; return PredictionDigest{}, nil }}
 	state := EmptyState()
 	disabled := resolveConfig(Config{Enabled: false, SummaryTimes: []string{"10:00"}, Timezone: "UTC"}, Overlay{})
 	if job.maybeQueue(context.Background(), state, disabled, time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)) {
@@ -83,8 +85,8 @@ func TestPredictionDigestUsesOutboxAndSuppressesScheduledSummary(t *testing.T) {
 	if err := store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
 	}
-	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
-		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
 	})
 	job.tick(context.Background())
 	if sends, _ := sender.counts(); sends != 1 {
@@ -114,7 +116,7 @@ func TestPredictionDigestSourceIsNotReadByInactiveService(t *testing.T) {
 		Web: Config{Enabled: false, SummaryTimes: []string{"10:00"}, Timezone: "UTC"},
 		Now: func() time.Time { return time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC) },
 	})
-	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) { reads++; return nil, nil })
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) { reads++; return PredictionDigest{}, nil })
 	job.tick(context.Background())
 	if reads != 0 {
 		t.Fatalf("inactive prediction reads = %d", reads)
@@ -133,9 +135,9 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		cancel()
-		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
 	})
 	job.Activate()
 	if !service.predictionSchedulerActive.Load() {
@@ -172,9 +174,9 @@ func TestPredictionJobBecomesReadyAfterReload(t *testing.T) {
 	})
 	used, projected := 60.0, 120.0
 	reads := make(chan struct{}, 1)
-	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		reads <- struct{}{}
-		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
 	})
 	job.tick(context.Background())
 	if len(reads) != 0 {
@@ -223,10 +225,10 @@ func TestPredictionMinuteSuppressesConcurrentStartupDigest(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	used, projected := 60.0, 120.0
-	job := NewPredictionJob(service, func(context.Context) ([]PredictionDigestItem, error) {
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		close(started)
 		<-release
-		return []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
 	})
 	job.Activate()
 	done := make(chan struct{})
@@ -278,6 +280,131 @@ func TestPredictionOwnershipDoesNotSuppressImmediateAlert(t *testing.T) {
 		t.Fatalf("outbox = %+v", state.Outbox)
 	}
 }
+
+type blockingFirstLoadStore struct {
+	base    *MemoryStore
+	mu      sync.Mutex
+	blocked bool
+	loaded  chan struct{}
+	release chan struct{}
+}
+
+func newBlockingFirstLoadStore() *blockingFirstLoadStore {
+	return &blockingFirstLoadStore{base: NewMemoryStore(), loaded: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (s *blockingFirstLoadStore) Load(ctx context.Context) (*State, error) {
+	state, err := s.base.Load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	isFirst := !s.blocked
+	if isFirst {
+		s.blocked = true
+	}
+	s.mu.Unlock()
+	if isFirst {
+		close(s.loaded)
+		<-s.release
+	}
+	return state, nil
+}
+
+func (s *blockingFirstLoadStore) Save(ctx context.Context, state *State) error {
+	return s.base.Save(ctx, state)
+}
+
+type notifyingReportSource struct {
+	report Report
+	read   chan struct{}
+	once   sync.Once
+}
+
+func (s *notifyingReportSource) ReadReport(context.Context) (Report, bool) {
+	s.once.Do(func() { close(s.read) })
+	return s.report, true
+}
+
+func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
+	for _, first := range []string{"prediction", "service"} {
+		t.Run(first+"_loads_first", func(t *testing.T) {
+			now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+			web, overlay := readyConfig()
+			web.QuietStart, web.QuietEnd = "00:00", "23:59"
+			store := newBlockingFirstLoadStore()
+			reportSource := &notifyingReportSource{read: make(chan struct{}), report: Report{GeneratedAt: now, Providers: []ProviderReport{{
+				Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
+			}}}}
+			service := NewService(Options{
+				Web: web, Overlay: overlay, Store: store, Source: reportSource, Now: func() time.Time { return now },
+				SenderFactory: func(Resolved) Sender { return newFakeSender() }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
+			})
+			service.predictionSchedulerActive.Store(true)
+			predictionRead := make(chan struct{})
+			var predictionOnce sync.Once
+			used, projected := 60.0, 120.0
+			job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
+				predictionOnce.Do(func() { close(predictionRead) })
+				return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "prediction", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+			})
+
+			serviceDone, predictionDone := make(chan struct{}), make(chan struct{})
+			runService := func() { service.tick(context.Background()); close(serviceDone) }
+			runPrediction := func() { job.tick(context.Background()); close(predictionDone) }
+			if first == "prediction" {
+				go runPrediction()
+				<-store.loaded
+				go runService()
+				<-reportSource.read
+			} else {
+				go runService()
+				<-store.loaded
+				go runPrediction()
+				<-predictionRead
+			}
+			close(store.release)
+			<-serviceDone
+			<-predictionDone
+
+			state, err := store.base.Load(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			alerts, predictions := 0, 0
+			for _, notification := range state.Outbox {
+				if notification.Kind == AlertCredential {
+					alerts++
+				}
+				if strings.HasPrefix(notification.Kind, predictionKindPrefix) {
+					predictions++
+				}
+			}
+			if alerts != 1 || predictions != 1 || !sameSummaryMinute(state.LastSummaryAt, service.resolvedNow(), now) {
+				t.Fatalf("runtime document lost a scheduler write: alerts=%d predictions=%d state=%+v", alerts, predictions, state)
+			}
+		})
+	}
+}
+
+func TestPredictionDigestDisclosesOmittedFindingsWithinCardLimit(t *testing.T) {
+	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	used, projected := 60.0, 120.0
+	items := make([]PredictionDigestItem, quotaPredictionFindingsForCardTest)
+	for index := range items {
+		items[index] = PredictionDigestItem{CredentialLabel: fmt.Sprintf("account-%03d", index), Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+	}
+	notification := predictionNotification(items, 3, readyPredictionConfig(), now)
+	message := Message{Kind: notification.Kind, Alerts: notification.Alerts, GeneratedAt: notification.OccurredAt}
+	card := NewPlainReportRenderer(time.UTC).Card(message)
+	body := card["body"].(map[string]any)
+	elements := body["elements"].([]map[string]any)
+	if len(elements) != maxCardElements || !strings.Contains(marshalTestJSON(card), "另有 3 项预测发现未展示") {
+		t.Fatalf("prediction card elements=%d payload=%s", len(elements), marshalTestJSON(card))
+	}
+}
+
+const quotaPredictionFindingsForCardTest = maxCardElements - 2
 
 func marshalTestJSON(value any) string {
 	encoded, _ := json.Marshal(value)

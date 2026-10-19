@@ -16,8 +16,12 @@ import (
 const (
 	quotaPredictionDefaultLimit = 100
 	quotaPredictionMaxLimit     = 100
-	quotaPredictionByteLimit    = 32 * 1024
-	quotaPredictionHistoryLimit = 5000
+	// A prediction card spends one element on metadata and one on its footer.
+	// Keeping 178 findings therefore fits Feishu's 180-element ceiling, including
+	// the footer's omitted-count disclosure.
+	quotaPredictionFindingsLimit = 178
+	quotaPredictionByteLimit     = 32 * 1024
+	quotaPredictionHistoryLimit  = 5000
 )
 
 type QuotaPredictionInput struct {
@@ -116,6 +120,15 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 	}
 	sort.Slice(candidates, func(first, second int) bool {
 		a, b := candidates[first], candidates[second]
+		if input.FindingsOnly {
+			aRank, bRank := predictionFindingRank(a.item), predictionFindingRank(b.item)
+			if aRank != bRank {
+				return aRank < bRank
+			}
+			if a.item.ExhaustionETAMS != nil && b.item.ExhaustionETAMS != nil && *a.item.ExhaustionETAMS != *b.item.ExhaustionETAMS {
+				return *a.item.ExhaustionETAMS < *b.item.ExhaustionETAMS
+			}
+		}
 		if a.item.Provider != b.item.Provider {
 			return a.item.Provider < b.item.Provider
 		}
@@ -138,11 +151,16 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 		}
 		result.Items = append(result.Items, item)
 	}
-	if !input.FindingsOnly && len(result.Items) > limit {
-		result.Omitted += len(result.Items) - limit
-		result.Items = result.Items[:limit]
-	}
-	if !input.FindingsOnly {
+	if input.FindingsOnly {
+		if len(result.Items) > quotaPredictionFindingsLimit {
+			result.Omitted = len(result.Items) - quotaPredictionFindingsLimit
+			result.Items = result.Items[:quotaPredictionFindingsLimit]
+		}
+	} else {
+		if len(result.Items) > limit {
+			result.Omitted += len(result.Items) - limit
+			result.Items = result.Items[:limit]
+		}
 		if err := boundQuotaPrediction(&result); err != nil {
 			return QuotaPredictionResult{}, err
 		}
@@ -199,7 +217,9 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 			usedPercent := observation.UsedPercent
 			window.UsedPercent = &usedPercent
 			window.RemainingPercent = floatPointer(max(0, 100-usedPercent))
-			window.ResetAtMS = observation.ResetAtMS
+			if observation.ResetAtMS != nil {
+				window.ResetAtMS = observation.ResetAtMS
+			}
 			observedAtMS := observation.ObservedAtMS
 			window.ObservedAtMS = &observedAtMS
 			window.Source = observation.Source
@@ -210,6 +230,13 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 		})
 	}
 	return result, nil
+}
+
+func predictionFindingRank(item QuotaPredictionItem) int {
+	if item.Verdict == quota.PredictionVerdictWillExhaust {
+		return 0
+	}
+	return 1
 }
 
 func floatPointer(value float64) *float64 { return &value }

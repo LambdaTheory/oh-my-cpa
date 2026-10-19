@@ -88,6 +88,9 @@ type Service struct {
 
 	lastError string
 
+	// stateMu serializes replacement of the whole runtime document. External
+	// report reads and Feishu sends stay outside it.
+	stateMu                   sync.Mutex
 	deliveryMu                sync.Mutex
 	predictionSchedulerActive atomic.Bool
 }
@@ -606,8 +609,10 @@ func (s *Service) tick(ctx context.Context) {
 		rep, has = s.source.ReadReport(ctx)
 	}
 
+	s.stateMu.Lock()
 	state, err := s.store.Load(ctx)
 	if err != nil {
+		s.stateMu.Unlock()
 		s.setLastError(err)
 		s.logger.WarnContext(ctx, "feishu state load failed", "error", err)
 		return
@@ -664,10 +669,12 @@ func (s *Service) tick(ctx context.Context) {
 
 	state.UpdatedAt = now
 	if err := s.store.Save(ctx, state); err != nil {
+		s.stateMu.Unlock()
 		s.setLastError(err)
 		s.logger.WarnContext(ctx, "feishu state save failed", "error", err)
 		return
 	}
+	s.stateMu.Unlock()
 	if !quiet {
 		s.deliverOutbox(ctx, resolved)
 	}
@@ -825,12 +832,16 @@ func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
 	// before this point, so a slow Feishu request cannot block either scheduler.
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
+	s.stateMu.Lock()
 	state, err := s.store.Load(ctx)
+	s.stateMu.Unlock()
 	if err != nil {
 		s.setLastError(err)
 		return
 	}
 	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, state.Outbox)
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	latest, err := s.store.Load(ctx)
 	if err != nil {
 		s.setLastError(err)
