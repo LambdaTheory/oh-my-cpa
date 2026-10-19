@@ -1,28 +1,12 @@
-/* ── Sarasa Gothic subsetted font-face ──────────────────────────── */
-@font-face {
-  font-family: "Sarasa Mono SC";
-  src: local("Sarasa Mono SC"),
-       local("Sarasa UI SC"),
-       local("更纱黑体 SC"),
-       url("./assets/fonts/sarasa-mono-sc-regular.woff2") format("woff2");
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: "Sarasa Mono SC";
-  src: local("Sarasa Mono SC Bold"),
-       local("Sarasa UI SC Bold"),
-       local("更纱黑体 SC Bold"),
-       url("./assets/fonts/sarasa-mono-sc-bold.woff2") format("woff2");
-  font-weight: 700;
-  font-style: normal;
-  font-display: swap;
-}
+/* ── Sarasa Mono SC: the core shard of each weight ──────────────── */
+/* The rest of the font is registered asynchronously by `web/src/theme/sarasaFont.ts`. */
+@import "./assets/fonts/sarasa/core.css";
 
 :root {
-  font-family: "Sarasa Mono SC", "Sarasa UI SC", "Sarasa Term SC", "更纱黑体 SC", "Berkeley Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  /* The two typographic roles. Both default to the bundled typeface; an operator's choice
+     (OMC Settings → Appearance) is written over them on the root element by `theme/fontLibrary.ts`. */
+  --font-ui: "Sarasa Mono SC", "Sarasa UI SC", "Sarasa Term SC", "更纱黑体 SC", "Berkeley Mono", "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-ui);
   line-height: 1.5;
   font-weight: 400;
   color-scheme: dark;
@@ -104,6 +88,16 @@
   --series-4: #f43f5e;
   --series-5: #f59e0b;
   --series-6: #06b6d4;
+  /* The live routing map's lane identities (design.md §2, §7 rule 9). A lane is a connection, and a
+     connection drawn in green, amber or red reads as a verdict on it. Every slot therefore stays on
+     the cool side of the wheel, away from the status hues the rest of the map still uses on node
+     surfaces. */
+  --route-1: #3b82f6;
+  --route-2: #8b5cf6;
+  --route-3: #06b6d4;
+  --route-4: #ec4899;
+  --route-5: #d946ef;
+  --route-6: #94a3b8;
   /* The trend's plot floor and the ring's unfilled track: a quiet step against the card, so an empty
      stretch reads as the axis rather than as a gap in the data. */
   --series-track: #2c2c30;
@@ -151,6 +145,9 @@
      (`motionDurationFast`, and `motionDurationMid`/`Slow`), and `test-theme-presets` pins the pair -
      the stylesheet used to carry 100ms/150ms against the table's 50ms/100ms, so call sites written
      as `var(--motion-fast, 50ms)` were quietly paying double the budget they named. */
+  /* The top bar's height. A page that fills the content pane (the request list) subtracts it,
+     so the two cannot disagree when a phone takes the shorter bar. */
+  --app-header-height: 56px;
   --motion-fast: 50ms;
   --motion-base: 100ms;
   /* §7's `float`: a click already said "open", so a floating panel only fades. antd has no token for
@@ -212,6 +209,12 @@
   --series-4: #e11d48;
   --series-5: #b45309;
   --series-6: #0891b2;
+  --route-1: #2563eb;
+  --route-2: #7c3aed;
+  --route-3: #0891b2;
+  --route-4: #db2777;
+  --route-5: #c026d3;
+  --route-6: #475569;
   --series-track: #e5e5ea;
   /* The same sweep as its darker steps, which is what stays legible on a light page. */
   --effort-1: #39626e;
@@ -272,6 +275,14 @@ a { color: inherit; }
 }
 .ant-card, .ant-table-wrapper .ant-table, .ant-drawer-content, .ant-modal-content {
   background: var(--surface);
+}
+/* Viewport dimensions land immediately; only the sheet's position slides. */
+.ant-drawer .ant-drawer-content-wrapper {
+  transition-property: transform !important;
+}
+/* A sheet slides opaque, so the page below cannot show through its content. */
+.ant-drawer [class*='-panel-motion-'] {
+  opacity: 1 !important;
 }
 .ant-btn, .ant-input, .ant-select, .ant-table, .ant-tag, .ant-menu { font-family: inherit; }
 .ant-typography, h1, h2, h3, h4 { font-family: inherit; }
@@ -909,7 +920,10 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .app-menu .ant-menu-item-group-title { color: var(--meta) !important; font-size: var(--text-2xs); letter-spacing: .14em; text-transform: uppercase; padding: 14px 12px 6px; }
 .app-menu .ant-menu-item { color: var(--muted); margin: 2px 8px; width: calc(100% - 16px); padding-inline: 10px; border-radius: var(--radius-sm); }
 .app-menu .ant-menu-item-selected { color: var(--fg) !important; font-weight: 600; background: transparent !important; box-shadow: inset 2px 0 0 var(--fg) !important; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
-.app-menu .app-menu-plugin-logo { width: 16px; height: 16px; flex: none; border-radius: var(--radius-xs); object-fit: contain; }
+/* A plugin page's logo is an image of whatever size the plugin shipped. The nav model hands the
+   same element to the rail and to the sidebar-visibility dialog, so the glyph box belongs to the
+   logo itself rather than to the rail that first drew it. */
+.app-menu-plugin-logo { width: 16px; height: 16px; flex: none; border-radius: var(--radius-xs); object-fit: contain; }
 .app-menu .ant-menu-item:hover { color: var(--fg) !important; background: var(--surface) !important; }
 /* An available update marks the System Information entry: a `--warn` dot just outside the
    icon's corner, where it touches neither the glyph nor the row's hover fill. */
@@ -946,7 +960,7 @@ input:focus-visible, textarea:focus-visible { outline: none; }
    to the chrome that touches an edge rather than to `.app-content`, because a scroll
    container given a bottom inset scrolls its last line out from under itself. Each inset
    is a floor beneath the design system's own padding, never a replacement for it. */
-.app-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 56px; padding: 0 max(24px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left)); background: var(--bg) !important; border-bottom: 1px solid var(--border); }
+.app-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; height: var(--app-header-height); padding: 0 max(24px, env(safe-area-inset-right)) 0 max(12px, env(safe-area-inset-left)); background: var(--bg) !important; border-bottom: 1px solid var(--border); }
 .app-sider { padding-left: env(safe-area-inset-left); }
 .app-header-left, .app-header-actions, .app-breadcrumb { display: flex; align-items: center; }
 .app-header-left { min-width: 0; gap: 8px; }
@@ -1087,7 +1101,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   box-shadow: none !important;
   min-width: 0;
 }
-.dashboard-tile.is-wide { grid-column: span 2; }
 .ant-btn.tile-link { height: auto; padding: 0; font-size: var(--text-sm); }
 .dashboard-tile .ant-card-body { padding: 20px; height: 100%; display: flex; flex-direction: column; }
 .dashboard-tile .tile-caption { flex: 1; }
@@ -1109,29 +1122,21 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .chart-slot svg { display: block; width: 100%; height: 100%; overflow: visible; }
 .chart-placeholder { margin-top: 14px; border-bottom: 1px solid var(--border-soft); }
 
-@media (max-width: 1100px) {
-  .dashboard-tile.is-wide { grid-column: span 2; }
-}
 @media (max-width: 640px) {
-  .dashboard-tile.is-wide { grid-column: span 1; }
   .dashboard-tile .ant-card-body { padding: 16px; }
+  .tile-caption { margin-top: 6px; gap: 2px 10px; font-size: var(--text-sm); }
+  .dashboard-tile .chart-slot, .dashboard-tile .chart-placeholder { margin-top: 8px; }
 }
 
 /* ── model panels: the window's token trend and usage ring ───────────────────
-   Two peer cards above the activity grid, each spanning half the grid on a wide viewport. They read
-   one response, so they are drawn from one ranking and a model's colour is the same in both - see
-   `ModelUsagePanels` for why that is a correctness requirement rather than an economy.
+   Two peer widgets, each spanning half the board by default. They read one response, so they are
+   drawn from one ranking and a model's colour is the same in both - see `useDashboardModels` for
+   why that is a correctness requirement rather than an economy.
 
    The blocks below are deliberately NOT `.chart-slot`. That class belongs to the six KPI sparklines,
    and it disables pointer events on its canvas and pins the plot to the slot's height; the model
    trend needs the library's own shared tooltip, which requires the pointer. The two chart surfaces
    are therefore styled separately even though both hold an AntV mark. */
-.dashboard-models {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
 
 /* `min-width: 0` is load-bearing: these are grid children holding a canvas that sizes to its
    container, and without it a long model name in the legend would push the card wider than its
@@ -1254,12 +1259,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .omc-tip-share { grid-column: 3; color: var(--muted); white-space: nowrap; text-align: right; }
 .omc-tip-rows.has-names .omc-tip-share { grid-column: 4; }
 
-@media (max-width: 1100px) {
-  .dashboard-models { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 640px) {
-  .dashboard-models { grid-template-columns: minmax(0, 1fr); }
-}
 /* A glyph in the header's own muted ink rather than a framed button: the panel is a reading, and
    its one control should not outweigh the title it sits beside. */
 .quota-refresh.ant-btn { border-color: transparent; background: transparent; box-shadow: none; color: var(--muted); }
@@ -1455,6 +1454,9 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   to { transform: rotate(360deg); }
 }
 @media (prefers-reduced-motion: reduce) {
+  .ant-drawer .ant-drawer-content-wrapper {
+    transition: none !important;
+  }
   /* antd animates a floating panel in with a zoom (`antZoomBigIn`) and does so under reduced motion
      as well - measured, not assumed. Killing the animation alone is not enough: rc-motion sets the
      enter state inline and waits for the animation to remove it, so `animation: none` left the panel
@@ -2235,8 +2237,27 @@ input:focus-visible, textarea:focus-visible { outline: none; }
 .action-menu-label { padding: 4px 12px; font-size: var(--text-sm); color: var(--muted); overflow-wrap: anywhere; }
 
 @media (max-width: 640px) {
+  :root { --app-header-height: 48px; }
   .terminal-page { padding: 12px 12px 24px; }
   .terminal-page-head { gap: 8px 12px; margin-bottom: 12px; align-items: center; }
+  /* The top bar already names the page one line above, so the page's own title is kept for a
+     screen reader and the document outline and not drawn a second time. What it shared a row
+     with - a live subtitle, the page's actions - moves up into its place; a head that held
+     nothing else takes no room at all. */
+  .terminal-page-head .terminal-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .terminal-page-head { position: relative; }
+  .terminal-page-head > .terminal-page-actions { margin-inline-start: auto; }
+  .terminal-page-heading:not(:has(> :not(.terminal-title))) { position: absolute; }
+  .terminal-page-head .terminal-subtitle { margin-top: 0; }
+  .terminal-page-head:not(:has(.terminal-page-actions, .request-actions, .terminal-page-heading > :not(.terminal-title))) { display: contents; }
   .terminal-page-stack { gap: 12px; }
   .terminal-page-stack > .terminal-page-head { margin-bottom: 0; }
   .terminal-title, .config-toolbar-left .terminal-title { font-size: 18px; }

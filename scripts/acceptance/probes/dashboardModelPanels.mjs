@@ -31,7 +31,7 @@ import { checkDashboardTooltipRows } from './dashboardCharts.mjs';
  */
 export async function dashboardModelPanels({ base, page, check }) {
   await page.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.locator('.dashboard-models').waitFor({ timeout: 20_000 });
+  await page.locator('.model-trend-card').waitFor({ timeout: 20_000 });
   // The marks are behind a lazy import, so the first frame after the panel appears is the Suspense
   // fallback rather than a canvas.
   await page.locator('.model-trend canvas').first().waitFor({ timeout: 20_000 });
@@ -378,7 +378,7 @@ export async function dashboardModelPanels({ base, page, check }) {
   // readout centred on a box that could be taller than the drawing, so the total floated above the
   // hole. The observable is geometric: the ink bounding box of the painted ring, and the readout's
   // own box, must share a centre within a couple of device pixels.
-  const ringCentring = await page.evaluate(() => {
+  const measureRingCentring = () => page.evaluate(() => {
     const canvas = document.querySelector('.model-ring canvas');
     if (!canvas) return { error: 'no canvas' };
     const probe = document.createElement('canvas');
@@ -406,12 +406,48 @@ export async function dashboardModelPanels({ base, page, check }) {
       x: (readoutRect.left - canvasRect.left + readoutRect.width / 2) * (probe.width / canvasRect.width),
       y: (readoutRect.top - canvasRect.top + readoutRect.height / 2) * (probe.height / canvasRect.height),
     };
-    return { ink, readout, drift: { x: Math.abs(ink.x - readout.x), y: Math.abs(ink.y - readout.y) } };
+    return {
+      ink,
+      readout,
+      drift: { x: Math.abs(ink.x - readout.x), y: Math.abs(ink.y - readout.y) },
+      canvasWidth: canvasRect.width,
+    };
   });
+  const isCentred = (centring) => !centring.error && centring.drift.x <= 2 && centring.drift.y <= 2;
+  const ringCentring = await measureRingCentring();
   check(
     'the centre readout sits on the ring\'s painted centre',
-    !ringCentring.error && ringCentring.drift.x <= 2 && ringCentring.drift.y <= 2,
+    isCentred(ringCentring),
     JSON.stringify(ringCentring),
+  );
+
+  // A frame can change size without the window changing: the console font arriving after the first
+  // paint re-measures the text beside the ring, and G2's own refit listens only for a window resize.
+  // Growing is the direction that shows it - a canvas left at a smaller size cannot fill a larger
+  // frame, while a larger one is scaled down by CSS and still looks centred - so the frame is
+  // narrowed, then widened back, and the ring must fill the wider frame on its centre.
+  const frameWidth = await page.evaluate(() => {
+    const frame = document.querySelector('.model-ring-frame');
+    const width = frame.getBoundingClientRect().width;
+    frame.style.width = `${Math.round(width * 0.8)}px`;
+    return width;
+  });
+  await until(async () => (await measureRingCentring()).canvasWidth < frameWidth - 1, { label: 'the ring to follow its narrowed frame' });
+  await page.evaluate(() => { document.querySelector('.model-ring-frame').style.width = ''; });
+  const fillsFrame = (centring) => isCentred(centring) && Math.abs(centring.canvasWidth - frameWidth) <= 1;
+  let refitCentring = await measureRingCentring();
+  try {
+    await until(async () => {
+      refitCentring = await measureRingCentring();
+      return fillsFrame(refitCentring);
+    }, { label: 'the ring to refit its widened frame' });
+  } catch {
+    // The check below reports the last measurement.
+  }
+  check(
+    'the ring refits a frame that grew without a window resize',
+    fillsFrame(refitCentring),
+    JSON.stringify({ frameWidth, ...refitCentring }),
   );
 
   // ── the ring's hover states what the ranked list states ───────────────────
@@ -539,7 +575,7 @@ export async function dashboardModelPanels({ base, page, check }) {
 
   // ── the two cards stay inside their own width ──────────────────────────────
   const overflow = await page.evaluate(() =>
-    [...document.querySelectorAll('.dashboard-models .dashboard-tile')].map((card) => card.scrollWidth - card.clientWidth),
+    [...document.querySelectorAll('.model-trend-card, .model-usage-card')].map((card) => card.scrollWidth - card.clientWidth),
   );
   check(
     'neither model card overflows its own width',
@@ -747,6 +783,9 @@ export async function dashboardModelPanels({ base, page, check }) {
 
   const trendCanvas = page.locator('.model-trend canvas').first();
   const hoverTrend = async () => {
+    // The mouse moves in viewport coordinates, so the trend has to be on screen wherever the
+    // dashboard's layout above it puts it.
+    await trendCanvas.scrollIntoViewIfNeeded();
     const box = await trendCanvas.boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     // A second move lands on a different pixel: the library's pointer tracking subscribes to movement,
@@ -1027,7 +1066,7 @@ export async function dashboardModelPanelFailures({ base, page, check }) {
  */
 export async function dashboardModelPanelsEmpty({ base, page, check }) {
   await page.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
-  await page.locator('.dashboard-models').waitFor({ timeout: 20_000 });
+  await page.locator('.model-trend-card').waitFor({ timeout: 20_000 });
   await until(async () => (await page.locator('.model-empty, .model-trend canvas').count()) > 0, {
     label: 'the model panels to resolve',
   }).catch(() => {});

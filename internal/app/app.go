@@ -27,6 +27,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/release"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/timezone"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/updater"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/usage/ingest"
 )
 
@@ -232,6 +233,17 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 			logger.Warn("could not clear stored release validators", "error", err)
 		}
 		handler.SetRelease(releaseService)
+
+		// The console holds no Docker access of its own. Updates go through the sidecar,
+		// and a native install, which has no containers to replace, is told apart from a
+		// containerised one that simply has no sidecar yet.
+		if cfg.Updater.Enabled {
+			_, dockerErr := os.Stat("/.dockerenv")
+			handler.SetUpdater(updater.NewClient(cfg.Updater.URL, cfg.MasterKey), release.NewManifestClient(), dockerErr == nil)
+			// A console update ends the process that admitted it, so its outcome is
+			// collected here, by the process that replaced it.
+			handler.WatchInterruptedUpdate()
+		}
 
 		if db != nil {
 			maintenanceService, err = repository.NewMaintenanceService(ctx, db)
@@ -479,25 +491,6 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
-	// The quota scheduler actively refreshes each credential on a per-account
-	// cadence. It is best-effort like pricing: losing it leaves quota readings
-	// stale, but never breaks request capture or the HTTP server. It performs
-	// outbound probes, so a demo never runs it.
-	if !a.cfg.IsDemoMode && a.cfg.Quota.SchedulerEnabled {
-		if scheduler := a.handler.QuotaScheduler(a.logger); scheduler != nil {
-			go func() {
-				a.logger.Info("quota refresh scheduler started",
-					"watch_interval", a.cfg.Quota.WatchInterval.String(),
-					"active_interval", a.cfg.Quota.ActiveInterval.String(),
-					"normal_interval", a.cfg.Quota.NormalInterval.String(),
-					"idle_interval", a.cfg.Quota.IdleInterval.String())
-				if err := scheduler.Run(runCtx); err != nil {
-					a.logger.Warn("quota refresh scheduler stopped", "error", err)
-				}
-			}()
-		}
-	}
-
 	// Account auto-management is best-effort like the quota scheduler: losing it
 	// parks the plans in the database for the next pass and never breaks request
 	// capture or the HTTP server. It performs a CPA write, so a demo never starts it.
@@ -546,6 +539,37 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
+	// Warmup is joined before Run returns because a round in flight writes state and
+	// observations to the database the caller closes next.
+	warmupDone := make(chan struct{})
+	if a.cfg.IsDemoMode {
+		close(warmupDone)
+	} else {
+		go func() {
+			defer close(warmupDone)
+			if err := a.handler.RunCredentialWarmup(runCtx); err != nil && !errors.Is(err, context.Canceled) {
+				a.logger.Warn("credential window warmup loop stopped", "error", err)
+			}
+		}()
+	}
+	defer func() { stop(); <-warmupDone }()
+	// Quota refresh is best effort: a failed round leaves the stored readings as they
+	// were. Exactly one configured mode runs, and a demo starts neither because both
+	// read providers through the gateway with each credential. It is joined before Run
+	// returns for the same database-lifetime reason as warmup and the usage pipeline.
+	quotaRefreshDone := make(chan struct{})
+	if a.cfg.IsDemoMode || !a.cfg.Quota.SchedulerEnabled {
+		close(quotaRefreshDone)
+	} else {
+		go func() {
+			defer close(quotaRefreshDone)
+			a.logger.Info("quota refresh loop started", "mode", a.cfg.Quota.SchedulerMode)
+			if err := a.runQuotaRefreshLoop(runCtx); err != nil && !errors.Is(err, context.Canceled) {
+				a.logger.Warn("quota refresh loop stopped", "mode", a.cfg.Quota.SchedulerMode, "error", err)
+			}
+		}()
+	}
+
 	var runErr error
 	hasPipelineReturned := a.pipeline == nil
 	select {
@@ -575,8 +599,14 @@ func (a *App) Run(ctx context.Context) error {
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	a.handler.CloseBrowserRuns()
+	a.handler.CloseUpdateWatchers()
 	if err := a.httpServer.Shutdown(shutdownContext); err != nil && runErr == nil {
 		runErr = fmt.Errorf("shutdown HTTP server: %w", err)
+	}
+	select {
+	case <-quotaRefreshDone:
+	case <-shutdownContext.Done():
+		a.logger.Warn("automatic quota refresh did not stop before the shutdown deadline")
 	}
 	if !hasPipelineReturned {
 		select {
@@ -588,11 +618,32 @@ func (a *App) Run(ctx context.Context) error {
 	return runErr
 }
 
+func (a *App) runQuotaRefreshLoop(ctx context.Context) error {
+	return runQuotaRefreshMode(ctx, a.cfg.Quota.SchedulerMode,
+		a.handler.RunQuotaAutoRefresh,
+		func(ctx context.Context) error {
+			scheduler := a.handler.QuotaScheduler(a.logger)
+			if scheduler == nil {
+				return nil
+			}
+			return scheduler.Run(ctx)
+		},
+	)
+}
+
+func runQuotaRefreshMode(ctx context.Context, mode config.QuotaSchedulerMode, interval, adaptive func(context.Context) error) error {
+	if mode == config.QuotaSchedulerModeAdaptive {
+		return adaptive(ctx)
+	}
+	return interval(ctx)
+}
+
 func (a *App) Close() error {
 	if a == nil {
 		return nil
 	}
 	a.handler.CloseBrowserRuns()
+	a.handler.CloseUpdateWatchers()
 	// The fixture listens on a loopback socket, so it has to be closed with the
 	// database it describes.
 	if a.upstream != nil {

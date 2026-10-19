@@ -140,6 +140,12 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/{workspace:agent|playground}/runs/{id}", demoRefuse, "live inference is unavailable in the demonstration"},
 	{http.MethodPost, "/api/v1/{workspace:agent|playground}/runs/{id}/cancel", demoRefuse, "live inference is unavailable in the demonstration"},
 	{http.MethodPatch, "/api/v1/resources/{id}/override", demoAllow, ""},
+	{http.MethodGet, "/api/v1/fonts", demoAllow, ""},
+	{http.MethodGet, "/api/v1/fonts/{id}/faces/{faceId}", demoAllow, ""},
+	{http.MethodHead, "/api/v1/fonts/{id}/faces/{faceId}", demoAllow, ""},
+	{http.MethodPost, "/api/v1/fonts/google", demoRefuse, "Installing fonts is unavailable in the demo"},
+	{http.MethodPost, "/api/v1/fonts/upload", demoRefuse, "Font uploads are unavailable in the demo"},
+	{http.MethodDelete, "/api/v1/fonts/{id}", demoRefuse, "Font deletion is unavailable in the demo"},
 	{http.MethodGet, "/api/v1/preferences", demoAllow, ""},
 	{http.MethodPut, "/api/v1/preferences/{key}", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/client-key-aliases", demoAllow, ""},
@@ -178,6 +184,10 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/usage/events", demoAllow, ""},
 	{http.MethodGet, "/api/v1/usage/events/{id}", demoAllow, ""},
 	{http.MethodGet, "/api/v1/usage/facets", demoAllow, ""},
+	// The live stream answers 204 in the demonstration, which has no collector to
+	// signal from; the pages keep polling the fixture instead.
+	{http.MethodGet, "/api/v1/usage/live", demoAllow, ""},
+	{http.MethodGet, "/api/v1/usage/routing", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/audit/events", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/audit/summary", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/audit/export", demoAllow, ""},
@@ -192,6 +202,11 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/management/system/repository", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/system/updates", demoAllow, ""},
 	{http.MethodPost, "/api/v1/management/system/check-updates", demoRefuse, "checking for updates is disabled: it would call the GitHub API"},
+
+	// Console updates. The read answers "disabled" because a demonstration builds no
+	// updater client; applying one would replace containers.
+	{http.MethodGet, "/api/v1/management/system/updater", demoAllow, ""},
+	{http.MethodPost, "/api/v1/management/system/updater/apply", demoRefuse, "applying updates is disabled in the demo"},
 
 	// Database maintenance. Reads are allowed so the page renders; both actions are
 	// refused because they rewrite the demonstration's database, and a visitor must not
@@ -339,6 +354,11 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPatch, "/api/v1/management/auth-files/excluded-models", demoRefuse, "changing a provider's excluded models is disabled"},
 	{http.MethodPost, "/api/v1/management/quota/reset", demoRefuse, "resetting a credential's quota is disabled"},
 	{http.MethodPost, "/api/v1/management/quota/clear-cooldown", demoRefuse, "changing a credential's cooldown is disabled"},
+	{http.MethodGet, "/api/v1/management/quota/warmup/settings", demoAllow, "read warmup settings"},
+	{http.MethodGet, "/api/v1/management/quota/warmup/credentials/{authIndex}", demoAllow, "read credential warmup state"},
+	{http.MethodPut, "/api/v1/management/quota/warmup/settings", demoRefuse, "automatic consuming requests require a real operator"},
+	{http.MethodPut, "/api/v1/management/quota/warmup/credentials/{authIndex}", demoRefuse, "automatic consuming requests require a real operator"},
+	{http.MethodPost, "/api/v1/management/quota/warmup/credentials/{authIndex}/run", demoRefuse, "warmup consumes real subscription entitlement"},
 	{http.MethodPost, "/api/v1/management/quota/redeem-credit", demoRefuse, "redeeming a reset credit is disabled: it spends a real entitlement"},
 }
 

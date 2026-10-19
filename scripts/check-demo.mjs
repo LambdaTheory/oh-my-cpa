@@ -67,7 +67,7 @@ const CONSOLE_ROUTES = [
  * data has no captured response even if the route itself renders.
  */
 const ROUTE_READS = {
-  '/dashboard': ['overview', 'pricing-attention', 'dashboard-24h', 'dashboard-tail-24h', 'dashboard-models-call-24h', 'dashboard-models-model-24h', 'dashboard-token-heatmap-utc'],
+  '/dashboard': ['overview', 'pricing-attention', 'dashboard-24h', 'dashboard-tail-24h', 'dashboard-models-call-24h', 'dashboard-models-model-24h', 'dashboard-token-heatmap-utc', 'usage-routing', 'usage-live'],
   '/model-square': ['model-square', 'pricing', 'usage-facets'],
   // The retired Playground page is no longer a routed console route: it redirects to the
   // dashboard, so it declares no reads. Its captured API responses (`playground-models`,
@@ -77,13 +77,13 @@ const ROUTE_READS = {
   '/agent': ['api-keys', 'capabilities', 'agent-session'],
   '/ai-providers': ['providers', 'dashboard-providers-24h'],
   '/api-keys': ['api-keys', 'client-key-aliases'],
-  '/oauth-management': ['auth-files', 'auth-files-model-aliases', 'auth-files-excluded-models', 'auth-files-provider-models-claude', 'auth-files-provider-models-codex', 'auth-files-provider-models-none', 'plugins', 'quota', 'ollama-accounts', 'ollama-quota'],
+  '/oauth-management': ['auth-files', 'auth-files-model-aliases', 'auth-files-excluded-models', 'auth-files-provider-models-claude', 'auth-files-provider-models-codex', 'auth-files-provider-models-none', 'plugins', 'quota', 'ollama-accounts', 'ollama-quota', 'warmup-settings', 'warmup-codex', 'warmup-codex-secondary', 'warmup-claude'],
   '/logs': ['logs', 'logs-status', 'request-error-logs'],
   '/audit': ['audit-events', 'audit-summary'],
-  '/usage/events': ['usage-events', 'usage-facets', 'usage-event-detail', 'usage-ingest-status'],
+  '/usage/events': ['usage-events', 'usage-facets', 'usage-event-detail', 'usage-ingest-status', 'usage-live'],
   '/pricing': ['pricing', 'pricing-attention', 'pricing-catalog', 'pricing-model-claude-opus-5.5'],
   '/config': ['config', 'config-source'],
-  '/omc-settings': ['preferences', 'system', 'feishu-settings', 'feishu-status'],
+  '/omc-settings': ['preferences', 'system', 'feishu-settings', 'feishu-status', 'fonts'],
   '/plugins': ['plugins', 'plugin-store', 'plugins-settings', 'plugin-config-usage-exporter'],
   '/system': ['system', 'system-releases', 'system-maintenance'],
 };

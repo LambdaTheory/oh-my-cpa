@@ -127,6 +127,7 @@ services:
       OMCPA_CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY:?}
       OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
       OMCPA_DATA_DIR: /data
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - oh-my-cpa-data:/data
 
@@ -162,6 +163,7 @@ docker compose up -d
       OMCPA_CPA_MANAGEMENT_KEY: ${OMCPA_CPA_MANAGEMENT_KEY:?}
       OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
       OMCPA_DATA_DIR: /data
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - oh-my-cpa-data:/data
 
@@ -198,6 +200,7 @@ services:
       OMCPA_CPA_MANAGEMENT_KEY: ${OMCPA_CPA_MANAGEMENT_KEY:?}
       OMCPA_MASTER_KEY: ${OMCPA_MASTER_KEY:?}
       OMCPA_DATA_DIR: /data
+      OMCPA_UPDATER_ENABLED: ${OMCPA_UPDATER_ENABLED:-false}
     volumes:
       - oh-my-cpa-data:/data
 
@@ -214,6 +217,21 @@ OMCPA_MASTER_KEY=<openssl rand -hex 32 的输出>
 
 执行 `docker compose up -d`，然后访问 **`http://127.0.0.1:8080/omc/`**，以管理密钥登录。
 
+### 更新
+
+控制台更新默认关闭。需要启用时，先设置 `OMCPA_UPDATER_ENABLED=true` 并重建 `oh-my-cpa`
+服务，再执行下方安装命令。之后控制台的**系统信息**页会在 Oh My CPA 或 CLIProxyAPI
+有新版本时显示**立即更新**。更新程序拉取新镜像，按原有的配置、数据卷与网络重建容器；新容器未能正常启动时恢复原容器。
+
+在该服务出现之前安装的部署，在 Docker 主机上执行一条命令即可启用，无需修改编排文件：
+
+```bash
+docker run --rm --pull always -u 0 -v /var/run/docker.sock:/var/run/docker.sock wiziscool/oh-my-cpa:latest updater install
+```
+
+该命令添加 `oh-my-cpa-updater` 容器，并同时把 Oh My CPA 升级到当前版本。`docker rm -f oh-my-cpa-updater`
+可将其移除。镜像固定为版本标签时，控制台不会改动它。各种情况及手动更新方式见[升级](docs/install.md#upgrading)（英文）。
+
 ### 安装原生可执行文件
 
 [标签发布](https://github.com/WizisCool/oh-my-cpa/releases)提供 macOS（Darwin）、Windows、
@@ -229,6 +247,11 @@ Linux 和 FreeBSD 的 amd64、arm64 可执行文件。每个压缩包内嵌控�
 CPA 的每条用量记录只交给一个读取方。同一个 CPA 上已有其他用量统计工具时，停用该工具，
 或在 `environment:` 下添加 `OMCPA_USAGE_INGEST_MODE: "off"`，仅将 OMC 用于管理。其他管理面板不冲突。
 
+可选的 `oh-my-cpa-updater` 挂载 Docker socket，等同于拥有该主机上 Docker 的控制权。
+只有显式设置 `OMCPA_UPDATER_ENABLED=true` 时控制台更新才会启用；关闭时改回 `false`、重建
+`oh-my-cpa`，并用 `docker rm -f oh-my-cpa-updater` 删除侧车。之后通过
+`docker compose pull && docker compose up -d` 更新。
+
 发布版的加固编排文件、远程访问、HTTPS、源码构建、升级与排障见[安装指南](docs/install.md)（英文）。
 
 ## 功能特性
@@ -237,7 +260,7 @@ CPA 的每条用量记录只交给一个读取方。同一个 CPA 上已有其�
 <summary><b>网关与提供商</b></summary>
 
 - **AI 提供商**：Codex、Claude、Gemini、Meta Muse、xAI、Vertex AI、Gemini Interactions、DeepSeek 及 OpenAI 兼容服务，统一管理凭据、模型高级选项、运行时重试与错误规则、优先级、权重、代理，以及由网关执行的启停开关。
-- **OAuth 管理**：在控制台登录 Codex、Claude、Antigravity、xAI、Kimi（kimi.com 与 kimi.ai）、Devin 与 Meta Muse，或导入 Vertex 服务账号密钥。认证文件、手动令牌刷新、模型列表、Meta 配额、xAI／Antigravity 实时套餐及凭据专属别名按凭据管理；共享模型别名与禁用规则按提供商统一配置。Codex、Claude 与已支持的 Antigravity 模型组提供窗口额度估算，上一周期的数值作为参考并单独标注。
+- **OAuth 管理**：在控制台登录 Codex、Claude、Antigravity、xAI、Kimi（kimi.com 与 kimi.ai）、Devin 与 Meta Muse，或导入 Vertex 服务账号密钥。认证文件、手动令牌刷新、模型列表、Meta 配额、xAI／Antigravity 实时套餐及凭据专属别名按凭据管理；共享模型别名与禁用规则按提供商统一配置。Codex、Claude 与已支持的 Antigravity 模型组提供窗口额度估算，上一周期的数值作为参考并单独标注。额度窗口重置约一分钟后会自动重新读取，并默认每 6 小时定时刷新一次，可在 OMC 设置中调整。 Codex／Claude 窗口预热支持按重置或每日时间调度、凭证独立策略，以及可选的确认后极小请求。已确认的自动策略会在发送前检查订阅额度与付费后备用量，并在请求后观察窗口是否激活。
 - **客户端密钥**：创建、命名与吊销网关 API Key，名称会出现在请求记录与筛选项中。
 - **模型目录**：直接从上游提供商拉取模型列表。
 - **操练场**：用文本与图片调试任意已路由的模型，支持流式多轮对话与请求诊断。
@@ -249,8 +272,9 @@ CPA 的每条用量记录只交给一个读取方。同一个 CPA 上已有其�
 <summary><b>用量观测</b></summary>
 
 - **仪表盘**：请求量、Token 吞吐、缓存命中率与费用，支持 15 分钟到 90 天的预设窗口、安装以来的“全部”窗口或任意自定义区间；统计数据永久保留，请求记录按保留期滚动清理，并提供全年 Token 热力图。
+- **实时路由**：展示最近一分钟调用了哪些模型，以及 CPA 把它们分配给了哪些凭据与提供商。每个新请求都会沿路由图流向凭据再返回，改道和冷却也会标出。面板在记录入库时即刻更新，实时连接不可用时改为短间隔轮询，仅在桌面宽度显示。
 - **模型面板**：Token 趋势与用量环形图，可按调用模型或请求模型统计，并展示费用占比。
-- **请求记录**：多条件筛选与全文搜索；详情抽屉展示耗时、首字延迟、Token 明细与单请求原始日志。每条记录保留上游实际返回的模型，与请求模型不同时会被标出。
+- **请求记录**：多条件筛选与全文搜索；开启自动刷新后，新记录入库即显示；详情抽屉展示耗时、首字延迟、Token 明细与单请求原始日志。每条记录保留上游实际返回的模型，与请求模型不同时会被标出。
 - **后台采集**：无论是否打开浏览器，用量都会通过流式订阅或轮询持续入库。
 - **日志与审计**：实时查看网关日志与控制台自身的服务日志；操作审计记录只增不改，支持筛选与 JSON 导出。
 - **Ollama 监控**：维护多个 Ollama Cloud 账号，用加密保存的会话 Cookie 从账号设置页读取额度；Cookie 不会返回或写入日志，缺失的百分比保持“未报告”，关闭采集也绝不声称已停止推理。
@@ -265,6 +289,7 @@ CPA 的每条用量记录只交给一个读取方。同一个 CPA 上已有其�
 - **OpenRouter 价目表**：依据 OpenRouter 公开列表为网关提供的每个模型定价，支持长上下文分档与分时段价格。
 - **关联与自定义价格**：把模型关联到指定的 OpenRouter 条目，或自行设置费率，附带分档预设与试算器。
 - **渠道倍率**：按提供商缩放其应答的全部请求，例如按 3 折计费的中转站。
+- **渠道模型价格**：同一模型可在不同渠道设置独立费率和优惠时段，未单独设置时沿用通用价格。
 
 </details>
 
@@ -275,8 +300,8 @@ CPA 的每条用量记录只交给一个读取方。同一个 CPA 上已有其�
 - **配置自动备份**：每次改写 `config.yaml` 之前自动保存一份加密副本，可在控制台恢复。
 - **静态加密**：已存储的凭据与原始用量消息采用 AES-GCM 加密。
 - **敏感操作审计**：查看密钥、下载认证文件、导出日志等操作都会写入审计日志，写入失败则拒绝执行。
-- **离线运行**：所有资源内嵌于二进制文件，不访问 CDN。
-- **个性化**：四种界面语言、可自定义配色的浅色与深色主题、部署时区，以及 K/M/B 或 万/亿 数字单位。
+- **离线运行**：随包资源内嵌于二进制文件；安装或上传的字体由部署本地存储和提供。浏览器不访问 CDN。
+- **个性化**：四种界面语言、可自定义配色的浅色与深色主题、界面与等宽字体（内置字体，或上传、从 Google Fonts 安装后由控制台自身提供的字体库）、部署时区，以及 K/M/B 或 万/亿 数字单位。
 
 </details>
 

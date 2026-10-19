@@ -36,6 +36,22 @@ const (
 	PreferenceTheme              = "omc_theme"
 	PreferenceScrollSmoothing    = "omc_scroll_smoothing"
 
+	// PreferenceNavHidden is the console rail entries the operator has hidden, as an
+	// array of route keys. Storing the hidden set rather than the visible one is what
+	// makes a destination a later release adds appear without anyone re-enabling it.
+	PreferenceNavHidden = "omc_nav_hidden"
+
+	// PreferenceDashboardLayout is the dashboard's widget arrangement: every widget the console
+	// knows, in reading order, with its width and whether it is hidden. A widget a later release
+	// adds is missing from an older document, and the console places and shows it by default.
+	PreferenceDashboardLayout = "omc_dashboard_layout"
+
+	// PreferenceFonts maps a typographic role - `ui` for the interface, `mono` for code
+	// and figures - to a built-in typeface or an installed family (`font:<id>`). A role
+	// left out uses the console's default. References to installed families are checked
+	// on write, and deleting a family clears the roles that used it.
+	PreferenceFonts = "omc_fonts"
+
 	// PreferencePlaygroundSession persists the single latest playground session:
 	// the target key's usage fingerprint and call point, the generation parameters
 	// and the latest conversation's bounded turns. It never stores the key secret,
@@ -51,6 +67,13 @@ const (
 	// chose to stop being reminded about. It names a version rather than recording a switch, so
 	// a release newer than the dismissed one is announced again without anyone re-enabling it.
 	PreferenceUpdateDismissals = "update_dismissals"
+
+	// PreferenceQuotaAutoRefresh is the deployment-wide automatic quota refresh policy. Unlike
+	// the display settings it is read by the server: the background loop consults it on every
+	// tick, so a change takes effect without a restart. It is a preference rather than
+	// environment configuration because it is an operator's running decision about how often
+	// credentials are read, made from the console that shows the readings.
+	PreferenceQuotaAutoRefresh = "omc_quota_auto_refresh"
 )
 
 // MaxPreferenceValueBytes bounds a stored value. Preferences are small UI
@@ -155,6 +178,11 @@ func (r *Repository) putPreferences(ctx context.Context, values map[string]strin
 	for key, value := range values {
 		if key == PreferenceProviderIcons {
 			if err := validateCustomIconReferences(ctx, tx, value); err != nil {
+				return err
+			}
+		}
+		if key == PreferenceFonts {
+			if err := validateFontReferences(ctx, tx, value); err != nil {
 				return err
 			}
 		}

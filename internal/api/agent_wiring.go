@@ -305,8 +305,9 @@ func (h *Handler) operationsService() *operations.Service {
 		}
 		for _, file := range files.Files {
 			if file.AuthIndex == authIndex {
-				if blocked, until := h.quotaBackoffBlocked(authIndex); blocked {
-					return operations.Quota{}, quotaBackoffError(until)
+				provider := quota.DetectProvider(file.Type, file.Provider)
+				if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {
+					return operations.Quota{}, quotaBackoffError(provider, authIndex, until, h.now())
 				}
 				h.agent.refreshMu.Lock()
 				if time.Since(h.agent.lastRefresh[authIndex]) < 30*time.Second {
@@ -319,15 +320,13 @@ func (h *Handler) operationsService() *operations.Service {
 				h.agent.lastRefresh[authIndex] = time.Now()
 				h.agent.refreshMu.Unlock()
 
-				value, err := quota.NewService(client).RefreshCredentialQuota(ctx, file, h.loadPriorNormalizedQuota(ctx, authIndex))
+				value, err := h.readCredentialQuota(ctx, quota.NewService(client), file, h.loadPriorNormalizedQuota(ctx, authIndex))
 				if err != nil {
-					h.recordQuotaRateLimit(authIndex, quota.DetectProvider(file.Type, file.Provider), err)
 					return operations.Quota{}, err
 				}
 				if err = h.persistNormalizedQuotaSnapshot(ctx, value); err != nil {
 					return operations.Quota{}, err
 				}
-				h.clearQuotaRateLimit(authIndex, quota.DetectProvider(file.Type, file.Provider))
 				h.attachWindowCapacity(ctx, value, h.now().UnixMilli())
 				return operations.SafeQuota(value), nil
 			}
@@ -507,6 +506,7 @@ func (h *Handler) operationsService() *operations.Service {
 		return mapAgentProviderError(err)
 	}
 	h.bindProviderOperations(service)
+	h.bindWarmupOperations(service)
 	return service
 }
 func (h *Handler) ensureAgent() error {

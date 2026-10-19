@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/pricing"
 )
 
 // fixtureInstanceName is the CPA instance the fixture impersonates. The console
@@ -233,17 +234,21 @@ type gatewayKey struct {
 	alias string
 	// usageWeight decides how much of the fabricated traffic this key carries.
 	usageWeight int
+	// userAgent is the client product that uses this key, as CPA reports it after
+	// minimisation: the first token of the header. It is what names the caller on
+	// the routing page, so each key is one recognisable agent.
+	userAgent string
 }
 
 func gatewayKeyCatalog() []gatewayKey {
 	return []gatewayKey{
-		{value: "omc-demo-key-platform", alias: "platform-services", usageWeight: 5},
-		{value: "omc-demo-key-ci", alias: "ci-pipelines", usageWeight: 3},
+		{value: "omc-demo-key-platform", alias: "platform-services", usageWeight: 5, userAgent: "opencode/0.15.8"},
+		{value: "omc-demo-key-ci", alias: "ci-pipelines", usageWeight: 3, userAgent: "codex_cli_rs/0.47.0"},
 		// The alias is rendered in the request list, and the demonstration is public, so
 		// it names a role rather than a person: an operator's own device name here would
 		// put their identity on a page anyone can open.
-		{value: "omc-demo-key-laptop", alias: "personal-laptop", usageWeight: 2},
-		{value: "omc-demo-key-eval", alias: "eval-harness", usageWeight: 1},
+		{value: "omc-demo-key-laptop", alias: "personal-laptop", usageWeight: 2, userAgent: "claude-cli/2.0.14"},
+		{value: "omc-demo-key-eval", alias: "eval-harness", usageWeight: 1, userAgent: "python-httpx/0.27.2"},
 	}
 }
 
@@ -373,6 +378,7 @@ type priceRow struct {
 	completion float64
 	cacheRead  float64
 	cacheWrite float64
+	tiers      []pricing.PriceTier
 }
 
 // customPriceCatalog is the rates an operator set by hand: the relay and
@@ -381,10 +387,17 @@ type priceRow struct {
 func customPriceCatalog() []priceRow {
 	return []priceRow{
 		{model: "mimo-v2.5", prompt: 0.14, completion: 0.28, cacheRead: 0.0028, cacheWrite: 0.14},
-		{model: "minimax-m3", prompt: 0.3, completion: 1.2, cacheRead: 0.06, cacheWrite: 0.3},
+		// A priority lane, so the demo shows a request billed on the upstream's fast
+		// lane at its own rates beside the same model's standard requests.
+		{model: "minimax-m3", prompt: 0.3, completion: 1.2, cacheRead: 0.06, cacheWrite: 0.3, tiers: []pricing.PriceTier{{
+			ServiceTiers: []string{"priority"}, PromptPricePer1M: demoRate(0.6), CompletionPer1M: demoRate(2.4),
+			CacheReadPer1M: demoRate(0.12), CacheWritePer1M: demoRate(0.6),
+		}}},
 		{model: "qwen3.8-omni-flash", prompt: 0.15, completion: 0.47, cacheRead: 0.016, cacheWrite: 0.15},
 	}
 }
+
+func demoRate(value float64) *float64 { return &value }
 
 // channelCatalog is the channel multipliers the fixture configures: the Qwen
 // endpoint is billed under a coding-plan discount, so every request it answers
@@ -827,7 +840,10 @@ func quotaPayloads(now time.Time) map[string]any {
 			"seven_day_opus":   map[string]any{"utilization": 22.9, "resets_at": weeklyReset},
 			"seven_day_sonnet": map[string]any{"utilization": 64.7, "resets_at": weeklyReset},
 			"extra_usage":      map[string]any{"is_enabled": false, "monthly_limit": 0, "used_credits": 0},
-			"limits":           []map[string]any{{"kind": "session", "group": "five_hour", "percent": 36.4, "resets_at": resetAt, "is_active": true}},
+			// The cloud session credit pool shares the legacy Fable key; its dollar
+			// amounts make it a balance rather than a window.
+			"iguana_necktie": map[string]any{"utilization": 30, "limit_dollars": 50, "used_dollars": 15, "remaining_dollars": 35, "resets_at": weeklyReset},
+			"limits":         []map[string]any{{"kind": "session", "group": "five_hour", "percent": 36.4, "resets_at": resetAt, "is_active": true}},
 		},
 		claudeProfileURL: map[string]any{
 			"account":        map[string]any{"email": "ops@acme-labs.example"},

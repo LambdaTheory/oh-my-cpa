@@ -10,6 +10,22 @@ import (
 	"time"
 )
 
+func TestPluginHostRefusesUnparseableScriptOverHTTP(t *testing.T) {
+	client, baseURL, _, _ := startPluginTestServer(t)
+
+	response, body := doJSON(t, client, http.MethodGet, baseURL+"/omc/api/v1/plugin-host/v0/resource/plugins/logger/broken.js", "")
+	if response.StatusCode != http.StatusBadGateway || !strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("script adaptation refusal: status=%d type=%q body=%s", response.StatusCode, response.Header.Get("Content-Type"), body)
+	}
+	var refusal map[string]any
+	if err := json.Unmarshal(body, &refusal); err != nil {
+		t.Fatal(err)
+	}
+	if len(refusal) != 2 || refusal["code"] != "plugin_adaptation_refused" || refusal["error"] != "plugin page could not be adapted" {
+		t.Fatalf("script adaptation refusal body: %s", body)
+	}
+}
+
 func TestPluginHostServesThePluginPageRebasedOntoTheConsole(t *testing.T) {
 	client, baseURL, _, state := startPluginTestServer(t)
 
@@ -146,13 +162,21 @@ func TestPluginHostRequiresTheConsoleSession(t *testing.T) {
 	_, baseURL, _, state := startPluginTestServer(t)
 
 	for _, target := range []string{"/v0/resource/plugins/logger/console", "/v0/management/logger/status", "/v0/management/config", "/v8/management/config/api-keys", "/v1/models"} {
-		resp, err := http.Get(baseURL + "/omc/api/v1/plugin-host" + target)
-		if err != nil {
-			t.Fatalf("GET %s: %v", target, err)
-		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Errorf("GET %s without a session: status %d, want 401", target, resp.StatusCode)
+		for _, header := range []http.Header{
+			{},
+			{"Authorization": {"Bearer cpa-secret-key"}},
+			{"X-Management-Key": {"cpa-secret-key"}},
+		} {
+			request, _ := http.NewRequest(http.MethodGet, baseURL+"/omc/api/v1/plugin-host"+target, nil)
+			request.Header = header
+			resp, err := http.DefaultClient.Do(request)
+			if err != nil {
+				t.Fatalf("GET %s: %v", target, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("GET %s without a session: status %d, want 401", target, resp.StatusCode)
+			}
 		}
 	}
 	state.mu.Lock()

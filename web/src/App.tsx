@@ -44,6 +44,7 @@ import { ThemeProvider, ThemeServerSync, useTheme } from './theme/ThemeContext';
 import { I18nProvider, useI18n } from './i18n';
 import { TokenDisplayProvider } from './types/tokenDisplayContext';
 import { useScrollSmoothing } from './hooks/useScrollSmoothing';
+import { useConsoleFonts } from './hooks/useFonts';
 
 // The recovery boundary stays eager even when the authenticated shell cannot be downloaded.
 const AppLayout = React.lazy(() => import('./components/common/AppLayout').then(module => ({ default: module.AppLayout })));
@@ -97,6 +98,12 @@ const ScrollSmoothingSync: React.FC = () => {
   return null;
 };
 
+/** Renders nothing; it keeps the document painted in the chosen typefaces (`useConsoleFonts`). */
+const FontSync: React.FC = () => {
+  useConsoleFonts();
+  return null;
+};
+
 const ThemedShell: React.FC = () => {
   const { lang } = useI18n();
   const { theme } = useTheme();
@@ -106,6 +113,7 @@ const ThemedShell: React.FC = () => {
       <AntdApp notification={TOAST_CONFIG}>
         <ThemeServerSync />
         <ScrollSmoothingSync />
+        <FontSync />
         <DemoNotice />
         <TokenDisplayProvider>
           <AppRoutes />

@@ -1,6 +1,6 @@
 import { ActionMenu } from '../../components/common/ActionMenu';
 import React from 'react';
-import { useBlocker, useSearchParams } from 'react-router-dom';
+import { useBlocker } from 'react-router-dom';
 import {
   App as AntdApp,
   Button,
@@ -24,7 +24,7 @@ import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-quer
 import { api } from '../../api/client';
 import { useT } from '../../i18n';
 import { useDebouncedSearch } from '../../components/usage/useDebouncedSearch';
-import { usePreference } from '../../hooks/usePreference';
+import { useOAuthManagementViewState } from './useOAuthManagementViewState';
 import { useVisibleNow } from '../../hooks/useVisibleNow';
 import { isDemoMode } from '../../types/demoMode';
 import { pluginOAuthLogoFor, pluginOAuthProviderLogos } from '../../types/pluginOAuthProviders';
@@ -37,6 +37,7 @@ import {
 } from '../../components/authFiles/authFileLogic';
 import { AuthFileDetailDrawer } from '../../components/authFiles/AuthFileDetailDrawer';
 import { BatchActionBar } from '../../components/authFiles/BatchActionBar';
+import { CredentialWarmup, WarmupSettingsDrawer } from '../../components/authFiles/CredentialWarmup';
 import { OAuthModelRulesDrawer } from '../../components/authFiles/OAuthModelRulesDrawer';
 import { AccountAutomationDrawer } from '../../components/automation/AccountAutomationDrawer';
 import { OllamaManagementDrawer } from '../../components/ollama/OllamaManagementDrawer';
@@ -57,10 +58,8 @@ import {
   buildQuotaRefreshTargets,
   consumeOneShotIntent,
   filterOAuthWorkspaceRecords,
-  parseOAuthWorkspaceQuery,
   resolveAuthorizationProviderId,
   sortOAuthWorkspaceRecords,
-  updateWorkspaceSearch,
   workspaceProviderCounts,
   workspaceProviderOptions,
   type OAuthWorkspaceQuotaFilter,
@@ -73,23 +72,6 @@ import { SearchInput } from '../../components/common/SearchInput';
 import { EmptyState } from '../../components/common/EmptyState';
 import { Toolbar } from '../../components/common/Toolbar';
 import { Pager } from '../../components/common/Pager';
-
-interface OAuthManagementViewPreference {
-  pageSize: 12 | 24 | 48;
-}
-
-const DEFAULT_VIEW_PREFERENCE: OAuthManagementViewPreference = {
-  pageSize: 12,
-};
-
-function parseViewPreference(raw: unknown): OAuthManagementViewPreference | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const record = raw as Record<string, unknown>;
-  const pageSize = record.pageSize === 12 || record.pageSize === 24 || record.pageSize === 48
-    ? record.pageSize
-    : DEFAULT_VIEW_PREFERENCE.pageSize;
-  return { pageSize };
-}
 
 interface CompletionPending {
   providerId: string;
@@ -114,16 +96,10 @@ export const OAuthManagementPage: React.FC = () => {
   const { modal } = AntdApp.useApp();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { searchParams, setSearchParams, queryState, setSearch, isViewLoaded } = useOAuthManagementViewState();
   const visibleNow = useVisibleNow();
   const [isFiltersOpen, setIsFiltersOpen] = React.useState(false);
   const isDemo = isDemoMode();
-  const viewPreference = usePreference<OAuthManagementViewPreference>(
-    'oauth_management_view_v1',
-    DEFAULT_VIEW_PREFERENCE,
-    parseViewPreference,
-  );
-  const queryState = React.useMemo(() => parseOAuthWorkspaceQuery(searchParams), [searchParams]);
   React.useEffect(() => {
     if (queryState.status !== 'all' || queryState.quota !== 'all' || queryState.sort !== 'name-asc') {
       setIsFiltersOpen(true);
@@ -138,9 +114,12 @@ export const OAuthManagementPage: React.FC = () => {
     staleTime: 10_000,
     placeholderData: keepPreviousData,
   });
+  // The overview reads stored observations and CPA's credential list, never a provider, so polling
+  // it spends no quota; it is what brings a reading the background refresh stored onto an open page.
   const quotaQuery = useQuery({
     queryKey: ['management-quota'],
     queryFn: api.getQuotaOverview,
+    refetchInterval: 60_000,
     staleTime: 15_000,
     placeholderData: keepPreviousData,
   });
@@ -225,19 +204,13 @@ export const OAuthManagementPage: React.FC = () => {
     [queryState.provider, queryState.query, queryState.quota, queryState.sort, queryState.status, records],
   );
 
-  const pageSize = searchParams.has('page_size') ? queryState.pageSize : viewPreference.value.pageSize;
+  const pageSize = queryState.pageSize;
   const maxPage = Math.max(1, Math.ceil(visibleRecords.length / pageSize));
   const page = Math.min(queryState.page, maxPage);
   const pagedRecords = React.useMemo(
     () => visibleRecords.slice((page - 1) * pageSize, page * pageSize),
     [page, pageSize, visibleRecords],
   );
-
-  const setSearch = React.useCallback((
-    changes: Record<string, string | number | null | undefined>,
-  ) => {
-    setSearchParams((current) => updateWorkspaceSearch(current, changes), { replace: true });
-  }, [setSearchParams]);
 
   React.useEffect(() => {
     if (!filesQuery.data || queryState.page <= maxPage) return;
@@ -400,7 +373,9 @@ export const OAuthManagementPage: React.FC = () => {
     if (selectedIdentity && !selectedRecord) setSelectedIdentity(undefined);
   }, [selectedIdentity, selectedRecord]);
 
-  const [isModelRulesOpen, setIsModelRulesOpen] = React.useState(false);
+  const [isWarmupSettingsOpen, setIsWarmupSettingsOpen] = React.useState(false);
+ const [hasWarmupDraft, setHasWarmupDraft] = React.useState(false);
+ const [isModelRulesOpen, setIsModelRulesOpen] = React.useState(false);
   const [isVertexImportOpen, setIsVertexImportOpen] = React.useState(false);
   const [isAutomationOpen, setIsAutomationOpen] = React.useState(false);
   const [isOllamaOpen, setIsOllamaOpen] = React.useState(false);
@@ -435,15 +410,17 @@ export const OAuthManagementPage: React.FC = () => {
   }, []);
   const actions = useOAuthWorkspaceActions(records, selectedKeys, setSelectedKeys, onTargetGone);
 
+  // The two polled reads are invalidated rather than refetched: a refetch of a polled query is
+  // indistinguishable from its poll, so it would not raise the loading bar the reader asked for.
   const reloadWorkspace = React.useCallback(() => {
     void Promise.all([
-      filesQuery.refetch(),
-      quotaQuery.refetch(),
+      queryClient.invalidateQueries({ queryKey: ['management-auth-files'], exact: true }),
+      queryClient.invalidateQueries({ queryKey: ['management-quota'], exact: true }),
       pluginsQuery.refetch(),
       ollamaAccountsQuery.refetch(),
       ollamaQuotaQuery.refetch(),
     ]);
-  }, [filesQuery, ollamaAccountsQuery, ollamaQuotaQuery, pluginsQuery, quotaQuery]);
+  }, [ollamaAccountsQuery, ollamaQuotaQuery, pluginsQuery, queryClient]);
 
   const totalCount = records.length;
   const disabledCount = records.filter((record) => isAuthFileDisabled(record.file)).length;
@@ -633,8 +610,20 @@ export const OAuthManagementPage: React.FC = () => {
               <Button icon={<UploadOutlined />} disabled={isDemo || actions.isOperating} onClick={() => fileInputRef.current?.click()}>{t('af.upload')}</Button>
               <Button icon={<CloudUploadOutlined />} disabled={isDemo || actions.isOperating} onClick={() => setIsVertexImportOpen(true)}>{t('af.vertex_open')}</Button>
               <Button icon={<BranchesOutlined />} disabled={actions.isOperating} onClick={() => setIsModelRulesOpen(true)} data-testid="oauth-management-model-rules-open">{t('af.rules_open')}</Button>
-              <Button icon={<SettingOutlined />} onClick={() => setIsAutomationOpen(true)}>{t('automation.title')}</Button>
-              <Button icon={<SyncOutlined />} onClick={() => setIsOllamaOpen(true)}>{t('ollama.title')}</Button>
+              <Button
+                icon={<SettingOutlined />}
+                onClick={() => setIsAutomationOpen(true)}
+                data-testid="oauth-management-automation-open-mobile"
+              >
+                {t('automation.title')}
+              </Button>
+              <Button
+                icon={<SyncOutlined />}
+                onClick={() => setIsOllamaOpen(true)}
+                data-testid="oauth-management-ollama-open-mobile"
+              >
+                {t('ollama.title')}
+              </Button>
             </ActionMenu>
             <Button type="primary" icon={<LoginOutlined />} onClick={openConnect}>{t('omc.connect_account')}</Button>
           </>
@@ -833,6 +822,7 @@ export const OAuthManagementPage: React.FC = () => {
         >
           {t('events.more_filters')}
         </Button>
+        <Button onClick={() => setIsWarmupSettingsOpen(true)} data-testid="oauth-warmup-settings-open">{t('warmup.settings')}</Button>
         {/* The main segment refreshes the filtered set, which is what the list is showing; the
             caret offers the other scopes. */}
         <Space.Compact>
@@ -869,6 +859,7 @@ export const OAuthManagementPage: React.FC = () => {
           <div className={styles['filter-field']}>
             <span className={styles['filter-field-label']}>{t('af.detail_status')}</span>
             <Select<AuthFileStatusFilter>
+              disabled={!isViewLoaded}
               value={queryState.status}
               onChange={(status) => setSearch({ status: status === 'all' ? null : status, page: null })}
               aria-label={t('af.detail_status')}
@@ -884,6 +875,7 @@ export const OAuthManagementPage: React.FC = () => {
           <div className={styles['filter-field']}>
             <span className={styles['filter-field-label']}>{t('omc.tab_quota')}</span>
             <Select<OAuthWorkspaceQuotaFilter>
+              disabled={!isViewLoaded}
               value={queryState.quota}
               onChange={(quota) => setSearch({ quota: quota === 'all' ? null : quota, page: null })}
               aria-label={t('omc.tab_quota')}
@@ -905,6 +897,8 @@ export const OAuthManagementPage: React.FC = () => {
           <div className={styles['filter-field']}>
             <span className={styles['filter-field-label']}>{t('af.sort_label')}</span>
             <Select<AuthFileSortKey>
+              aria-label={t('af.sort_label')}
+              disabled={!isViewLoaded}
               value={queryState.sort}
               onChange={(sort) => setSearch({ sort: sort === 'name-asc' ? null : sort, page: null })}
               style={{ width: 160 }}
@@ -920,6 +914,7 @@ export const OAuthManagementPage: React.FC = () => {
           <div className={styles['toolbar-actions']}>
             <Button
               icon={<SearchOutlined />}
+              disabled={!isViewLoaded}
               onClick={() => {
                 setResetSearchToken((value) => value + 1);
                 setSearch({ q: null, status: null, quota: null, sort: null, page: null });
@@ -1015,10 +1010,10 @@ export const OAuthManagementPage: React.FC = () => {
             <span>{t('omc.result_count', { n: visibleRecords.length, total: records.length })}</span>
             <Select
               value={pageSize}
+              disabled={!isViewLoaded}
               onChange={(size) => {
                 const next = size as 12 | 24 | 48;
                 setSearch({ page_size: next, page: null });
-                void viewPreference.set({ pageSize: next });
               }}
               style={{ width: 110 }}
               options={[12, 24, 48].map((size) => ({ value: size, label: t('af.page_size_n', { n: size }) }))}
@@ -1073,9 +1068,13 @@ export const OAuthManagementPage: React.FC = () => {
         }}
         initialSection={drawerSection}
         canEdit={Boolean(selectedRecord?.canEditFile)}
+        hasExternalDraft={hasWarmupDraft}
         quotaContent={selectedRecord ? quotaBodyForRecord(selectedRecord, false) : undefined}
+        warmupContent={selectedRecord?.authIndex && selectedRecord.hasUniqueAuthIndex && ['codex', 'claude'].includes(selectedRecord.displayProvider)
+          ? <CredentialWarmup key={selectedRecord.authIndex} authIndex={selectedRecord.authIndex} onDirtyChange={setHasWarmupDraft} /> : undefined}
       />
 
+      <WarmupSettingsDrawer open={isWarmupSettingsOpen} onClose={() => setIsWarmupSettingsOpen(false)} />
       <OAuthModelRulesDrawer
         open={isModelRulesOpen}
         onClose={() => setIsModelRulesOpen(false)}

@@ -45,8 +45,12 @@ import {
   dashboardTokenHeatmapMobile,
   dashboardTokenHeatmapPruned,
 } from './probes/dashboardTokenHeatmap.mjs';
+import { dashboardLayout } from './probes/dashboardLayout.mjs';
 import { omcSettings } from './probes/omcSettings.mjs';
+import { sidebarNavCustomization } from './probes/sidebarNav.mjs';
+import { fontLibrary } from './probes/fontLibrary.mjs';
 import { auditTrail, auditTrailNarrow, logsFixtures, logsSources } from './probes/logsPage.mjs';
+import { routingFixtures, routingMap, routingNarrow } from './probes/routingMap.mjs';
 import {
   providerRateMarks,
   providerRateOverview,
@@ -60,10 +64,11 @@ import { pricingBook, pricingFixtures, pricingFromRequestList } from './probes/p
 import { touchErgonomics } from './probes/touchErgonomics.mjs';
 import { scrollSmoothing } from './probes/scrollSmoothing.mjs';
 import { requestListTouch } from './probes/requestListTouch.mjs';
-import { oauthManagement, oauthVertexImport, oauthModelRules, oauthTokenCapacity, oauthAuthorizationOutcomes, oauthWorkspaceScale, oauthPluginConnections, oauthManagementFixtures, oauthManagementProbeRoutes } from './probes/oauthManagement.mjs';
+import { oauthWindowWarmup, oauthManagement, oauthVertexImport, oauthModelRules, oauthTokenCapacity, oauthAuthorizationOutcomes, oauthWorkspaceScale, oauthPluginConnections, oauthManagementFixtures, oauthManagementProbeRoutes } from './probes/oauthManagement.mjs';
 import { customIconLibrary, customIconProbeRoutes, iconPickerStacking, pickerCatalog, pickerProvider, providerIconPick, providerModelPicker } from './probes/providerConsole.mjs';
 import { routePreloading } from './probes/routePreloading.mjs';
 import { systemInformationNarrow, systemInformationPage, systemVersionFeedback, systemHealthAnomalies, systemUpdateIndicator, systemFixtures } from './probes/systemInformation.mjs';
+import { SYSTEM_UPDATER_CONTRACT } from './system-updater-fixture.mjs';
 import { configSourceEditor, configSourceFixtures } from './probes/configSourceEditor.mjs';
 import { configBackups, configBackupsFixtures } from './probes/configBackups.mjs';
 import {
@@ -100,6 +105,8 @@ const auditRequests = [];
 const pluginManagementWrites = [];
 const pricingBookWrites = [];
 const configBackupsLog = [];
+/** The live routing scenario's fixture, which the probe tells when a request is stored. */
+const routingLive = routingFixtures();
 
 const routeErrorFixtures = () => [
   [(url) => url.pathname.endsWith('/dashboard'), () => chartDashboard],
@@ -239,6 +246,24 @@ export const SCENARIOS = [
     run: feishuSettings,
   },
   {
+    // The rail is the shell's, and this scenario drives it from the settings page inside that
+    // shell: the panel that lists the entries, the rail it redraws, the group headings it must
+    // not leave empty and the phone sheet are four renderings of one choice, and no single
+    // component test can see them agree.
+    id: 'sidebar-customization',
+    name: 'the rail shows only the entries the operator keeps, and every page stays reachable',
+    // The rail is driven from the settings page, and one of the claims opens a hidden destination
+    // directly: the logs page's own reads are declared so that navigation is a page rather than a
+    // fixture the harness has to report.
+    options: { routes: logsFixtures([]) },
+    run: sidebarNavCustomization,
+  },
+  {
+    id: 'font-library',
+    name: 'typeface roles repaint the console, library families load from this origin, and the choice paints the first frame',
+    run: fontLibrary,
+  },
+  {
     id: 'column-alignment',
     name: 'column alignment',
     options: {
@@ -262,6 +287,7 @@ export const SCENARIOS = [
     },
     run: oauthManagement,
   },
+  { id: 'oauth-window-warmup', name: 'OAuth window warmup settings and guarded phone editor', options: { routes: oauthManagementProbeRoutes() }, run: oauthWindowWarmup },
   { id: 'oauth-vertex-import', name: 'Vertex import file lifecycle', options: {routes: oauthManagementProbeRoutes()}, run: oauthVertexImport },
   { id: 'oauth-model-rules', name: 'OAuth model aliases and exclusions', options: {routes: oauthManagementProbeRoutes()}, run: oauthModelRules },
   { id: 'oauth-token-capacity', name: 'OAuth token capacity formatting and phone geometry', options: {routes: oauthManagementProbeRoutes()}, run: oauthTokenCapacity },
@@ -328,6 +354,22 @@ export const SCENARIOS = [
       ],
     },
     run: dashboardChartMarks,
+  },
+  {
+    // The board is the page's, so the scenario loads the dashboard with the chart fixtures and drives
+    // the arrangement editor on top of it: the board, the editor and the stored document are three
+    // renderings of one choice that no component test can see agree.
+    id: 'dashboard-layout',
+    name: 'the operator orders, sizes and hides dashboard widgets, and the board keeps the arrangement',
+    options: {
+      routes: [
+        [(url) => url.pathname.endsWith('/dashboard'), () => chartDashboard],
+        [(url) => url.pathname.endsWith('/dashboard/tail'), () => chartDashboard],
+        [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
+        [(url) => url.pathname.endsWith('/dashboard/models'), () => chartDashboardModels],
+      ],
+    },
+    run: dashboardLayout,
   },
   {
     id: 'provider-rate-marks',
@@ -781,6 +823,8 @@ export const SCENARIOS = [
   },
   {
     id: 'scroll-smoothing',
+    // Asserts motion frame by frame; a sibling context on the same CPU drops frames (ADR 0095).
+    shouldRunAlone: true,
     name: 'a wheel notch glides on an ordinary scroller and on the virtualized request list, as the preference says',
     options: {
       viewport: { width: 1280, height: 560 },
@@ -800,6 +844,8 @@ export const SCENARIOS = [
   },
   {
     id: 'request-list-touch',
+    // Asserts motion frame by frame; a sibling context on the same CPU drops frames (ADR 0095).
+    shouldRunAlone: true,
     name: 'on a phone the request list is the only scroller, and a finger folds and unfolds its header',
     options: {
       // A phone short enough that the unfolded header leaves the list less than half the screen.
@@ -841,6 +887,18 @@ export const SCENARIOS = [
     run: (context) => auditTrail({ ...context, auditRequests }),
   },
   {
+    id: 'dashboard-routing',
+    name: 'the dashboard\'s live routing map joins its rows, and a request stored while it is open travels it unless motion is reduced',
+    options: { routes: [...routingLive.routes, ...routeErrorFixtures()] },
+    run: (context) => routingMap({ ...context, fixtures: routingLive }),
+  },
+  {
+    id: 'dashboard-routing-narrow',
+    name: 'a phone dashboard leaves out the live routing panel and its live stream',
+    options: { routes: [...routingFixtures().routes, ...routeErrorFixtures()], viewport: { width: 360, height: 800 } },
+    run: routingNarrow,
+  },
+  {
     id: 'audit-trail-narrow',
     name: 'the audit trail reads as one tappable row per entry on a phone',
     options: { routes: logsFixtures([]), viewport: { width: 360, height: 800 } },
@@ -865,7 +923,15 @@ export const SCENARIOS = [
     id: 'system-information-narrow',
     name: 'the system page keeps its card heads and product rows from overlapping at 320px',
     options: {
-      routes: systemFixtures(),
+      // The gateway's available update gains its filled update action here, the widest control
+      // the version row ever holds.
+      routes: [
+        [(url) => url.pathname.endsWith('/management/system/updater'), () => ({
+          ...SYSTEM_UPDATER_CONTRACT.ready,
+          products: SYSTEM_UPDATER_CONTRACT.ready.products.map((product) => ({ ...product, action: 'available', reason: '' })),
+        })],
+        ...systemFixtures(),
+      ],
       viewport: { width: 320, height: 1200 },
     },
     run: systemInformationNarrow,

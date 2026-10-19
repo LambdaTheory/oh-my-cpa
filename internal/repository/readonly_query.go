@@ -47,6 +47,9 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"account_automation_accounts":   {"account_label"},
 	"account_automation_batches":    nil,
 	"account_automation_settings":   nil,
+	"credential_warmup_policies":    nil,
+	"credential_warmup_state":       nil,
+	"credential_warmup_runs":        nil,
 	"audit_events":                  nil,
 	"client_key_aliases":            nil,
 	"connections":                   nil,
@@ -64,6 +67,7 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"ingest_gaps":                   nil,
 	"model_price_versions":          nil,
 	"model_prices":                  nil,
+	"channel_model_prices":          nil,
 	"pricing_catalog_state":         nil,
 	"pricing_channel_versions":      nil,
 	"pricing_channels":              nil,
@@ -88,6 +92,8 @@ var QUERY_READABLE_TABLES = map[string][]string{
 // QUERY_HIDDEN_TABLES are never readable, with the reason recorded for the next reviewer.
 var QUERY_HIDDEN_TABLES = map[string]string{
 	"custom_icons":       "operator-uploaded artwork is only returned by the authenticated image endpoint",
+	"fonts":              "the font library is read through its own endpoint",
+	"font_faces":         "font files are binary and only returned by the authenticated face endpoint",
 	"agent_documents":    "encrypted agent conversations and pending operations",
 	"cpa_config_backups": "encrypted copies of CPA configuration files, which carry every secret in them",
 	"cpa_instances":      "the encrypted CPA management key",
