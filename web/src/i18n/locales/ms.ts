@@ -737,6 +737,7 @@ export const MS: Readonly<Record<string, string>> = {
   "omc.section_sidebar": "Bar sisi",
   "omc.sidebar_show_all": "Tunjuk semua",
   "omc.sidebar_locked": "Entri ini mengurus bar sisi, jadi ia sentiasa dipaparkan.",
+  "omc.sidebar_locked_operations": "Entri ini memastikan automasi akaun dan pengurusan Ollama boleh dicapai, jadi ia sentiasa dipaparkan.",
   "omc.sidebar_entries": "Entri bar sisi",
   "omc.sidebar_manage": "Urus entri",
   "omc.sidebar_hidden_count": "{n} disembunyikan",

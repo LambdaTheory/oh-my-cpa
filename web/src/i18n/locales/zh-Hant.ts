@@ -737,6 +737,7 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "omc.section_sidebar": "側邊欄",
   "omc.sidebar_show_all": "全部顯示",
   "omc.sidebar_locked": "此入口用於管理側邊欄，一律顯示。",
+  "omc.sidebar_locked_operations": "此入口承載帳號自動管理與 Ollama 管理，一律顯示。",
   "omc.sidebar_entries": "側邊欄入口",
   "omc.sidebar_manage": "管理入口",
   "omc.sidebar_hidden_count": "已隱藏 {n} 項",

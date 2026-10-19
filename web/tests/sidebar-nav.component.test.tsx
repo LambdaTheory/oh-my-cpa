@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 describe('sidebar visibility panel', () => {
-  it('lists every rail entry once, in the rail\'s own order, with the entry that owns the rail inert', async () => {
+  it('lists every rail entry once, in the rail\'s own order, with irreplaceable entries inert', async () => {
     const { container } = mount();
     const page = container.querySelector('[data-testid="sidebar-nav-settings"]')!;
     expect([...page.querySelectorAll('.settings-toggle-title')].map((node) => node.textContent))
@@ -103,10 +103,15 @@ describe('sidebar visibility panel', () => {
       'Plugin management', 'Plugin store',
       'Config', 'OMC Settings', 'System Information',
     ]);
+    const oauthToggle = screen.getByRole('switch', { name: 'OAuth management' });
+    expect(oauthToggle.hasAttribute('disabled')).toBe(true);
+    expect(oauthToggle.getAttribute('aria-checked')).toBe('true');
     const settingsToggle = screen.getByRole('switch', { name: 'OMC Settings' });
     expect(settingsToggle.hasAttribute('disabled')).toBe(true);
     expect(settingsToggle.getAttribute('aria-checked')).toBe('true');
-    expect(dialog.querySelector('.settings-toggle-desc')?.textContent).toBe('This entry manages the sidebar, so it always shows.');
+    const descriptions = [...dialog.querySelectorAll('.settings-toggle-desc')].map((node) => node.textContent);
+    expect(descriptions).toContain('This entry keeps account automation and Ollama management reachable, so it always shows.');
+    expect(descriptions).toContain('This entry manages the sidebar, so it always shows.');
     // Nothing is hidden on a fresh deployment, so the reset has nothing to put back.
     expect((screen.getByRole('button', { name: 'Show all' }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -131,14 +136,18 @@ describe('sidebar visibility panel', () => {
   });
 
   it('reads a stored hidden set back, dropping anything the store should never have accepted', async () => {
-    stored.omc_nav_hidden = ['/agent', '/omc-settings', 'not-a-route', 42];
+    stored.omc_nav_hidden = ['/agent', '/oauth-management', '/omc-settings', 'not-a-route', 42];
     mount();
     await openPanel();
     const agent = await readySwitch('Agent');
     expect(agent.getAttribute('aria-checked')).toBe('false');
+    const oauthToggle = screen.getByRole('switch', { name: 'OAuth management' });
+    expect(oauthToggle.getAttribute('aria-checked')).toBe('true');
+    expect(oauthToggle.hasAttribute('disabled')).toBe(true);
     const settingsToggle = screen.getByRole('switch', { name: 'OMC Settings' });
     expect(settingsToggle.getAttribute('aria-checked')).toBe('true');
     expect(settingsToggle.hasAttribute('disabled')).toBe(true);
+    expect(LOCKED_NAV_KEYS.has('/oauth-management')).toBe(true);
     expect(LOCKED_NAV_KEYS.has('/omc-settings')).toBe(true);
     // Showing everything writes the empty set rather than re-sending anything that was dropped.
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }));

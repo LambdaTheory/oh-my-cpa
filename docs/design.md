@@ -1143,10 +1143,11 @@ and halo. Ringing the inner field too drew a second rectangle inside the control
   rail, the collapsed rail and the phone sheet from one filtered model. The panel lists the model
   the rail draws, including the pages a running plugin registered, so the two cannot disagree
   about which destinations exist. A group whose every entry is hidden goes with
-  them, the OMC settings entry itself is shown switched on and inert - a preference that could
-  hide its own surface would leave the console unable to undo it - and everything else on the
-  shell reads the unfiltered model, so a page opened by URL still names itself in the breadcrumb
-  and the document title.
+  them. OMC Settings and OAuth management are shown switched on and inert: the first owns the
+  visibility choice and the Feishu panel, while the second owns the account automation and Ollama
+  entrances, so hiding either would strand fork-owned management. Everything else on the shell
+  reads the unfiltered model, so a page opened by URL still names itself in the breadcrumb and the
+  document title.
 - The rail ends with its navigation: CPA connection and version are read on the
   System Information page, not repeated in the shell.
 

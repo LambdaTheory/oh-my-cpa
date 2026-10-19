@@ -139,7 +139,9 @@ const SidebarNavPanel: React.FC<{
                       {label}
                     </span>
                   }
-                  description={isLocked ? t('omc.sidebar_locked') : undefined}
+                  description={isLocked
+                    ? t(entry.key === '/oauth-management' ? 'omc.sidebar_locked_operations' : 'omc.sidebar_locked')
+                    : undefined}
                   control={
                     <span className={styles.control} data-nav-toggle={entry.key}>
                       <Switch

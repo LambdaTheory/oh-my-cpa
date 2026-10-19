@@ -39,10 +39,11 @@ export const DEFAULT_HIDDEN_NAV: readonly string[] = Object.freeze([]);
  * Entries that cannot be hidden.
  *
  * The OMC Settings page is where the rail is customized, so a preference that hid it would leave
- * the operator no way back to the choice from the console itself - a state not worth being able to
- * reach. The page stays listed with a disabled control that says why, rather than quietly omitted.
+ * the operator no way back to the choice from the console itself. OAuth management is the only
+ * console entry to account automation and Ollama management, so hiding it would strand fork-owned
+ * operations in the same way. Both stay listed with disabled controls that say why.
  */
-export const LOCKED_NAV_KEYS: ReadonlySet<string> = new Set(['/omc-settings']);
+export const LOCKED_NAV_KEYS: ReadonlySet<string> = new Set(['/oauth-management', '/omc-settings']);
 
 /** A route key is at most this long; anything larger is a client bug, not a destination. */
 const MAX_NAV_KEY_LENGTH = 128;
@@ -105,7 +106,9 @@ export function retainVisibleGroups(groups: readonly NavGroup[], hidden: Readonl
   if (hidden.size === 0) return [...groups];
   const visible: NavGroup[] = [];
   for (const group of groups) {
-    const items = group.items.filter((item) => !hidden.has(item.key));
+    // Locked destinations survive even a stale or hand-written hidden set. Parsing preferences is
+    // the first boundary, but the rail itself is the invariant: fork operations must stay reachable.
+    const items = group.items.filter((item) => !hidden.has(item.key) || !isHideableNavKey(item.key));
     if (items.length > 0) visible.push({ ...group, items });
   }
   return visible;
