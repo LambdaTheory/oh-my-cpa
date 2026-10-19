@@ -574,6 +574,8 @@ const DICT: Record<string, [string, string]> = {
   'agent.capability.quota_list': ["查看配额", "Read quotas"],
   'agent.capability.model_advice': ["模型建议", "Model advice"],
   'agent.capability.model_advice.description': ["按已记录的配额信息排序可用模型；不刷新额度。", "Rank models from recorded quota readings without refreshing them."],
+  'agent.capability.quota_prediction': ["额度预测", "Quota prediction"],
+  'agent.capability.quota_prediction.description': ["根据已记录的额度观测与使用历史预测重置前的耗尽或闲置风险；不刷新额度。", "Project exhaustion or under-use before reset from recorded quota observations and usage; does not refresh quota."],
   'agent.capability.quota_list.description': [
     "读取各凭据的套餐名称、档位、配额窗口与观测时间；缺失或过期的观测不代表额度为零。",
     "Reads subscription plan names and tiers, quota windows and when they were observed; a missing or stale observation is not zero quota.",

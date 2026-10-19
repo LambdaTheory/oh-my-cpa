@@ -235,6 +235,23 @@ The module is wired into the running process:
 6. The read-only summary `feishu_notifications_status` is offered through the
    capability registry; it carries no secret and no write path.
 
+## Daily prediction digest
+
+The service owns a separate read-only prediction-digest component. It reads stored quota
+prediction findings at configured `SummaryTimes` and never calls the Agent, an LLM or an
+upstream quota endpoint. The component is evaluated only while the resolved configuration
+is ready, and tests inject both its prediction source and sender.
+
+At a scheduled minute, one or more `will_exhaust` or `under_used` windows are combined
+into one card titled `OMC 额度预测 · HH:MM`. The service records that minute in the existing
+summary timestamp, so `maybeScheduledSummary` cannot queue a second message. With no
+finding, prediction is silent and the ordinary digest runs unchanged. Quiet hours defer
+delivery through the same outbox; failed sends use the same bounded retry schedule.
+
+Each row shows the credential label, window, current used percentage, projected percentage
+at reset and verdict. Projected cost and tokens appear only when priced usage is sufficient.
+The footer states the newest data time and that the result is a projection, not a guarantee.
+
 ## Remaining risk
 
 - The stored auth-invalid evidence depends on the classifier. A quota snapshot

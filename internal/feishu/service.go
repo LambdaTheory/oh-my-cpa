@@ -86,6 +86,9 @@ type Service struct {
 	loopDone   chan struct{}
 
 	lastError string
+
+	stateMu                     sync.Mutex
+	isPredictionSchedulerActive bool
 }
 
 // NewService builds the bot. It never returns an error: an invalid configuration
@@ -588,6 +591,8 @@ func (s *Service) runLoop(ctx context.Context) {
 }
 
 func (s *Service) tick(ctx context.Context) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	resolved := s.resolvedNow()
 	if !resolved.Ready() {
 		return
@@ -649,7 +654,9 @@ func (s *Service) tick(ctx context.Context) {
 	}
 
 	s.maybeStartupSummary(ctx, state, resolved, rep, has, result.Opened, now)
-	s.maybeScheduledSummary(state, resolved, rep, has, now)
+	if !s.isPredictionSchedulerActive {
+		s.maybeScheduledSummary(state, resolved, rep, has, now)
+	}
 
 	state.UpdatedAt = now
 	if err := s.store.Save(ctx, state); err != nil {
@@ -786,20 +793,10 @@ func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolve
 // reading is still fresh. A stale or absent report therefore never manufactures
 // a "nearly out" digest, while real open items are still summarized.
 func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Report, has bool, now time.Time) {
-	local := now.In(resolved.Location)
-	minutes := local.Hour()*60 + local.Minute()
-	due := false
-	for _, value := range resolved.SummaryTimes {
-		if parsed, ok := parseClock(value); ok && int(parsed) == minutes {
-			due = true
-			break
-		}
-	}
-	if !due {
+	if !scheduledMinute(resolved, now) {
 		return
 	}
-	if !state.LastSummaryAt.IsZero() &&
-		state.LastSummaryAt.In(resolved.Location).Format("2006-01-02 15:04") == local.Format("2006-01-02 15:04") {
+	if sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return
 	}
 	state.LastSummaryAt = now

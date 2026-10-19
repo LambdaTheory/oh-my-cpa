@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	appcrypto "github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
@@ -42,12 +44,13 @@ var errFeishuCipherUnavailable = errors.New("feishu: master-key cipher is not co
 
 // FeishuAPI owns the Feishu service and its settings routes.
 type FeishuAPI struct {
-	handler *Handler
-	repo    *repository.Repository
-	cipher  *appcrypto.Cipher
-	logger  *slog.Logger
-	now     func() time.Time
-	service *feishu.Service
+	handler    *Handler
+	repo       *repository.Repository
+	cipher     *appcrypto.Cipher
+	logger     *slog.Logger
+	now        func() time.Time
+	service    *feishu.Service
+	prediction *feishu.PredictionJob
 	// overlay is the environment override. It is retained so a settings save
 	// re-applies the same precedence (an explicit environment off still wins).
 	overlay feishu.Overlay
@@ -56,6 +59,8 @@ type FeishuAPI struct {
 // Service exposes the built bot so the integration owner can start and stop it with
 // the other background loops.
 func (f *FeishuAPI) Service() *feishu.Service { return f.service }
+
+func (f *FeishuAPI) PredictionJob() *feishu.PredictionJob { return f.prediction }
 
 // BuildFeishuAPI builds the bot and its routes. source supplies the read-only
 // report the bot answers from; the application passes
@@ -93,12 +98,24 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 		return nil, err
 	}
 	api.service = feishu.NewService(feishu.Options{
-		Web:     web,
-		Overlay: overlay,
-		Store:   feishuStore{repo: h.repo},
-		Source:  source,
-		Logger:  h.logger,
-		Now:     h.now,
+		Web: web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
+		Logger: h.logger, Now: h.now,
+	})
+	api.prediction = feishu.NewPredictionJob(api.service, func(ctx context.Context) ([]feishu.PredictionDigestItem, error) {
+		prediction, err := h.operationsService().QuotaPrediction(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.QuotaPredictionInput{})
+		if err != nil {
+			return nil, err
+		}
+		items := make([]feishu.PredictionDigestItem, 0, len(prediction.Items))
+		for _, item := range prediction.Items {
+			items = append(items, feishu.PredictionDigestItem{
+				CredentialLabel: item.CredentialLabel, Provider: item.Provider, WindowKind: item.WindowKind,
+				UsedPercent: item.UsedPercent, ProjectedPercentAtReset: item.ProjectedPercentAtReset,
+				ProjectedTokensAtReset: item.ProjectedTokensAtReset, ProjectedCostNanosAtReset: item.ProjectedCostNanosAtReset,
+				ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
+			})
+		}
+		return items, nil
 	})
 	return api, nil
 }

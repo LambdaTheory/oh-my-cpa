@@ -159,6 +159,14 @@ exclusions share a Model rules task with separate guarded drafts and catalog sel
 
 ### Cost & Usage workbench
 
+### Read-only quota prediction (OMC extension)
+
+Agent and MCP expose bounded reset-time quota predictions from stored passive and active
+observations plus request usage/cost history. Read-only MCP results mask credential labels
+and omit auth indexes. This adds no CPA endpoint, console page, routing rule, automatic
+disablement or model switch; Feishu may summarize exhaustion and under-use findings at its
+configured digest times.
+
 The price book groups models by actual configured API-key and OAuth providers, reuses their names/icons, and offers provider and price-mode filters, separator-tolerant search and 20-row pagination. Provider groups sort by routing priority; model names use stable case-aware natural ordering. Shared model memberships edit one global price, and unpriced models offer suggestions in place. The OpenRouter picker paginates its entire searchable catalog.
 
 | Deployment timezone | OMC Settings | OMC preferences | Covered | Server-default IANA timezone with persistent manual override, current UTC-offset labels, timezone-aware console timestamps and natural-day aggregation; Agent/MCP read and write capabilities share validation. |

@@ -106,6 +106,9 @@ func (r *PlainReportRenderer) Title(msg Message) string {
 	if strings.TrimSpace(msg.Title) != "" {
 		return strings.TrimSpace(msg.Title)
 	}
+	if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+		return "OMC 额度预测 · " + strings.TrimPrefix(msg.Kind, predictionKindPrefix)
+	}
 	if title, ok := defaultTitles[msg.Kind]; ok {
 		return title
 	}

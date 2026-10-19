@@ -351,6 +351,22 @@ and the places it deliberately differs from the hand-tuned values it replaced.
 
 ## Time windows
 
+### Quota prediction evidence
+
+A **quota prediction** is a read-only projection of one normalized quota window to its
+current reset boundary. It is not capacity, an upstream guarantee or a routing instruction.
+Its verdicts are **will exhaust**, **under-used**, **on track** and **unknown**.
+
+Prediction evidence has three tiers. **Fact** is a directly observed current reading or a
+classification supported without a positive future trend. **Projection** is arithmetic
+from at least two passive or active observations in the same cycle. **Unknown** means the
+required boundary, freshness, history, trend or usage evidence is absent or invalid.
+Unknown values remain missing with a reason and are never written as zero.
+
+Reset-time token and cost values are projections from OMC-recorded current-cycle usage,
+not capacity estimates. They exist only when at least five percent is used, traffic was
+recorded and at least 95 percent of requests carried request-time pricing.
+
 - **Range Preset**: A relative window — Live (last 15m), 1h, 6h, 24h, 7d, 30d,
   90d, and on the dashboard only, All time. It slides with the current time, so its totals move on every poll even
   when no request arrived: the left edge keeps dropping old events. That is why

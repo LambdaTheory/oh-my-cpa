@@ -3244,6 +3244,25 @@ and is superseded by ADR 0024, which records the single latest session that repl
 `scripts/test-playground.ts`, and desktop/phone probes cover this flow. Public-demo
 model reads are generated through the real facade; inference is explicitly refused, while one browser-local recorded example demonstrates the flow (ADR 0092).
 
+## Read-only quota prediction
+
+`internal/quota/prediction.go` owns deterministic window math. It accepts a normalized
+current window, current-cycle passive and active observations, and usage joined for the
+same half-open cycle. It derives boundaries through `WindowCycleRange`, rejects stale,
+incomplete or reset history, and keeps missing projections as null reasoned evidence.
+
+`internal/operations/quota_prediction.go` owns capability validation, filters, identity
+projection and the 100-row/32-KiB bounds. It reads the normalized quota overview and joins
+`quota_observations` plus `usage_events` through repository methods; it performs no
+provider quota refresh. Read-only MCP masking happens after the shared projection.
+
+`internal/feishu/prediction_digest.go` is the daily prediction component. At configured
+summary minutes the Feishu loop evaluates it before the legacy scheduled summary. A
+`will_exhaust` or `under_used` finding queues one card through the same persisted outbox
+and claims that minute; without a finding, the existing summary path runs unchanged. The
+component shares timezone, chat, quiet hours, sender and retry behavior and remains inert
+when Feishu is not ready.
+
 ## 15. Where to look next
 
 - Domain wording: `CONTEXT.md`

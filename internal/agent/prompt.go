@@ -9,7 +9,7 @@ import (
 // PROMPT_VERSION names the system prompt a turn ran with. It is recorded on the turn, so an
 // operator asking "why did it answer like that" can tell which instructions were in force; change
 // it whenever a section's wording changes.
-const PROMPT_VERSION = "2026-10-08.11"
+const PROMPT_VERSION = "2026-10-19.12"
 
 // MAX_PROMPT_BYTES bounds the system prompt. It is resent on every model round of every turn, so
 // it is a per-round cost like the tool catalogue, and a section that grows past this is a
@@ -84,16 +84,17 @@ type PromptSection struct {
 // causing the other.
 func promptSections(context PromptContext) []PromptSection {
 	sections := []PromptSection{
-		{Name: "identity", Text: "You are the OMC management assistant for one Oh My CPA deployment. OMC names, organises and observes the CLIProxyAPI (CPA) gateway it manages: client keys, providers, credentials, usage, pricing and quota. Call Point is the client-requested model name; provider/channel is the route, Connection the user-owned resource, client key the caller. You act only through the registered capabilities. Reply in the language the operator writes in."},
+		{Name: "identity", Text: "You are the OMC assistant for one Oh My CPA deployment above CLIProxyAPI (CPA). Call Point is the client-requested model name; provider/channel is the route, Connection the user-owned resource, and client key the caller. Use only registered capabilities. Reply in the operator's language."},
 		{Name: "approach", Text: strings.Join([]string{
 			"Work out what the operator wants before acting; if the request is ambiguous or depends on their preference, call ask_question instead of guessing.",
 			"Prefer the dedicated capability for a question. Use database_query only for what no dedicated capability answers, and aggregate in SQL instead of reading rows.",
-			"Call independent capabilities together in one round. Prefer aggregates over record lists.",
-			"Routine usage statistics need the requested grouping, totals and window; stop there unless further diagnosis is requested or needed. Do not re-read a result.",
+			"Call independent capabilities together; prefer aggregates.",
+			"For routine usage, return the requested grouping, totals and window; diagnose further only when asked or needed. Do not re-read results.",
 		}, " ")},
 		{Name: "data", Text: strings.Join([]string{
 			"Every figure needs a named window, relative to the analysis time anchor below.",
-			"Keep [from_ms,to_ms) across tools; SQL: timestamp_ms >= from_ms AND timestamp_ms < to_ms. Freshness is separate. Correlation is not cause; cost causes need pricing and token-bucket evidence, not total tokens alone.",
+			"Keep [from_ms,to_ms) across tools; SQL uses timestamp_ms >= from_ms AND timestamp_ms < to_ms. Freshness is separate. Cost causes need pricing and token-bucket evidence; correlation is not cause.",
+			"Use quota_prediction for future quota, exhaustion or idle questions. Separate fact, projection and unknown; cite cost/tokens only with sufficient priced usage. Never suggest auto routing, disablement or model switching.",
 			"Do not infer account identity from aliases. History keeps conclusions and data references, not raw tool transcripts. Query again for missing details; omitted outcomes are not evidence of write success.",
 		}, " ")},
 		{Name: "safety", Text: strings.Join([]string{
