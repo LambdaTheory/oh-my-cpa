@@ -539,10 +539,7 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
-	// Quota refresh is best effort: a failed round leaves the stored readings as they
-	// were. Exactly one configured mode runs, and a demo starts neither because both
-	// read providers through the gateway with each credential.
-	// It is joined before Run returns, like the pipeline, because a round in flight writes
+	// Warmup is joined before Run returns because a round in flight writes state and
 	// observations to the database the caller closes next.
 	warmupDone := make(chan struct{})
 	if a.cfg.IsDemoMode {
@@ -556,6 +553,10 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 	defer func() { stop(); <-warmupDone }()
+	// Quota refresh is best effort: a failed round leaves the stored readings as they
+	// were. Exactly one configured mode runs, and a demo starts neither because both
+	// read providers through the gateway with each credential. It is joined before Run
+	// returns for the same database-lifetime reason as warmup and the usage pipeline.
 	quotaRefreshDone := make(chan struct{})
 	if a.cfg.IsDemoMode || !a.cfg.Quota.SchedulerEnabled {
 		close(quotaRefreshDone)

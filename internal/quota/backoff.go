@@ -84,6 +84,9 @@ func NewBackoff(base, maximum time.Duration) *Backoff {
 	if base <= 0 {
 		base = DefaultBackoffBase
 	}
+	if maximum <= 0 {
+		maximum = DefaultBackoffMax
+	}
 	if maximum < base {
 		maximum = base
 	}
@@ -100,6 +103,10 @@ func NewBackoff(base, maximum time.Duration) *Backoff {
 // DefaultBackoffBase is the first wait a 429 without a Retry-After produces. It
 // is exported so the config layer and this package cannot drift.
 const DefaultBackoffBase = 5 * time.Minute
+
+// DefaultBackoffMax matches the process default when a caller supplies a zero-value
+// configuration, including focused handler tests that do not load environment settings.
+const DefaultBackoffMax = 6 * time.Hour
 
 // CredentialBlocked reports whether the credential is parked and until when.
 func (b *Backoff) CredentialBlocked(authIndex string, now time.Time) (bool, time.Time) {

@@ -25,6 +25,8 @@ type quotaAutoRefreshFixture struct {
 	reads         map[string]int
 	isUsageFailed bool
 	isRateLimited bool
+	retryAfter    int
+	isSingle      bool
 }
 
 func (f *quotaAutoRefreshFixture) usageReads(authIndex string) int {
@@ -44,6 +46,13 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 		writer.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/v8/management/credentials":
+			fixture.mu.Lock()
+			isSingle := fixture.isSingle
+			fixture.mu.Unlock()
+			if isSingle {
+				_, _ = writer.Write([]byte(`{"files":[{"id":"f-reset","name":"codex-reset.json","auth_index":"codex-reset","type":"codex","provider":"codex"}]}`))
+				return
+			}
 			_, _ = writer.Write([]byte(`{"files": [
 				{"id": "f-reset", "name": "codex-reset.json", "auth_index": "codex-reset", "type": "codex", "provider": "codex"},
 				{"id": "f-fresh", "name": "codex-fresh.json", "auth_index": "codex-fresh", "type": "codex", "provider": "codex"},
@@ -65,10 +74,13 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 			}
 			fixture.mu.Lock()
 			fixture.reads[payload.AuthIndex]++
-			isFailed, isRateLimited := fixture.isUsageFailed, fixture.isRateLimited
+			isFailed, isRateLimited, retryAfter := fixture.isUsageFailed, fixture.isRateLimited, fixture.retryAfter
 			fixture.mu.Unlock()
 			if isRateLimited {
-				_, _ = writer.Write([]byte(`{"status_code": 429, "header":{"Retry-After":["120"]}, "body": {"message":"slow down"}}`))
+				if retryAfter == 0 {
+					retryAfter = 120
+				}
+				_, _ = fmt.Fprintf(writer, `{"status_code":429,"header":{"Retry-After":["%d"]},"body":{"message":"slow down"}}`, retryAfter)
 				return
 			}
 			if isFailed {
@@ -217,12 +229,12 @@ func TestQuotaAutoRefreshDoesNotRepeatAFailedRead(t *testing.T) {
 
 func TestQuotaAutoRefreshSharesRateLimitBackoffAndClearsAfterSuccess(t *testing.T) {
 	ctx := context.Background()
-	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, isRateLimited: true}
+	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, isRateLimited: true, retryAfter: 600, isSingle: true}
 	handler := newQuotaAutoRefreshHandler(t, fixture)
 	now := time.Now().UTC()
 	handler.nowFn = func() time.Time { return now }
 	saveAutoRefreshSnapshot(t, handler, "codex-reset", "codex", now.Add(-5*time.Hour).UnixMilli(), now.Add(-2*time.Minute).UnixMilli())
-	setAutoRefreshPolicy(t, handler, `{"interval_minutes":0,"refresh_on_reset":true}`)
+	setAutoRefreshPolicy(t, handler, `{"interval_minutes":5,"refresh_on_reset":false}`)
 
 	round, err := handler.runQuotaAutoRefreshRound(ctx)
 	if err != nil || round.Failed != 1 || fixture.usageReads("codex-reset") != 1 {
@@ -231,11 +243,12 @@ func TestQuotaAutoRefreshSharesRateLimitBackoffAndClearsAfterSuccess(t *testing.
 	if blocked, _ := handler.quotaBackoffBlocked("codex", "codex-reset"); !blocked {
 		t.Fatal("interval refresh did not park the credential")
 	}
-	if round, err = handler.runQuotaAutoRefreshRound(ctx); err != nil || round.Due != 0 || fixture.usageReads("codex-reset") != 1 {
+	now = now.Add(5 * time.Minute)
+	if round, err = handler.runQuotaAutoRefreshRound(ctx); err != nil || round.Due != 1 || round.Failed != 1 || fixture.usageReads("codex-reset") != 1 {
 		t.Fatalf("parked round = %+v err=%v reads=%d", round, err, fixture.usageReads("codex-reset"))
 	}
 
-	now = now.Add(11 * time.Minute)
+	now = now.Add(6 * time.Minute)
 	fixture.mu.Lock()
 	fixture.isRateLimited = false
 	fixture.mu.Unlock()

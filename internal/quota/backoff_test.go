@@ -27,6 +27,16 @@ func TestBackoffHonoursRetryAfterThenClears(t *testing.T) {
 	}
 }
 
+func TestBackoffZeroValueBoundsKeepTheProductionMaximum(t *testing.T) {
+	backoff := NewBackoff(0, 0)
+	now := time.Now()
+	backoff.Record("codex", "c-1", 10*time.Minute, true, now)
+	blocked, until := backoff.Blocked("codex", "c-1", now.Add(5*time.Minute))
+	if !blocked || until.Sub(now) != 10*time.Minute {
+		t.Fatalf("blocked=%v until=%v, want the ten-minute Retry-After", blocked, until)
+	}
+}
+
 func TestBackoffDoublesWithoutRetryAfterAndCaps(t *testing.T) {
 	backoff := NewBackoff(5*time.Minute, 20*time.Minute)
 	now := time.Now()
