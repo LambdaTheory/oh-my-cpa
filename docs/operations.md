@@ -78,7 +78,7 @@ a message naming the variable.
 
 ### Quota refresh scheduler
 
-Exactly one quota refresh mode runs outside demo mode:
+When enabled, exactly one quota refresh mode runs outside demo mode:
 
 | Mode | Policy source | Behavior |
 | --- | --- | --- |
@@ -113,9 +113,9 @@ Claude stays at ten minutes.
 
 An upstream 429 parks the credential and its provider for the `Retry-After` (or the
 exponential wait). The manual endpoint, Agent/MCP `quota_refresh`, the selected background
-loop and credential warmup's consuming requests share the park; while it is active they refuse
-with a retry time instead of probing upstream again. A successful quota read clears it. The
-state is in memory only, so a restart clears it.
+loop and credential warmup's consuming requests share the park. Quota refreshes refuse with
+`rate_limited_backoff` and a retry time; warmup waits without probing upstream again. A
+successful quota read clears it. The state is in memory only, so a restart clears it.
 
 ### Account auto-management
 
@@ -629,17 +629,18 @@ being filed under a period it does not describe (ADR 0071).
 
 ## Automatic quota refresh
 
-OMC Settings → Quota holds the deployment-wide automatic quota refresh policy (the
-`omc_quota_auto_refresh` preference, ADR 0094). **Refresh after a quota resets** is on
+In `interval` mode, OMC Settings → Quota holds the deployment-wide automatic quota refresh
+policy (the `omc_quota_auto_refresh` preference, ADR 0094). **Refresh after a quota resets** is on
 by default: about a minute after a window a stored reading reported has reset, that
 credential is read again once. **Scheduled quota refresh** reads every enabled credential whose reading is
-older than the interval - six hours by default, adjustable from 5 minutes to 24 hours,
+older than the interval - thirty minutes by default, adjustable from 5 minutes to 24 hours,
 or off - including credentials nobody has read, so the first minutes after an upgrade
 read every such credential. Each automatic read is a provider request made with the credential through CPA
 (`api-call`, or the plugin's quota endpoint for a plugin credential), at most sixteen per
 minute; a failed reset-driven read is retried every ten minutes for an hour. Meta credentials are only read on a manual
 refresh, because that read exchanges a key upstream. Turning both off restores
-operator-only reads. A demonstration never runs it.
+operator-only reads in `interval` mode. `adaptive` mode ignores these settings and follows
+the environment configuration above. A demonstration never runs either mode.
 
 ## Meta quota and live subscription tiers
 

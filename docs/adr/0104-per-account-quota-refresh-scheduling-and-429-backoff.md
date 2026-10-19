@@ -60,11 +60,12 @@ exists only for the model-scoped windows and the plan.
 `SafeApiCall` turns an upstream 429 into a typed `quota.RateLimitError` carrying the
 `Retry-After` header CPA relays from the upstream (delay-seconds or an HTTP date,
 bounded to a day), or an exponential wait (five minutes doubling to six hours) when
-none is present. `RefreshCredentialQuota` propagates it. The scheduler, the manual
+none is present. `RefreshCredentialQuota` propagates it. Both background modes, the manual
 `POST /management/quota/refresh` endpoint and the MCP `quota_refresh` tool all
 share one in-memory registry: a 429 parks the credential and its provider, and
 while parked each path answers `rate_limited_backoff` with a retry time instead of
-probing again. A successful read clears the park.
+probing again. Credential warmup's consuming requests also respect the park and wait without
+probing. A successful quota read clears the park.
 
 Every successful refresh records each window with a stated period and used share
 into the observation timeline as `source='active'` (migration 042), under a

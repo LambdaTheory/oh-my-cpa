@@ -442,7 +442,8 @@ and the places it deliberately differs from the hand-tuned values it replaced.
   `Retry-After` or a doubling wait when none is given. It is shared by the scheduler, the
   manual refresh endpoint and the `quota_refresh` capability: while parked, each refuses
   with `rate_limited_backoff` and a retry time instead of probing the upstream. It is held
-  in memory only, so a restart clears it (ADR 0104).
+  in memory only, so a restart clears it. Both background modes and credential warmup's
+  consuming requests share the same park (ADR 0104).
 - **Account Auto-Management**: OMC's control of one credential's `disabled` state from
   account-level evidence (ADR 0105). It disables only on a **new** standard weekly (7d)
   reading that states 100% used with its reset still in the future, and enables directly
