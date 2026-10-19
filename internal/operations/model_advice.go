@@ -269,6 +269,36 @@ func boundModelAdvice(result *ModelAdviceResult) {
 	}
 }
 
+func inferAdviceWindowKind(window quota.QuotaWindow) string {
+	if window.Kind != "" {
+		return window.Kind
+	}
+	switch window.ID {
+	case "five_hour", "daily", "weekly", "monthly":
+		return window.ID
+	}
+	if window.ID == "seven_day" || strings.HasPrefix(window.ID, "seven_day_") {
+		return "weekly"
+	}
+	if window.PeriodHours == nil {
+		return ""
+	}
+	hours := *window.PeriodHours
+	if math.Abs(hours-5) < 1 {
+		return "five_hour"
+	}
+	if math.Abs(hours-24) < 1 {
+		return "daily"
+	}
+	if math.Abs(hours-168) < 1 {
+		return "weekly"
+	}
+	if hours >= 24*28 && hours <= 24*31 {
+		return "monthly"
+	}
+	return ""
+}
+
 func tightestAdviceWindow(windows []quota.QuotaWindow) *AdviceWindow {
 	labels := map[string]string{
 		"five_hour": "Five-hour", "weekly": "Weekly", "daily": "Daily",
@@ -285,7 +315,7 @@ func tightestAdviceWindow(windows []quota.QuotaWindow) *AdviceWindow {
 			used = *window.UsedPercent
 		}
 		if selected == nil || used > selected.UsedPercent {
-			kind := window.Kind
+			kind := inferAdviceWindowKind(window)
 			label := labels[kind]
 			if label == "" {
 				kind, label = "unknown", "Quota window"

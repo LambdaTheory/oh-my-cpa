@@ -547,7 +547,8 @@ fifty, with `omitted` counting the remainder. `recommended` is the leading
 `ok` or `caution` model, or null when neither exists even if `avoid` models have
 ranks. Each item reports `ok`, `caution`, `avoid`, or `unknown`,
 its continuous rank (null for unknown), bounded reason codes, the tightest
-relevant window's label/kind/used share/reset, eligible and usable credential
+relevant window's label/kind/used share/reset (with a missing kind inferred from
+the window ID first, then its period hours), eligible and usable credential
 counts, and the selected reading's age. The result also carries
 `generated_at_ms` and fits the capability's 32 KiB result budget.
 
