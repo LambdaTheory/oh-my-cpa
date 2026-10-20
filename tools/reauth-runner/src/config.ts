@@ -7,6 +7,9 @@ export interface StartConfig {
   provider: string;
   isHeadless: boolean;
   isManual: boolean;
+  browserChannel?: string;
+  shouldIgnoreHttpsErrors: boolean;
+  userAgent?: string;
   profileDir: string;
   codeFile?: string;
   timeoutMs: number;
@@ -58,6 +61,9 @@ export function loadStartConfig(environment: NodeJS.ProcessEnv): StartConfig {
     provider: environment.PROVIDER?.trim().toLowerCase() || "claude",
     isHeadless: parseBoolean(environment.HEADLESS, true, "HEADLESS"),
     isManual: parseBoolean(environment.MANUAL, false, "MANUAL"),
+    browserChannel: environment.BROWSER_CHANNEL?.trim() || undefined,
+    shouldIgnoreHttpsErrors: parseBoolean(environment.IGNORE_HTTPS_ERRORS, false, "IGNORE_HTTPS_ERRORS"),
+    userAgent: environment.USER_AGENT?.trim() || undefined,
     profileDir: environment.PROFILE_DIR?.trim() || path.join(os.tmpdir(), "omc-reauth-runner-profile"),
     codeFile: environment.CODE_FILE?.trim() || undefined,
     timeoutMs: parseTimeout(environment.TIMEOUT_MS),

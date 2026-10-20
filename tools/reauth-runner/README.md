@@ -10,9 +10,9 @@ Run commands from this directory so the package stays outside the repository's r
 
 ```sh
 pnpm --ignore-workspace install --frozen-lockfile
-pnpm typecheck
-pnpm test
-pnpm fixture
+pnpm --ignore-workspace typecheck
+pnpm --ignore-workspace test
+pnpm --ignore-workspace fixture
 ```
 
 Expected fixture output:
@@ -32,6 +32,9 @@ The fixture starts a local email/code form, submits to `http://localhost:54545/c
 | `PROVIDER` | no | OAuth provider; defaults to `claude` |
 | `HEADLESS` | no | `true` by default; use `false` for a visible browser or Xvfb |
 | `MANUAL` | no | `false` by default; when `true`, the runner leaves login, verification code, CAPTCHA, 2FA, and device checks to the operator and only waits for the callback |
+| `BROWSER_CHANNEL` | no | Playwright browser channel; empty uses the bundled Chromium, while `chrome` uses the system-installed Google Chrome |
+| `IGNORE_HTTPS_ERRORS` | no | `false` by default; set `true` only when diagnosing a trusted local certificate-interception environment |
+| `USER_AGENT` | no | Optional browser User-Agent override; empty leaves the browser default unchanged |
 | `PROFILE_DIR` | no | persistent Chromium profile; defaults to an OS temporary directory |
 | `CODE_FILE` | no | automated mode only; path containing the one-time code, polled until it exists and is non-empty or `TIMEOUT_MS` expires; without it, the runner reads stdin |
 | `TIMEOUT_MS` | no | request, browser, callback, and status deadline; defaults to `180000` |
@@ -51,6 +54,20 @@ MANUAL=true HEADLESS=false pnpm start
 ```
 
 The runner prints `MANUAL 模式：请在浏览器完成登录和验证码`, waits for a callback URL, validates its state, submits it to CPA or OMC, and polls CPA status. It does not look for a verification-code input and does not read stdin or `CODE_FILE` in this mode.
+
+### Google login reports an unsafe or automated browser
+
+When Google blocks the bundled Playwright Chromium during Antigravity OAuth, prefer the system-installed Google Chrome and complete the flow manually:
+
+```sh
+BROWSER_CHANNEL=chrome
+HEADLESS=false
+MANUAL=true
+IGNORE_HTTPS_ERRORS=true
+pnpm --ignore-workspace start
+```
+
+`IGNORE_HTTPS_ERRORS=true` is intended only to rule out TLS interception by a trusted local proxy; leave it at its default `false` when certificates validate normally. `USER_AGENT` can override the browser User-Agent for diagnostics, but the recommended Chrome configuration normally relies on Chrome's own value. The runner removes Playwright's `--enable-automation` default argument and disables Blink's `AutomationControlled` feature, but Google can still reject the session based on account, network, device, or other risk signals; these settings are not a bypass guarantee.
 
 The optional automated flow waits until a verification-code input appears and then reads the code from stdin:
 
@@ -149,6 +166,7 @@ Use only a disposable/non-production Claude account and non-production CPA deplo
 
 - Anthropic controls the page markup and may change it without notice. The spike uses accessible/attribute selectors and reports when no code field appears; it does not claim a stable vendor contract.
 - CAPTCHA, 2FA, device verification, consent screens, split OTP fields, and bot detection can block headless automation. A human must resolve allowed challenges; the runner does not bypass them.
+- Google may still classify a headed system-Chrome session as unsafe or automated based on signals outside the runner's browser launch configuration. Do not add stealth plugins or fingerprint-forging libraries; use manual takeover and follow the provider's supported recovery path.
 - Automating a consumer login can be restricted by provider terms or policy. Complete legal/security review before productizing this spike.
 - In automated mode, `CODE_FILE` polling begins only after the code field appears and ends when the file is non-empty or `TIMEOUT_MS` expires. External code delivery, mailbox access, retries, scheduling, concurrency control, and Phase 2 OMC jobs are intentionally out of scope.
 - A persistent profile improves session continuity but is sensitive local state. Restrict filesystem access and avoid concurrent use.

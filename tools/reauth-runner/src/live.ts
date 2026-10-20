@@ -212,7 +212,12 @@ async function submitCapturedCallback(config: StartConfig, callback: OAuthCallba
 export async function runLiveFlow(config: StartConfig, hooks: LiveFlowHooks = {}): Promise<Record<string, unknown>> {
   const auth = await requestAuthUrl(config.cpaBaseUrl, config.cpaManagementKey, config.provider, config.timeoutMs);
   const context = await chromium.launchPersistentContext(config.profileDir, {
+    channel: config.browserChannel,
     headless: config.isHeadless,
+    ignoreDefaultArgs: ["--enable-automation"],
+    args: ["--disable-blink-features=AutomationControlled"],
+    ignoreHTTPSErrors: config.shouldIgnoreHttpsErrors,
+    userAgent: config.userAgent,
     viewport: { width: 1280, height: 900 },
   });
   try {

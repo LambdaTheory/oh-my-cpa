@@ -6,6 +6,8 @@ Implementation commit: `ad74a143abd0fe3a2b7c7141863961bd4946f7f3`
 
 Manual takeover timing fix: this report's HEAD commit.
 
+System Chrome launch fix: this report's HEAD commit.
+
 ## Result
 
 The offline proof succeeds: Playwright completes the synthetic email and verification-code pages, observes the outgoing loopback callback request even though no server is listening on `localhost:54545`, and parses `fixture-code` plus `fixture-state`. The live CPA/Anthropic flow is implemented but was not executed because this worktree received no test Claude account, one-time code, CPA endpoint, or management key. No OMC product code was changed.
@@ -18,6 +20,14 @@ The initial automated flow started reading stdin or `CODE_FILE` as soon as a ver
 
 The automated path remains available. Its `CODE_FILE` read still starts only after a verification-code input is visible, but a missing or empty file is now polled until it contains a code or `TIMEOUT_MS` expires with a clear error; stdin behavior is unchanged.
 
+## Google/Antigravity browser rejection fix
+
+The runner can now select the system-installed Google Chrome with `BROWSER_CHANNEL=chrome`; an empty value preserves Playwright's bundled Chromium. Browser contexts also accept the opt-in `IGNORE_HTTPS_ERRORS` and `USER_AGENT` settings, while continuing to preserve the existing headless, viewport, and persistent-profile behavior.
+
+Every launch omits Playwright's `--enable-automation` default argument and passes `--disable-blink-features=AutomationControlled`. The recommended Google/Antigravity diagnostic configuration is `BROWSER_CHANNEL=chrome`, `HEADLESS=false`, `MANUAL=true`, and `IGNORE_HTTPS_ERRORS=true`, with the TLS exception returned to its default `false` after certificate interception has been ruled out.
+
+These changes reduce the most direct Playwright automation signals but do not defeat Google risk controls. Google can still reject a login because of account reputation, network origin, device history, challenge state, or signals outside this runner; the spike intentionally does not use stealth plugins or fingerprint-forging libraries.
+
 ## Commands and observed results
 
 Run from `tools/reauth-runner/`:
@@ -26,8 +36,9 @@ Run from `tools/reauth-runner/`:
 | --- | --- |
 | `pnpm --ignore-workspace install` | Passed; dependencies installed and `pnpm-lock.yaml` generated |
 | `pnpm --ignore-workspace typecheck` | Passed |
-| `pnpm --ignore-workspace test` | Passed: 16 tests, retaining the original 12 and adding MANUAL/CODE_FILE configuration, manual browser takeover, and delayed/empty code-file coverage |
+| `pnpm --ignore-workspace test` | Passed: 16 tests, including BROWSER_CHANNEL/IGNORE_HTTPS_ERRORS/USER_AGENT parsing, MANUAL/CODE_FILE configuration, manual browser takeover, and delayed/empty code-file coverage |
 | `pnpm --ignore-workspace fixture` | Passed; printed `{"code":"fixture-code","state":"fixture-state"}` |
+| `BROWSER_CHANNEL=chrome HEADLESS=false MANUAL=true pnpm --ignore-workspace start` against a local synthetic CPA | Passed; system Chrome opened the authorization page, requested it with `Chrome/155.0.0.0`, captured the synthetic loopback callback, and returned `{"provider":"claude","state":"chrome-smoke-state","status":"ok","message":"chrome smoke complete"}` |
 | `MANUAL=true pnpm --ignore-workspace start` without CPA environment | Expected failure: `CPA_BASE_URL is required`; no secret value was printed |
 | `docker build -t omc-reauth-runner:spike .` | Not run to completion: Docker CLI 29.5.3 is installed, but the Docker Desktop Linux engine pipe was unavailable |
 | repository `pnpm test:fast` | Relevant frontend, documentation, workflow, and component checks passed; the aggregate failed because Go is absent and Windows denied symlink/GNU-tar release self-tests |
@@ -39,6 +50,7 @@ Run from `tools/reauth-runner/`:
 - Node.js `v24.16.0` (project CI pins `22.23.2`; the runner declares Node.js 20+).
 - pnpm `11.19.0`.
 - Playwright `1.62.1`, using the locally installed Chromium revision for the fixture.
+- Google Chrome `155.0.8059.80`, selected through Playwright's `chrome` channel for the headed start smoke test.
 - Docker CLI `29.5.3`; Docker Desktop Linux engine unavailable, so the image could not be built locally.
 - Go unavailable, so repository Go gates could not start.
 

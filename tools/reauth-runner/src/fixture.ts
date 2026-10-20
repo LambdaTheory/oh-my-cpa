@@ -99,6 +99,7 @@ export async function runManualFixtureFlow(
       provider: "claude",
       isHeadless: true,
       isManual: true,
+      shouldIgnoreHttpsErrors: false,
       profileDir,
       codeFile: path.join(profileDir, "must-not-be-read"),
       timeoutMs,
