@@ -107,7 +107,7 @@ Claude stays at ten minutes.
 | `OMCPA_QUOTA_PASSIVE_FRESH_INTERVAL` | `60m` | Floor an interval is widened to when a fresh passive observation already covers the standard window |
 | `OMCPA_QUOTA_CREDENTIAL_FLOOR` | `10m` | Fallback shortest time between two active reads of the same credential, for a provider `OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER` does not name |
 | `OMCPA_QUOTA_CREDENTIAL_FLOOR_BY_PROVIDER` | `claude=10m,codex=5m,antigravity=5m` | Per-provider credential floors as `provider=duration` entries, overriding the named defaults. A provider not named keeps its default; an unnamed provider falls back to `OMCPA_QUOTA_CREDENTIAL_FLOOR`. A malformed entry refuses startup |
-| `OMCPA_QUOTA_REFRESH_CONCURRENCY` | `4` | Maximum simultaneous active reads; a single provider is always serialized at one |
+| `OMCPA_QUOTA_REFRESH_CONCURRENCY` | `4` | Maximum simultaneous active reads across credentials; the same credential has at most one active read, while different credentials of one provider may run concurrently |
 | `OMCPA_QUOTA_BACKOFF_BASE` | `5m` | First wait after an upstream 429 that carried no `Retry-After`; it doubles up to the maximum |
 | `OMCPA_QUOTA_BACKOFF_MAX` | `6h` | Ceiling on the 429 backoff. Must be at least the base |
 

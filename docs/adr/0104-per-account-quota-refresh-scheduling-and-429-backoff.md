@@ -1,6 +1,6 @@
 # ADR 0104: Per-account quota refresh scheduling and 429 backoff
 
-- Status: Accepted
+- Status: Accepted; provider-wide probe serialization was superseded by ADR 0107's per-credential coordination.
 - Date: 2026-10-14
 - Amends: ADR 0065's quota refresh boundary and ADR 0103's observation timeline.
 
