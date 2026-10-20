@@ -706,6 +706,12 @@ parked until then; the manual endpoint and the `quota_refresh` tool share that s
 rate-limited credential is not probed again from any path until its park expires. An agent should
 report the wait rather than retry immediately.
 
+The browser's multi-credential refresh uses the same backoff and per-credential lock but returns
+one allowlisted result per credential. Different credentials of the same provider keep the normal
+four-way concurrency; a rate-limited target carries its retry time beside successful siblings and
+does not make the batch HTTP request fail. The Agent/MCP `quota_refresh` capability remains a
+single-credential call and keeps its typed `rate_limited_backoff` refusal.
+
 ### Read-only MCP key
 
 A deployment may set `OMCPA_MCP_READONLY_KEY` as a second bearer credential for the remote MCP

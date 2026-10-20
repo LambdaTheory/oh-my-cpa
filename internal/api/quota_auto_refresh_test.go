@@ -21,19 +21,30 @@ import (
 // quotaAutoRefreshFixture is a gateway listing one credential per scheduling case and
 // counting the usage reads it is asked to make, per credential.
 type quotaAutoRefreshFixture struct {
-	mu            sync.Mutex
-	reads         map[string]int
-	filesJSON     string
-	isUsageFailed bool
-	isRateLimited bool
-	retryAfter    int
-	isSingle      bool
+	mu                   sync.Mutex
+	reads                map[string]int
+	filesJSON            string
+	isUsageFailed        bool
+	isRateLimited        bool
+	rateLimitedAuthIndex string
+	retryAfter           int
+	isSingle             bool
+	readStarted          chan<- string
+	readRelease          <-chan struct{}
+	activeReads          int
+	peakReads            int
 }
 
 func (f *quotaAutoRefreshFixture) usageReads(authIndex string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reads[authIndex]
+}
+
+func (f *quotaAutoRefreshFixture) peakUsageReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peakReads
 }
 
 func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) *Handler {
@@ -74,15 +85,32 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 				URL       string `json:"url"`
 			}
 			_ = json.NewDecoder(request.Body).Decode(&payload)
-			if !strings.Contains(payload.URL, "backend-api/wham/usage") {
+			if !strings.Contains(payload.URL, "backend-api/wham/usage") && !strings.Contains(payload.URL, "/coding/v1/usages") {
 				_, _ = writer.Write([]byte(`{"status_code": 404, "body": {}}`))
 				return
 			}
 			fixture.mu.Lock()
 			fixture.reads[payload.AuthIndex]++
-			isFailed, isRateLimited, retryAfter := fixture.isUsageFailed, fixture.isRateLimited, fixture.retryAfter
+			fixture.activeReads++
+			if fixture.activeReads > fixture.peakReads {
+				fixture.peakReads = fixture.activeReads
+			}
+			isFailed, isRateLimited, rateLimitedAuthIndex, retryAfter := fixture.isUsageFailed, fixture.isRateLimited, fixture.rateLimitedAuthIndex, fixture.retryAfter
+			readStarted, readRelease := fixture.readStarted, fixture.readRelease
 			fixture.mu.Unlock()
-			if isRateLimited {
+			if readStarted != nil {
+				readStarted <- payload.AuthIndex
+			}
+			if readRelease != nil {
+				select {
+				case <-readRelease:
+				case <-request.Context().Done():
+				}
+			}
+			fixture.mu.Lock()
+			fixture.activeReads--
+			fixture.mu.Unlock()
+			if isRateLimited && (rateLimitedAuthIndex == "" || rateLimitedAuthIndex == payload.AuthIndex) {
 				if retryAfter == 0 {
 					retryAfter = 120
 				}
@@ -91,6 +119,10 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 			}
 			if isFailed {
 				_, _ = writer.Write([]byte(`{"status_code": 500, "body": {"message": "upstream unavailable"}}`))
+				return
+			}
+			if strings.Contains(payload.URL, "/coding/v1/usages") {
+				_, _ = writer.Write([]byte(`{"status_code": 200, "body": {"usages":{"limit_week":{"used_ratio":0.2}}}}`))
 				return
 			}
 			_, _ = writer.Write([]byte(`{"status_code": 200, "body": {

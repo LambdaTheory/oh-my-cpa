@@ -158,6 +158,51 @@ func TestSchedulerLoopRefreshesAndRespectsBackoff(t *testing.T) {
 	}
 }
 
+func TestSchedulerSharesCredentialLockWithManualRefresh(t *testing.T) {
+	backoff := NewBackoff(time.Minute, time.Hour)
+	scheduler := NewScheduler(SchedulerConfig{
+		IdleInterval: time.Minute, GlobalConcurrency: 1,
+	}, nil, backoff)
+	scheduler.ListFiles = func(context.Context) ([]management.AuthFile, error) {
+		return []management.AuthFile{{AuthIndex: "codex-one", Type: "codex", Provider: "codex"}}, nil
+	}
+	scheduler.State = func(context.Context, management.AuthFile, *NormalizedQuota, int64, int64) (SchedulerState, error) {
+		return SchedulerState{}, nil
+	}
+	scheduler.Prior = func(context.Context, string) *NormalizedQuota { return nil }
+	started := make(chan struct{})
+	release := make(chan struct{})
+	scheduler.Refresh = func(context.Context, management.AuthFile, *NormalizedQuota) (*NormalizedQuota, error) {
+		close(started)
+		<-release
+		return &NormalizedQuota{AuthIndex: "codex-one", Provider: "codex"}, nil
+	}
+	done := make(chan struct{})
+	go func() {
+		scheduler.runOnce(context.Background())
+		close(done)
+	}()
+	<-started
+
+	manualAcquired := make(chan struct{})
+	go func() {
+		unlock, err := backoff.LockCredential(context.Background(), "codex", "codex-one")
+		if err != nil {
+			return
+		}
+		close(manualAcquired)
+		unlock()
+	}()
+	select {
+	case <-manualAcquired:
+		t.Fatal("manual refresh acquired the credential lock while the scheduler was probing")
+	default:
+	}
+	close(release)
+	<-done
+	<-manualAcquired
+}
+
 // TestSchedulerConfigCredentialFloorIsPerProvider pins the lookup: a provider
 // with its own floor uses it, a provider named with stray case or spacing still
 // matches, and every other provider uses the shared fallback.

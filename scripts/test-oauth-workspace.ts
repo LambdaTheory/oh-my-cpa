@@ -567,19 +567,19 @@ test('the list summary and the status filter agree on what is healthy', () => {
 
 test('a refresh is acknowledged or reported, chosen by whether it needs inspecting', () => {
   assert.equal(
-    quotaRefreshOutcomeKind({ failed: 0, unknown: 0 }),
+    quotaRefreshOutcomeKind({ failed: 0, rateLimited: 0 }),
     'acknowledgement',
     'a run whose targets all answered is an acknowledgement that leaves on its own',
   );
   assert.equal(
-    quotaRefreshOutcomeKind({ failed: 1, unknown: 0 }),
+    quotaRefreshOutcomeKind({ failed: 1, rateLimited: 0 }),
     'report',
     'a failure needs its per-target reason, so its toast stays until it is closed',
   );
   assert.equal(
-    quotaRefreshOutcomeKind({ failed: 0, unknown: 2 }),
+    quotaRefreshOutcomeKind({ failed: 0, rateLimited: 2 }),
     'report',
-    'a target the response never mentioned is as inspectable as a failure',
+    'a rate-limited target needs its retry time, so its toast stays until it is closed',
   );
 });
 
@@ -620,7 +620,7 @@ test('a target nobody could refresh is reported, not counted as clean', () => {
   // A conflict is resolved before the run, so it must not be filed with the credentials that
   // were never eligible: a run whose every target was held elsewhere refreshed nothing, and
   // `skipped` is the count the clean acknowledgement is built from.
-  const kindFor = (failed: number, unknown: number) => quotaRefreshOutcomeKind({ failed, unknown });
+  const kindFor = (failed: number, rateLimited: number) => quotaRefreshOutcomeKind({ failed, rateLimited });
   assert.equal(kindFor(0, 3), 'report', 'a fully conflicted run is not an acknowledgement');
   assert.equal(kindFor(0, 0), 'acknowledgement');
 });

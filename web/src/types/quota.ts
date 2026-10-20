@@ -221,6 +221,24 @@ export interface QuotaOverviewResponse {
   total: number;
 }
 
+interface QuotaRefreshResultBase {
+  auth_index: string;
+  name: string;
+}
+
+export type QuotaRefreshResult = QuotaRefreshResultBase & (
+  | { outcome: 'success'; quota: QuotaItem }
+  | { outcome: 'rate_limited'; retry_at_ms: number; retry_after_ms: number }
+  | { outcome: 'failed'; error: string; quota?: QuotaItem }
+);
+
+export interface QuotaBatchRefreshResponse {
+  status: string;
+  quotas: QuotaItem[];
+  results: QuotaRefreshResult[];
+  total: number;
+}
+
 export interface CredentialQuotaDetailResponse {
   quota: QuotaItem;
   history: QuotaSnapshotHistoryItem[];

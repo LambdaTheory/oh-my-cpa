@@ -65,6 +65,11 @@ func quotaBackoffError(provider, authIndex string, until, now time.Time) error {
 func (h *Handler) readCredentialQuota(ctx context.Context, service *quota.Service, file management.AuthFile, prior *quota.NormalizedQuota) (*quota.NormalizedQuota, error) {
 	authIndex := strings.TrimSpace(file.AuthIndex)
 	provider := quota.DetectProvider(file.Type, file.Provider)
+	unlock, err := h.quotaBackoff.LockCredential(ctx, provider, authIndex)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {
 		return nil, quotaBackoffError(provider, authIndex, until, h.now())
 	}

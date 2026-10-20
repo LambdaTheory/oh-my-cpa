@@ -45,7 +45,7 @@ import {
 import { ClientAPIKeyItem, ClientKeyUsageItem, ProviderItem, SaveProviderPayload } from '../types/providers';
 import { GatewayModelItem } from '../types/gatewayModels';
 import { OAuthProviderItem, StartOAuthResponse, OAuthStatusResponse, OAuthCallbackResponse, OAuthCancelResponse } from '../types/oauth';
-import { QuotaOverviewResponse, CredentialQuotaDetailResponse, QuotaItem } from '../types/quota';
+import { QuotaOverviewResponse, CredentialQuotaDetailResponse, QuotaItem, type QuotaBatchRefreshResponse } from '../types/quota';
 import {
   SystemInfoResponse,
   SystemReleasesResponse,
@@ -1192,8 +1192,8 @@ export const api = {
     });
   },
 
-  async batchRefreshCredentialQuotas(authIndexes: string[]): Promise<{ status: string; quotas: QuotaItem[] }> {
-    return request<{ status: string; quotas: QuotaItem[] }>('/management/quota/refresh', {
+  async batchRefreshCredentialQuotas(authIndexes: string[]): Promise<QuotaBatchRefreshResponse> {
+    return request<QuotaBatchRefreshResponse>('/management/quota/refresh', {
       method: 'POST',
       body: JSON.stringify({ auth_indexes: authIndexes }),
     });

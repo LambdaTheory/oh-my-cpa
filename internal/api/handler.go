@@ -105,9 +105,10 @@ type Handler struct {
 	// providerKeyMasks caches the auth index to provider key mask mapping the
 	// request list needs; see usage_provider_key_masks.go.
 	providerKeyMasks *providerKeyMaskCache
-	// quotaBackoff parks a credential after an upstream 429. Manual, MCP and the
-	// background scheduler share it, so a limit seen by one path is respected by
-	// the others. It is in memory only: a restart clears it.
+	// quotaBackoff parks a credential after an upstream 429 and owns its probe lock.
+	// Manual, MCP and scheduled reads share that lock, so the same credential has
+	// one probe in flight while other credentials of its provider may run concurrently.
+	// It is in memory only: a restart clears it.
 	quotaBackoff *quota.Backoff
 	// automation runs account-level auto-management (disable on weekly exhaustion,
 	// enable at the recorded reset). Nil until SetAutomation; nil-safe reads answer
