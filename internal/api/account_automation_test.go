@@ -264,6 +264,35 @@ func TestAccountAutomationCandidateSeparatesAdoptionFromAutoDisable(t *testing.T
 	if candidate := byIndex["idx-uncontrollable"]; candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != automation.ReasonNoCredential {
 		t.Fatalf("an uncontrollable provider must stay blocked with its reason: %+v", candidate)
 	}
+
+	body, _ := json.Marshal(map[string]any{"auth_indexes": []string{"idx-unverified", "idx-verified"}, "enable": true})
+	request, err := http.NewRequest(http.MethodPost, base+"/omc/api/v1/account-automation/adopt", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	adoptResponse, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adoptResponse.Body.Close()
+	if adoptResponse.StatusCode != http.StatusOK {
+		t.Fatalf("adopt status = %d", adoptResponse.StatusCode)
+	}
+	_, payload = getJSON(t, client, base+"/omc/api/v1/account-automation")
+	if err := json.Unmarshal(payload, &list); err != nil {
+		t.Fatal(err)
+	}
+	roster := make(map[string]accountAutomationAccountDTO, len(list.Accounts))
+	for _, account := range list.Accounts {
+		roster[account.AuthIndex] = account
+	}
+	if !roster["idx-verified"].AutoDisableSupported {
+		t.Fatalf("verified roster capability = %+v", roster["idx-verified"])
+	}
+	if roster["idx-unverified"].AutoDisableSupported {
+		t.Fatalf("unverified roster capability = %+v", roster["idx-unverified"])
+	}
 }
 
 // TestAccountAutomationRecoveryProjection keeps the console and read-only Agent/MCP

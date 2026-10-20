@@ -316,9 +316,9 @@ func TestServiceReconcilesAnExternalReEnable(t *testing.T) {
 	}
 }
 
-// TestServicePlansRecoveryForADisabledAdoptedAccount is the first takeover: adopting an
-// account that is already disabled upstream with a fresh exhausted weekly reading plans
-// the direct enable at the reset, without ever disabling it or recording a disable.
+// TestServicePlansRecoveryForADisabledAdoptedAccount also covers rows written by the
+// original takeover implementation, which stored the reset on an idle row. That row
+// shape must still enable at the reset without ever recording a disable.
 func TestServicePlansRecoveryForADisabledAdoptedAccount(t *testing.T) {
 	ctx := context.Background()
 	repo := automationRepo(t)
@@ -346,6 +346,16 @@ func TestServicePlansRecoveryForADisabledAdoptedAccount(t *testing.T) {
 	}
 	if account.ManualResetAtMS != nil || account.ManualResetConsumed {
 		t.Fatalf("a takeover must not invent a manual reset: %+v", account)
+	}
+	if _, err := repo.SQL().ExecContext(ctx, `
+		UPDATE account_automation_accounts
+		SET state = ?, monitor_reason = ''
+		WHERE auth_index = ?`, StateIdle, "idx-1"); err != nil {
+		t.Fatal(err)
+	}
+	account, _, _ = repo.GetAutomationAccount(ctx, "idx-1")
+	if account.LastDisableAtMS != nil || account.LastEnableAtMS != nil {
+		t.Fatalf("legacy takeover fixture must have no completed action: %+v", account)
 	}
 
 	// Before the reset the account is monitored; nothing is written to CPA.

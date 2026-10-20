@@ -307,13 +307,33 @@ func TestRecoveryDueProjectsOnlyActivePlans(t *testing.T) {
 		t.Fatalf("overdue recovery = %+v/%v", recovery, ok)
 	}
 
+	legacyTakeover := adoptedAccount()
+	legacyTakeover.State = StateIdle
+	legacyTakeover.CycleResetAtMS = ptrInt64(past)
+	legacyTakeover.DisableObservedAtMS = ptrInt64(now.Add(-2 * time.Hour).UnixMilli())
+	legacyTakeover.CycleKey = "idx-1:codex:legacy"
+	if recovery, ok := RecoveryDue(legacyTakeover, now); !ok || recovery.AtMS != past || recovery.Status != RecoveryOverdue {
+		t.Fatalf("legacy takeover recovery = %+v/%v", recovery, ok)
+	}
+	decision := Decide(legacyTakeover, nil, CredentialState{
+		Exists: true, Disabled: true, Controllable: true, Provider: "codex",
+	}, now, DefaultPolicyConfig())
+	if decision.Kind != DecisionEnable {
+		t.Fatalf("legacy takeover must still enable after reset: %+v", decision)
+	}
+	orphanedIdle := legacyTakeover
+	orphanedIdle.CycleKey = ""
+	if recovery, ok := RecoveryDue(orphanedIdle, now); ok {
+		t.Fatalf("an idle timestamp without the takeover watermark must remain history: %+v", recovery)
+	}
+
 	recovered := overdue
 	recovered.State = StateIdle
 	recovered.LastEnableAtMS = ptrInt64(now.Add(-30 * time.Minute).UnixMilli())
 	if recovery, ok := RecoveryDue(recovered, now); ok {
 		t.Fatalf("completed recovery must not project an old time: %+v", recovery)
 	}
-	decision := Decide(recovered, nil, CredentialState{Exists: true, Disabled: true, Controllable: true, Provider: "codex"}, now, DefaultPolicyConfig())
+	decision = Decide(recovered, nil, CredentialState{Exists: true, Disabled: true, Controllable: true, Provider: "codex"}, now, DefaultPolicyConfig())
 	if decision.Kind != DecisionMonitor || decision.Reason != ReasonMissingReset {
 		t.Fatalf("an old completed reset must not enable an externally disabled credential: %+v", decision)
 	}

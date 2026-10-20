@@ -44,6 +44,7 @@ type accountAutomationAccountDTO struct {
 	IsEnabled            bool     `json:"is_enabled"`
 	State                string   `json:"state"`
 	MonitorReason        string   `json:"monitor_reason,omitempty"`
+	AutoDisableSupported bool     `json:"auto_disable_supported"`
 	DisabledByAutomation bool     `json:"disabled_by_automation"`
 	RecoveryAtMS         *int64   `json:"recovery_at_ms,omitempty"`
 	RecoveryStatus       string   `json:"recovery_status,omitempty"`
@@ -309,6 +310,7 @@ func (h *Handler) automationAccountDTOs(ctx context.Context, roster []repository
 			IsEnabled:            account.IsEnabled,
 			State:                account.State,
 			MonitorReason:        account.MonitorReason,
+			AutoDisableSupported: automation.ProviderHasVerifiedWeeklyCapability(account.Provider),
 			DisabledByAutomation: account.IsDisabledByAutomation(),
 			AdoptedAtMS:          account.AdoptedAtMS,
 			AdoptBatchID:         account.AdoptBatchID,

@@ -120,6 +120,7 @@ function automationListBody(state) {
           is_enabled: true,
           state: 'waiting',
           monitor_reason: 'backoff',
+          auto_disable_supported: true,
           disabled_by_automation: true,
           recovery_at_ms: Date.now() - 60_000,
           recovery_status: 'overdue',
@@ -137,9 +138,12 @@ function automationListBody(state) {
           account_label: 'b@example.test',
           is_adopted: true,
           is_enabled: true,
-          state: 'monitoring',
-          monitor_reason: 'missing_reset',
+          state: state.manualReset ? 'waiting' : 'monitoring',
+          monitor_reason: state.manualReset ? 'recovery_scheduled' : 'missing_reset',
+          auto_disable_supported: true,
           disabled_by_automation: false,
+          recovery_at_ms: state.manualReset?.reset_at_ms,
+          recovery_status: state.manualReset ? 'scheduled' : undefined,
           attempt_count: 0,
           has_weekly_evidence: true,
           weekly_used_percent: 100,
@@ -154,6 +158,7 @@ function automationListBody(state) {
           is_enabled: true,
           state: 'monitoring',
           monitor_reason: 'unverified_account_weekly_capability',
+          auto_disable_supported: false,
           disabled_by_automation: false,
           // A stale timestamp from an older server is history without an active
           // recovery status and must not render as an expected recovery.
@@ -280,11 +285,19 @@ export async function accountAutomation({ base, page, check }) {
     await roster.getByText('Recovery time passed; waiting to retry', { exact: true }).count() === 1);
   check('a stale timestamp outside an active recovery plan is not rendered',
     await roster.getByText(/Recovery at:/).count() === 0);
+  const verifiedMonitoringCard = roster.getByText('b@example.test', { exact: true }).locator('..').locator('..').locator('..');
+  const monitorOnlyCard = roster.getByText('c@example.test', { exact: true }).locator('..').locator('..').locator('..');
+  check('verified monitoring remains an auto-disable-capable monitoring state',
+    await verifiedMonitoringCard.getByText('Monitoring', { exact: true }).count() === 1
+      && await verifiedMonitoringCard.getByText('Monitor only', { exact: true }).count() === 0);
+  check('only an unverified roster account carries the monitor-only badge',
+    await monitorOnlyCard.getByText('Monitoring', { exact: true }).count() === 1
+      && await monitorOnlyCard.getByText('Monitor only', { exact: true }).count() === 1);
   const stateFilter = roster.getByRole('combobox');
   await stateFilter.click();
   await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'Monitor only' }).click();
   await until(async () => (await roster.getByText('c@example.test', { exact: true }).count()) === 1, { label: 'the monitor-only filter to apply' });
-  check('the monitor-only state is visible and filterable', await roster.getByText('c@example.test', { exact: true }).count() === 1
+  check('the monitor-only capability is visible and filterable', await roster.getByText('c@example.test', { exact: true }).count() === 1
     && await roster.getByText('a@example.test', { exact: true }).count() === 0);
   await stateFilter.click();
   await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'All accounts' }).click();
@@ -312,6 +325,9 @@ export async function accountAutomation({ base, page, check }) {
   check('a hand-filled recovery time is a future instant and reaches the missing-reset account',
     typeof automationState.manualReset?.reset_at_ms === 'number' && automationState.manualReset.reset_at_ms > Date.now(),
     JSON.stringify(automationState.manualReset));
+  await until(async () => (await roster.getByText(/Recovery at:/).count()) === 1, { label: 'the scheduled recovery label to render' });
+  check('a future active recovery plan is rendered as an expected recovery',
+    await roster.getByText(/Recovery at:/).count() === 1);
   await roster.locator('.ant-drawer-close').click();
   await until(async () => (await page.locator('.ant-drawer-open').filter({ hasText: 'Account Automation' }).count()) === 0,
     { label: 'the account automation drawer to close' });

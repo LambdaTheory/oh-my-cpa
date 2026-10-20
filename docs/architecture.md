@@ -2285,11 +2285,12 @@ function (`automation.Decide`) driven by an injectable clock, so the whole state
 is tested without sleeping.
 
 The live candidate projection keeps roster admission separate from action capability
-(ADR 0107). `adoptable` means CPA exposes a named credential whose disabled state OMC
+(ADR 0108). `adoptable` means CPA exposes a named credential whose disabled state OMC
 can address; `auto_disable_supported` means the provider also has a verified account-level
-weekly mapping. Every controllable credential can therefore join the roster, while an
-unverified provider is persisted and displayed as `monitoring` with
-`unverified_account_weekly_capability`. The capability registry remains an invariant on
+weekly mapping. Candidate and roster projections both expose the capability fact. Every
+controllable credential can therefore join the roster, while an unverified provider is
+persisted in `monitoring` with `unverified_account_weekly_capability` and separately
+displayed as monitor-only. The capability registry remains an invariant on
 the decision and recovery paths, so adoption cannot widen automatic disablement or
 enablement. An uncontrollable credential remains outside the roster even if its auth index
 is submitted directly.

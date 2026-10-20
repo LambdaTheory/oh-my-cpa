@@ -185,7 +185,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
   // Stats calculation
   const stats = useMemo(() => {
     let adopted = 0;
-    let monitoring = 0;
+    let monitorOnly = 0;
     let disabled = 0;
     let waiting = 0;
     let error = 0;
@@ -193,14 +193,14 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
     for (const a of accounts) {
       if (a.is_adopted) adopted++;
       const s = a.state?.toLowerCase();
-      if (s === 'monitoring') monitoring++;
+      if (!a.auto_disable_supported) monitorOnly++;
       if (s === 'disabled') disabled++;
       if (s === 'waiting') waiting++;
       if (s === 'error') error++;
     }
 
     const credentialTotal = listQuery.data?.candidates_degraded ? null : candidates.length;
-    return { credentialTotal, adopted, monitoring, disabled, waiting, error };
+    return { credentialTotal, adopted, monitorOnly, disabled, waiting, error };
   }, [accounts, candidates.length, listQuery.data?.candidates_degraded]);
 
   // Filtered accounts
@@ -209,7 +209,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       const s = a.state?.toLowerCase();
       if (filterState === 'adopted' && !a.is_adopted) return false;
       if (filterState === 'unadopted' && a.is_adopted) return false;
-      if (filterState === 'monitoring' && s !== 'monitoring') return false;
+      if (filterState === 'monitor_only' && a.auto_disable_supported) return false;
       if (filterState === 'disabled' && s !== 'disabled') return false;
       if (filterState === 'waiting' && s !== 'waiting') return false;
       if (filterState === 'error' && s !== 'error') return false;
@@ -412,8 +412,8 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
             <div style={{ fontSize: 18, fontWeight: 600 }}>{stats.credentialTotal ?? '—'}</div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_monitoring')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--info)' }}>{stats.monitoring}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_monitor_only')}</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--info)' }}>{stats.monitorOnly}</div>
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_disabled')}</div>
@@ -447,7 +447,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                 { value: 'all', label: t('automation.filter_all') },
                 { value: 'adopted', label: t('automation.filter_adopted') },
                 { value: 'unadopted', label: t('automation.filter_unadopted') },
-                { value: 'monitoring', label: t('automation.filter_monitoring') },
+                { value: 'monitor_only', label: t('automation.filter_monitor_only') },
                 { value: 'disabled', label: t('automation.filter_disabled') },
                 { value: 'waiting', label: t('automation.filter_waiting') },
                 { value: 'error', label: t('automation.filter_error') },
@@ -522,6 +522,9 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                             <Tag size="small" tone="accent">{t('automation.tag_adopted')}</Tag>
                           ) : (
                             <Tag size="small">{t('automation.tag_not_adopted')}</Tag>
+                          )}
+                          {!account.auto_disable_supported && (
+                            <Tag size="small" tone="warn">{t('automation.tag_monitor_only')}</Tag>
                           )}
                           {account.disabled_by_automation ? (
                             <Tag size="small" tone="danger">{t('automation.tag_disabled_by_auto')}</Tag>

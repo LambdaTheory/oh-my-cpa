@@ -769,7 +769,7 @@ the read-only MCP key cannot reach them, so the agent cannot adopt, switch, canc
 set a recovery time. Controllable credentials may be adopted even before their provider
 capability is verified; the read then reports `state=monitoring` with
 `monitor_reason=unverified_account_weekly_capability`, and no automatic disable or
-recovery action is permitted. See ADR 0105 and ADR 0107.
+recovery action is permitted. See ADR 0105 and ADR 0108.
 
 ### Ollama and Feishu status
 

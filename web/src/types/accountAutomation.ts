@@ -38,6 +38,7 @@ export interface AccountAutomationAccountDTO {
   is_enabled: boolean;
   state: AutomationState;
   monitor_reason?: AutomationMonitorReason;
+  auto_disable_supported: boolean;
   disabled_by_automation: boolean;
   recovery_at_ms?: number | null;
   recovery_status?: AutomationRecoveryStatus;

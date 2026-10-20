@@ -160,6 +160,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_adopted: true,
             is_enabled: true,
             state: 'disabled',
+            auto_disable_supported: true,
             disabled_by_automation: true,
             attempt_count: 0,
             has_weekly_evidence: true,
@@ -176,6 +177,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: false,
             state: 'idle',
             monitor_reason: 'externally_disabled',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: false,
@@ -188,6 +190,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: true,
             state: 'error',
             monitor_reason: 'backoff',
+            auto_disable_supported: true,
             disabled_by_automation: true,
             recovery_at_ms: now - 60_000,
             recovery_status: 'overdue',
@@ -204,6 +207,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: true,
             state: 'monitoring',
             monitor_reason: 'not_exhausted',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             // A compatibility-shaped stale timestamp is not an active recovery plan
             // unless the server also projects its recovery status.
@@ -248,6 +252,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: true,
             state: 'monitoring',
             monitor_reason: 'missing_reset',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: true,
@@ -319,7 +324,7 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(await screen.findByText('CPA gateway unreachable')).toBeDefined();
     });
 
-    it('adopts unverified controllable candidates, blocks uncontrollable ones, and renders monitor-only state', async () => {
+    it('adopts unverified controllable candidates, blocks uncontrollable ones, and separates monitoring from monitor-only capability', async () => {
       const mockResponse: AccountAutomationListResponse = {
         settings: {
           web_enabled: false,
@@ -337,6 +342,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: true,
             state: 'monitoring',
             monitor_reason: 'evidence_identity_mismatch',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: true,
@@ -344,10 +350,12 @@ describe('First Batch OMC UI Component Tests', () => {
           },
           {
             auth_index: 'acc_idle',
+            provider: 'unknown-vendor',
             account_label: 'Idle Acc',
             is_adopted: true,
             is_enabled: true,
             state: 'idle',
+            auto_disable_supported: false,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: false,
@@ -401,6 +409,7 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(await screen.findByText('Mismatched Acc')).toBeDefined();
       expect(screen.queryByText('acc_mismatched')).toBeNull();
       expect(screen.getByText(/凭据与观测身份不一致，暂停自动操作/)).toBeDefined();
+      expect(screen.getByText('监控中', { exact: true })).toBeDefined();
       expect(screen.getAllByText('只监控', { exact: true }).length).toBeGreaterThan(0);
 
       // Open adopt modal

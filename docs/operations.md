@@ -128,11 +128,13 @@ switch, the one-time recovery time and the web switch all live in the console un
 `/api/v1/account-automation` and in `account_automation_*` (migration 043).
 
 All controllable CPA credentials can be adopted. A provider whose account-level weekly
-capability is not verified is shown as **monitor-only** after adoption and can be filtered
-by that state; it is never automatically disabled or re-enabled. Credentials that CPA
+capability is not verified receives a separate **monitor-only** badge and can be filtered
+by that capability; `monitoring` remains the runtime health state for verified and
+unverified providers alike. A monitor-only credential is never automatically disabled or
+re-enabled. Credentials that CPA
 does not expose as controllable cannot be adopted and retain an explicit reason in the
 candidate list. The console reports the two inventory scopes separately as adopted
-accounts and total live credentials (ADR 0107).
+accounts and total live credentials (ADR 0108).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

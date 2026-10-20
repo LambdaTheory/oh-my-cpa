@@ -310,8 +310,9 @@ func AdoptionRecovery(account repository.AutomationAccount, evidence *repository
 
 // RecoveryDue returns an active recovery plan and its relation to now. A live
 // operator override (manual_reset_at_ms, not yet consumed) takes precedence over
-// the cycle reset recorded at disable time. State is part of the contract: an old
-// timestamp on an idle or ordinarily monitored row is history, not executable work.
+// the cycle reset recorded at disable time. State is part of the contract, with one
+// compatibility case for takeover plans created before adoption persisted a waiting
+// state. Other timestamps on idle or ordinarily monitored rows are history.
 func RecoveryDue(account repository.AutomationAccount, now time.Time) (RecoverySchedule, bool) {
 	if !account.IsAdopted || !account.IsEnabled || !hasPendingRecoveryState(account) {
 		return RecoverySchedule{}, false
@@ -341,6 +342,13 @@ func hasPendingRecoveryState(account repository.AutomationAccount) bool {
 	switch account.State {
 	case StateDisabled, StateWaiting:
 		return true
+	case StateIdle:
+		// Older takeover plans stored the cycle reset while leaving the row idle.
+		// Their evidence watermark proves the timestamp was admitted as a plan, while
+		// the absent action timestamps distinguish them from completed history.
+		return account.CycleResetAtMS != nil &&
+			account.DisableObservedAtMS != nil && account.CycleKey != "" &&
+			account.LastDisableAtMS == nil && account.LastEnableAtMS == nil
 	case StateError:
 		// A disable write can fail too. Error alone therefore does not prove that
 		// the credential is awaiting enable; retain only errors whose preceding
