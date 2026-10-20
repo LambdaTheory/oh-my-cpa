@@ -282,6 +282,70 @@ func TestDecideEnablesAtTheRecordedReset(t *testing.T) {
 	}
 }
 
+// TestRecoveryDueProjectsOnlyActivePlans separates the execution timestamp from
+// its read projection. Future plans are scheduled, failed overdue plans stay
+// recognizable, and a timestamp left on a completed row is neither displayed nor
+// reused if the credential is disabled again outside automation.
+func TestRecoveryDueProjectsOnlyActivePlans(t *testing.T) {
+	now := time.UnixMilli(1_000_000_000_000)
+	disabledAt := now.Add(-2 * time.Hour).UnixMilli()
+	future := now.Add(time.Hour).UnixMilli()
+	past := now.Add(-time.Hour).UnixMilli()
+
+	scheduled := adoptedAccount()
+	scheduled.State = StateWaiting
+	scheduled.CycleResetAtMS = ptrInt64(future)
+	scheduled.LastDisableAtMS = ptrInt64(disabledAt)
+	if recovery, ok := RecoveryDue(scheduled, now); !ok || recovery.AtMS != future || recovery.Status != RecoveryScheduled {
+		t.Fatalf("future recovery = %+v/%v", recovery, ok)
+	}
+
+	overdue := scheduled
+	overdue.State = StateError
+	overdue.CycleResetAtMS = ptrInt64(past)
+	if recovery, ok := RecoveryDue(overdue, now); !ok || recovery.AtMS != past || recovery.Status != RecoveryOverdue {
+		t.Fatalf("overdue recovery = %+v/%v", recovery, ok)
+	}
+
+	legacyTakeover := adoptedAccount()
+	legacyTakeover.State = StateIdle
+	legacyTakeover.CycleResetAtMS = ptrInt64(past)
+	legacyTakeover.DisableObservedAtMS = ptrInt64(now.Add(-2 * time.Hour).UnixMilli())
+	legacyTakeover.CycleKey = "idx-1:codex:legacy"
+	if recovery, ok := RecoveryDue(legacyTakeover, now); !ok || recovery.AtMS != past || recovery.Status != RecoveryOverdue {
+		t.Fatalf("legacy takeover recovery = %+v/%v", recovery, ok)
+	}
+	decision := Decide(legacyTakeover, nil, CredentialState{
+		Exists: true, Disabled: true, Controllable: true, Provider: "codex",
+	}, now, DefaultPolicyConfig())
+	if decision.Kind != DecisionEnable {
+		t.Fatalf("legacy takeover must still enable after reset: %+v", decision)
+	}
+	orphanedIdle := legacyTakeover
+	orphanedIdle.CycleKey = ""
+	if recovery, ok := RecoveryDue(orphanedIdle, now); ok {
+		t.Fatalf("an idle timestamp without the takeover watermark must remain history: %+v", recovery)
+	}
+
+	recovered := overdue
+	recovered.State = StateIdle
+	recovered.LastEnableAtMS = ptrInt64(now.Add(-30 * time.Minute).UnixMilli())
+	if recovery, ok := RecoveryDue(recovered, now); ok {
+		t.Fatalf("completed recovery must not project an old time: %+v", recovery)
+	}
+	decision = Decide(recovered, nil, CredentialState{Exists: true, Disabled: true, Controllable: true, Provider: "codex"}, now, DefaultPolicyConfig())
+	if decision.Kind != DecisionMonitor || decision.Reason != ReasonMissingReset {
+		t.Fatalf("an old completed reset must not enable an externally disabled credential: %+v", decision)
+	}
+
+	failedDisable := recovered
+	failedDisable.State = StateError
+	failedDisable.MonitorReason = ReasonNotExhausted
+	if recovery, ok := RecoveryDue(failedDisable, now); ok {
+		t.Fatalf("an unrelated failed disable must not reactivate old recovery history: %+v", recovery)
+	}
+}
+
 // TestDecideReconcilesAnExternalReEnable proves OMC never re-closes a credential
 // another actor turned back on, and never claims it disabled an account it did not.
 func TestDecideReconcilesAnExternalReEnable(t *testing.T) {

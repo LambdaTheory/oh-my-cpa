@@ -8,8 +8,10 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/automation"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
 // TestAccountAutomationRoutesResolveTheMasterSwitch proves the tri-state master
@@ -135,8 +137,8 @@ func TestAccountAutomationCandidatesAreReadOnlyAndAdoptable(t *testing.T) {
 		t.Fatalf("candidates = %+v", list.Candidates)
 	}
 	for _, candidate := range list.Candidates {
-		if candidate.Adopted || !candidate.Eligible || !candidate.Controllable {
-			t.Fatalf("a live credential must be an eligible, unadopted candidate: %+v", candidate)
+		if candidate.Adopted || !candidate.Adoptable || !candidate.AutoDisableSupported || !candidate.Controllable {
+			t.Fatalf("a verified live credential must be adoptable and auto-disable capable: %+v", candidate)
 		}
 	}
 
@@ -221,17 +223,18 @@ func TestAccountAutomationWritesStayBehindTheConsoleSession(t *testing.T) {
 	}
 }
 
-// TestAccountAutomationCandidateMarksUnverifiedProviderIneligible proves the candidate
-// contract reflects capability: a provider whose account-level weekly window OMC has not
-// verified is offered ineligible with the unverified-capability reason, while a verified
-// one stays eligible.
-func TestAccountAutomationCandidateMarksUnverifiedProviderIneligible(t *testing.T) {
+// TestAccountAutomationCandidateSeparatesAdoptionFromAutoDisable proves the candidate
+// contract keeps CPA controllability separate from verified provider capability. A
+// controllable unverified credential remains adoptable for monitoring, while a
+// credential that cannot be addressed by CPA is blocked from adoption.
+func TestAccountAutomationCandidateSeparatesAdoptionFromAutoDisable(t *testing.T) {
 	client, base, _ := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if strings.HasPrefix(request.URL.Path, "/v8/management/credentials") {
 			_, _ = writer.Write([]byte(`{"files":[
 				{"auth_index":"idx-unverified","name":"openrouter-1.json","provider":"openrouter","disabled":false},
-				{"auth_index":"idx-verified","name":"claude-1.json","provider":"claude","disabled":false}
+				{"auth_index":"idx-verified","name":"claude-1.json","provider":"claude","disabled":false},
+				{"auth_index":"idx-uncontrollable","provider":"openrouter","disabled":false}
 			]}`))
 			return
 		}
@@ -252,10 +255,132 @@ func TestAccountAutomationCandidateMarksUnverifiedProviderIneligible(t *testing.
 	for _, candidate := range list.Candidates {
 		byIndex[candidate.AuthIndex] = candidate
 	}
-	if candidate := byIndex["idx-verified"]; !candidate.Eligible || candidate.IneligibleReason != "" {
-		t.Fatalf("a verified provider must stay eligible: %+v", candidate)
+	if candidate := byIndex["idx-verified"]; !candidate.Adoptable || !candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != "" {
+		t.Fatalf("a verified controllable provider must support adoption and auto-disable: %+v", candidate)
 	}
-	if candidate := byIndex["idx-unverified"]; candidate.Eligible || candidate.IneligibleReason != automation.ReasonUnverifiedCapability {
-		t.Fatalf("an unverified provider must be ineligible with the capability reason: %+v", candidate)
+	if candidate := byIndex["idx-unverified"]; !candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != "" {
+		t.Fatalf("an unverified controllable provider must be adoptable for monitoring only: %+v", candidate)
+	}
+	if candidate := byIndex["idx-uncontrollable"]; candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != automation.ReasonNoCredential {
+		t.Fatalf("an uncontrollable provider must stay blocked with its reason: %+v", candidate)
+	}
+
+	body, _ := json.Marshal(map[string]any{"auth_indexes": []string{"idx-unverified", "idx-verified"}, "enable": true})
+	request, err := http.NewRequest(http.MethodPost, base+"/omc/api/v1/account-automation/adopt", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	adoptResponse, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adoptResponse.Body.Close()
+	if adoptResponse.StatusCode != http.StatusOK {
+		t.Fatalf("adopt status = %d", adoptResponse.StatusCode)
+	}
+	_, payload = getJSON(t, client, base+"/omc/api/v1/account-automation")
+	if err := json.Unmarshal(payload, &list); err != nil {
+		t.Fatal(err)
+	}
+	roster := make(map[string]accountAutomationAccountDTO, len(list.Accounts))
+	for _, account := range list.Accounts {
+		roster[account.AuthIndex] = account
+	}
+	if !roster["idx-verified"].AutoDisableSupported {
+		t.Fatalf("verified roster capability = %+v", roster["idx-verified"])
+	}
+	if roster["idx-unverified"].AutoDisableSupported {
+		t.Fatalf("unverified roster capability = %+v", roster["idx-unverified"])
+	}
+}
+
+// TestAccountAutomationRecoveryProjection keeps the console and read-only Agent/MCP
+// summary on one clock-aware contract: future active plans are scheduled, overdue
+// disabled plans are explicit retry work, and a recovered row never exposes history.
+func TestAccountAutomationRecoveryProjection(t *testing.T) {
+	now := time.UnixMilli(1_000_000_000_000)
+	var handlerRef *Handler
+	client, base, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(request.URL.Path, "/v8/management/credentials") {
+			_, _ = writer.Write([]byte(`{"files":[]}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(handler *Handler) {
+		handler.nowFn = func() time.Time { return now }
+		handler.SetAutomation(handler.BuildAutomationService())
+		handlerRef = handler
+	})
+
+	ctx := context.Background()
+	if err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: "recovery", CreatedAtMS: now.UnixMilli()}, []repository.AutomationAccount{
+		{AuthIndex: "scheduled", Provider: "codex", Name: "scheduled.json"},
+		{AuthIndex: "overdue", Provider: "codex", Name: "overdue.json"},
+		{AuthIndex: "recovered", Provider: "codex", Name: "recovered.json"},
+	}, true, now.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	disable := func(authIndex string, resetAtMS int64) repository.AutomationAccount {
+		t.Helper()
+		window := repository.AutomationWeeklyWindow{AuthIndex: authIndex, Provider: "codex", ObservedAtMS: now.Add(-time.Hour).UnixMilli(), ResetAtMS: &resetAtMS}
+		account, err := repo.RecordAutomationDisable(ctx, authIndex, 1, window, authIndex+":codex:cycle", now.Add(-time.Hour).UnixMilli())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return account
+	}
+	future := now.Add(time.Hour).UnixMilli()
+	past := now.Add(-time.Minute).UnixMilli()
+	disable("scheduled", future)
+	disable("overdue", past)
+	recovered := disable("recovered", past)
+	if _, err := repo.RecordAutomationEnable(ctx, "recovered", recovered.IntentVersion, now.UnixMilli(), false); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a row written by the old implementation: projection and decisions
+	// must still treat this as history after the successful enable.
+	if _, err := repo.SQL().ExecContext(ctx, `UPDATE account_automation_accounts SET cycle_reset_at_ms = ? WHERE auth_index = 'recovered'`, past); err != nil {
+		t.Fatal(err)
+	}
+
+	response, payload := getJSON(t, client, base+"/omc/api/v1/account-automation")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", response.StatusCode, payload)
+	}
+	var list accountAutomationListResponse
+	if err := json.Unmarshal(payload, &list); err != nil {
+		t.Fatal(err)
+	}
+	assertRecoveryProjection(t, list.Accounts)
+
+	status, err := handlerRef.operationsService().AutomationSummary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentAccounts := make([]accountAutomationAccountDTO, 0, len(status.Accounts))
+	for _, account := range status.Accounts {
+		agentAccounts = append(agentAccounts, accountAutomationAccountDTO{
+			AuthIndex: account.AuthIndex, RecoveryAtMS: account.RecoveryAtMS, RecoveryStatus: account.RecoveryStatus,
+		})
+	}
+	assertRecoveryProjection(t, agentAccounts)
+}
+
+func assertRecoveryProjection(t *testing.T, accounts []accountAutomationAccountDTO) {
+	t.Helper()
+	byIndex := make(map[string]accountAutomationAccountDTO, len(accounts))
+	for _, account := range accounts {
+		byIndex[account.AuthIndex] = account
+	}
+	if account := byIndex["scheduled"]; account.RecoveryAtMS == nil || account.RecoveryStatus != string(automation.RecoveryScheduled) {
+		t.Fatalf("scheduled projection = %+v", account)
+	}
+	if account := byIndex["overdue"]; account.RecoveryAtMS == nil || account.RecoveryStatus != string(automation.RecoveryOverdue) {
+		t.Fatalf("overdue projection = %+v", account)
+	}
+	if account := byIndex["recovered"]; account.RecoveryAtMS != nil || account.RecoveryStatus != "" {
+		t.Fatalf("recovered projection must omit history: %+v", account)
 	}
 }

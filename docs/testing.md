@@ -1128,6 +1128,24 @@ a held 429 and last-good snapshot retention. Existing first-batch automation and
 Ollama probes own friendly adoption labels, real checkbox/action wiring and
 desktop/phone screenshots. These extend the existing automatic discovery layers.
 
+Account-automation adoption separation is owned at three layers. The API test projects
+verified, unverified-controllable and uncontrollable candidates into independent
+`adoptable` and `auto_disable_supported` facts. The roster projection test proves the
+same provider capability fact remains distinct from runtime state. The automation service
+test proves an unverified controllable credential is persisted for monitoring, an uncontrollable
+credential is omitted even on a direct request, and a weekly 100 causes no CPA write.
+The rendered first-batch test and `omc-account-automation` browser scenario own checkbox,
+Select all, enabled confirmation, capability-based monitor-only badge/count/filtering, the
+ordinary monitoring state label, separate roster/inventory counts, and synthetic
+desktop/phone evidence. Recovery-plan coverage is split by layer:
+repository and automation tests prove confirmed or external enable paths consume the
+cycle instant, historical timestamps cannot execute, and the legacy idle takeover row
+still executes at its reset; API and Agent/MCP projection
+tests distinguish future `scheduled`, passed `overdue`, and completed plans. The rendered
+test and the same browser scenario prove only a scheduled plan says “expected recovery,”
+an overdue disabled plan says it is waiting for retry, and a recovered row with a legacy
+timestamp renders neither label.
+
 `scripts/test-oauth-sort.ts` compares every OAuth workspace sort with the frozen
 baseline oracle in `scripts/fixtures/oauth-sort.ts`, including empty/singleton inputs,
 Unicode/numeric/equivalent labels, missing numeric defaults, stable ties, unknown-key

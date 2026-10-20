@@ -271,13 +271,17 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 		if authIndex == "" {
 			continue
 		}
+		state := strings.TrimSpace(account.State)
+		if state == "" {
+			state = AutomationStateIdle
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO account_automation_accounts (
 				auth_index, provider, name, account_label, is_adopted, is_enabled, adopt_batch_id,
 				adopted_at_ms, state, monitor_reason,
 				cycle_reset_at_ms, cycle_key, disable_observed_at_ms,
 				intent_version, created_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, '', ?, ?, ?, 1, ?, ?)
+			) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(auth_index) DO UPDATE SET
 				provider = excluded.provider,
 				name = excluded.name,
@@ -303,7 +307,7 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 				updated_at_ms = excluded.updated_at_ms`,
 			authIndex, account.Provider, account.Name, account.AccountLabel,
 			boolToInt(enable), batch.ID, batch.CreatedAtMS,
-			AutomationStateIdle, account.CycleResetAtMS, account.CycleKey, account.DisableObservedAtMS,
+			state, account.MonitorReason, account.CycleResetAtMS, account.CycleKey, account.DisableObservedAtMS,
 			nowMS, nowMS); err != nil {
 			return fmt.Errorf("adopt account automation account %s: %w", authIndex, err)
 		}
@@ -343,9 +347,11 @@ func (r *Repository) SetAutomationManualReset(ctx context.Context, authIndex str
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
 		manual_reset_at_ms = ?,
 		manual_reset_consumed = 0,
+		state = ?,
+		monitor_reason = ?,
 		intent_version = intent_version + 1,
 		updated_at_ms = ?`,
-		resetAtMS, nowMS)
+		resetAtMS, AutomationStateWaiting, automationReasonRecoveryScheduled, nowMS)
 }
 
 // RecordAutomationMonitoring writes the descriptive state a pass computed. It
@@ -389,6 +395,7 @@ func (r *Repository) RecordAutomationEnable(ctx context.Context, authIndex strin
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
 		state = ?,
 		monitor_reason = '',
+		cycle_reset_at_ms = NULL,
 		manual_reset_consumed = CASE WHEN ? = 1 THEN 1 ELSE manual_reset_consumed END,
 		next_attempt_at_ms = NULL,
 		attempt_count = 0,
@@ -421,6 +428,8 @@ func (r *Repository) RecordAutomationReset(ctx context.Context, authIndex string
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
 		state = ?,
 		monitor_reason = ?,
+		cycle_reset_at_ms = NULL,
+		manual_reset_consumed = CASE WHEN manual_reset_at_ms IS NULL THEN manual_reset_consumed ELSE 1 END,
 		next_attempt_at_ms = NULL,
 		attempt_count = 0,
 		last_error = '',
@@ -433,6 +442,10 @@ func (r *Repository) RecordAutomationReset(ctx context.Context, authIndex string
 // automationReasonExternallyReEnabled mirrors the automation package's reason
 // string; the store only needs to recognize it to end the disable episode.
 const automationReasonExternallyReEnabled = "externally_re_enabled"
+
+// automationReasonRecoveryScheduled mirrors the automation package's reason
+// without making the repository depend on the decision package.
+const automationReasonRecoveryScheduled = "recovery_scheduled"
 
 func (r *Repository) writeAutomationAccount(ctx context.Context, authIndex string, expectedVersion int64, nowMS int64, assignments string, args ...any) (AutomationAccount, error) {
 	if r == nil || r.SQL() == nil {

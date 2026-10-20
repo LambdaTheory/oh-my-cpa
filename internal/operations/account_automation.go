@@ -22,6 +22,7 @@ type AutomationAccountSummary struct {
 	IsEnabled            bool     `json:"is_enabled"`
 	DisabledByAutomation bool     `json:"disabled_by_automation"`
 	RecoveryAtMS         *int64   `json:"recovery_at_ms,omitempty"`
+	RecoveryStatus       string   `json:"recovery_status,omitempty"`
 	HasWeeklyEvidence    bool     `json:"has_weekly_evidence"`
 	WeeklyUsedPercent    *float64 `json:"weekly_used_percent,omitempty"`
 }
@@ -37,7 +38,7 @@ type AutomationStatus struct {
 // first round; the write routes remain console-only.
 func (s *Service) registerAccountAutomation(registry *capability.Registry) error {
 	return read(registry, "account_automation_status",
-		"Read account-level auto-management: the resolved master switch and, for each adopted credential, its plan (state, why it has no automatic control, whether it is disabled by OMC, the scheduled recovery instant, and the newest standard weekly reading). Read-only summary without credential material.",
+		"Read account-level auto-management: the resolved master switch and, for each adopted credential, its plan (state, why it has no automatic control, whether it is disabled by OMC, any active recovery instant and whether it is scheduled or overdue, and the newest standard weekly reading). Read-only summary without credential material.",
 		func(ctx context.Context, _ Empty) (AutomationStatus, error) {
 			if s.AutomationSummary == nil {
 				return AutomationStatus{}, errors.New("capability_unavailable")

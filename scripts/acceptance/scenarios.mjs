@@ -229,7 +229,7 @@ export const SCENARIOS = [
   },
   {
     id: 'omc-account-automation',
-    name: 'the OAuth workspace adopts eligible gateway accounts and plans a retry and a hand-filled recovery',
+    name: 'the OAuth workspace adopts controllable gateway accounts, keeps unverified providers monitor-only and plans recovery',
     options: { viewport: { width: 1440, height: 900 }, routes: accountAutomationFixtures() },
     run: accountAutomation,
   },

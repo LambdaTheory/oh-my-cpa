@@ -134,7 +134,10 @@ func TestRecordAutomationEnableConsumesAManualReset(t *testing.T) {
 	repo, _ := testRepository(t)
 	ctx := context.Background()
 	now := time.Now().UTC().UnixMilli()
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "a"}}, true, now); err != nil {
+	cycleReset := now + 7200_000
+	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{
+		AuthIndex: "a", CycleResetAtMS: &cycleReset, State: AutomationStateWaiting,
+	}}, true, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.SetAutomationManualReset(ctx, "a", now+3600_000, 1, now); err != nil {
@@ -149,6 +152,31 @@ func TestRecordAutomationEnableConsumesAManualReset(t *testing.T) {
 	}
 	if account.NextAttemptAtMS != nil || account.AttemptCount != 0 || account.LastError != "" {
 		t.Fatalf("a completed enable must clear the retry state: %+v", account)
+	}
+	if account.CycleResetAtMS != nil {
+		t.Fatalf("a completed enable must clear the consumed cycle reset: %+v", account)
+	}
+}
+
+func TestRecordAutomationResetClearsRecoveryTimes(t *testing.T) {
+	repo, _ := testRepository(t)
+	ctx := context.Background()
+	now := time.Now().UTC().UnixMilli()
+	resetAt := now + 3600_000
+	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{
+		AuthIndex: "a", CycleResetAtMS: &resetAt, State: AutomationStateWaiting,
+	}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetAutomationManualReset(ctx, "a", resetAt, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	account, err := repo.RecordAutomationReset(ctx, "a", 2, now, AutomationStateIdle, automationReasonExternallyReEnabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.CycleResetAtMS != nil || !account.ManualResetConsumed {
+		t.Fatalf("an external re-enable must consume every pending recovery time: %+v", account)
 	}
 }
 
