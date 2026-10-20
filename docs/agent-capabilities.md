@@ -763,7 +763,10 @@ whether a standard weekly reading exists with its used share. It returns no cred
 material, and it is read-only by construction: the console's
 `/api/v1/account-automation` write routes are session-and-same-origin authenticated and
 the read-only MCP key cannot reach them, so the agent cannot adopt, switch, cancel or
-set a recovery time. See ADR 0105.
+set a recovery time. Controllable credentials may be adopted even before their provider
+capability is verified; the read then reports `state=monitoring` with
+`monitor_reason=unverified_account_weekly_capability`, and no automatic disable or
+recovery action is permitted. See ADR 0105 and ADR 0107.
 
 ### Ollama and Feishu status
 

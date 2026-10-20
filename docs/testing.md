@@ -1128,6 +1128,15 @@ a held 429 and last-good snapshot retention. Existing first-batch automation and
 Ollama probes own friendly adoption labels, real checkbox/action wiring and
 desktop/phone screenshots. These extend the existing automatic discovery layers.
 
+Account-automation adoption separation is owned at three layers. The API test projects
+verified, unverified-controllable and uncontrollable candidates into independent
+`adoptable` and `auto_disable_supported` facts. The automation service test proves an
+unverified controllable credential is persisted as monitor-only, an uncontrollable
+credential is omitted even on a direct request, and a weekly 100 causes no CPA write.
+The rendered first-batch test and `omc-account-automation` browser scenario own checkbox,
+Select all, enabled confirmation, monitor-only copy/filtering, separate roster/inventory
+counts, and synthetic desktop/phone evidence.
+
 `scripts/test-oauth-sort.ts` compares every OAuth workspace sort with the frozen
 baseline oracle in `scripts/fixtures/oauth-sort.ts`, including empty/singleton inputs,
 Unicode/numeric/equivalent labels, missing numeric defaults, stable ties, unknown-key

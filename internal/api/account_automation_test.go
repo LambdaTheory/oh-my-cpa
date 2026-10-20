@@ -135,8 +135,8 @@ func TestAccountAutomationCandidatesAreReadOnlyAndAdoptable(t *testing.T) {
 		t.Fatalf("candidates = %+v", list.Candidates)
 	}
 	for _, candidate := range list.Candidates {
-		if candidate.Adopted || !candidate.Eligible || !candidate.Controllable {
-			t.Fatalf("a live credential must be an eligible, unadopted candidate: %+v", candidate)
+		if candidate.Adopted || !candidate.Adoptable || !candidate.AutoDisableSupported || !candidate.Controllable {
+			t.Fatalf("a verified live credential must be adoptable and auto-disable capable: %+v", candidate)
 		}
 	}
 
@@ -221,17 +221,18 @@ func TestAccountAutomationWritesStayBehindTheConsoleSession(t *testing.T) {
 	}
 }
 
-// TestAccountAutomationCandidateMarksUnverifiedProviderIneligible proves the candidate
-// contract reflects capability: a provider whose account-level weekly window OMC has not
-// verified is offered ineligible with the unverified-capability reason, while a verified
-// one stays eligible.
-func TestAccountAutomationCandidateMarksUnverifiedProviderIneligible(t *testing.T) {
+// TestAccountAutomationCandidateSeparatesAdoptionFromAutoDisable proves the candidate
+// contract keeps CPA controllability separate from verified provider capability. A
+// controllable unverified credential remains adoptable for monitoring, while a
+// credential that cannot be addressed by CPA is blocked from adoption.
+func TestAccountAutomationCandidateSeparatesAdoptionFromAutoDisable(t *testing.T) {
 	client, base, _ := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		if strings.HasPrefix(request.URL.Path, "/v8/management/credentials") {
 			_, _ = writer.Write([]byte(`{"files":[
 				{"auth_index":"idx-unverified","name":"openrouter-1.json","provider":"openrouter","disabled":false},
-				{"auth_index":"idx-verified","name":"claude-1.json","provider":"claude","disabled":false}
+				{"auth_index":"idx-verified","name":"claude-1.json","provider":"claude","disabled":false},
+				{"auth_index":"idx-uncontrollable","provider":"openrouter","disabled":false}
 			]}`))
 			return
 		}
@@ -252,10 +253,13 @@ func TestAccountAutomationCandidateMarksUnverifiedProviderIneligible(t *testing.
 	for _, candidate := range list.Candidates {
 		byIndex[candidate.AuthIndex] = candidate
 	}
-	if candidate := byIndex["idx-verified"]; !candidate.Eligible || candidate.IneligibleReason != "" {
-		t.Fatalf("a verified provider must stay eligible: %+v", candidate)
+	if candidate := byIndex["idx-verified"]; !candidate.Adoptable || !candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != "" {
+		t.Fatalf("a verified controllable provider must support adoption and auto-disable: %+v", candidate)
 	}
-	if candidate := byIndex["idx-unverified"]; candidate.Eligible || candidate.IneligibleReason != automation.ReasonUnverifiedCapability {
-		t.Fatalf("an unverified provider must be ineligible with the capability reason: %+v", candidate)
+	if candidate := byIndex["idx-unverified"]; !candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != "" {
+		t.Fatalf("an unverified controllable provider must be adoptable for monitoring only: %+v", candidate)
+	}
+	if candidate := byIndex["idx-uncontrollable"]; candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != automation.ReasonNoCredential {
+		t.Fatalf("an uncontrollable provider must stay blocked with its reason: %+v", candidate)
 	}
 }

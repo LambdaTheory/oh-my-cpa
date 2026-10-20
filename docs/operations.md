@@ -127,6 +127,13 @@ variables below control the process, not the roster: adopting accounts, the per-
 switch, the one-time recovery time and the web switch all live in the console under
 `/api/v1/account-automation` and in `account_automation_*` (migration 043).
 
+All controllable CPA credentials can be adopted. A provider whose account-level weekly
+capability is not verified is shown as **monitor-only** after adoption and can be filtered
+by that state; it is never automatically disabled or re-enabled. Credentials that CPA
+does not expose as controllable cannot be adopted and retain an explicit reason in the
+candidate list. The console reports the two inventory scopes separately as adopted
+accounts and total live credentials (ADR 0107).
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OMCPA_ACCOUNT_AUTOMATION_ENABLED` | unset (off) | Master switch. Unset leaves the console's web switch in force; an explicit `false` is an emergency off the console cannot override; an explicit `true` forces automation on. The console shows which source is in effect |

@@ -69,8 +69,9 @@ export interface AccountAutomationCandidateDTO {
   disabled: boolean;
   controllable: boolean;
   adopted: boolean;
-  eligible: boolean;
-  ineligible_reason?: AutomationMonitorReason;
+  adoptable: boolean;
+  adoption_blocked_reason?: AutomationMonitorReason;
+  auto_disable_supported: boolean;
 }
 
 export interface AccountAutomationListResponse {

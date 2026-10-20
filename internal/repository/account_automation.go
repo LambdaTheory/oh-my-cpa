@@ -271,13 +271,17 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 		if authIndex == "" {
 			continue
 		}
+		state := strings.TrimSpace(account.State)
+		if state == "" {
+			state = AutomationStateIdle
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO account_automation_accounts (
 				auth_index, provider, name, account_label, is_adopted, is_enabled, adopt_batch_id,
 				adopted_at_ms, state, monitor_reason,
 				cycle_reset_at_ms, cycle_key, disable_observed_at_ms,
 				intent_version, created_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, '', ?, ?, ?, 1, ?, ?)
+			) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
 			ON CONFLICT(auth_index) DO UPDATE SET
 				provider = excluded.provider,
 				name = excluded.name,
@@ -303,7 +307,7 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 				updated_at_ms = excluded.updated_at_ms`,
 			authIndex, account.Provider, account.Name, account.AccountLabel,
 			boolToInt(enable), batch.ID, batch.CreatedAtMS,
-			AutomationStateIdle, account.CycleResetAtMS, account.CycleKey, account.DisableObservedAtMS,
+			state, account.MonitorReason, account.CycleResetAtMS, account.CycleKey, account.DisableObservedAtMS,
 			nowMS, nowMS); err != nil {
 			return fmt.Errorf("adopt account automation account %s: %w", authIndex, err)
 		}

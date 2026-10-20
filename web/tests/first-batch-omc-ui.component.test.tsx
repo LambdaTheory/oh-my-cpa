@@ -88,7 +88,8 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled: false,
             controllable: true,
             adopted: false,
-            eligible: true,
+            adoptable: true,
+            auto_disable_supported: true,
           },
           {
             auth_index: 'auth_cand_2',
@@ -98,7 +99,8 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled: true,
             controllable: true,
             adopted: false,
-            eligible: true,
+            adoptable: true,
+            auto_disable_supported: true,
           },
         ],
       };
@@ -280,7 +282,7 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(await screen.findByText('CPA gateway unreachable')).toBeDefined();
     });
 
-    it('disables unverified/ineligible candidates from selection and explains canonical reasons including unverified capability and identity mismatch', async () => {
+    it('adopts unverified controllable candidates, blocks uncontrollable ones, and renders monitor-only state', async () => {
       const mockResponse: AccountAutomationListResponse = {
         settings: {
           web_enabled: false,
@@ -288,11 +290,12 @@ describe('First Batch OMC UI Component Tests', () => {
           source: 'default_off',
           disabled_reason: 'default_off',
           master_from_env: false,
-          accounts: 1,
+          accounts: 2,
         },
         accounts: [
           {
             auth_index: 'acc_mismatched',
+            account_label: 'Mismatched Acc',
             is_adopted: true,
             is_enabled: true,
             state: 'monitoring',
@@ -300,6 +303,17 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: true,
+            intent_version: 1,
+          },
+          {
+            auth_index: 'acc_idle',
+            account_label: 'Idle Acc',
+            is_adopted: true,
+            is_enabled: true,
+            state: 'idle',
+            disabled_by_automation: false,
+            attempt_count: 0,
+            has_weekly_evidence: false,
             intent_version: 1,
           },
         ],
@@ -312,61 +326,86 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled: false,
             controllable: true,
             adopted: false,
-            eligible: false,
-            ineligible_reason: 'unverified_account_weekly_capability',
+            adoptable: true,
+            auto_disable_supported: false,
           },
           {
-            auth_index: 'cand_verified_eligible',
+            auth_index: 'cand_verified_adoptable',
             provider: 'claude',
             name: 'claude-1.json',
             account_label: 'Claude Acc',
             disabled: false,
             controllable: true,
             adopted: false,
-            eligible: true,
+            adoptable: true,
+            auto_disable_supported: true,
+          },
+          {
+            auth_index: 'cand_uncontrollable',
+            provider: 'unknown-vendor',
+            account_label: 'Runtime-only Acc',
+            disabled: false,
+            controllable: false,
+            adopted: false,
+            adoptable: false,
+            adoption_blocked_reason: 'no_controllable_credential',
+            auto_disable_supported: false,
           },
         ],
       };
 
       vi.mocked(api.getAccountAutomation).mockResolvedValue(mockResponse);
       vi.mocked(api.getAccountAutomationSettings).mockResolvedValue(mockResponse.settings);
+      vi.mocked(api.postAccountAutomationAdopt).mockResolvedValue({ adopted: 2 });
 
       renderWithClient(<AccountAutomationDrawer open={true} onClose={() => {}} />);
 
       // Verify roster displays evidence_identity_mismatch human copy
-      expect(await screen.findByText('账号', { exact: true })).toBeDefined();
+      expect(await screen.findByText('Mismatched Acc')).toBeDefined();
       expect(screen.queryByText('acc_mismatched')).toBeNull();
       expect(screen.getByText(/凭据与观测身份不一致，暂停自动操作/)).toBeDefined();
+      expect(screen.getAllByText('只监控', { exact: true }).length).toBeGreaterThan(0);
 
       // Open adopt modal
       const adoptBtn = screen.getByRole('button', { name: '批量接管账号' });
       fireEvent.click(adoptBtn);
 
-      // Verify unverified provider candidate displays humanized ineligible reason
+      // An unverified provider is explicitly monitor-only but remains adoptable.
       expect(await screen.findByText('Unknown Vendor Acc')).toBeDefined();
-      expect(screen.getByText(/能力未核实暂监控/)).toBeDefined();
+      expect(screen.getByText(/能力未核实，接管后只监控/)).toBeDefined();
 
-      // Checkbox for ineligible candidate is disabled
+      // The unverified candidate is enabled; only the uncontrollable candidate is blocked.
       const unknownCheckbox = screen.getByLabelText('Unknown Vendor Acc') as HTMLInputElement;
-      expect(unknownCheckbox.disabled).toBe(true);
+      expect(unknownCheckbox.disabled).toBe(false);
+      const runtimeOnlyCheckbox = screen.getByLabelText('Runtime-only Acc') as HTMLInputElement;
+      expect(runtimeOnlyCheckbox.disabled).toBe(true);
+      expect(screen.getByText(/缺少可控凭据/)).toBeDefined();
 
-      // Checkbox for eligible candidate is enabled
-      const eligibleCheckbox = screen.getByLabelText('Claude Acc') as HTMLInputElement;
-      expect(eligibleCheckbox.disabled).toBe(false);
+      const verifiedCheckbox = screen.getByLabelText('Claude Acc') as HTMLInputElement;
+      expect(verifiedCheckbox.disabled).toBe(false);
 
       // Default selection is empty; submit button is disabled
       const submitBtn = screen.getByRole('button', { name: '确认接管' });
       expect(submitBtn.getAttribute('disabled')).not.toBeNull();
 
-      // Select all only selects eligible candidates
+      // Select all includes every controllable candidate, including monitor-only.
       const selectAllBtn = screen.getByRole('button', { name: '全选未接管' });
       fireEvent.click(selectAllBtn);
-      expect(screen.getByText('已选择 1 个账号')).toBeDefined();
+      expect(screen.getByText('已选择 2 个账号')).toBeDefined();
+      expect(unknownCheckbox.checked).toBe(true);
+      expect(verifiedCheckbox.checked).toBe(true);
+      expect(runtimeOnlyCheckbox.checked).toBe(false);
+      expect(submitBtn.getAttribute('disabled')).toBeNull();
 
-      // Deselect all clears selection
-      const deselectAllBtn = screen.getByRole('button', { name: '取消全选' });
-      fireEvent.click(deselectAllBtn);
-      expect(screen.getByText('已选择 0 个账号')).toBeDefined();
+      fireEvent.click(submitBtn);
+      await waitFor(() => {
+        expect(api.postAccountAutomationAdopt).toHaveBeenCalledWith({
+          auth_indexes: ['cand_unknown_provider', 'cand_verified_adoptable'],
+          enable: true,
+          note: undefined,
+        });
+      });
+
     });
   });
 

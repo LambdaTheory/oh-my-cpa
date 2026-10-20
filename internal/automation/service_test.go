@@ -103,6 +103,44 @@ func newTestService(repo *repository.Repository, clock *testClock, writer *fakeW
 	}
 }
 
+// TestServiceAdoptsUnverifiedCredentialsAsMonitorOnly proves roster admission and
+// automatic action admission are separate. A controllable provider with no verified
+// weekly capability joins the roster in monitoring, while an uncontrollable credential
+// is omitted even when a caller submits its auth index directly.
+func TestServiceAdoptsUnverifiedCredentialsAsMonitorOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1_000_000_000_000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{
+		{AuthIndex: "idx-unverified", Name: "openrouter-1.json", Provider: "openrouter", Controllable: true},
+		{AuthIndex: "idx-uncontrollable", Provider: "openrouter", Controllable: false},
+	}
+	service := newTestService(repo, clock, writer, &credentials)
+
+	adopted, err := service.Adopt(ctx, []string{"idx-unverified", "idx-uncontrollable"}, true, "monitoring batch")
+	if err != nil || adopted != 1 {
+		t.Fatalf("adopt = %d, %v", adopted, err)
+	}
+	account, found, err := repo.GetAutomationAccount(ctx, "idx-unverified")
+	if err != nil || !found {
+		t.Fatalf("read unverified account: found=%v err=%v", found, err)
+	}
+	if account.State != StateMonitoring || account.MonitorReason != ReasonUnverifiedCapability || !account.IsEnabled {
+		t.Fatalf("unverified adoption must start monitor-only: %+v", account)
+	}
+	if _, found, err := repo.GetAutomationAccount(ctx, "idx-uncontrollable"); err != nil || found {
+		t.Fatalf("uncontrollable credential must not be adopted: found=%v err=%v", found, err)
+	}
+
+	resetAt := clock.Now().Add(48 * time.Hour).UnixMilli()
+	insertWeekly(t, repo, "idx-unverified", "openrouter", 100, clock.Now().UnixMilli(), resetAt)
+	service.RunOnce(ctx)
+	if calls := writer.snapshot(); len(calls) != 0 {
+		t.Fatalf("monitor-only adoption must never disable: %+v", calls)
+	}
+}
+
 // TestServiceDisablesThenEnablesAtTheReset exercises the whole persisted plan: a
 // disable confirmed by CPA, then an on-time enable at the recorded reset with no
 // pre-probe, then a completed plan.

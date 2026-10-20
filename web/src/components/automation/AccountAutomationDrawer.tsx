@@ -160,7 +160,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
   const candidates: AccountAutomationCandidateDTO[] = listQuery.data?.candidates ?? [];
   const settings: AccountAutomationSettingsDTO | undefined = settingsQuery.data;
   const adoptableCandidates = useMemo(() => {
-    return candidates.filter((c) => !c.adopted && c.eligible);
+    return candidates.filter((c) => !c.adopted && c.adoptable);
   }, [candidates]);
 
   // Formatters
@@ -184,7 +184,6 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
 
   // Stats calculation
   const stats = useMemo(() => {
-    let total = accounts.length;
     let adopted = 0;
     let monitoring = 0;
     let disabled = 0;
@@ -200,8 +199,9 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       if (s === 'error') error++;
     }
 
-    return { total, adopted, monitoring, disabled, waiting, error };
-  }, [accounts]);
+    const credentialTotal = listQuery.data?.candidates_degraded ? null : candidates.length;
+    return { credentialTotal, adopted, monitoring, disabled, waiting, error };
+  }, [accounts, candidates.length, listQuery.data?.candidates_degraded]);
 
   // Filtered accounts
   const filteredAccounts = useMemo(() => {
@@ -328,7 +328,10 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       onClose={onClose}
       footerStart={
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {t('automation.stat_total')}: {accounts.length}
+          {t('automation.adoption_summary', {
+            adopted: stats.adopted,
+            total: stats.credentialTotal ?? '—',
+          })}
         </span>
       }
       footer={
@@ -401,12 +404,12 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
           }}
         >
           <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_total')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>{stats.total}</div>
-          </div>
-          <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_adopted')}</div>
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--accent)' }}>{stats.adopted}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_credentials')}</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>{stats.credentialTotal ?? '—'}</div>
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_monitoring')}</div>
@@ -700,7 +703,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                   <Checkbox
                     key={c.auth_index}
                     checked={selectedAdoptKeys.includes(c.auth_index)}
-                    disabled={!c.eligible}
+                    disabled={!c.adoptable}
                     aria-label={nameInfo.primary}
                     onChange={(e) => {
                       if (e.target.checked) {
@@ -715,9 +718,14 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                     {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
                     {c.adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
                     {c.disabled && <span style={{ marginLeft: 6, color: 'var(--warn)', fontSize: 12 }}>[{t('automation.tag_disabled_external')}]</span>}
-                    {!c.eligible && c.ineligible_reason && (
+                    {!c.adoptable && c.adoption_blocked_reason && (
                       <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
-                        ({getReasonLabel(c.ineligible_reason)})
+                        ({getReasonLabel(c.adoption_blocked_reason)})
+                      </span>
+                    )}
+                    {c.adoptable && !c.auto_disable_supported && (
+                      <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
+                        ({t('automation.adopt_monitor_only')})
                       </span>
                     )}
                   </Checkbox>

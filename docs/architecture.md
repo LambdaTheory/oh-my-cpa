@@ -2284,6 +2284,16 @@ timeline and, only on explicit new exhaustion evidence, writes CPA's credential
 function (`automation.Decide`) driven by an injectable clock, so the whole state machine
 is tested without sleeping.
 
+The live candidate projection keeps roster admission separate from action capability
+(ADR 0107). `adoptable` means CPA exposes a named credential whose disabled state OMC
+can address; `auto_disable_supported` means the provider also has a verified account-level
+weekly mapping. Every controllable credential can therefore join the roster, while an
+unverified provider is persisted and displayed as `monitoring` with
+`unverified_account_weekly_capability`. The capability registry remains an invariant on
+the decision and recovery paths, so adoption cannot widen automatic disablement or
+enablement. An uncontrollable credential remains outside the roster even if its auth index
+is submitted directly.
+
 Evidence is a standard-scope window whose stated period is a real seven days (168h ±
 1h) - not the slot it arrived in. A Codex five-hour primary, a Claude model-scoped
 `seven_day_sonnet`, a partial reading, a missing or already-passed reset, a reading
