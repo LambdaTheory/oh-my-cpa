@@ -1135,7 +1135,13 @@ unverified controllable credential is persisted as monitor-only, an uncontrollab
 credential is omitted even on a direct request, and a weekly 100 causes no CPA write.
 The rendered first-batch test and `omc-account-automation` browser scenario own checkbox,
 Select all, enabled confirmation, monitor-only copy/filtering, separate roster/inventory
-counts, and synthetic desktop/phone evidence.
+counts, and synthetic desktop/phone evidence. Recovery-plan coverage is split by layer:
+repository and automation tests prove confirmed or external enable paths consume the
+cycle instant and that historical timestamps cannot execute; API and Agent/MCP projection
+tests distinguish future `scheduled`, passed `overdue`, and completed plans. The rendered
+test and the same browser scenario prove only a scheduled plan says “expected recovery,”
+an overdue disabled plan says it is waiting for retry, and a recovered row with a legacy
+timestamp renders neither label.
 
 `scripts/test-oauth-sort.ts` compares every OAuth workspace sort with the frozen
 baseline oracle in `scripts/fixtures/oauth-sort.ts`, including empty/singleton inputs,

@@ -321,6 +321,8 @@ func (s *Service) planAdoptionRecovery(ctx context.Context, selected []repositor
 		selected[i].CycleResetAtMS = &resetAtMS
 		selected[i].CycleKey = cycleKey
 		selected[i].DisableObservedAtMS = &observedAtMS
+		selected[i].State = StateWaiting
+		selected[i].MonitorReason = ReasonRecoveryScheduled
 	}
 }
 

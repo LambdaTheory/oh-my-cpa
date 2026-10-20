@@ -719,8 +719,8 @@ const DICT: Record<string, [string, string]> = {
   ],
   'agent.capability.account_automation_status': ["查看账号自动管理状态", "Read account automation status"],
   'agent.capability.account_automation_status.description': [
-    "读取账号自动管理状态：全局开关与已接管凭据的调度计划（状态、恢复时间与最新 7 天用量）；只读状态，不含凭据材料。",
-    "Reads account automation status: master switch, adopted credentials and recovery plans (state, recovery time, newest weekly usage); read-only summary without credential material.",
+    "读取账号自动管理状态：全局开关与已接管凭据的调度计划（状态、有效恢复时间及其待恢复或过期状态、最新 7 天用量）；只读状态，不含凭据材料。",
+    "Reads account automation status: master switch, adopted credentials and recovery plans (state, active recovery time and whether it is scheduled or overdue, newest weekly usage); read-only summary without credential material.",
   ],
   'agent.capability.feishu_notifications_status': ["查看飞书通知状态", "Read Feishu notification status"],
   'agent.capability.feishu_notifications_status.description': [
@@ -3774,6 +3774,7 @@ const DICT: Record<string, [string, string]> = {
   'automation.weekly_reset': ['重置时间: {time}', 'Reset: {time}'],
   'automation.no_weekly': ['未上报 7d 数据（不参与自动关）', 'No 7d evidence (not auto-disabled)'],
   'automation.recovery_at': ['预计恢复: {time}', 'Recovery at: {time}'],
+  'automation.recovery_overdue': ['已过预计恢复时间，等待重试', 'Recovery time passed; waiting to retry'],
   'automation.next_attempt': ['下次重试: {time} (第 {count} 次)', 'Next attempt: {time} (attempt {count})'],
   'automation.btn_cancel_retry': ['取消重试计划', 'Cancel Retry'],
   'automation.cancel_confirm': ['确定取消该账号的恢复与重试计划？', 'Cancel the recovery and retry plan for this account?'],

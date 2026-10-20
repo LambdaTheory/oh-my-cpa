@@ -143,8 +143,13 @@ accounts and total live credentials (ADR 0107).
 | `OMCPA_ACCOUNT_AUTOMATION_MAX_EVIDENCE_AGE` | `24h` | How old the weekly reading that justifies a disable may be |
 
 A failed enable persists its retry instant and attempt count, so a restart resumes the
-wait rather than retrying immediately. The loop performs a CPA write, so it never runs
-in demo mode. See ADR 0105.
+wait rather than retrying immediately. The console and read-only status project a
+recovery instant only while the credential remains disabled with an active recovery
+plan: a future instant is reported as `scheduled`, while a passed instant is `overdue`
+and shown as waiting for retry. A confirmed automatic enable or an external re-enable
+clears the consumed cycle instant; historical timestamps on completed rows are neither
+displayed nor acted on. The loop performs a CPA write, so it never runs in demo mode.
+See ADR 0105.
 
 ### Ollama monitoring
 

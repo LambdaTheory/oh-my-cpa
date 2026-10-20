@@ -143,28 +143,30 @@ describe('First Batch OMC UI Component Tests', () => {
       });
     });
 
-    it('displays already-disabled accounts with recovery plan and distinguishes external disable vs auto disable', async () => {
+    it('shows only active future recovery plans and labels overdue retry work', async () => {
+      const now = Date.now();
       const mockResponse: AccountAutomationListResponse = {
         settings: {
           web_enabled: true,
           enabled: true,
           source: 'web',
           master_from_env: false,
-          accounts: 2,
+          accounts: 4,
         },
         accounts: [
           {
             auth_index: 'acc_auto_disabled',
             account_label: 'acc_auto_disabled: Auto account',
             is_adopted: true,
-            is_enabled: false,
+            is_enabled: true,
             state: 'disabled',
             disabled_by_automation: true,
             attempt_count: 0,
             has_weekly_evidence: true,
             weekly_used_percent: 100,
-            weekly_reset_at_ms: Date.now() + 86400000,
-            recovery_at_ms: Date.now() + 86400000,
+            weekly_reset_at_ms: now + 86400000,
+            recovery_at_ms: now + 86400000,
+            recovery_status: 'scheduled',
             intent_version: 1,
           },
           {
@@ -179,6 +181,38 @@ describe('First Batch OMC UI Component Tests', () => {
             has_weekly_evidence: false,
             intent_version: 1,
           },
+          {
+            auth_index: 'acc_overdue',
+            account_label: 'Overdue account',
+            is_adopted: true,
+            is_enabled: true,
+            state: 'error',
+            monitor_reason: 'backoff',
+            disabled_by_automation: true,
+            recovery_at_ms: now - 60_000,
+            recovery_status: 'overdue',
+            next_attempt_at_ms: now + 300_000,
+            attempt_count: 1,
+            has_weekly_evidence: true,
+            weekly_used_percent: 100,
+            intent_version: 2,
+          },
+          {
+            auth_index: 'acc_recovered',
+            account_label: 'Recovered account',
+            is_adopted: true,
+            is_enabled: true,
+            state: 'monitoring',
+            monitor_reason: 'not_exhausted',
+            disabled_by_automation: false,
+            // A compatibility-shaped stale timestamp is not an active recovery plan
+            // unless the server also projects its recovery status.
+            recovery_at_ms: now - 3600_000,
+            attempt_count: 0,
+            has_weekly_evidence: true,
+            weekly_used_percent: 19,
+            intent_version: 3,
+          },
         ],
         candidates: [],
       };
@@ -189,7 +223,10 @@ describe('First Batch OMC UI Component Tests', () => {
       renderWithClient(<AccountAutomationDrawer open={true} onClose={() => {}} />);
 
       expect(await screen.findByText('Auto account')).toBeDefined();
-      expect(screen.getByText('7d耗尽自动关闭')).toBeDefined();
+      expect(screen.getAllByText('7d耗尽自动关闭').length).toBe(2);
+      expect(screen.getAllByText(/预计恢复:/).length).toBe(1);
+      expect(screen.getByText('已过预计恢复时间，等待重试')).toBeDefined();
+      expect(screen.getByText('Recovered account')).toBeDefined();
 
       expect(screen.getByText('External account')).toBeDefined();
       expect(screen.getByText('外部停用')).toBeDefined();

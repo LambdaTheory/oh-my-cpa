@@ -46,6 +46,7 @@ type accountAutomationAccountDTO struct {
 	MonitorReason        string   `json:"monitor_reason,omitempty"`
 	DisabledByAutomation bool     `json:"disabled_by_automation"`
 	RecoveryAtMS         *int64   `json:"recovery_at_ms,omitempty"`
+	RecoveryStatus       string   `json:"recovery_status,omitempty"`
 	AdoptedAtMS          *int64   `json:"adopted_at_ms,omitempty"`
 	AdoptBatchID         string   `json:"adopt_batch_id,omitempty"`
 	NextAttemptAtMS      *int64   `json:"next_attempt_at_ms,omitempty"`
@@ -318,8 +319,10 @@ func (h *Handler) automationAccountDTOs(ctx context.Context, roster []repository
 			LastEnableAtMS:       account.LastEnableAtMS,
 			IntentVersion:        account.IntentVersion,
 		}
-		if dueMS, ok := automation.RecoveryDue(account); ok {
+		if recovery, ok := automation.RecoveryDue(account, h.now()); ok {
+			dueMS := recovery.AtMS
 			dto.RecoveryAtMS = &dueMS
+			dto.RecoveryStatus = string(recovery.Status)
 		}
 		if window, ok := evidence[account.AuthIndex]; ok {
 			dto.HasWeeklyEvidence = true

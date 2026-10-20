@@ -581,10 +581,16 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
 
                     {/* Recovery / Retry information */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {account.recovery_at_ms && (
+                      {account.recovery_at_ms && account.recovery_status === 'scheduled' && (
                         <span style={{ color: 'var(--accent)' }}>
                           <ClockCircleOutlined style={{ marginRight: 4 }} />
                           {t('automation.recovery_at', { time: formatTime(account.recovery_at_ms) })}
+                        </span>
+                      )}
+                      {account.recovery_at_ms && account.recovery_status === 'overdue' && (
+                        <span style={{ color: 'var(--warn)' }}>
+                          <ClockCircleOutlined style={{ marginRight: 4 }} />
+                          {t('automation.recovery_overdue')}
                         </span>
                       )}
                       {account.next_attempt_at_ms && (

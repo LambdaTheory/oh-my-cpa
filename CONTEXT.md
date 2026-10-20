@@ -483,7 +483,10 @@ recorded and at least 95 percent of requests carried request-time pricing.
   schedules. A disable stores the reading's `observed_at` and the cycle's reset as an
   evidence watermark, so a later pass needs strictly newer evidence in a different cycle
   and a closed cycle cannot re-close. A failed enable persists its retry schedule and is
-  complete only once CPA confirms it. The process master switch,
+  complete only once CPA confirms it. A **Recovery Plan** is active only while the
+  credential is still disabled and awaiting that enable: a future instant is scheduled,
+  a passed instant is overdue retry work, and a completed or abandoned plan has no current
+  recovery instant. The process master switch,
   `OMCPA_ACCOUNT_AUTOMATION_ENABLED`, defaults off, and an explicit `false` is an
   out-of-band emergency off the console cannot override; the console shows which source
   is in effect. An external `disabled` change is never read as intent: a credential that is

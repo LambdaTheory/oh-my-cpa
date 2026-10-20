@@ -120,6 +120,23 @@ type Decision struct {
 	CycleKey             string
 }
 
+// RecoveryStatus describes how a persisted recovery instant relates to the
+// current clock while the account still owns an active recovery plan.
+type RecoveryStatus string
+
+const (
+	RecoveryScheduled RecoveryStatus = "scheduled"
+	RecoveryOverdue   RecoveryStatus = "overdue"
+)
+
+// RecoverySchedule is the safe read projection of an active recovery plan.
+// Overdue plans remain visible as retry work, but completed or abandoned plans
+// are omitted even when an older database row still carries their timestamp.
+type RecoverySchedule struct {
+	AtMS   int64
+	Status RecoveryStatus
+}
+
 // CycleKey identifies a weekly cycle by its reset instant. The key is what stops
 // a stale reading in an already-closed cycle from re-disabling the credential.
 func CycleKey(window repository.AutomationWeeklyWindow) string {
@@ -163,12 +180,13 @@ func Decide(account repository.AutomationAccount, evidence *repository.Automatio
 // pre-enable probe is performed: the enable is the action, and only CPA's success
 // completes it.
 func decideRecovery(account repository.AutomationAccount, now time.Time) Decision {
-	dueMS, hasDue := RecoveryDue(account)
+	recovery, hasDue := RecoveryDue(account, now)
 	if !hasDue {
 		// Nothing says when this credential will be worth using again. Enabling
 		// now would be a guess, so it is monitored and the missing reset shown.
 		return Decision{Kind: DecisionMonitor, State: StateMonitoring, Reason: ReasonMissingReset}
 	}
+	dueMS := recovery.AtMS
 	if pending := account.NextAttemptAtMS; pending != nil && now.UnixMilli() < *pending {
 		return Decision{Kind: DecisionNone, State: StateWaiting, Reason: ReasonBackoff, ResetAtMS: dueMS, HasReset: true}
 	}
@@ -290,10 +308,26 @@ func AdoptionRecovery(account repository.AutomationAccount, evidence *repository
 	return *evidence.ResetAtMS, key, evidence.ObservedAtMS, true
 }
 
-// RecoveryDue returns the absolute instant the account should be enabled, and
-// whether one is known. A live operator override (manual_reset_at_ms, not yet
-// consumed) takes precedence over the cycle reset recorded at disable time.
-func RecoveryDue(account repository.AutomationAccount) (int64, bool) {
+// RecoveryDue returns an active recovery plan and its relation to now. A live
+// operator override (manual_reset_at_ms, not yet consumed) takes precedence over
+// the cycle reset recorded at disable time. State is part of the contract: an old
+// timestamp on an idle or ordinarily monitored row is history, not executable work.
+func RecoveryDue(account repository.AutomationAccount, now time.Time) (RecoverySchedule, bool) {
+	if !account.IsAdopted || !account.IsEnabled || !hasPendingRecoveryState(account) {
+		return RecoverySchedule{}, false
+	}
+	dueMS, ok := recoveryAtMS(account)
+	if !ok {
+		return RecoverySchedule{}, false
+	}
+	status := RecoveryScheduled
+	if dueMS <= now.UnixMilli() {
+		status = RecoveryOverdue
+	}
+	return RecoverySchedule{AtMS: dueMS, Status: status}, true
+}
+
+func recoveryAtMS(account repository.AutomationAccount) (int64, bool) {
 	if account.ManualResetAtMS != nil && !account.ManualResetConsumed && *account.ManualResetAtMS > 0 {
 		return *account.ManualResetAtMS, true
 	}
@@ -301,6 +335,35 @@ func RecoveryDue(account repository.AutomationAccount) (int64, bool) {
 		return *account.CycleResetAtMS, true
 	}
 	return 0, false
+}
+
+func hasPendingRecoveryState(account repository.AutomationAccount) bool {
+	switch account.State {
+	case StateDisabled, StateWaiting:
+		return true
+	case StateError:
+		// A disable write can fail too. Error alone therefore does not prove that
+		// the credential is awaiting enable; retain only errors whose preceding
+		// state or action owned a recovery plan.
+		return account.IsDisabledByAutomation() ||
+			account.MonitorReason == ReasonRecoveryScheduled ||
+			account.MonitorReason == ReasonExternallyDisabled ||
+			hasPendingManualReset(account)
+	case StateMonitoring:
+		// A takeover of an already-disabled credential is not recorded as OMC's
+		// disable, but its admitted reset still belongs to an active recovery plan.
+		// The missing-reset case covers rows created before setting a manual reset
+		// began moving them directly to waiting.
+		return account.MonitorReason == ReasonExternallyDisabled ||
+			hasPendingManualReset(account)
+	default:
+		return false
+	}
+}
+
+func hasPendingManualReset(account repository.AutomationAccount) bool {
+	return account.MonitorReason == ReasonMissingReset &&
+		account.ManualResetAtMS != nil && !account.ManualResetConsumed
 }
 
 // NextBackoff is the delay after the attempt-th consecutive failure. It doubles

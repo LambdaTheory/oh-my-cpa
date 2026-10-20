@@ -175,14 +175,15 @@ func TestServiceDisablesThenEnablesAtTheReset(t *testing.T) {
 		t.Fatalf("cycle reset = %+v", account.CycleResetAtMS)
 	}
 
-	// A second pass with the same reading must not disable again.
+	// CPA now reports the confirmed write. A second pass with the same reading
+	// must keep waiting rather than disable again.
+	credentials[0].Disabled = true
 	service.RunOnce(ctx)
 	if len(writer.snapshot()) != 1 {
 		t.Fatal("a repeated pass must not re-close the credential")
 	}
 
 	// The credential is now disabled in CPA; at the reset it must be enabled once.
-	credentials[0].Disabled = true
 	clock.Set(time.UnixMilli(resetAt))
 	service.RunOnce(ctx)
 	calls = writer.snapshot()
@@ -195,6 +196,12 @@ func TestServiceDisablesThenEnablesAtTheReset(t *testing.T) {
 	}
 	if account.LastError != "" || account.NextAttemptAtMS != nil {
 		t.Fatalf("a completed enable must clear the retry state: %+v", account)
+	}
+	if account.CycleResetAtMS != nil {
+		t.Fatalf("a completed enable must consume the cycle recovery time: %+v", account)
+	}
+	if recovery, ok := RecoveryDue(account, clock.Now()); ok {
+		t.Fatalf("a completed enable must not expose pending recovery: %+v", recovery)
 	}
 }
 

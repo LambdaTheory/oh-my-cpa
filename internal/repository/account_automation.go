@@ -347,9 +347,11 @@ func (r *Repository) SetAutomationManualReset(ctx context.Context, authIndex str
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
 		manual_reset_at_ms = ?,
 		manual_reset_consumed = 0,
+		state = ?,
+		monitor_reason = ?,
 		intent_version = intent_version + 1,
 		updated_at_ms = ?`,
-		resetAtMS, nowMS)
+		resetAtMS, AutomationStateWaiting, automationReasonRecoveryScheduled, nowMS)
 }
 
 // RecordAutomationMonitoring writes the descriptive state a pass computed. It
@@ -393,6 +395,7 @@ func (r *Repository) RecordAutomationEnable(ctx context.Context, authIndex strin
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
 		state = ?,
 		monitor_reason = '',
+		cycle_reset_at_ms = NULL,
 		manual_reset_consumed = CASE WHEN ? = 1 THEN 1 ELSE manual_reset_consumed END,
 		next_attempt_at_ms = NULL,
 		attempt_count = 0,
@@ -425,6 +428,8 @@ func (r *Repository) RecordAutomationReset(ctx context.Context, authIndex string
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
 		state = ?,
 		monitor_reason = ?,
+		cycle_reset_at_ms = NULL,
+		manual_reset_consumed = CASE WHEN manual_reset_at_ms IS NULL THEN manual_reset_consumed ELSE 1 END,
 		next_attempt_at_ms = NULL,
 		attempt_count = 0,
 		last_error = '',
@@ -437,6 +442,10 @@ func (r *Repository) RecordAutomationReset(ctx context.Context, authIndex string
 // automationReasonExternallyReEnabled mirrors the automation package's reason
 // string; the store only needs to recognize it to end the disable episode.
 const automationReasonExternallyReEnabled = "externally_re_enabled"
+
+// automationReasonRecoveryScheduled mirrors the automation package's reason
+// without making the repository depend on the decision package.
+const automationReasonRecoveryScheduled = "recovery_scheduled"
 
 func (r *Repository) writeAutomationAccount(ctx context.Context, authIndex string, expectedVersion int64, nowMS int64, assignments string, args ...any) (AutomationAccount, error) {
 	if r == nil || r.SQL() == nil {

@@ -120,7 +120,9 @@ function automationListBody(state) {
           is_enabled: true,
           state: 'waiting',
           monitor_reason: 'backoff',
-          disabled_by_automation: false,
+          disabled_by_automation: true,
+          recovery_at_ms: Date.now() - 60_000,
+          recovery_status: 'overdue',
           attempt_count: 2,
           next_attempt_at_ms: Date.now() + 300_000,
           has_weekly_evidence: true,
@@ -153,6 +155,9 @@ function automationListBody(state) {
           state: 'monitoring',
           monitor_reason: 'unverified_account_weekly_capability',
           disabled_by_automation: false,
+          // A stale timestamp from an older server is history without an active
+          // recovery status and must not render as an expected recovery.
+          recovery_at_ms: Date.now() - 86_400_000,
           attempt_count: 0,
           has_weekly_evidence: false,
           intent_version: 1,
@@ -271,6 +276,10 @@ export async function accountAutomation({ base, page, check }) {
   await until(async () => (await roster.getByText('a@example.test', { exact: true }).count()) > 0, { label: 'the adopted roster to render' });
   check('the managed roster retains friendly account labels', !(await roster.innerText()).includes(VERIFIED_CLAUDE));
   check('the roster summarizes adopted and live credential counts separately', (await roster.innerText()).includes('Adopted 3 / 4 credentials'));
+  check('an overdue disabled plan is retry work rather than an expected recovery',
+    await roster.getByText('Recovery time passed; waiting to retry', { exact: true }).count() === 1);
+  check('a stale timestamp outside an active recovery plan is not rendered',
+    await roster.getByText(/Recovery at:/).count() === 0);
   const stateFilter = roster.getByRole('combobox');
   await stateFilter.click();
   await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'Monitor only' }).click();

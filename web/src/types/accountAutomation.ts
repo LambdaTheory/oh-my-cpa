@@ -1,5 +1,7 @@
 export type AutomationState = 'idle' | 'monitoring' | 'disabled' | 'waiting' | 'error' | string;
 
+export type AutomationRecoveryStatus = 'scheduled' | 'overdue' | string;
+
 export type AutomationSource =
   | 'default_off'
   | 'web'
@@ -38,6 +40,7 @@ export interface AccountAutomationAccountDTO {
   monitor_reason?: AutomationMonitorReason;
   disabled_by_automation: boolean;
   recovery_at_ms?: number | null;
+  recovery_status?: AutomationRecoveryStatus;
   adopted_at_ms?: number | null;
   adopt_batch_id?: string;
   next_attempt_at_ms?: number | null;
