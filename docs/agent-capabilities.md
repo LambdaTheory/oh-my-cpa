@@ -583,6 +583,13 @@ serialized as a fabricated zero; model/group usage that cannot be assigned safel
 `scope_unknown`. Freshness is window-aware: at least the two-hour idle
 refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
 
+The dashboard reads the same operation through
+`GET /api/v1/management/dashboard/predictions` with `findings_only=false`. This console
+projection retains operator-visible credential labels and auth indexes, groups the bounded
+items by provider, and adds handler-measured `duration_ms`; it does not add or alter an
+Agent/MCP capability. The five-minute foreground refresh and the manual dashboard refresh
+therefore recompute only from stored evidence and never probe CPA.
+
 The tool assembles its roster and current readings only from persisted safe credential
 metadata and quota snapshots, then reads passive and active observations without refreshing
 quota or calling the CPA management gateway. Standard windows

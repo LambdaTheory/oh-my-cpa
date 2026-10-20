@@ -67,7 +67,7 @@ const CONSOLE_ROUTES = [
  * data has no captured response even if the route itself renders.
  */
 const ROUTE_READS = {
-  '/dashboard': ['overview', 'pricing-attention', 'dashboard-24h', 'dashboard-tail-24h', 'dashboard-models-call-24h', 'dashboard-models-model-24h', 'dashboard-token-heatmap-utc', 'usage-routing', 'usage-live'],
+  '/dashboard': ['overview', 'pricing-attention', 'dashboard-24h', 'dashboard-tail-24h', 'dashboard-models-call-24h', 'dashboard-models-model-24h', 'dashboard-token-heatmap-utc', 'dashboard-predictions', 'usage-routing', 'usage-live'],
   '/model-square': ['model-square', 'pricing', 'usage-facets'],
   // The retired Playground page is no longer a routed console route: it redirects to the
   // dashboard, so it declares no reads. Its captured API responses (`playground-models`,

@@ -47,6 +47,60 @@ func (job *PredictionJob) Ready() bool {
 	return job != nil && job.service != nil && job.service.resolvedNow().Ready()
 }
 
+// SendNow queues and delivers one operator-requested prediction card. Unlike a
+// scheduled digest it does not claim the summary minute or alter LastSummaryAt,
+// so it cannot suppress either configured daily digest.
+func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
+	if job == nil || job.service == nil || job.source == nil {
+		return false, fmt.Errorf("feishu prediction sender is unavailable")
+	}
+	service := job.service
+	resolved := service.resolvedNow()
+	if !resolved.Ready() {
+		return false, fmt.Errorf("feishu is not ready: %s", service.inactiveReason(resolved))
+	}
+	digest, err := job.source(ctx)
+	if err != nil {
+		return false, err
+	}
+	findings := predictionFindings(digest.Items)
+	if len(findings) == 0 {
+		return false, nil
+	}
+
+	now := service.now()
+	notification := predictionNotification(findings, digest.Omitted, resolved, now)
+	service.lockStateTransition()
+	state, err := service.store.Load(ctx)
+	if err == nil {
+		state.queueNotification(notification)
+		state.UpdatedAt = now
+		err = service.store.Save(ctx, state)
+	}
+	service.unlockStateTransition()
+	if err != nil {
+		return false, err
+	}
+	service.deliverOutboxNotification(ctx, resolved, notification.ID)
+
+	service.lockStateTransition()
+	latest, loadErr := service.store.Load(ctx)
+	service.unlockStateTransition()
+	if loadErr != nil {
+		return false, loadErr
+	}
+	for _, candidate := range latest.Outbox {
+		if candidate.ID != notification.ID {
+			continue
+		}
+		if candidate.State == NotifySent {
+			return true, nil
+		}
+		return false, fmt.Errorf("feishu prediction delivery is pending")
+	}
+	return false, fmt.Errorf("feishu prediction notification was not persisted")
+}
+
 // Activate transfers scheduled-summary ownership before the service loop starts,
 // so its immediate first tick cannot race the prediction job and send both cards.
 func (job *PredictionJob) Activate() {
@@ -149,16 +203,21 @@ func hasPredictionFindings(items []PredictionDigestItem) bool {
 	return false
 }
 
-func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
-	if state == nil || !resolved.Ready() || !scheduledMinute(resolved, now) || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
-		return false
-	}
-	findings := make([]PredictionDigestItem, 0, len(digest.Items))
-	for _, item := range digest.Items {
+func predictionFindings(items []PredictionDigestItem) []PredictionDigestItem {
+	findings := make([]PredictionDigestItem, 0, len(items))
+	for _, item := range items {
 		if item.Verdict == "will_exhaust" || item.Verdict == "under_used" {
 			findings = append(findings, item)
 		}
 	}
+	return findings
+}
+
+func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
+	if state == nil || !resolved.Ready() || !scheduledMinute(resolved, now) || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
+		return false
+	}
+	findings := predictionFindings(digest.Items)
 	if len(findings) == 0 {
 		return false
 	}

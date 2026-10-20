@@ -29,6 +29,7 @@ import {
 import { DashboardResponse, DashboardTailResponse, DashboardWindow, type WindowCredentialTraffic } from '../types/dashboard';
 import { DashboardTokenHeatmap } from '../types/tokenHeatmap';
 import { DashboardModelsResponse } from '../types/dashboardModels';
+import type { DashboardPredictionsResponse } from '../types/quotaPrediction';
 import { ErrorLogFile, type ServiceLogPage } from '../types/logs';
 import { AUDIT_PAGE_SIZE, auditSearchParams, type AuditBucket, type AuditEvent, type AuditFilters, type AuditPage } from '../types/audit';
 import {
@@ -514,6 +515,10 @@ export const api = {
   }> {
     const search = query ? (query.startsWith('?') ? query : `?${query}`) : '';
     return request(`/management/dashboard/providers${search}`, { method: 'GET' });
+  },
+
+  async getDashboardPredictions(): Promise<DashboardPredictionsResponse> {
+    return request<DashboardPredictionsResponse>('/management/dashboard/predictions', { method: 'GET' });
   },
 
   /**
@@ -1394,6 +1399,12 @@ export const api = {
 
   async postFeishuTest(): Promise<FeishuTestResponse> {
     return request<FeishuTestResponse>('/feishu/test', {
+      method: 'POST',
+    });
+  },
+
+  async postFeishuPredictionTest(): Promise<FeishuTestResponse> {
+    return request<FeishuTestResponse>('/feishu/prediction-test', {
       method: 'POST',
     });
   },

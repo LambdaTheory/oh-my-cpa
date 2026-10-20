@@ -95,6 +95,7 @@ const FIXED_ROUTES = new Map([
   // captured disabled-state answers the console renders.
   ['/api/v1/feishu/settings', 'feishu-settings'],
   ['/api/v1/feishu/status', 'feishu-status'],
+  ['/api/v1/management/dashboard/predictions', 'dashboard-predictions'],
   ['/api/v1/management/quota', 'quota'],
   ['/api/v1/management/quota/warmup/settings', 'warmup-settings'],
   ['/api/v1/management/quota/warmup/credentials/auth-codex-01', 'warmup-codex'],

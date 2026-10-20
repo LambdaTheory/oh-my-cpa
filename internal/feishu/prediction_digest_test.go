@@ -50,6 +50,77 @@ func TestPredictionDigestLeavesSummaryWhenNoFinding(t *testing.T) {
 	}
 }
 
+func TestManualPredictionSendsOneCardWithoutClaimingSummaryMinute(t *testing.T) {
+	web, overlay := readyConfig()
+	now := time.Date(2026, 10, 19, 9, 30, 0, 0, time.UTC)
+	sender := newFakeSender()
+	store := NewMemoryStore()
+	service := NewService(Options{
+		Web: web, Overlay: overlay, Store: store, Now: func() time.Time { return now },
+		Renderer:      NewPlainReportRenderer(time.UTC),
+		SenderFactory: func(Resolved) Sender { return sender },
+		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
+	})
+	used, projected := 60.0, 120.0
+	reads := 0
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
+		reads++
+		return PredictionDigest{Items: []PredictionDigestItem{{
+			CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
+			UsedPercent: &used, ProjectedPercentAtReset: &projected,
+			ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+		}}}, nil
+	})
+
+	sent, err := job.SendNow(context.Background())
+	if err != nil || !sent {
+		t.Fatalf("manual prediction sent=%v err=%v", sent, err)
+	}
+	if reads != 1 {
+		t.Fatalf("prediction source reads = %d", reads)
+	}
+	if sends, _ := sender.counts(); sends != 1 {
+		t.Fatalf("manual prediction sends = %d", sends)
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastSummaryAt.IsZero() || len(state.Outbox) != 1 || state.Outbox[0].State != NotifySent {
+		t.Fatalf("manual prediction state = %+v", state)
+	}
+}
+
+func TestManualPredictionWithNoFindingSendsNothingAndKeepsState(t *testing.T) {
+	web, overlay := readyConfig()
+	now := time.Date(2026, 10, 19, 9, 30, 0, 0, time.UTC)
+	sender := newFakeSender()
+	store := NewMemoryStore()
+	service := NewService(Options{
+		Web: web, Overlay: overlay, Store: store, Now: func() time.Time { return now },
+		SenderFactory: func(Resolved) Sender { return sender },
+		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
+	})
+	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
+		return PredictionDigest{Items: []PredictionDigestItem{{Verdict: "on_track"}}}, nil
+	})
+
+	sent, err := job.SendNow(context.Background())
+	if err != nil || sent {
+		t.Fatalf("manual no-finding sent=%v err=%v", sent, err)
+	}
+	if sends, _ := sender.counts(); sends != 0 {
+		t.Fatalf("manual no-finding sends = %d", sends)
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastSummaryAt.IsZero() || len(state.Outbox) != 0 {
+		t.Fatalf("manual no-finding state = %+v", state)
+	}
+}
+
 func TestPredictionDigestDoesNotRunOutsideReadyService(t *testing.T) {
 	reads := 0
 	job := &PredictionJob{service: NewService(Options{}), source: func(context.Context) (PredictionDigest, error) { reads++; return PredictionDigest{}, nil }}

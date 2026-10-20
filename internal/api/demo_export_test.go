@@ -189,6 +189,7 @@ func demoExportCases() []demoExportCase {
 		// demo policy, and neither is exported.
 		{Name: "feishu-settings", Path: "/api/v1/feishu/settings"},
 		{Name: "feishu-status", Path: "/api/v1/feishu/status"},
+		{Name: "dashboard-predictions", Path: "/api/v1/management/dashboard/predictions"},
 		{Name: "logs", Path: "/api/v1/management/logs?limit=200"},
 		{Name: "logs-status", Path: "/api/v1/management/logs/status"},
 		{Name: "service-logs", Path: "/api/v1/management/service-logs"},

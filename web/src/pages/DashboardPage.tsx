@@ -41,6 +41,7 @@ import {
 import { ModelTrendPanel, ModelUsagePanel, DASHBOARD_MODELS_QUERY_KEY } from '../components/dashboard/ModelUsagePanels';
 import { DashboardBoard } from '../components/dashboard/DashboardBoard';
 import { DashboardProviders } from '../components/dashboard/DashboardProviders';
+import { QuotaPrediction, QUOTA_PREDICTION_QUERY_KEY } from '../components/dashboard/QuotaPrediction';
 import {
   applyTail,
   DASHBOARD_RANGE_PREFERENCE,
@@ -297,6 +298,7 @@ export const DashboardPage: React.FC = () => {
     void queryClient.invalidateQueries({ queryKey: ['management-overview'] });
     void queryClient.invalidateQueries({ queryKey: [CREDENTIAL_FILES_QUERY_KEY] });
     void queryClient.invalidateQueries({ queryKey: [CREDENTIAL_QUOTA_QUERY_KEY] });
+    void queryClient.invalidateQueries({ queryKey: [QUOTA_PREDICTION_QUERY_KEY] });
     void refetch();
   }, [queryClient, refetch]);
 
@@ -569,6 +571,8 @@ export const DashboardPage: React.FC = () => {
         return <TokenHeatmap />;
       case 'credential_quota':
         return <CredentialQuota />;
+      case 'quota_prediction':
+        return <QuotaPrediction />;
       case 'providers':
         return overviewQuery.data ? (
           <DashboardProviders overview={overviewQuery.data} query={query} range={range} enabled={rangeReady} />

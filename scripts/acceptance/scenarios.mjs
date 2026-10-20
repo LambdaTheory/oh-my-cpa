@@ -46,6 +46,7 @@ import {
   dashboardTokenHeatmapPruned,
 } from './probes/dashboardTokenHeatmap.mjs';
 import { dashboardLayout } from './probes/dashboardLayout.mjs';
+import { dashboardQuotaPrediction } from './probes/dashboardQuotaPrediction.mjs';
 import { omcSettings } from './probes/omcSettings.mjs';
 import { sidebarNavCustomization } from './probes/sidebarNav.mjs';
 import { fontLibrary } from './probes/fontLibrary.mjs';
@@ -370,6 +371,16 @@ export const SCENARIOS = [
       ],
     },
     run: dashboardLayout,
+  },
+  {
+    id: 'dashboard-quota-prediction',
+    name: 'dashboard quota prediction rows, refresh and manual Feishu send',
+    options: {
+      routes: [
+        [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
+      ],
+    },
+    run: dashboardQuotaPrediction,
   },
   {
     id: 'provider-rate-marks',

@@ -228,8 +228,10 @@ The module is wired into the running process:
    quota scheduler and a credit redeem all record the same safe outcome.
 4. `RegisterFeishuRoutes` is called inside the authenticated `/api/v1` group in
    `internal/api/handler.go` once the API is built: `GET/PUT
-   /api/v1/feishu/settings`, `GET /api/v1/feishu/status` and `POST
-   /api/v1/feishu/test`. The settings route calls `Reload` after a save.
+   /api/v1/feishu/settings`, `GET /api/v1/feishu/status`, `POST
+   /api/v1/feishu/test` and `POST /api/v1/feishu/prediction-test`. The settings route
+   calls `Reload` after a save. The prediction route is an explicit operator action
+   backed by the injected prediction source and sender; it never opens a second transport.
 5. `app.Run` starts the bot under the process lifetime context and `Stop`s it on
    shutdown; neither a demo, a forced-off nor a degraded configuration starts it.
 6. The read-only summary `feishu_notifications_status` is offered through the
@@ -254,6 +256,14 @@ at reset and verdict. Projected cost and tokens appear only when priced usage is
 Exhaustion findings are prioritised within the card's bounded finding set. The footer states
 the newest data time, that the result is a projection rather than a guarantee, and how many
 additional findings were omitted when the bound was reached.
+
+The dashboard's “send prediction summary” action calls the prediction-test route after a
+confirmation. It evaluates current stored findings immediately and persists one notification
+before delivery through the existing sender/outbox. Delivery is restricted to that new row,
+so unrelated pending alerts are not flushed by the action. With no `will_exhaust` or
+`under_used` finding it returns `{sent:false, reason:"no_findings"}` and sends no card. A
+manual send never changes `LastSummaryAt`, never claims the current summary minute and cannot
+suppress the configured 10:00/17:00 prediction or ordinary digest.
 
 ## Remaining risk
 

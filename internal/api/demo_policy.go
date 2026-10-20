@@ -172,6 +172,7 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/management/dashboard/token-heatmap", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/dashboard/models", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/dashboard/providers", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/dashboard/predictions", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/logs", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/logs/status", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/service-logs", demoAllow, ""},
@@ -273,6 +274,7 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/feishu/settings", demoAllow, ""},
 	{http.MethodGet, "/api/v1/feishu/status", demoAllow, ""},
 	{http.MethodPost, "/api/v1/feishu/test", demoRefuse, "sending a Feishu test message is disabled"},
+	{http.MethodPost, "/api/v1/feishu/prediction-test", demoRefuse, "sending a Feishu prediction message is disabled"},
 
 	// A manual capture pass is answered locally: it reports a pass that found an
 	// empty queue, so the request list's own refresh button works without a queue

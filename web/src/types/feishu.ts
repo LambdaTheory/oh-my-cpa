@@ -48,5 +48,6 @@ export interface FeishuStatusDTO {
 
 export interface FeishuTestResponse {
   sent: boolean;
+  reason?: 'no_findings';
   error?: string;
 }
