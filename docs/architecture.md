@@ -3481,17 +3481,21 @@ model reads are generated through the real facade; inference is explicitly refus
 
 ## Read-only reset advice
 
-`internal/quota/reset_advice.go` owns the pure entitlement/window decision.
+`internal/quota/reset_advice.go` owns the pure credential-level entitlement decision.
 `internal/operations/reset_advice.go` reads persisted credential metadata, latest
-quota snapshots and standard passive observations, then registers `reset_advice`
+quota snapshots, standard passive observations and correlated cooldown records, then registers `reset_advice`
 through the capability registry for both Agent and MCP. The operation preserves
 credentials with missing snapshots as unknown rows, validates count presence before
-decoding stored entitlements, and applies Claude grants only to their `clears` windows.
+decoding stored entitlements, and counts each Claude grant once when `clears`
+intersects the credential's standard windows. Any valid standard window at or
+above 90% takes priority over spending an expiring entitlement in another window;
+without a known emergency, unreadable standard windows block spending advice.
 Expired entries do not contribute remaining resets. A two-hour entitlement freshness
 bound is independent of the quota window freshness and cannot be renewed by headers.
 
 The projection allowlists credential labels, provider/window identity, nullable count,
-expiry and current used share, separate observation timestamps, verdict, evidence and
+expiry and highest valid standard used share, separate observation timestamps,
+nullable cooldown state, an empty announcements array, one verdict, evidence and
 reason codes. Read-only callers receive masked labels and no auth index; filters,
 the 100-row bound, 32 KiB ceiling and omitted count are owned by operations. Startup
 configuration supplies the expiry horizon through the existing operations wiring.

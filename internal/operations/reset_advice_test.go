@@ -75,6 +75,9 @@ func TestResetAdviceSharedReadCapabilityAndPrivacy(t *testing.T) {
 			t.Fatalf("output=%+v err=%v", output, err)
 		}
 		item := output.Items[0]
+		if !strings.Contains(string(result.Data), `"announcements":[]`) || !strings.Contains(string(result.Data), `"cooldown_active":null`) {
+			t.Fatalf("missing evidence fields: %s", result.Data)
+		}
 		if item.Verdict != quota.ResetAdviceUseBeforeExpiry || item.Evidence != "projection" || item.RemainingResets == nil || *item.RemainingResets != 1 {
 			t.Fatalf("item=%+v", item)
 		}
@@ -173,5 +176,54 @@ func TestResetAdviceBoundsAndFilters(t *testing.T) {
 	result, err := service.ResetAdvice(ctx, ResetAdviceInput{Provider: "claude"})
 	if err != nil || len(result.Items) != 0 {
 		t.Fatalf("provider filter=%+v err=%v", result, err)
+	}
+}
+
+func TestResetAdviceOneConclusionPerCredential(t *testing.T) {
+	service, ctx, now := resetAdviceFixture(t)
+	seedPredictionResources(t, service.Repo, []domain.DiscoveredResource{predictionResource("codex", "account", "codex")})
+	credits := fmt.Sprintf(`{"available_count":1,"credits":[{"status":"available","expires_at_ms":%d}]}`, now+time.Hour.Milliseconds())
+	windows := fmt.Sprintf(`[{"id":"five_hour","kind":"five_hour","scope":"standard","used_percent":95,"reset_at_ms":%d},{"id":"seven_day","kind":"weekly","scope":"standard","used_percent":20,"reset_at_ms":%d}]`, now+time.Hour.Milliseconds(), now+time.Hour.Milliseconds())
+	if err := service.Repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{AuthIndex: "codex", Provider: "codex", Status: "healthy", ObservedAtMS: now, WindowsJSON: windows, ResetCreditsJSON: credits}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"", "five_hour", "weekly"} {
+		result, err := service.ResetAdvice(ctx, ResetAdviceInput{WindowKind: kind})
+		if err != nil || len(result.Items) != 1 || result.Omitted != 0 {
+			t.Fatalf("kind=%q result=%+v err=%v", kind, result, err)
+		}
+		item := result.Items[0]
+		if item.Verdict != quota.ResetAdviceKeepForEmergency || item.WindowKind != "five_hour" || item.UsedPercent == nil || *item.UsedPercent != 95 || item.RemainingResets == nil || *item.RemainingResets != 1 {
+			t.Fatalf("kind=%q item=%+v", kind, item)
+		}
+	}
+}
+
+func TestResetAdviceCooldownEvidence(t *testing.T) {
+	service, ctx, now := resetAdviceFixture(t)
+	seedPredictionResources(t, service.Repo, []domain.DiscoveredResource{predictionResource("codex", "account", "codex")})
+	if _, err := service.Repo.SQL().ExecContext(ctx, `INSERT INTO cpa_instances (id, name, base_url, usage_addr, management_key_ciphertext, management_key_nonce, status, created_at, updated_at) VALUES ('default', 'Default', 'http://127.0.0.1:18317', '127.0.0.1:18317', x'00', x'00', 'unknown', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := service.Repo.SQL().ExecContext(ctx, `INSERT INTO error_events (instance_id, event_key, provider, model, auth_index, status_code, body, retryable, auth_status, auth_disabled, auth_unavailable, quota_exceeded, quota_reason, next_recover_at_ms, timestamp_ms, created_at_ms) VALUES ('default', 'reset-cooldown', 'codex', '', 'codex', 429, '', 1, 'active', 0, 0, 1, 'quota', ?, ?, ?)`, now+time.Minute.Milliseconds(), now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		at   int64
+		want bool
+	}{{now, true}, {now + time.Minute.Milliseconds(), false}} {
+		result, err := service.ResetAdvice(capability.WithAnchor(ctx, test.at), ResetAdviceInput{})
+		if err != nil || len(result.Items) != 1 {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+		item := result.Items[0]
+		if item.CooldownActive == nil || *item.CooldownActive != test.want {
+			t.Fatalf("cooldown=%v want=%v", item.CooldownActive, test.want)
+		}
+		raw, err := json.Marshal(item)
+		if err != nil || !strings.Contains(string(raw), fmt.Sprintf(`"cooldown_active":%t`, test.want)) {
+			t.Fatalf("wire=%s err=%v", raw, err)
+		}
 	}
 }

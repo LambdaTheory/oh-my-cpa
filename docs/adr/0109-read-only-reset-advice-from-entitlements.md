@@ -21,14 +21,28 @@ identity projection; Agent and MCP contain no feature-specific behavior. Read-on
 MCP rejects auth-index filters and omits auth indexes from results while using the
 existing masked credential labels. No HTTP route, migration or write path is added.
 
-At 90% used or above, a remaining entitlement with known expiry yields
-`keep_for_emergency`. Below that threshold, an expiry within the configurable
-72-hour default horizon yields `use_before_expiry`; a later expiry yields
-`no_action`. An explicitly observed zero remaining balance or fully expired grants
-also yields `no_action`. Missing grants, invalid counts, unknown expiry or scope,
-and missing/stale quota evidence yield `unknown` with reason codes and nullable
-values. Claude counts cover only windows explicitly named in `clears`; one grant
-may occur in several window rows, so counts are not additive across rows.
+Return exactly one conclusion per credential. Count Codex credits once and each
+Claude grant once when its `clears` intersects the credential's standard windows.
+With fresh, valid remaining entitlements and known expiry, apply this priority:
+
+1. Any valid standard window at or above 90% used yields `keep_for_emergency`,
+   including when another window would favor spending an expiring entitlement.
+2. Otherwise all standard windows must be readable and below 90%; any applicable
+   entitlement expiring within the configurable 72-hour default horizon yields
+   `use_before_expiry`.
+3. An explicitly observed zero remaining balance or fully expired grants yields
+   `no_action`; a readable positive balance entirely outside the horizon also
+   yields `no_action`.
+4. Missing, stale or invalid key evidence that prevents the above decision yields
+   `unknown`, with reason codes and nullable values. A missing quota window blocks
+   spending but does not negate a known emergency in another standard window.
+
+The window identity and percentage identify the highest valid standard reading
+(window ID breaks ties); they are evidence, not a second conclusion. The optional
+window-kind filter selects credentials, and never hides another standard window
+from their decision. `cooldown_active` reads the existing correlated local cooldown
+record: true or false when present, null when absent. It is evidence only and adds
+no upstream request or change to verdict priority.
 
 Evidence is `fact`, `projection` or `unknown`. A known zero remaining balance is a
 fact; positive-balance advice is a projection of usefulness from current evidence,
@@ -46,7 +60,10 @@ times, provenance and explicit applicability conditions. A published campaign is
 fact about the announcement, not evidence that a specific credential received a
 grant. Applying it to an account requires separately observed eligibility and balance;
 inferences remain projections and unresolved applicability remains unknown. This
-version reads no announcements and adds no scraper, feed, storage or fetch hook.
+version returns `announcements: []` on every credential item and reads no
+announcements; it adds no scraper, feed, storage or fetch hook. Future versions
+may append announcement entries and additive entry fields while preserving this
+array's shape and the existing advice fields.
 The semantic distinction leaves room for that source without changing the four
 verdicts or treating an announcement as a redemption authorization.
 

@@ -14,25 +14,27 @@ import (
 
 type ResetAdviceInput struct {
 	Provider   string `json:"provider,omitempty" jsonschema:"Provider identifier; omit for all stored credentials"`
-	WindowKind string `json:"window_kind,omitempty" jsonschema:"Normalized window kind such as five_hour or weekly; omit for all"`
+	WindowKind string `json:"window_kind,omitempty" jsonschema:"Select credentials with this normalized window kind; advice still considers all standard windows"`
 	AuthIndex  string `json:"auth_index,omitempty" jsonschema:"Credential auth index for console or Agent; read-only MCP callers must omit it"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum rows, 1 to 100; defaults to 100"`
 }
 
 type ResetAdviceItem struct {
-	CredentialLabel   string   `json:"credential_label"`
-	Provider          string   `json:"provider"`
-	AuthIndex         string   `json:"auth_index,omitempty"`
-	WindowKind        string   `json:"window_kind"`
-	WindowID          string   `json:"window_id"`
-	RemainingResets   *int     `json:"remaining_resets"`
-	EarliestExpiryMS  *int64   `json:"earliest_expiry_ms"`
-	UsedPercent       *float64 `json:"used_percent"`
-	ResetObservedAtMS int64    `json:"reset_observed_at_ms"`
-	QuotaObservedAtMS int64    `json:"quota_observed_at_ms"`
-	Verdict           string   `json:"verdict"`
-	Evidence          string   `json:"evidence"`
-	Reasons           []string `json:"reasons"`
+	Announcements     []struct{} `json:"announcements"`
+	CooldownActive    *bool      `json:"cooldown_active"`
+	CredentialLabel   string     `json:"credential_label"`
+	Provider          string     `json:"provider"`
+	AuthIndex         string     `json:"auth_index,omitempty"`
+	WindowKind        string     `json:"window_kind"`
+	WindowID          string     `json:"window_id"`
+	RemainingResets   *int       `json:"remaining_resets"`
+	EarliestExpiryMS  *int64     `json:"earliest_expiry_ms"`
+	UsedPercent       *float64   `json:"used_percent"`
+	ResetObservedAtMS int64      `json:"reset_observed_at_ms"`
+	QuotaObservedAtMS int64      `json:"quota_observed_at_ms"`
+	Verdict           string     `json:"verdict"`
+	Evidence          string     `json:"evidence"`
+	Reasons           []string   `json:"reasons"`
 }
 
 type ResetAdviceResult struct {
@@ -82,6 +84,10 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		return ResetAdviceResult{}, err
 	}
 	result := ResetAdviceResult{GeneratedAtMS: capability.AnchorMS(ctx), Items: []ResetAdviceItem{}}
+	cooldowns, err := s.Repo.BatchCorrelatedCooldowns(ctx, indexes, result.GeneratedAtMS)
+	if err != nil {
+		return ResetAdviceResult{}, err
+	}
 	for _, entry := range metadata {
 		if input.AuthIndex != "" && input.AuthIndex != entry.AuthIndex {
 			continue
@@ -102,12 +108,13 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		if len(windows) == 0 {
 			windows = []quota.QuotaWindow{{Kind: input.WindowKind, Scope: "standard"}}
 		}
-		for _, window := range windows {
-			kind := predictionWindowKind(window)
-			if input.WindowKind != "" && input.WindowKind != kind {
-				continue
+		hasMatchingWindow := input.WindowKind == ""
+		for index := range windows {
+			window := &windows[index]
+			if input.WindowKind == predictionWindowKind(*window) {
+				hasMatchingWindow = true
 			}
-			if passiveKind, ok := quota.PassiveWindowKindFor(provider, window); ok {
+			if passiveKind, ok := quota.PassiveWindowKindFor(provider, *window); ok {
 				observation, exists := passive[entry.AuthIndex][passiveKind]
 				if exists && observation.Provider == provider && observation.ObservedAtMS > snapshot.ObservedAtMS {
 					window.UsedPercent = &observation.UsedPercent
@@ -115,18 +122,25 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 					window.ObservedAtMS = &observation.ObservedAtMS
 				}
 			}
-			adviceInput := quota.ResetAdviceInput{Provider: provider, Window: window, Status: snapshot.Status, ObservedAtMS: snapshot.ObservedAtMS, NowMS: result.GeneratedAtMS, ExpiryWindow: s.ResetAdviceExpiryWindow}
-			decodeResetAdviceEntitlements(snapshot, &adviceInput)
-			advice := quota.AdviseReset(adviceInput)
-			observedAtMS := snapshot.ObservedAtMS
-			if window.ObservedAtMS != nil {
-				observedAtMS = *window.ObservedAtMS
-			}
-			item := ResetAdviceItem{CredentialLabel: safeLabel(entry.Name), Provider: provider, AuthIndex: entry.AuthIndex, WindowKind: kind, WindowID: window.ID,
-				RemainingResets: advice.RemainingResets, EarliestExpiryMS: advice.EarliestExpiryMS, UsedPercent: advice.UsedPercent,
-				ResetObservedAtMS: snapshot.ObservedAtMS, QuotaObservedAtMS: observedAtMS, Verdict: advice.Verdict, Evidence: advice.Evidence, Reasons: advice.Reasons}
-			result.Items = append(result.Items, item)
 		}
+		if !hasMatchingWindow {
+			continue
+		}
+		adviceInput := quota.ResetAdviceInput{Provider: provider, Windows: windows, Status: snapshot.Status, ObservedAtMS: snapshot.ObservedAtMS, NowMS: result.GeneratedAtMS, ExpiryWindow: s.ResetAdviceExpiryWindow}
+		decodeResetAdviceEntitlements(snapshot, &adviceInput)
+		advice := quota.AdviseReset(adviceInput)
+		observedAtMS := snapshot.ObservedAtMS
+		if advice.Window.ObservedAtMS != nil {
+			observedAtMS = *advice.Window.ObservedAtMS
+		}
+		item := ResetAdviceItem{CredentialLabel: safeLabel(entry.Name), Provider: provider, AuthIndex: entry.AuthIndex, WindowKind: predictionWindowKind(advice.Window), WindowID: advice.Window.ID,
+			RemainingResets: advice.RemainingResets, EarliestExpiryMS: advice.EarliestExpiryMS, UsedPercent: advice.UsedPercent,
+			ResetObservedAtMS: snapshot.ObservedAtMS, QuotaObservedAtMS: observedAtMS, Verdict: advice.Verdict, Evidence: advice.Evidence, Reasons: advice.Reasons,
+			Announcements: []struct{}{}}
+		if cooldown, exists := cooldowns[entry.AuthIndex]; exists {
+			item.CooldownActive = &cooldown.IsActive
+		}
+		result.Items = append(result.Items, item)
 	}
 	sort.SliceStable(result.Items, func(i, j int) bool {
 		a, b := result.Items[i], result.Items[j]

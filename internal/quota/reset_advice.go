@@ -19,7 +19,7 @@ const (
 
 type ResetAdviceInput struct {
 	Provider     string
-	Window       QuotaWindow
+	Windows      []QuotaWindow
 	ResetCredits *CodexResetCreditsInfo
 	ResetGrants  []ClaudeResetGrant
 	Status       string
@@ -29,6 +29,7 @@ type ResetAdviceInput struct {
 }
 
 type ResetAdvice struct {
+	Window           QuotaWindow
 	RemainingResets  *int
 	EarliestExpiryMS *int64
 	UsedPercent      *float64
@@ -62,26 +63,22 @@ func AdviseReset(input ResetAdviceInput) ResetAdvice {
 		return unknown(reason)
 	}
 	result.RemainingResets, result.EarliestExpiryMS = &remaining, expiry
-	observedAtMS := input.ObservedAtMS
-	if input.Window.ObservedAtMS != nil {
-		observedAtMS = *input.Window.ObservedAtMS
+	var quotaReason string
+	for _, window := range input.Windows {
+		if window.Scope != "standard" {
+			continue
+		}
+		if reason := resetQuotaReason(input, window); reason != "" {
+			if quotaReason == "" {
+				quotaReason = reason
+			}
+			continue
+		}
+		if result.UsedPercent == nil || *window.UsedPercent > *result.UsedPercent ||
+			*window.UsedPercent == *result.UsedPercent && window.ID < result.Window.ID {
+			result.Window, result.UsedPercent = window, window.UsedPercent
+		}
 	}
-	if input.Window.UsedPercent == nil {
-		return unknown("quota_reading_missing")
-	}
-	if !validPredictionPercent(*input.Window.UsedPercent) {
-		return unknown("invalid_used_percent")
-	}
-	if observedAtMS <= 0 || observedAtMS > input.NowMS || input.NowMS-observedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
-		return unknown("quota_reading_stale")
-	}
-	if input.Window.ResetAtMS == nil {
-		return unknown("quota_boundary_unknown")
-	}
-	if *input.Window.ResetAtMS <= input.NowMS {
-		return unknown("quota_cycle_expired")
-	}
-	result.UsedPercent = input.Window.UsedPercent
 	if remaining == 0 {
 		result.Verdict, result.Evidence, result.Reasons = ResetAdviceNoAction, "fact", []string{"no_remaining_resets"}
 		return result
@@ -89,11 +86,19 @@ func AdviseReset(input ResetAdviceInput) ResetAdvice {
 	if expiry == nil {
 		return unknown("reset_expiry_unknown")
 	}
-	result.Evidence = "projection"
-	if *result.UsedPercent >= ResetAdviceNearExhaustionPercent {
-		result.Verdict, result.Reasons = ResetAdviceKeepForEmergency, []string{"quota_near_exhaustion"}
+	// A known emergency is decisive; otherwise every standard window must be
+	// readable before recommending that a shared entitlement be spent.
+	if result.UsedPercent != nil && *result.UsedPercent >= ResetAdviceNearExhaustionPercent {
+		result.Verdict, result.Evidence, result.Reasons = ResetAdviceKeepForEmergency, "projection", []string{"quota_near_exhaustion"}
 		return result
 	}
+	if quotaReason != "" {
+		return unknown(quotaReason)
+	}
+	if result.UsedPercent == nil {
+		return unknown("quota_reading_missing")
+	}
+	result.Evidence = "projection"
 	expiryWindow := input.ExpiryWindow
 	if expiryWindow == 0 {
 		expiryWindow = DefaultResetAdviceExpiryWindow
@@ -106,8 +111,37 @@ func AdviseReset(input ResetAdviceInput) ResetAdvice {
 	return result
 }
 
+func resetQuotaReason(input ResetAdviceInput, window QuotaWindow) string {
+	observedAtMS := input.ObservedAtMS
+	if window.ObservedAtMS != nil {
+		observedAtMS = *window.ObservedAtMS
+	}
+	if window.UsedPercent == nil {
+		return "quota_reading_missing"
+	}
+	if !validPredictionPercent(*window.UsedPercent) {
+		return "invalid_used_percent"
+	}
+	if observedAtMS <= 0 || observedAtMS > input.NowMS || input.NowMS-observedAtMS > predictionFreshWindow(window).Milliseconds() {
+		return "quota_reading_stale"
+	}
+	if window.ResetAtMS == nil {
+		return "quota_boundary_unknown"
+	}
+	if *window.ResetAtMS <= input.NowMS {
+		return "quota_cycle_expired"
+	}
+	return ""
+}
+
 func resetEntitlements(input ResetAdviceInput) (int, *int64, string) {
-	if input.Window.Scope != "standard" {
+	standardIDs := []string{}
+	for _, window := range input.Windows {
+		if window.Scope == "standard" {
+			standardIDs = append(standardIDs, window.ID)
+		}
+	}
+	if len(standardIDs) == 0 {
 		return 0, nil, "reset_scope_unknown"
 	}
 	remaining := 0
@@ -154,7 +188,7 @@ func resetEntitlements(input ResetAdviceInput) (int, *int64, string) {
 			if len(grant.Clears) == 0 {
 				return 0, nil, "reset_scope_unknown"
 			}
-			if !slices.Contains(grant.Clears, input.Window.ID) {
+			if !slices.ContainsFunc(grant.Clears, func(id string) bool { return slices.Contains(standardIDs, id) }) {
 				continue
 			}
 			hasMatchingGrant = true
