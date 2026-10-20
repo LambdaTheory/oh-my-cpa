@@ -65,6 +65,12 @@ route or reading evidence stays unknown, and the advice does not choose a route.
 
 ## Capabilities and Constraints
 
+- Read-only quota prediction projects stored observations to reset, distinguishes fact,
+  projection and unknown evidence, and masks credential identity for read-only MCP.
+- Feishu sends one scheduled prediction digest for exhaustion or under-use findings and
+  replaces the ordinary digest for that minute; prediction never changes routing,
+  credentials or models.
+
 - **Core Capabilities**:
   - CPA resource discovery and stable binding: Resource families (`auth-files`, `codex-api-key`, `openai-compatibility`, etc.) are resolved via a three-layer identity hierarchy derived from ADR 0002 (family-scoped `auth_index`, keyed HMAC of non-empty API keys, and non-sensitive metadata fingerprints, marking identity collisions when both are missing). The discovery engine persists entries into `discovered_resources` and `cpa_bindings` (queried via `/api/v1/resources` and triggered by `/instances/default/discover`). The console currently surfaces live CPA runtime entries directly through the Providers and OAuth management pages (layering user preferences) rather than a separate unclaimed queue screen;
   - Gateway client key management: Dedicated Key Management page (`/api-keys`, deployed under `/omc/api-keys`) to manage proxy client API keys; keys belong to CPA's client-key list (`access.api-keys`), each add, edit or removal applying to CPA the moment it is confirmed, as a revision-guarded write of that one path through the same save path and conflict protection the config panel uses. Each key can be assigned an alias (stored in `client_key_aliases` indexed by `(instance_id, usage fingerprint)`), and renaming never rewrites CPA's configuration document; aliases appear across request lists, detail drawers, caller facets, and filter chips, falling back to masked keys when unnamed. The list also shows each key's last-24-hour requests, tokens and failures and how long ago it was last used, and renders as labelled rows rather than a sideways-scrolling table below 640px so those controls stay on screen; a key has no disabled state, since CPA accepts it by presence in the active client-key list alone (`access.api-keys`; ADR 0010), and the configuration panel's API-key group points at the dedicated page instead of editing the field a second time;

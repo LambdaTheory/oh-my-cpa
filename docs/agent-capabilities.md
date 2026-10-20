@@ -559,6 +559,41 @@ See [ADR 0044](adr/0044-browser-connections-subscribe-to-server-owned-runs.md).
 
 ## Quota capacity output
 
+### Quota prediction
+
+`quota_prediction` is a low-risk `read` on Agent and MCP. Its optional filters are
+`provider`, `window_kind`, `auth_index` and `limit`; the limit defaults to and may not
+exceed 100. A read-only MCP principal must omit `auth_index`, receives no auth index in
+the result and sees `credential_label` through `accountLabelForCaller`. Agent and console
+callers retain both fields. The result is also bounded to 32 KiB and reports every removed
+tail row through `omitted`. The internal Feishu findings projection filters verdicts before
+these public result bounds, prioritises `will_exhaust`, and retains at most 178 findings to
+fit the card envelope while also applying the 32 KiB result bound. Its `omitted` count is
+disclosed in the prediction card footer, so a finding cannot disappear silently behind
+either a non-finding row, the byte bound or renderer truncation.
+
+Each item states the current used percentage, reset and observation times, data age,
+burn rate, projected used percentage at reset, optional projected tokens and cost,
+optional exhaustion ETA, verdict, evidence tier and reason codes. Verdicts are
+`will_exhaust`, `under_used`, `on_track` and `unknown`; evidence is `fact`, `projection`
+or `unknown`. Boundary, stale/error reading, incomplete history, mid-cycle reset, fewer
+than two current-cycle observations, early-cycle non-positive trend, invalid percentages,
+unsafe arithmetic and unavailable usage are explicit reasons. A missing number is never
+serialized as a fabricated zero; model/group usage that cannot be assigned safely reports
+`scope_unknown`. Freshness is window-aware: at least the two-hour idle
+refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
+
+The tool assembles its roster and current readings only from persisted safe credential
+metadata and quota snapshots, then reads passive and active observations without refreshing
+quota or calling the CPA management gateway. Standard windows
+join `QueryCredentialWindowUsage`; model and group windows join
+`QueryCredentialModelWindowUsage` through the existing scope resolver. Reset-time token
+and cost projections require at least five percent used, recorded traffic and a priced
+request share of at least 95 percent. Otherwise both fields are omitted with a reason such
+as `used_percent_below_five`, `no_traffic`, `no_price` or
+`insufficient_priced_usage`. This is not the capacity API and returns no capacity field.
+See ADR 0098.
+
 ### Model advice
 
 `model_advice` is a low-risk `read` on Agent and MCP, including the read-only MCP

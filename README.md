@@ -302,7 +302,7 @@ troubleshooting.
 - **Background collection**: usage is ingested by stream or polling, even with no browser open.
 - **Logs and audit trail**: tail the gateway log, read the console's own service log, and review an append-only audit trail with filters and JSON export.
 - **Ollama monitoring**: keep several Ollama Cloud accounts and read each one's quota from its settings page with an encrypted session cookie. The cookie is never returned or logged, a missing percentage stays "not reported", and disabling collection never claims to stop inference.
-- **Feishu notifications**: one long connection answers read-only status and quota queries from OMC's stored readings and sends denoised alerts - one message per problem, merged during quiet hours, a scheduled digest only when there is something to say. The app secret is encrypted, and an environment force-off takes precedence over the web settings.
+- **Feishu notifications**: one long connection answers read-only status and quota queries from OMC's stored readings and sends denoised alerts - one message per problem, merged during quiet hours, plus a scheduled quota-prediction digest when a window may exhaust or remain under-used. A prediction replaces the ordinary digest for that minute. The app secret is encrypted, and an environment force-off takes precedence over the web settings.
 
 </details>
 
@@ -332,7 +332,7 @@ troubleshooting.
 ## Agents and MCP
 
 **In the console:** On the `/agent` page, a model routed through CPA answers questions
-and operates the console: usage and request analysis, providers, OAuth, quota,
+and operates the console: usage and request analysis, providers, OAuth, quota prediction,
 read-only model advice, client keys, configuration and pricing. Reads run directly. Changes are prepared server-side
 and run only after an Allow in the console. Secrets, tokens and OAuth authorization
 never enter the model's context. Answers can mix text with inline interactive components that

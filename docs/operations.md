@@ -713,6 +713,16 @@ record an attempt audit before calling CPA. If the success audit fails after CPA
 has completed the action, the successful action remains successful; the audit
 failure is logged without tokens or uploaded key material.
 
+## Daily Feishu quota prediction
+
+The existing Feishu `SummaryTimes`, timezone, `ChatID` and quiet hours also schedule a
+read-only quota prediction digest. At a configured minute OMC sends one card only when at
+least one stored window is `will_exhaust` or `under_used`; that card replaces the ordinary
+scheduled digest for the same local minute. With no finding, the ordinary digest behaves
+as before. Disabled, incomplete or degraded Feishu configuration does not evaluate or
+send prediction. Delivery uses the existing persisted outbox and retry path, with no new
+setting, secret, table or migration.
+
 ## Public demonstration conversations
 
 The public demonstration's Agent and Playground offer one browser-local recorded example

@@ -58,6 +58,9 @@ type App struct {
 	// feishu is the notification bot: the long connection, the classification loop and
 	// the outbound sender. Nil in demo mode.
 	feishu *feishu.Service
+	// prediction runs the independent daily Feishu quota digest. It is nil only
+	// when Feishu was not built, and otherwise becomes active when Feishu is ready.
+	prediction *feishu.PredictionJob
 	// upstream is the in-process CPA fixture. It is non-nil only in demo mode, and
 	// it is the reason a demo deployment can boot with no gateway at all.
 	upstream *demo.Upstream
@@ -279,8 +282,12 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 	}
 
 	var feishuService *feishu.Service
+	var predictionJob *feishu.PredictionJob
 	if feishuErr == nil && feishuAPI != nil {
 		feishuService = feishuAPI.Service()
+		if !cfg.IsDemoMode {
+			predictionJob = feishuAPI.PredictionJob()
+		}
 	}
 
 	return &App{
@@ -299,6 +306,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 		automation:  automationManager,
 		ollama:      ollamaCollector,
 		feishu:      feishuService,
+		prediction:  predictionJob,
 	}, nil
 }
 
@@ -516,9 +524,25 @@ func (a *App) Run(ctx context.Context) error {
 	// Start is a no-op for a disabled, forced-off or degraded configuration, so an
 	// unusable Feishu setup never fails startup.
 	if a.feishu != nil && !a.cfg.IsDemoMode {
+		var predictionDone chan struct{}
+		if a.prediction != nil {
+			a.prediction.Activate()
+			predictionDone = make(chan struct{})
+			go func() {
+				defer close(predictionDone)
+				if err := a.prediction.Run(runCtx); err != nil {
+					a.logger.Warn("feishu quota prediction stopped", "error", err)
+				}
+			}()
+		}
 		if err := a.feishu.Start(runCtx); err != nil {
 			a.logger.Warn("feishu notifications did not start", "error", err)
 		}
+		defer func() {
+			if predictionDone != nil {
+				<-predictionDone
+			}
+		}()
 	}
 
 	// The release sweep is best-effort in the same way and for the same reason: a

@@ -92,6 +92,26 @@ func TestPromptFitsItsBudget(t *testing.T) {
 	}
 }
 
+func TestPromptIncludesQuotaPredictionSOP(t *testing.T) {
+	prompt := SystemPrompt(PromptContext{AnchorMS: 1})
+	for _, phrase := range []string{
+		"OMC management assistant for one Oh My CPA deployment",
+		"OMC names, organises and observes the CLIProxyAPI",
+		"Call independent capabilities together in one round",
+		"Routine usage statistics need the requested grouping",
+		"Correlation is not cause",
+		"not total tokens alone",
+		"quota_prediction", "Separate fact, projection and unknown", "sufficient priced usage", "Never suggest auto routing",
+	} {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("prompt is missing %q", phrase)
+		}
+	}
+	if PROMPT_VERSION != "2026-10-19.12" {
+		t.Fatalf("prompt version = %q", PROMPT_VERSION)
+	}
+}
+
 func TestPromptStatesDomainWindowAndConfiguredModel(t *testing.T) {
 	prompt := SystemPrompt(PromptContext{AnchorMS: 1, Model: "codex-auto-review", ReasoningEffort: "high", DisplayTools: []string{RENDER_UI}})
 	for _, phrase := range []string{"client-requested model name", "[from_ms,to_ms)", "timestamp_ms < to_ms", "pricing and token-bucket evidence", "source {data_ref}", "not operation_id", "does not verify browser rendering", `"model":"codex-auto-review"`, `"reasoning_effort":"high"`, "actual upstream identity is unverified"} {

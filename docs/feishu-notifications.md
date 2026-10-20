@@ -15,7 +15,7 @@ and what remains unverified. The approved scope is in
 
 | Path | Responsibility |
 | --- | --- |
-| `internal/feishu/` | The bot: report DTO, policy, renderer, sender seam, dedup, service lifecycle, websocket source. |
+| `internal/feishu/` | The bot: report DTO, policy, renderer, sender seam, dedup, service lifecycle, websocket source, and the scheduled quota prediction digest in `prediction_digest.go`. |
 | `internal/repository/feishu_notifications.go` | Persistence for the settings, the encrypted secret and the runtime document. |
 | `internal/api/feishu.go` | The settings/status/test routes and the `feishu.Store` adapter. |
 | `migrations/045_feishu_notifications.sql` | The schema. |
@@ -234,6 +234,26 @@ The module is wired into the running process:
    shutdown; neither a demo, a forced-off nor a degraded configuration starts it.
 6. The read-only summary `feishu_notifications_status` is offered through the
    capability registry; it carries no secret and no write path.
+
+## Daily prediction digest
+
+The service owns a separate read-only prediction-digest component. It reads stored quota
+prediction findings at configured `SummaryTimes` and never calls the Agent, an LLM or an
+upstream quota endpoint. The process keeps the component loaded for every non-demo service;
+it remains inert while configuration is disabled or degraded and begins evaluating after a
+ready settings reload without a restart. Tests inject both its prediction source and sender.
+
+At a scheduled minute, one or more `will_exhaust` or `under_used` windows are combined
+into one card titled `OMC 额度预测 · HH:MM`. The service records that minute in the existing
+summary timestamp, so `maybeScheduledSummary` cannot queue a second message. With no
+finding, prediction is silent and the ordinary digest runs unchanged. Quiet hours defer
+delivery through the same outbox; failed sends use the same bounded retry schedule.
+
+Each row shows the credential label, window, current used percentage, projected percentage
+at reset and verdict. Projected cost and tokens appear only when priced usage is sufficient.
+Exhaustion findings are prioritised within the card's bounded finding set. The footer states
+the newest data time, that the result is a projection rather than a guarantee, and how many
+additional findings were omitted when the bound was reached.
 
 ## Remaining risk
 

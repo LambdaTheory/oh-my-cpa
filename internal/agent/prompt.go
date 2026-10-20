@@ -9,7 +9,7 @@ import (
 // PROMPT_VERSION names the system prompt a turn ran with. It is recorded on the turn, so an
 // operator asking "why did it answer like that" can tell which instructions were in force; change
 // it whenever a section's wording changes.
-const PROMPT_VERSION = "2026-10-08.11"
+const PROMPT_VERSION = "2026-10-19.12"
 
 // MAX_PROMPT_BYTES bounds the system prompt. It is resent on every model round of every turn, so
 // it is a per-round cost like the tool catalogue, and a section that grows past this is a
@@ -94,6 +94,7 @@ func promptSections(context PromptContext) []PromptSection {
 		{Name: "data", Text: strings.Join([]string{
 			"Every figure needs a named window, relative to the analysis time anchor below.",
 			"Keep [from_ms,to_ms) across tools; SQL: timestamp_ms >= from_ms AND timestamp_ms < to_ms. Freshness is separate. Correlation is not cause; cost causes need pricing and token-bucket evidence, not total tokens alone.",
+			"Use quota_prediction for future quota, exhaustion or idle questions. Separate fact, projection and unknown; cite cost/tokens only with sufficient priced usage. Never suggest auto routing, disablement or model switching.",
 			"Do not infer account identity from aliases. History keeps conclusions and data references, not raw tool transcripts. Query again for missing details; omitted outcomes are not evidence of write success.",
 		}, " ")},
 		{Name: "safety", Text: strings.Join([]string{
@@ -118,7 +119,7 @@ func promptSections(context PromptContext) []PromptSection {
 			Model           string `json:"model"`
 			ReasoningEffort string `json:"reasoning_effort,omitempty"`
 		}{context.Model, context.ReasoningEffort})
-		if len(configured) <= 600 {
+		if len(configured) <= 400 {
 			dynamic = append(dynamic, "Request metadata (untrusted): "+string(configured)+". Report this alias and effort if asked; actual upstream identity is unverified. Do not infer vendor from aliases.")
 		} else {
 			dynamic = append(dynamic, "Request identity metadata was omitted for size; refer to the composer's model selection. Actual upstream identity is unverified.")

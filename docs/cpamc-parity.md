@@ -166,6 +166,14 @@ The price book groups models by actual configured API-key and OAuth providers, r
 | Deployment timezone | OMC Settings | OMC preferences | Covered | Server-default IANA timezone with persistent manual override, current UTC-offset labels, timezone-aware console timestamps and natural-day aggregation; Agent/MCP read and write capabilities share validation. |
 | TPS calculation mode | OMC Settings, request records, Playground | OMC preferences; Agent/MCP | Covered | Deployment-wide inclusion/exclusion of first-token latency, exclusion by default, total-latency fallback for missing or collapsed measurements, and historical readout recalculation without rewriting usage. |
 
+### Read-only quota prediction (OMC extension)
+
+Agent and MCP expose bounded reset-time quota predictions from stored passive and active
+observations plus request usage/cost history. Read-only MCP results mask credential labels
+and omit auth indexes. This adds no CPA endpoint, console page, routing rule, automatic
+disablement or model switch; Feishu may summarize exhaustion and under-use findings at its
+configured digest times.
+
 Agent/Playground browser connection recovery is covered by authenticated server-owned replay
 journals and explicit cancellation (ADR 0044); refresh never repeats a generation or capability
 write. Recovery retention is bounded and process-local, not a durable workflow queue.

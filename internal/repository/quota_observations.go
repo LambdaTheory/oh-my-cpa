@@ -27,8 +27,10 @@ const QuotaObservationRetentionDays = 365
 // history, because only changes were written.
 const quotaObservationHeartbeatMS = 15 * 60 * 1000
 
-// quotaObservationRow is one stored observation.
-type quotaObservationRow struct {
+// QuotaObservationRecord is one stored observation. It is exported because
+// read-only analytical capabilities consume the normalized timeline without
+// learning the table shape or issuing their own SQL.
+type QuotaObservationRecord struct {
 	AuthIndex     string
 	Provider      string
 	WindowKind    string
@@ -41,6 +43,8 @@ type quotaObservationRow struct {
 	ObservedAtMS  int64
 	Source        string
 }
+
+type quotaObservationRow = QuotaObservationRecord
 
 // QuotaObservationFilter narrows an observation read.
 type QuotaObservationFilter struct {
