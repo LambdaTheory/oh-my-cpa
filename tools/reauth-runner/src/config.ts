@@ -6,6 +6,7 @@ export interface StartConfig {
   cpaManagementKey: string;
   provider: string;
   isHeadless: boolean;
+  isManual: boolean;
   profileDir: string;
   codeFile?: string;
   timeoutMs: number;
@@ -19,7 +20,7 @@ function requireValue(environment: NodeJS.ProcessEnv, name: string): string {
   return value;
 }
 
-function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+function parseBoolean(value: string | undefined, fallback: boolean, name: string): boolean {
   if (value === undefined || value.trim() === "") return fallback;
   switch (value.trim().toLowerCase()) {
     case "1":
@@ -31,7 +32,7 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
     case "no":
       return false;
     default:
-      throw new Error("HEADLESS must be true/false, yes/no, or 1/0");
+      throw new Error(`${name} must be true/false, yes/no, or 1/0`);
   }
 }
 
@@ -55,7 +56,8 @@ export function loadStartConfig(environment: NodeJS.ProcessEnv): StartConfig {
     cpaBaseUrl: requireValue(environment, "CPA_BASE_URL"),
     cpaManagementKey: requireValue(environment, "CPA_MANAGEMENT_KEY"),
     provider: environment.PROVIDER?.trim().toLowerCase() || "claude",
-    isHeadless: parseBoolean(environment.HEADLESS, true),
+    isHeadless: parseBoolean(environment.HEADLESS, true, "HEADLESS"),
+    isManual: parseBoolean(environment.MANUAL, false, "MANUAL"),
     profileDir: environment.PROFILE_DIR?.trim() || path.join(os.tmpdir(), "omc-reauth-runner-profile"),
     codeFile: environment.CODE_FILE?.trim() || undefined,
     timeoutMs: parseTimeout(environment.TIMEOUT_MS),

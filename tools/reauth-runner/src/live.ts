@@ -7,6 +7,17 @@ import { captureCallback } from "./callback.js";
 import type { StartConfig } from "./config.js";
 import { pollOAuthStatus, requestAuthUrl, submitCallbackToCpa, submitCallbackToOmc } from "./http.js";
 
+interface BrowserAuthorization {
+  url: string;
+  state: string;
+}
+
+type BrowserAuthorizationConfig = Pick<StartConfig, "codeFile" | "isManual" | "provider" | "timeoutMs">;
+
+export interface LiveFlowHooks {
+  onBrowserReady?: (context: BrowserContext) => Promise<void>;
+}
+
 const CODE_SELECTORS = [
   'input[autocomplete="one-time-code"]',
   'input[name*="code" i]',
@@ -76,16 +87,26 @@ function captureCodeInput(context: BrowserContext, timeoutMs: number): CodeInput
   };
 }
 
-async function readVerificationCode(codeFile: string | undefined): Promise<string> {
+function isMissingFile(error: unknown): boolean {
+  return error instanceof Error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT";
+}
+
+export async function readVerificationCode(codeFile: string | undefined, timeoutMs: number): Promise<string> {
   if (codeFile) {
-    let code: string;
-    try {
-      code = (await fs.readFile(codeFile, "utf8")).trim();
-    } catch {
-      throw new Error("CODE_FILE could not be read");
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const code = (await fs.readFile(codeFile, "utf8")).trim();
+        if (code) return code;
+      } catch (error) {
+        if (!isMissingFile(error)) throw new Error("CODE_FILE could not be read");
+      }
+      const remaining = deadline - Date.now();
+      if (remaining > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+      }
     }
-    if (!code) throw new Error("CODE_FILE is empty");
-    return code;
+    throw new Error(`timed out after ${timeoutMs}ms waiting for CODE_FILE to exist and contain a verification code`);
   }
   if (!stdin.isTTY) {
     let value = "";
@@ -100,6 +121,62 @@ async function readVerificationCode(codeFile: string | undefined): Promise<strin
     return (await readline.question("Verification code: ")).trim();
   } finally {
     readline.close();
+  }
+}
+
+export async function authorizeInBrowser(
+  context: BrowserContext,
+  auth: BrowserAuthorization,
+  config: BrowserAuthorizationConfig,
+): Promise<OAuthCallback> {
+  const capture = captureCallback(context, config.timeoutMs);
+  const codeCapture = config.isManual ? undefined : captureCodeInput(context, config.timeoutMs);
+  try {
+    const page = context.pages()[0] ?? await context.newPage();
+    if (config.isManual) {
+      process.stderr.write("MANUAL 模式：请在浏览器完成登录和验证码；脚本正在等待 callback。\n");
+    } else {
+      process.stderr.write(`OAuth started for ${config.provider}; waiting for the verification-code page or callback.\n`);
+    }
+    const navigation = page.goto(auth.url, { waitUntil: "domcontentloaded", timeout: config.timeoutMs });
+    // A successful OAuth redirect can end in ERR_CONNECTION_REFUSED because the
+    // browser's localhost is not CPA. The request listener is the success signal.
+    try {
+      await Promise.race([navigation, capture.result.then(() => null)]);
+    } catch {
+      throw new Error("authorization page failed to open");
+    }
+
+    let callback: OAuthCallback;
+    if (config.isManual) {
+      callback = await capture.result;
+    } else {
+      const next = await Promise.race([
+        capture.result.then((captured) => ({ kind: "callback" as const, callback: captured })),
+        codeCapture!.result.then(({ page: codePage, locator }) => ({ kind: "code" as const, page: codePage, locator })),
+      ]);
+      codeCapture!.stop();
+      if (next.kind === "callback") {
+        callback = next.callback;
+      } else {
+        process.stderr.write("Waiting for a manually supplied verification code.\n");
+        const code = await readVerificationCode(config.codeFile, config.timeoutMs);
+        try {
+          await fillVerificationCode(next.page, next.locator, code);
+        } catch {
+          throw new Error("verification code could not be submitted");
+        }
+        callback = await capture.result;
+      }
+    }
+
+    if (callback.state !== auth.state) {
+      throw new Error("captured callback state does not match the CPA OAuth session");
+    }
+    return callback;
+  } finally {
+    codeCapture?.stop();
+    capture.stop();
   }
 }
 
@@ -132,48 +209,17 @@ async function submitCapturedCallback(config: StartConfig, callback: OAuthCallba
   await submitCallbackToCpa(config.cpaBaseUrl, config.cpaManagementKey, config.provider, callback.callbackUrl, config.timeoutMs);
 }
 
-export async function runLiveFlow(config: StartConfig): Promise<Record<string, unknown>> {
+export async function runLiveFlow(config: StartConfig, hooks: LiveFlowHooks = {}): Promise<Record<string, unknown>> {
   const auth = await requestAuthUrl(config.cpaBaseUrl, config.cpaManagementKey, config.provider, config.timeoutMs);
   const context = await chromium.launchPersistentContext(config.profileDir, {
     headless: config.isHeadless,
     viewport: { width: 1280, height: 900 },
   });
-  const capture = captureCallback(context, config.timeoutMs);
-  const codeCapture = captureCodeInput(context, config.timeoutMs);
   try {
-    const page = context.pages()[0] ?? await context.newPage();
-    process.stderr.write(`OAuth started for ${config.provider}; waiting for the verification-code page or callback.\n`);
-    const navigation = page.goto(auth.url, { waitUntil: "domcontentloaded", timeout: config.timeoutMs });
-    // A successful OAuth redirect can end in ERR_CONNECTION_REFUSED because the
-    // browser's localhost is not CPA. The request listener is the success signal.
-    try {
-      await Promise.race([navigation, capture.result.then(() => null)]);
-    } catch {
-      throw new Error("authorization page failed to open");
-    }
-
-    const next = await Promise.race([
-      capture.result.then((callback) => ({ kind: "callback" as const, callback })),
-      codeCapture.result.then(({ page: codePage, locator }) => ({ kind: "code" as const, page: codePage, locator })),
-    ]);
-    codeCapture.stop();
-    let callback: OAuthCallback;
-    if (next.kind === "callback") {
-      callback = next.callback;
-    } else {
-      process.stderr.write("Waiting for a manually supplied verification code.\n");
-      const code = await readVerificationCode(config.codeFile);
-      try {
-        await fillVerificationCode(next.page, next.locator, code);
-      } catch {
-        throw new Error("verification code could not be submitted");
-      }
-      callback = await capture.result;
-    }
-
-    if (callback.state !== auth.state) {
-      throw new Error("captured callback state does not match the CPA OAuth session");
-    }
+    const authorization = authorizeInBrowser(context, auth, config);
+    const callback = hooks.onBrowserReady
+      ? (await Promise.all([authorization, hooks.onBrowserReady(context)]))[0]
+      : await authorization;
     await submitCapturedCallback(config, callback);
     const status = await pollOAuthStatus(config.cpaBaseUrl, config.cpaManagementKey, auth.state, config.timeoutMs);
     return {
@@ -183,8 +229,6 @@ export async function runLiveFlow(config: StartConfig): Promise<Record<string, u
       message: status.message ?? status.error ?? "",
     };
   } finally {
-    codeCapture.stop();
-    capture.stop();
     await context.close();
   }
 }
