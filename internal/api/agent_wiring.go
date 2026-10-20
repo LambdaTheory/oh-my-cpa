@@ -159,8 +159,10 @@ func (h *Handler) operationsService() *operations.Service {
 				IsEnabled:            account.IsEnabled,
 				DisabledByAutomation: account.IsDisabledByAutomation(),
 			}
-			if dueMS, ok := automation.RecoveryDue(account); ok {
+			if recovery, ok := automation.RecoveryDue(account, h.now()); ok {
+				dueMS := recovery.AtMS
 				summary.RecoveryAtMS = &dueMS
+				summary.RecoveryStatus = string(recovery.Status)
 			}
 			if window, ok := evidence[account.AuthIndex]; ok {
 				summary.HasWeeklyEvidence = true

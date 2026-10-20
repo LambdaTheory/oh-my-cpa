@@ -44,8 +44,10 @@ type accountAutomationAccountDTO struct {
 	IsEnabled            bool     `json:"is_enabled"`
 	State                string   `json:"state"`
 	MonitorReason        string   `json:"monitor_reason,omitempty"`
+	AutoDisableSupported bool     `json:"auto_disable_supported"`
 	DisabledByAutomation bool     `json:"disabled_by_automation"`
 	RecoveryAtMS         *int64   `json:"recovery_at_ms,omitempty"`
+	RecoveryStatus       string   `json:"recovery_status,omitempty"`
 	AdoptedAtMS          *int64   `json:"adopted_at_ms,omitempty"`
 	AdoptBatchID         string   `json:"adopt_batch_id,omitempty"`
 	NextAttemptAtMS      *int64   `json:"next_attempt_at_ms,omitempty"`
@@ -84,9 +86,14 @@ type accountAutomationCandidateDTO struct {
 	Controllable bool `json:"controllable"`
 	// Adopted reports whether the credential is already on the persisted roster.
 	Adopted bool `json:"adopted"`
-	// Eligible is true when the candidate can be adopted into automatic control.
-	Eligible         bool   `json:"eligible"`
-	IneligibleReason string `json:"ineligible_reason,omitempty"`
+	// Adoptable is true when the credential can join the managed roster. Provider
+	// capability is deliberately separate: adoption may be monitor-only.
+	Adoptable             bool   `json:"adoptable"`
+	AdoptionBlockedReason string `json:"adoption_blocked_reason,omitempty"`
+	// AutoDisableSupported reports whether OMC has verified the provider's
+	// account-level weekly capability. It does not imply that current evidence
+	// warrants an action.
+	AutoDisableSupported bool `json:"auto_disable_supported"`
 }
 
 type accountAutomationListResponse struct {
@@ -246,31 +253,26 @@ func (h *Handler) getAccountAutomation(writer http.ResponseWriter, request *http
 }
 
 // automationCandidateDTOs projects the live credentials to their safe adoption
-// metadata. Eligibility requires both that CPA controllability holds (a credential
-// with no name cannot be addressed by the status patch) and that the provider's
-// account-level weekly window is a capability OMC has verified. An unverified
-// provider is shown ineligible rather than offered as if any seven-day-shaped window
-// it published could be acted on; the reason names the unverified capability.
+// metadata. Adoption requires CPA controllability because a managed row must remain
+// addressable by the status patch. Provider capability is projected separately: an
+// unverified provider can join the roster for monitoring, while the decision layer
+// continues to refuse every automatic disable or recovery action for it.
 func automationCandidateDTOs(credentials []automation.Credential, adopted map[string]bool) []accountAutomationCandidateDTO {
 	result := make([]accountAutomationCandidateDTO, 0, len(credentials))
 	for _, credential := range credentials {
 		candidate := accountAutomationCandidateDTO{
-			AuthIndex:    credential.AuthIndex,
-			Provider:     credential.Provider,
-			Name:         credential.Name,
-			AccountLabel: credential.AccountLabel,
-			Disabled:     credential.Disabled,
-			Controllable: credential.Controllable,
-			Adopted:      adopted[credential.AuthIndex],
-			Eligible:     credential.Controllable,
+			AuthIndex:            credential.AuthIndex,
+			Provider:             credential.Provider,
+			Name:                 credential.Name,
+			AccountLabel:         credential.AccountLabel,
+			Disabled:             credential.Disabled,
+			Controllable:         credential.Controllable,
+			Adopted:              adopted[credential.AuthIndex],
+			Adoptable:            credential.Controllable,
+			AutoDisableSupported: automation.ProviderHasVerifiedWeeklyCapability(credential.Provider),
 		}
-		switch {
-		case !credential.Controllable:
-			candidate.Eligible = false
-			candidate.IneligibleReason = automation.ReasonNoCredential
-		case !automation.ProviderHasVerifiedWeeklyCapability(credential.Provider):
-			candidate.Eligible = false
-			candidate.IneligibleReason = automation.ReasonUnverifiedCapability
+		if !credential.Controllable {
+			candidate.AdoptionBlockedReason = automation.ReasonNoCredential
 		}
 		result = append(result, candidate)
 	}
@@ -308,6 +310,7 @@ func (h *Handler) automationAccountDTOs(ctx context.Context, roster []repository
 			IsEnabled:            account.IsEnabled,
 			State:                account.State,
 			MonitorReason:        account.MonitorReason,
+			AutoDisableSupported: automation.ProviderHasVerifiedWeeklyCapability(account.Provider),
 			DisabledByAutomation: account.IsDisabledByAutomation(),
 			AdoptedAtMS:          account.AdoptedAtMS,
 			AdoptBatchID:         account.AdoptBatchID,
@@ -318,8 +321,10 @@ func (h *Handler) automationAccountDTOs(ctx context.Context, roster []repository
 			LastEnableAtMS:       account.LastEnableAtMS,
 			IntentVersion:        account.IntentVersion,
 		}
-		if dueMS, ok := automation.RecoveryDue(account); ok {
+		if recovery, ok := automation.RecoveryDue(account, h.now()); ok {
+			dueMS := recovery.AtMS
 			dto.RecoveryAtMS = &dueMS
+			dto.RecoveryStatus = string(recovery.Status)
 		}
 		if window, ok := evidence[account.AuthIndex]; ok {
 			dto.HasWeeklyEvidence = true

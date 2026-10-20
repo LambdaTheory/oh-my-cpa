@@ -127,6 +127,15 @@ variables below control the process, not the roster: adopting accounts, the per-
 switch, the one-time recovery time and the web switch all live in the console under
 `/api/v1/account-automation` and in `account_automation_*` (migration 043).
 
+All controllable CPA credentials can be adopted. A provider whose account-level weekly
+capability is not verified receives a separate **monitor-only** badge and can be filtered
+by that capability; `monitoring` remains the runtime health state for verified and
+unverified providers alike. A monitor-only credential is never automatically disabled or
+re-enabled. Credentials that CPA
+does not expose as controllable cannot be adopted and retain an explicit reason in the
+candidate list. The console reports the two inventory scopes separately as adopted
+accounts and total live credentials (ADR 0108).
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `OMCPA_ACCOUNT_AUTOMATION_ENABLED` | unset (off) | Master switch. Unset leaves the console's web switch in force; an explicit `false` is an emergency off the console cannot override; an explicit `true` forces automation on. The console shows which source is in effect |
@@ -136,8 +145,13 @@ switch, the one-time recovery time and the web switch all live in the console un
 | `OMCPA_ACCOUNT_AUTOMATION_MAX_EVIDENCE_AGE` | `24h` | How old the weekly reading that justifies a disable may be |
 
 A failed enable persists its retry instant and attempt count, so a restart resumes the
-wait rather than retrying immediately. The loop performs a CPA write, so it never runs
-in demo mode. See ADR 0105.
+wait rather than retrying immediately. The console and read-only status project a
+recovery instant only while the credential remains disabled with an active recovery
+plan: a future instant is reported as `scheduled`, while a passed instant is `overdue`
+and shown as waiting for retry. A confirmed automatic enable or an external re-enable
+clears the consumed cycle instant; historical timestamps on completed rows are neither
+displayed nor acted on. The loop performs a CPA write, so it never runs in demo mode.
+See ADR 0105.
 
 ### Ollama monitoring
 

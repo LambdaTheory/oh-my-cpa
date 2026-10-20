@@ -234,16 +234,22 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 			continue
 		}
 		credential, ok := byIndex[authIndex]
-		if !ok {
+		if !ok || !credential.Controllable {
 			continue
 		}
 		seen[authIndex] = true
-		selected = append(selected, repository.AutomationAccount{
+		account := repository.AutomationAccount{
 			AuthIndex:    authIndex,
 			Provider:     credential.Provider,
 			Name:         credential.Name,
 			AccountLabel: credential.AccountLabel,
-		})
+			State:        StateIdle,
+		}
+		if enable && !ProviderHasVerifiedWeeklyCapability(credential.Provider) {
+			account.State = StateMonitoring
+			account.MonitorReason = ReasonUnverifiedCapability
+		}
+		selected = append(selected, account)
 		adoptedIndexes = append(adoptedIndexes, authIndex)
 	}
 	if len(selected) == 0 {
@@ -315,6 +321,8 @@ func (s *Service) planAdoptionRecovery(ctx context.Context, selected []repositor
 		selected[i].CycleResetAtMS = &resetAtMS
 		selected[i].CycleKey = cycleKey
 		selected[i].DisableObservedAtMS = &observedAtMS
+		selected[i].State = StateWaiting
+		selected[i].MonitorReason = ReasonRecoveryScheduled
 	}
 }
 

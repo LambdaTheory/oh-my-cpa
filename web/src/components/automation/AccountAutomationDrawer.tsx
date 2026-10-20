@@ -160,7 +160,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
   const candidates: AccountAutomationCandidateDTO[] = listQuery.data?.candidates ?? [];
   const settings: AccountAutomationSettingsDTO | undefined = settingsQuery.data;
   const adoptableCandidates = useMemo(() => {
-    return candidates.filter((c) => !c.adopted && c.eligible);
+    return candidates.filter((c) => !c.adopted && c.adoptable);
   }, [candidates]);
 
   // Formatters
@@ -184,9 +184,8 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
 
   // Stats calculation
   const stats = useMemo(() => {
-    let total = accounts.length;
     let adopted = 0;
-    let monitoring = 0;
+    let monitorOnly = 0;
     let disabled = 0;
     let waiting = 0;
     let error = 0;
@@ -194,14 +193,15 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
     for (const a of accounts) {
       if (a.is_adopted) adopted++;
       const s = a.state?.toLowerCase();
-      if (s === 'monitoring') monitoring++;
+      if (!a.auto_disable_supported) monitorOnly++;
       if (s === 'disabled') disabled++;
       if (s === 'waiting') waiting++;
       if (s === 'error') error++;
     }
 
-    return { total, adopted, monitoring, disabled, waiting, error };
-  }, [accounts]);
+    const credentialTotal = listQuery.data?.candidates_degraded ? null : candidates.length;
+    return { credentialTotal, adopted, monitorOnly, disabled, waiting, error };
+  }, [accounts, candidates.length, listQuery.data?.candidates_degraded]);
 
   // Filtered accounts
   const filteredAccounts = useMemo(() => {
@@ -209,7 +209,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       const s = a.state?.toLowerCase();
       if (filterState === 'adopted' && !a.is_adopted) return false;
       if (filterState === 'unadopted' && a.is_adopted) return false;
-      if (filterState === 'monitoring' && s !== 'monitoring') return false;
+      if (filterState === 'monitor_only' && a.auto_disable_supported) return false;
       if (filterState === 'disabled' && s !== 'disabled') return false;
       if (filterState === 'waiting' && s !== 'waiting') return false;
       if (filterState === 'error' && s !== 'error') return false;
@@ -328,7 +328,10 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       onClose={onClose}
       footerStart={
         <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {t('automation.stat_total')}: {accounts.length}
+          {t('automation.adoption_summary', {
+            adopted: stats.adopted,
+            total: stats.credentialTotal ?? '—',
+          })}
         </span>
       }
       footer={
@@ -401,16 +404,16 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
           }}
         >
           <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_total')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>{stats.total}</div>
-          </div>
-          <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_adopted')}</div>
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--accent)' }}>{stats.adopted}</div>
           </div>
           <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_monitoring')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--info)' }}>{stats.monitoring}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_credentials')}</div>
+            <div style={{ fontSize: 18, fontWeight: 600 }}>{stats.credentialTotal ?? '—'}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_monitor_only')}</div>
+            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--info)' }}>{stats.monitorOnly}</div>
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_disabled')}</div>
@@ -444,7 +447,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                 { value: 'all', label: t('automation.filter_all') },
                 { value: 'adopted', label: t('automation.filter_adopted') },
                 { value: 'unadopted', label: t('automation.filter_unadopted') },
-                { value: 'monitoring', label: t('automation.filter_monitoring') },
+                { value: 'monitor_only', label: t('automation.filter_monitor_only') },
                 { value: 'disabled', label: t('automation.filter_disabled') },
                 { value: 'waiting', label: t('automation.filter_waiting') },
                 { value: 'error', label: t('automation.filter_error') },
@@ -520,6 +523,9 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                           ) : (
                             <Tag size="small">{t('automation.tag_not_adopted')}</Tag>
                           )}
+                          {!account.auto_disable_supported && (
+                            <Tag size="small" tone="warn">{t('automation.tag_monitor_only')}</Tag>
+                          )}
                           {account.disabled_by_automation ? (
                             <Tag size="small" tone="danger">{t('automation.tag_disabled_by_auto')}</Tag>
                           ) : !account.is_enabled ? (
@@ -578,10 +584,16 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
 
                     {/* Recovery / Retry information */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {account.recovery_at_ms && (
+                      {account.recovery_at_ms && account.recovery_status === 'scheduled' && (
                         <span style={{ color: 'var(--accent)' }}>
                           <ClockCircleOutlined style={{ marginRight: 4 }} />
                           {t('automation.recovery_at', { time: formatTime(account.recovery_at_ms) })}
+                        </span>
+                      )}
+                      {account.recovery_at_ms && account.recovery_status === 'overdue' && (
+                        <span style={{ color: 'var(--warn)' }}>
+                          <ClockCircleOutlined style={{ marginRight: 4 }} />
+                          {t('automation.recovery_overdue')}
                         </span>
                       )}
                       {account.next_attempt_at_ms && (
@@ -700,7 +712,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                   <Checkbox
                     key={c.auth_index}
                     checked={selectedAdoptKeys.includes(c.auth_index)}
-                    disabled={!c.eligible}
+                    disabled={!c.adoptable}
                     aria-label={nameInfo.primary}
                     onChange={(e) => {
                       if (e.target.checked) {
@@ -715,9 +727,14 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                     {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
                     {c.adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
                     {c.disabled && <span style={{ marginLeft: 6, color: 'var(--warn)', fontSize: 12 }}>[{t('automation.tag_disabled_external')}]</span>}
-                    {!c.eligible && c.ineligible_reason && (
+                    {!c.adoptable && c.adoption_blocked_reason && (
                       <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
-                        ({getReasonLabel(c.ineligible_reason)})
+                        ({getReasonLabel(c.adoption_blocked_reason)})
+                      </span>
+                    )}
+                    {c.adoptable && !c.auto_disable_supported && (
+                      <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
+                        ({t('automation.adopt_monitor_only')})
                       </span>
                     )}
                   </Checkbox>
