@@ -6,6 +6,7 @@ import { OAUTH_PROVIDER_PATTERN, type OAuthProviderChoice } from '../oauthProvid
 import type { QuotaItem } from '../../types/quota';
 import type { OllamaAccountDTO, OllamaQuotaDTO } from '../../types/ollama';
 import { credentialLabel } from '../../utils/credentialLabel';
+import { hasAvailableQuotaReset } from '../../utils/quotaResets';
 
 export type OAuthWorkspaceDensity = 'compact' | 'expanded';
 export type OAuthWorkspaceQuotaFilter =
@@ -76,6 +77,11 @@ export interface OAuthWorkspaceRecord {
   canRefreshQuota: boolean;
   canClearCooldown: boolean;
   canRedeemCredit: boolean;
+  /**
+   * Whether the account holds an unspent reset of either kind: Codex credits or Claude
+   * grants. A reading for display and filtering; only `canRedeemCredit` gates spending one.
+   */
+  hasAvailableReset: boolean;
 }
 
 export interface OAuthWorkspaceProjection {
@@ -214,6 +220,7 @@ function hasMeaningfulObservation(item: QuotaItem): boolean {
     (item.windows?.length ?? 0) > 0
       || item.plan
       || item.reset_credits
+      || (item.reset_grants?.length ?? 0) > 0
       || item.active_cooldown?.is_active
       || Object.keys(item.raw_signals ?? {}).length > 0
       || Object.keys(item.quota?.signals ?? {}).length > 0
@@ -365,6 +372,7 @@ export function buildOAuthWorkspaceProjection(
           && quota.capabilities?.reset_credit_supported
           && (quota.reset_credits?.available_count ?? 0) > 0,
       ),
+      hasAvailableReset: hasAvailableQuotaReset(quota),
     };
   });
 
@@ -430,6 +438,7 @@ export function buildOAuthWorkspaceProjection(
       canRefreshQuota: account.enabled,
       canClearCooldown: false,
       canRedeemCredit: false,
+      hasAvailableReset: hasAvailableQuotaReset(quotaItem),
     };
   });
 

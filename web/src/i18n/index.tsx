@@ -3092,6 +3092,8 @@ const DICT: Record<string, [string, string]> = {
   'quota.reset_expiry_title_zoned': ['重置积分到期时间（{zone}）', 'Reset credit expiries ({zone})'],
   'quota.reset_grants_title_zoned': ['Claude 重置授权（{zone}）', 'Claude reset grants ({zone})'],
   'quota.reset_grant_remaining': ['剩余 {left}/{total}', '{left} of {total} left'],
+  'quota.reset_grant_available_hint': ['该凭据的 Claude 账户当前可用的重置次数', 'Claude resets currently available on this credential’s account'],
+  'quota.reset_grant_earliest_expiry': ['最早{time}到期', 'Earliest: {time}'],
   'quota.mins_later': ['分钟后', 'mins'],
   'quota.later': ['后恢复', 'later'],
   'quota.col_windows': ['主要用量窗口', 'Usage Windows'],

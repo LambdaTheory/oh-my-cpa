@@ -64,6 +64,17 @@ function quotaFor(index) {
     // The bank holds two credits while upstream considers none of them applicable right
     // now. That combination is exactly the reported defect: the action must still exist.
     reset_credits: credits ? { available_count: 2, applicable_available_count: 0 } : undefined,
+    // auth-06 is a Claude credential holding unspent grants beside a spent one that ends
+    // sooner; auth-02 holds only a spent grant, which must leave its row without a badge.
+    ...(index === 5 ? {
+      reset_grants: [
+        { id: 'grant-live-late', resets_total: 2, resets_left: 2, ends_at_ms: Date.now() + 6 * 86_400_000 },
+        { id: 'grant-live-soon', resets_total: 1, resets_left: 1, ends_at_ms: Date.now() + 2 * 86_400_000 + 1_800_000 },
+        { id: 'grant-spent', resets_total: 1, resets_left: 0, ends_at_ms: Date.now() + 3_600_000 },
+      ],
+    } : index === 1 ? {
+      reset_grants: [{ id: 'grant-spent', resets_total: 1, resets_left: 0, ends_at_ms: Date.now() + 86_400_000 }],
+    } : {}),
     recommendation: { status: cooldown ? 'cooldown' : 'healthy', priority: cooldown ? 'high' : 'none', action: cooldown ? 'clear_cooldown' : 'none', reason: '' },
     capabilities: {
       refresh_supported: !unsupported,
@@ -238,6 +249,22 @@ export async function oauthManagement({ base, page, check }) {
   const cooldownItem = page.getByRole('menuitem', { name: /Clear Cooldown|清除冷却/i });
   check('an active cooldown stays actionable through the row menu', await cooldownItem.isEnabled());
   await page.keyboard.press('Escape');
+
+  const grantRow = page.locator('[data-testid="oauth-credential-record"][data-auth-index="auth-06"]');
+  const grantBadge = grantRow.locator('[data-reset-grants]');
+  const grantBadgeText = (await grantBadge.count()) === 1 ? await grantBadge.innerText() : '';
+  check(
+    'a Claude row reports its unspent grant resets and the soonest live expiry',
+    /Available 3/.test(grantBadgeText) && /Earliest: 2d( \dh)? left/.test(grantBadgeText),
+    grantBadgeText,
+  );
+  check(
+    'a Claude row whose grants are all spent carries no reset badge',
+    (await plainRow.locator('[data-reset-grants]').count()) === 0,
+  );
+  await grantRow.scrollIntoViewIfNeeded();
+  await settleLayout(page);
+  await grantRow.screenshot({ path: 'tmp/oauth-management-claude-grant-row.png' });
 
   const creditRow = page.locator('[data-testid="oauth-credential-record"][data-auth-index="auth-12"]');
   check(

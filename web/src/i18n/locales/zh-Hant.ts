@@ -2671,6 +2671,8 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "quota.reset_expiry_title_zoned": "重設積分到期時間（{zone}）",
   "quota.reset_grants_title_zoned": "Claude 重設授權（{zone}）",
   "quota.reset_grant_remaining": "剩餘 {left}/{total}",
+  "quota.reset_grant_available_hint": "此憑據的 Claude 帳戶目前可用的重設次數",
+  "quota.reset_grant_earliest_expiry": "最早{time}到期",
   "quota.mins_later": "分鐘後",
   "quota.later": "後恢復",
   "quota.col_windows": "主要用量視窗",
