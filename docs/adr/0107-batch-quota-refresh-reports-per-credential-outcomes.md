@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-20
-- Amends: ADR 0104's manual batch response behavior.
+- Amends: ADR 0104's manual batch response behavior and provider-wide probe serialization.
 
 ## Context
 
@@ -25,9 +25,10 @@ material.
 The batch starts with the existing global concurrency of four. Once the first
 rate-limited result settles, already-running probes may finish, but the dispatcher sends
 the remaining targets one at a time. Manual probes and the background scheduler acquire
-the same provider lock held by the shared in-memory quota backoff registry. A parked
-credential is therefore reported with its retry time without another upstream request,
-and a manual batch cannot overlap the scheduler for that provider.
+the same cancellable per-credential lock held by the shared in-memory quota backoff
+registry. A parked credential is therefore reported with its retry time without another
+upstream request, and a manual batch cannot overlap the scheduler for that credential.
+Different credentials of the same provider retain the batch's normal concurrency.
 
 The console renders one persistent report grouped as succeeded, rate limited, failed,
 and skipped. Rate limits are operational waits rather than failures; their copy names the
@@ -41,6 +42,6 @@ valid batch request into an HTTP failure. The single-credential endpoint and the
 `quota_refresh` capability retain their existing typed 429 behavior because each call has
 only one target.
 
-The provider lock is intentionally stronger than a credential-only lock. It preserves
-ADR 0104's provider serialization and gives manual and background probes one coordination
-boundary instead of two states that can race.
+The credential lock gives manual and background probes one coordination boundary without
+serializing unrelated credentials. Waiting is context-cancellable, so an abandoned manual
+request does not remain queued behind the scheduler.

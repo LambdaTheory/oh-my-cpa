@@ -291,7 +291,10 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 		go func(file management.AuthFile, provider, authIndex, resetKey string, prior *NormalizedQuota, isReset bool) {
 			defer wait.Done()
 			defer func() { <-semaphore }()
-			unlock := s.Backoff.LockProvider(provider)
+			unlock, err := s.Backoff.LockCredential(ctx, provider, authIndex)
+			if err != nil {
+				return
+			}
 			defer unlock()
 			s.query(ctx, file, provider, authIndex, prior)
 			if isReset {

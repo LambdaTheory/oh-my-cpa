@@ -59,12 +59,40 @@ type refreshQuotaResultDTO struct {
 	RetryAfterMS *int64                 `json:"retry_after_ms,omitempty"`
 }
 
+const (
+	quotaRefreshMaxUpstreamCalls = 3
+	quotaRefreshWriteGrace       = 5 * time.Second
+)
+
+// extendQuotaRefreshWriteDeadline replaces the server-wide 30-second deadline
+// with the longest bounded path this request can take: one credential-list read,
+// up to three provider reads per credential, one four-wide wave, and a serial
+// tail if that wave observes a rate limit.
+func (h *Handler) extendQuotaRefreshWriteDeadline(writer http.ResponseWriter, targetCount int) {
+	if targetCount < 1 {
+		return
+	}
+	if targetCount > 10 {
+		targetCount = 10
+	}
+	requestTimeout := h.queryTimeout()
+	serialTail := max(0, targetCount-4)
+	probeWaves := 1 + serialTail
+	window := time.Duration(1+quotaRefreshMaxUpstreamCalls*probeWaves)*requestTimeout + quotaRefreshWriteGrace
+	_ = http.NewResponseController(writer).SetWriteDeadline(time.Now().Add(window))
+}
+
 func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	var req refreshQuotaRequest
 	if err := decodeManagementJSON(writer, request, 32*1024, &req); err != nil {
 		return
 	}
+	targetCount := len(req.AuthIndexes)
+	if strings.TrimSpace(req.AuthIndex) != "" {
+		targetCount = 1
+	}
+	h.extendQuotaRefreshWriteDeadline(writer, targetCount)
 
 	client, ok := h.managementClientOrError(writer, request)
 	if !ok {

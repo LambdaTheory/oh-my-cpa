@@ -29,12 +29,22 @@ type quotaAutoRefreshFixture struct {
 	rateLimitedAuthIndex string
 	retryAfter           int
 	isSingle             bool
+	readStarted          chan<- string
+	readRelease          <-chan struct{}
+	activeReads          int
+	peakReads            int
 }
 
 func (f *quotaAutoRefreshFixture) usageReads(authIndex string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.reads[authIndex]
+}
+
+func (f *quotaAutoRefreshFixture) peakUsageReads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.peakReads
 }
 
 func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) *Handler {
@@ -81,7 +91,24 @@ func newQuotaAutoRefreshHandler(t *testing.T, fixture *quotaAutoRefreshFixture) 
 			}
 			fixture.mu.Lock()
 			fixture.reads[payload.AuthIndex]++
+			fixture.activeReads++
+			if fixture.activeReads > fixture.peakReads {
+				fixture.peakReads = fixture.activeReads
+			}
 			isFailed, isRateLimited, rateLimitedAuthIndex, retryAfter := fixture.isUsageFailed, fixture.isRateLimited, fixture.rateLimitedAuthIndex, fixture.retryAfter
+			readStarted, readRelease := fixture.readStarted, fixture.readRelease
+			fixture.mu.Unlock()
+			if readStarted != nil {
+				readStarted <- payload.AuthIndex
+			}
+			if readRelease != nil {
+				select {
+				case <-readRelease:
+				case <-request.Context().Done():
+				}
+			}
+			fixture.mu.Lock()
+			fixture.activeReads--
 			fixture.mu.Unlock()
 			if isRateLimited && (rateLimitedAuthIndex == "" || rateLimitedAuthIndex == payload.AuthIndex) {
 				if retryAfter == 0 {

@@ -32,6 +32,8 @@ let requests: Array<{ path: string; method: string; body: Record<string, unknown
 let operations: Promise<void>[];
 let heldRefresh: { promise: Promise<Response>; resolve: (response: Response) => void } | undefined;
 let quotaRefreshResponse: (authIndexes: string[]) => unknown;
+let quotaBatchTransportFailure: boolean;
+let quotaSingleRefreshResponse: (authIndex: string) => unknown;
 
 function response(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -64,6 +66,7 @@ beforeEach(() => {
   requests = [];
   operations = [];
   heldRefresh = undefined;
+  quotaBatchTransportFailure = false;
   quotaRefreshResponse = (authIndexes) => {
     const quotas = QUOTAS.filter((quota) => authIndexes.includes(quota.auth_index));
     return {
@@ -71,6 +74,9 @@ beforeEach(() => {
       results: quotas.map((quota) => ({ auth_index: quota.auth_index, name: quota.name, outcome: 'success', quota })),
     };
   };
+  quotaSingleRefreshResponse = (authIndex) => ({
+    status: 'ok', quota: QUOTAS.find((quota) => quota.auth_index === authIndex),
+  });
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   client.setQueryData(['ollama-accounts'], { accounts: [ACCOUNT] });
   client.setQueryData(['ollama-quota'], { accounts: [{ account_id: ACCOUNT.id, quota: QUOTAS[0] }] });
@@ -79,6 +85,8 @@ beforeEach(() => {
     const body = options.body ? JSON.parse(String(options.body)) : {};
     requests.push({ path, method: options.method ?? 'GET', body });
     if (path.endsWith('/management/quota/refresh')) {
+      if (body.auth_index) return response(quotaSingleRefreshResponse(body.auth_index as string));
+      if (quotaBatchTransportFailure) throw new TypeError('Synthetic connection closed');
       return response(quotaRefreshResponse(body.auth_indexes as string[]));
     }
     if (path.endsWith(`/ollama/accounts/${ACCOUNT.id}/refresh`)) {
@@ -184,6 +192,24 @@ it('renders success, rate-limited, failed and skipped quota groups with per-targ
   expect(report.textContent).toContain('retry at');
   expect(report.textContent).toContain('Synthetic provider failure');
   expect(report.textContent).not.toContain('rate_limited_backoff');
+});
+
+it('isolates a batch transport failure to per-credential refresh outcomes', async () => {
+  quotaBatchTransportFailure = true;
+  quotaSingleRefreshResponse = (authIndex) => {
+    const quota = QUOTAS.find((item) => item.auth_index === authIndex)!;
+    if (authIndex === 'index-2') return { status: 'ok', quota: { ...quota, status: 'error', error: 'Synthetic isolated failure' } };
+    return { status: 'ok', quota };
+  };
+  mount();
+  fireEvent.click(screen.getByText('Refresh all'));
+  await act(async () => { await Promise.all(operations); });
+
+  const report = screen.getByTestId('quota-operation-report');
+  expect(report.textContent).toContain('Quota refresh: 10 succeeded, 0 rate limited, 1 failed, 2 skipped');
+  expect(report.textContent).toContain('Synthetic isolated failure');
+  expect(requests.filter((request) => request.body.auth_indexes).length).toBe(1);
+  expect(requests.filter((request) => request.body.auth_index).length).toBe(10);
 });
 
 it('hides unverified Ollama money but retains verified zero and independent reset credits', () => {

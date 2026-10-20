@@ -158,7 +158,7 @@ func TestSchedulerLoopRefreshesAndRespectsBackoff(t *testing.T) {
 	}
 }
 
-func TestSchedulerSharesProviderLockWithManualRefresh(t *testing.T) {
+func TestSchedulerSharesCredentialLockWithManualRefresh(t *testing.T) {
 	backoff := NewBackoff(time.Minute, time.Hour)
 	scheduler := NewScheduler(SchedulerConfig{
 		IdleInterval: time.Minute, GlobalConcurrency: 1,
@@ -186,13 +186,16 @@ func TestSchedulerSharesProviderLockWithManualRefresh(t *testing.T) {
 
 	manualAcquired := make(chan struct{})
 	go func() {
-		unlock := backoff.LockProvider("codex")
+		unlock, err := backoff.LockCredential(context.Background(), "codex", "codex-one")
+		if err != nil {
+			return
+		}
 		close(manualAcquired)
 		unlock()
 	}()
 	select {
 	case <-manualAcquired:
-		t.Fatal("manual refresh acquired the provider lock while the scheduler was probing")
+		t.Fatal("manual refresh acquired the credential lock while the scheduler was probing")
 	default:
 	}
 	close(release)

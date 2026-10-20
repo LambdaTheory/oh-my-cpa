@@ -121,8 +121,9 @@ the read that created the current refusal. The state is in memory only, so a res
 The console's multi-credential refresh reports the park per credential instead of failing the
 whole request. Successful siblings remain in the response, rate-limited entries carry their retry
 time, and an already parked credential does not reach upstream again. The manual batch and the
-background scheduler share the same provider lock: normal batches retain four-way concurrency
-across providers, then send remaining targets one at a time after the first rate limit settles.
+background scheduler share one cancellable lock per credential: different credentials of the same
+provider retain four-way concurrency, then the batch sends remaining targets one at a time after
+the first rate limit settles.
 
 ### Account auto-management
 

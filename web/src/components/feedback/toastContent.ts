@@ -6,8 +6,8 @@ export type ToastTone = 'success' | 'info' | 'warning' | 'error';
 export interface ToastItem {
   name: string;
   reason?: string;
-  /** The heading the target is listed under - failed, skipped. Items are grouped in the order
-   * their groups first appear, so a caller lists what needs attention first. */
+  /** The heading the target is listed under. Items are grouped in the order their groups first
+   * appear, so each caller controls the report's documented group order. */
   group?: string;
   /** Summarises the group by reason instead of listing every target: high-volume context such as
    * successes or ineligible skips must not push the actionable outcomes out of reach. */

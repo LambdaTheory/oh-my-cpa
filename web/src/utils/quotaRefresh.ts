@@ -30,6 +30,53 @@ export interface QuotaRefreshOutcome {
   failures: QuotaRefreshFailure[];
 }
 
+function apiRetryAtMS(error: ApiError): number | undefined {
+  if (error.status !== 429 || !error.data || typeof error.data !== 'object') return undefined;
+  const retryAtMS = (error.data as { retry_at_ms?: unknown }).retry_at_ms;
+  return typeof retryAtMS === 'number' && Number.isFinite(retryAtMS) ? retryAtMS : undefined;
+}
+
+function recordReturnedQuota(
+  outcome: QuotaRefreshOutcome,
+  authIndex: string,
+  quota: QuotaItem,
+  onReturned?: (quotas: QuotaItem[]) => void,
+) {
+  onReturned?.([quota]);
+  const name = quota.name || authIndex;
+  if (quota.error || quota.status === 'error' || quota.status === 'stale') {
+    outcome.failures.push({ authIndex, name, error: quota.error });
+    return;
+  }
+  outcome.succeeded += 1;
+  outcome.successes.push({ authIndex, name });
+}
+
+async function recoverTransportFailure(
+  chunk: string[],
+  outcome: QuotaRefreshOutcome,
+  onReturned?: (quotas: QuotaItem[]) => void,
+) {
+  // A dropped batch response says nothing about which upstream probes completed.
+  // Isolate the retry to one credential at a time so another transport failure
+  // cannot turn every target in the chunk into the same synthetic failure.
+  for (const authIndex of chunk) {
+    try {
+      const response = await api.refreshCredentialQuota(authIndex);
+      recordReturnedQuota(outcome, authIndex, response.quota, onReturned);
+    } catch (cause) {
+      if (cause instanceof ApiError) {
+        const retryAtMS = apiRetryAtMS(cause);
+        if (retryAtMS !== undefined) {
+          outcome.rateLimited.push({ authIndex, name: authIndex, retryAtMS });
+          continue;
+        }
+      }
+      outcome.failures.push({ authIndex, name: authIndex, cause });
+    }
+  }
+}
+
 /**
  * Runs one live quota refresh over the given credentials and tallies each target's outcome.
  *
@@ -64,7 +111,11 @@ export async function refreshCredentialQuotas(
         else outcome.failures.push({ authIndex, name: result.name || authIndex, error: result.error });
       }
     } catch (cause) {
-      chunk.forEach((authIndex) => outcome.failures.push({ authIndex, name: authIndex, cause }));
+      if (cause instanceof ApiError && cause.status !== 0) {
+        chunk.forEach((authIndex) => outcome.failures.push({ authIndex, name: authIndex, cause }));
+      } else {
+        await recoverTransportFailure(chunk, outcome, onReturned);
+      }
     }
   }
   return outcome;

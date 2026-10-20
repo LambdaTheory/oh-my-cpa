@@ -187,6 +187,101 @@ func TestManualBatchRefreshReportsRateLimitBesideSuccessfulResults(t *testing.T)
 	}
 }
 
+func TestManualBatchRefreshKeepsFourSameProviderCredentialsConcurrent(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	fixture := &quotaAutoRefreshFixture{
+		reads: map[string]int{},
+		filesJSON: `{"files":[
+			{"name":"Codex 1","auth_index":"codex-1","type":"codex","provider":"codex"},
+			{"name":"Codex 2","auth_index":"codex-2","type":"codex","provider":"codex"},
+			{"name":"Codex 3","auth_index":"codex-3","type":"codex","provider":"codex"},
+			{"name":"Codex 4","auth_index":"codex-4","type":"codex","provider":"codex"}
+		]}`,
+		readStarted: started,
+		readRelease: release,
+	}
+	handler := newQuotaAutoRefreshHandler(t, fixture)
+	server := httptest.NewServer(handler.Router())
+	defer server.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	login, err := client.Post(server.URL+"/api/auth/login", "application/json", bytes.NewBufferString(`{"password":"management-secret"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	login.Body.Close()
+
+	type responseResult struct {
+		response *http.Response
+		err      error
+	}
+	responseDone := make(chan responseResult, 1)
+	go func() {
+		response, postErr := client.Post(server.URL+"/api/v1/management/quota/refresh", "application/json", bytes.NewBufferString(`{"auth_indexes":["codex-1","codex-2","codex-3","codex-4"]}`))
+		responseDone <- responseResult{response: response, err: postErr}
+	}()
+
+	seen := map[string]bool{}
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for len(seen) < 4 {
+		select {
+		case authIndex := <-started:
+			seen[authIndex] = true
+		case <-deadline.C:
+			close(release)
+			t.Fatalf("same-provider probes started serially: %v", seen)
+		}
+	}
+	close(release)
+	result := <-responseDone
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	defer result.response.Body.Close()
+	var body struct {
+		Results []refreshQuotaResultDTO `json:"results"`
+	}
+	if err := json.NewDecoder(result.response.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if result.response.StatusCode != http.StatusOK || len(body.Results) != 4 || fixture.peakUsageReads() != 4 {
+		t.Fatalf("status=%d results=%+v peak=%d, want four concurrent successes", result.response.StatusCode, body.Results, fixture.peakUsageReads())
+	}
+	for _, item := range body.Results {
+		if item.Outcome != "success" {
+			t.Fatalf("no-rate-limit batch degraded: %+v", body.Results)
+		}
+	}
+}
+
+type quotaDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	writeDeadline time.Time
+}
+
+func (r *quotaDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	r.writeDeadline = deadline
+	return nil
+}
+
+func TestBatchQuotaRefreshExtendsTheServerWriteDeadline(t *testing.T) {
+	handler := testHandler(t, "")
+	handler.cfg.RequestTimeout = 15 * time.Second
+	writer := &quotaDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/management/quota/refresh", bytes.NewBufferString(`{"auth_indexes":["1","2","3","4","5","6","7","8","9","10"]}`))
+	request.Header.Set("Content-Type", "application/json")
+	startedAt := time.Now()
+	handler.refreshCredentialQuota(writer, request)
+	if got := writer.writeDeadline.Sub(startedAt); got < 5*time.Minute {
+		t.Fatalf("batch write deadline window = %v, want the serial-tail budget beyond the server's 30s default", got)
+	}
+}
+
 func TestAgentQuotaRefreshRefusesASharedBackoff(t *testing.T) {
 	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}}
 	handler := newQuotaAutoRefreshHandler(t, fixture)
