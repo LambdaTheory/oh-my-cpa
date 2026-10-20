@@ -2,11 +2,13 @@
 
 Date: 2026-10-20
 
-Implementation commit: `ad74a143abd0fe3a2b7c7141863961bd4946f7f3`
+Implementation commit: this report's HEAD commit.
 
 Manual takeover timing fix: this report's HEAD commit.
 
 System Chrome launch fix: this report's HEAD commit.
+
+Logged-out Claude email step: this report's HEAD commit.
 
 ## Result
 
@@ -19,6 +21,14 @@ The initial automated flow started reading stdin or `CODE_FILE` as soon as a ver
 `MANUAL=true` now disables verification-input discovery and all stdin/`CODE_FILE` reads. The runner opens CPA's authorization URL, tells the operator to complete login and verification in the browser, captures the callback, verifies its state, submits it to CPA or OMC, and polls CPA status. Real-account characterization should use `MANUAL=true HEADLESS=false`.
 
 The automated path remains available. Its `CODE_FILE` read still starts only after a verification-code input is visible, but a missing or empty file is now polled until it contains a code or `TIMEOUT_MS` expires with a clear error; stdin behavior is unchanged.
+
+## Logged-out Claude email step
+
+Automated mode now detects visible email inputs using type, name, id, autocomplete, and placeholder attributes. When one appears, it requires `LOGIN_EMAIL`, fills the field, and clicks a visible Continue, Next, Sign in, 继续, or 下一步 button; an empty `LOGIN_EMAIL` fails immediately instead of leaving the runner waiting for a verification field that cannot appear.
+
+After the email step, the runner continues racing the verification-code input against the OAuth callback. A visible password input stops the flow with `password/SSO required; manual takeover needed` and directs the operator to `MANUAL=true`; password, SSO, CAPTCHA, and 2FA automation remain out of scope. `MANUAL=true` still performs no email or code interaction, and `CODE_FILE` still waits until its file exists and contains a non-empty value.
+
+The fixture now exercises the production `runLiveFlow` path against a fake CPA and a two-page Email + Continue, then Verification code + Verify flow. Tests assert that `LOGIN_EMAIL` reached the fixture server, an existing-session code page skips the email requirement, the callback was captured and submitted, missing `LOGIN_EMAIL` reports the configuration error, the password page requests manual takeover, and manual mode leaves the email input untouched.
 
 ## Google/Antigravity browser rejection fix
 
@@ -36,7 +46,7 @@ Run from `tools/reauth-runner/`:
 | --- | --- |
 | `pnpm --ignore-workspace install` | Passed; dependencies installed and `pnpm-lock.yaml` generated |
 | `pnpm --ignore-workspace typecheck` | Passed |
-| `pnpm --ignore-workspace test` | Passed: 16 tests, including BROWSER_CHANNEL/IGNORE_HTTPS_ERRORS/USER_AGENT parsing, MANUAL/CODE_FILE configuration, manual browser takeover, and delayed/empty code-file coverage |
+| `pnpm --ignore-workspace test` | Passed: 20 tests, including LOGIN_EMAIL parsing and submission, existing-session bypass, missing-email failure, password/SSO manual-takeover failure, MANUAL isolation, and delayed/empty code-file coverage |
 | `pnpm --ignore-workspace fixture` | Passed; printed `{"code":"fixture-code","state":"fixture-state"}` |
 | `BROWSER_CHANNEL=chrome HEADLESS=false MANUAL=true pnpm --ignore-workspace start` against a local synthetic CPA | Passed; system Chrome opened the authorization page, requested it with `Chrome/155.0.0.0`, captured the synthetic loopback callback, and returned `{"provider":"claude","state":"chrome-smoke-state","status":"ok","message":"chrome smoke complete"}` |
 | `MANUAL=true pnpm --ignore-workspace start` without CPA environment | Expected failure: `CPA_BASE_URL is required`; no secret value was printed |
@@ -64,7 +74,7 @@ Capture is armed before navigation and attaches to the initial tab plus every po
 
 The first HTTP(S) URL with non-empty `code` and `state` wins. `start` verifies that the captured state equals CPA's returned session state before submitting anything.
 
-The manual fixture uses the production browser-authorization path. The test itself fills and submits the fake login and verification forms while `MANUAL=true`; an intentionally absent `CODE_FILE` proves the flow does not wait for or read it before capturing the callback.
+Both automated and manual fixtures use the production browser-authorization path. The automated fixture supplies `LOGIN_EMAIL` and a synthetic `CODE_FILE`; the manual fixture supplies sentinel values for both and asserts that the runner leaves the email field untouched before the test operator completes the forms.
 
 ## Selectors observed and used
 
@@ -75,7 +85,7 @@ Only the synthetic fixture was observed in this run:
 - verification code: accessible label `Verification code`;
 - submission: role `button`, name `Verify`.
 
-The live runner has not claimed vendor selectors as observed facts. Its fallback candidates are visible inputs with `autocomplete="one-time-code"`, a name/id/placeholder containing `code`, or `inputmode="numeric"`; submission uses an accessible button named `verify`, `continue`, `submit`, or `next`, otherwise Enter. These candidates must be checked against the real Anthropic page before a production design.
+The live runner has not claimed vendor selectors as observed facts. Its email candidates are visible `type=email` inputs, name/id/placeholder values containing `email`, or `autocomplete=username`; its continuation buttons are accessible Continue, Next, Sign in, 继续, or 下一步 buttons. Verification candidates remain visible inputs with `autocomplete="one-time-code"`, a name/id/placeholder containing `code`, or `inputmode="numeric"`; submission uses an accessible button named `verify`, `continue`, `submit`, or `next`, otherwise Enter. These candidates must be checked against the real Anthropic page before a production design.
 
 ## CAPTCHA, 2FA, and device verification
 
@@ -87,7 +97,8 @@ No real Anthropic session was available, so CAPTCHA, 2FA, device approval, secur
 - A non-production CPA base URL and management key, injected only at runtime.
 - Optional non-production OMC base URL and management key when the callback must pass through OMC's audited facade.
 - Network access from the sidecar to CPA/OMC and Anthropic/Claude login hosts.
-- A human present to complete login, enter the one-time code through the approved channel, and handle permitted CAPTCHA/2FA/device/consent steps directly in the visible browser.
+- The account email supplied as `LOGIN_EMAIL` for the automated logged-out path, or a human present for `MANUAL=true` to complete the full login flow.
+- A human available to switch to manual takeover when password/SSO, CAPTCHA, 2FA, device, or consent steps appear.
 - A human check that CPA status becomes `ok` and that the intended credential exists afterward.
 
 ## Unresolved questions and recommendations

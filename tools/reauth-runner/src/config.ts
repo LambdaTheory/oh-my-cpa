@@ -11,6 +11,7 @@ export interface StartConfig {
   shouldIgnoreHttpsErrors: boolean;
   userAgent?: string;
   profileDir: string;
+  loginEmail?: string;
   codeFile?: string;
   timeoutMs: number;
   omcBaseUrl?: string;
@@ -65,6 +66,7 @@ export function loadStartConfig(environment: NodeJS.ProcessEnv): StartConfig {
     shouldIgnoreHttpsErrors: parseBoolean(environment.IGNORE_HTTPS_ERRORS, false, "IGNORE_HTTPS_ERRORS"),
     userAgent: environment.USER_AGENT?.trim() || undefined,
     profileDir: environment.PROFILE_DIR?.trim() || path.join(os.tmpdir(), "omc-reauth-runner-profile"),
+    loginEmail: environment.LOGIN_EMAIL?.trim() || undefined,
     codeFile: environment.CODE_FILE?.trim() || undefined,
     timeoutMs: parseTimeout(environment.TIMEOUT_MS),
     omcBaseUrl,

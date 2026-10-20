@@ -2,7 +2,7 @@
 
 This directory is an independent Node.js 20+ / TypeScript / Playwright runner. It proves that a browser can capture CPA's loopback OAuth redirect from navigation events even when `localhost:54545` is unreachable from the container. It does not change or run inside the OMC product.
 
-The runner never reads email. In the recommended `MANUAL` mode, the operator completes login and enters the one-time code directly in the browser. The optional automated mode can instead read the code from stdin or `CODE_FILE`. Management keys are read only from environment variables and are never intentionally printed or persisted.
+The runner never accesses a mailbox. In `MANUAL` mode, the operator completes login and enters the one-time code directly in the browser. In automated mode, the runner can fill a configured account email, then read the verification code from stdin or `CODE_FILE`. Management keys and the login email are read only from environment variables and are never intentionally printed or persisted.
 
 ## Install and verify
 
@@ -36,6 +36,7 @@ The fixture starts a local email/code form, submits to `http://localhost:54545/c
 | `IGNORE_HTTPS_ERRORS` | no | `false` by default; set `true` only when diagnosing a trusted local certificate-interception environment |
 | `USER_AGENT` | no | Optional browser User-Agent override; empty leaves the browser default unchanged |
 | `PROFILE_DIR` | no | persistent Chromium profile; defaults to an OS temporary directory |
+| `LOGIN_EMAIL` | when automated login shows an email field | account email entered into a visible email/username field before the runner clicks Continue, Next, Sign in, 继续, or 下一步; ignored when `MANUAL=true` |
 | `CODE_FILE` | no | automated mode only; path containing the one-time code, polled until it exists and is non-empty or `TIMEOUT_MS` expires; without it, the runner reads stdin |
 | `TIMEOUT_MS` | no | request, browser, callback, and status deadline; defaults to `180000` |
 | `OMC_BASE_URL` | no | OMC base including any sub-path, such as `http://omc:8080/omc`; selects OMC callback submission |
@@ -69,23 +70,26 @@ pnpm --ignore-workspace start
 
 `IGNORE_HTTPS_ERRORS=true` is intended only to rule out TLS interception by a trusted local proxy; leave it at its default `false` when certificates validate normally. `USER_AGENT` can override the browser User-Agent for diagnostics, but the recommended Chrome configuration normally relies on Chrome's own value. The runner removes Playwright's `--enable-automation` default argument and disables Blink's `AutomationControlled` feature, but Google can still reject the session based on account, network, device, or other risk signals; these settings are not a bypass guarantee.
 
-The optional automated flow waits until a verification-code input appears and then reads the code from stdin:
+For a Claude session with no existing login state, set `LOGIN_EMAIL`. The automated flow fills a visible email/username input, clicks the visible continuation button, waits for the verification-code input, and then reads the code from stdin:
 
 ```sh
 export CPA_BASE_URL=http://cpa:8317
 export CPA_MANAGEMENT_KEY='runtime-only-value'
+export LOGIN_EMAIL='operator@example.com'
 printf '%s\n' '123456' | pnpm start
 ```
 
 With a code file:
 
 ```sh
-CODE_FILE=/run/secrets/claude-code pnpm start
+LOGIN_EMAIL='operator@example.com' CODE_FILE=/run/secrets/claude-code pnpm start
 ```
 
 The file may be created or populated after the provider displays the code input. The runner polls until it contains a non-empty value, bounded by `TIMEOUT_MS`; stdin behavior is unchanged.
 
-`start` requests `GET /v8/management/oauth/auth-url?provider=claude&is_webui=true`, opens the returned URL with a persistent Chromium profile, and watches every page for callback requests/navigations. Manual mode leaves all page interaction to the operator; automated mode fills a visible verification-code input after it appears. The runner then submits the captured URL to CPA (or OMC when configured) and polls CPA status. Its structured output contains the provider, state, terminal status, and non-secret status message; it does not print the callback authorization code.
+If the authorization page already has a login session and does not show an email field, `LOGIN_EMAIL` is not required and the runner continues waiting for the code field or callback. If an email field is visible but `LOGIN_EMAIL` is empty, the runner fails immediately with a configuration error instead of waiting. If the next page requires a password or SSO, the runner stops with `password/SSO required; manual takeover needed`; rerun with `MANUAL=true HEADLESS=false` and complete the provider-controlled flow in the browser.
+
+`start` requests `GET /v8/management/oauth/auth-url?provider=claude&is_webui=true`, opens the returned URL with a persistent Chromium profile, and watches every page for callback requests/navigations. Manual mode leaves all page interaction to the operator; automated mode optionally fills the account email and then fills a visible verification-code input after it appears. The runner then submits the captured URL to CPA (or OMC when configured) and polls CPA status. Its structured output contains the provider, state, terminal status, and non-secret status message; it does not print the callback authorization code.
 
 Submit a callback separately. stdin is preferred because callback URLs contain a short-lived authorization code and shell arguments may be retained in process listings or history:
 
@@ -130,6 +134,7 @@ services:
       CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY}
       PROVIDER: claude
       HEADLESS: "true"
+      LOGIN_EMAIL: ${CLAUDE_LOGIN_EMAIL}
       PROFILE_DIR: /data/profile
       TIMEOUT_MS: "180000"
     volumes:
@@ -166,7 +171,8 @@ Use only a disposable/non-production Claude account and non-production CPA deplo
 
 - Anthropic controls the page markup and may change it without notice. The spike uses accessible/attribute selectors and reports when no code field appears; it does not claim a stable vendor contract.
 - CAPTCHA, 2FA, device verification, consent screens, split OTP fields, and bot detection can block headless automation. A human must resolve allowed challenges; the runner does not bypass them.
+- Password and SSO pages are intentionally not automated. The runner reports them immediately and directs the operator to `MANUAL=true`; it does not attempt to bypass CAPTCHA, 2FA, or other provider controls.
 - Google may still classify a headed system-Chrome session as unsafe or automated based on signals outside the runner's browser launch configuration. Do not add stealth plugins or fingerprint-forging libraries; use manual takeover and follow the provider's supported recovery path.
 - Automating a consumer login can be restricted by provider terms or policy. Complete legal/security review before productizing this spike.
-- In automated mode, `CODE_FILE` polling begins only after the code field appears and ends when the file is non-empty or `TIMEOUT_MS` expires. External code delivery, mailbox access, retries, scheduling, concurrency control, and Phase 2 OMC jobs are intentionally out of scope.
+- In automated mode, `LOGIN_EMAIL` is used only when a visible email/username field appears, and `CODE_FILE` polling begins only after the code field appears. External code delivery, mailbox access, password/SSO automation, retries, scheduling, concurrency control, and Phase 2 OMC jobs are intentionally out of scope.
 - A persistent profile improves session continuity but is sensitive local state. Restrict filesystem access and avoid concurrent use.

@@ -2,8 +2,8 @@ import http from "node:http";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Page } from "playwright";
-import { captureCallback, parseCallbackUrl } from "./callback.js";
+import type { Page } from "playwright";
+import { parseCallbackUrl } from "./callback.js";
 import { runLiveFlow } from "./live.js";
 
 const EMAIL_PAGE = `<!doctype html><html><body>
@@ -21,6 +21,13 @@ const CODE_PAGE = `<!doctype html><html><body>
   </form></main>
 </body></html>`;
 
+const PASSWORD_PAGE = `<!doctype html><html><body>
+  <main><h1>Sign in</h1><form>
+    <label>Password <input type="password" name="password" required></label>
+    <button type="submit">Sign in</button>
+  </form></main>
+</body></html>`;
+
 async function listen(server: http.Server): Promise<number> {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -32,29 +39,75 @@ async function listen(server: http.Server): Promise<number> {
 }
 
 export async function runFixtureFlow(timeoutMs = 30_000): Promise<{ code: string; state: string }> {
+  const fixture = await runAutomatedFixtureFlow({ loginEmail: "fixture@example.invalid" }, timeoutMs);
+  return fixture.callback;
+}
+
+export async function runAutomatedFixtureFlow(
+  options: { loginEmail: string | undefined; initialPage?: "email" | "code"; nextPage?: "code" | "password" },
+  timeoutMs = 30_000,
+): Promise<{
+  callback: { code: string; state: string };
+  result: Record<string, unknown>;
+  submittedEmail: string;
+}> {
+  let submittedCallback: { code: string; state: string } | undefined;
+  let submittedEmail = "";
+  let baseUrl = "";
   const server = http.createServer((request, response) => {
+    if (request.url?.startsWith("/v8/management/oauth/auth-url")) {
+      response.setHeader("Content-Type", "application/json");
+      response.end(JSON.stringify({ url: `${baseUrl}/login`, state: "fixture-state" }));
+      return;
+    }
+    if (request.url === "/v8/management/oauth/callback" && request.method === "POST") {
+      void (async () => {
+        let body = "";
+        for await (const chunk of request) body += chunk;
+        const redirectUrl = (JSON.parse(body) as { redirect_url?: string }).redirect_url ?? "";
+        const callback = parseCallbackUrl(redirectUrl);
+        submittedCallback = { code: callback.code, state: callback.state };
+        response.setHeader("Content-Type", "application/json");
+        response.end("{}");
+      })();
+      return;
+    }
+    if (request.url?.startsWith("/v8/management/oauth/status")) {
+      response.setHeader("Content-Type", "application/json");
+      response.end('{"status":"ok","message":"fixture complete"}');
+      return;
+    }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
-    if (request.url?.startsWith("/verify")) response.end(CODE_PAGE);
-    else response.end(EMAIL_PAGE);
+    if (request.url?.startsWith("/verify")) {
+      submittedEmail = new URL(request.url, baseUrl).searchParams.get("email") ?? "";
+      response.end(options.nextPage === "password" ? PASSWORD_PAGE : CODE_PAGE);
+      return;
+    }
+    response.end(options.initialPage === "code" ? CODE_PAGE : EMAIL_PAGE);
   });
   const port = await listen(server);
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
-  const capture = captureCallback(context, timeoutMs);
+  baseUrl = `http://127.0.0.1:${port}`;
+  const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omc-reauth-automated-"));
+  const codeFile = path.join(profileDir, "code");
   try {
-    const page = await context.newPage();
-    await page.goto(`http://127.0.0.1:${port}/`);
-    await page.getByLabel("Email").fill("fixture@example.invalid");
-    await page.getByRole("button", { name: "Continue" }).click();
-    await page.getByLabel("Verification code").fill("fixture-code");
-    await page.getByRole("button", { name: "Verify" }).click({ noWaitAfter: true });
-    const callback = await capture.result;
-    return { code: callback.code, state: callback.state };
+    await fs.writeFile(codeFile, "fixture-code\n", "utf8");
+    const result = await runLiveFlow({
+      cpaBaseUrl: baseUrl,
+      cpaManagementKey: "synthetic-management-key",
+      provider: "claude",
+      isHeadless: true,
+      isManual: false,
+      shouldIgnoreHttpsErrors: false,
+      profileDir,
+      loginEmail: options.loginEmail,
+      codeFile,
+      timeoutMs,
+    });
+    if (!submittedCallback) throw new Error("automated fixture did not submit the callback to CPA");
+    return { callback: submittedCallback, result, submittedEmail };
   } finally {
-    capture.stop();
-    await context.close();
-    await browser.close();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await fs.rm(profileDir, { recursive: true, force: true });
   }
 }
 
@@ -101,6 +154,7 @@ export async function runManualFixtureFlow(
       isManual: true,
       shouldIgnoreHttpsErrors: false,
       profileDir,
+      loginEmail: "must-not-be-filled@example.invalid",
       codeFile: path.join(profileDir, "must-not-be-read"),
       timeoutMs,
     }, {

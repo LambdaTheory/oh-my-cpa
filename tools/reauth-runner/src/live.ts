@@ -12,7 +12,7 @@ interface BrowserAuthorization {
   state: string;
 }
 
-type BrowserAuthorizationConfig = Pick<StartConfig, "codeFile" | "isManual" | "provider" | "timeoutMs">;
+type BrowserAuthorizationConfig = Pick<StartConfig, "codeFile" | "isManual" | "loginEmail" | "provider" | "timeoutMs">;
 
 export interface LiveFlowHooks {
   onBrowserReady?: (context: BrowserContext) => Promise<void>;
@@ -26,31 +26,35 @@ const CODE_SELECTORS = [
   'input[inputmode="numeric"]',
 ];
 
-interface CodeInputCapture {
+const EMAIL_SELECTORS = [
+  'input[type="email"]',
+  'input[name*="email" i]',
+  'input[id*="email" i]',
+  'input[autocomplete="username"]',
+  'input[placeholder*="email" i]',
+];
+
+const PASSWORD_SELECTORS = ['input[type="password"]'];
+
+interface VisibleInputCapture {
   result: Promise<{ page: Page; locator: Locator }>;
   stop: () => void;
 }
 
-function captureCodeInput(context: BrowserContext, timeoutMs: number): CodeInputCapture {
+function captureVisibleInput(context: BrowserContext, selectors: string[]): VisibleInputCapture {
   let isSettled = false;
-  let timeout: NodeJS.Timeout | undefined;
   const attachedPages = new Set<Page>();
-  let rejectResult: (reason: Error) => void;
 
   const stop = (): void => {
-    if (timeout) {
-      clearTimeout(timeout);
-      timeout = undefined;
-    }
     context.off("page", attachPage);
   };
 
   function attachPage(page: Page): void {
     if (attachedPages.has(page)) return;
     attachedPages.add(page);
-    for (const selector of CODE_SELECTORS) {
+    for (const selector of selectors) {
       const locator = page.locator(`${selector}:visible`).first();
-      void locator.waitFor({ state: "visible", timeout: timeoutMs }).then(() => {
+      void locator.waitFor({ state: "visible", timeout: 0 }).then(() => {
         if (isSettled) return;
         isSettled = true;
         stop();
@@ -60,21 +64,9 @@ function captureCodeInput(context: BrowserContext, timeoutMs: number): CodeInput
   }
 
   let resolveResult: (value: { page: Page; locator: Locator }) => void;
-  const result = new Promise<{ page: Page; locator: Locator }>((resolve, reject) => {
+  const result = new Promise<{ page: Page; locator: Locator }>((resolve) => {
     resolveResult = resolve;
-    rejectResult = reject;
   });
-
-  timeout = setTimeout(async () => {
-    if (isSettled) return;
-    isSettled = true;
-    stop();
-    const visibleText = (await Promise.all(context.pages().map((page) => page.locator("body").innerText().catch(() => "")))).join(" ").toLowerCase();
-    const challenge = ["captcha", "security key", "two-factor", "2fa", "device verification"].find((term) => visibleText.includes(term));
-    rejectResult(new Error(challenge
-      ? `verification code input did not appear; page indicates ${challenge}`
-      : "verification code input did not appear; enter the account email or complete any consent/challenge in the browser"));
-  }, timeoutMs);
 
   context.on("page", attachPage);
   for (const page of context.pages()) attachPage(page);
@@ -85,6 +77,56 @@ function captureCodeInput(context: BrowserContext, timeoutMs: number): CodeInput
       stop();
     },
   };
+}
+
+type AutomatedStep =
+  | { kind: "callback"; callback: OAuthCallback }
+  | { kind: "code"; page: Page; locator: Locator }
+  | { kind: "email"; page: Page; locator: Locator }
+  | { kind: "password" };
+
+async function explainAutomatedTimeout(context: BrowserContext): Promise<never> {
+  const visibleText = (await Promise.all(context.pages().map((page) => page.locator("body").innerText().catch(() => "")))).join(" ").toLowerCase();
+  const challenge = ["captcha", "security key", "two-factor", "2fa", "device verification"].find((term) => visibleText.includes(term));
+  throw new Error(challenge
+    ? `verification code input did not appear; page indicates ${challenge}`
+    : "verification code input did not appear; complete any consent/challenge in the browser or retry with MANUAL=true");
+}
+
+async function waitForAutomatedStep(
+  context: BrowserContext,
+  callback: Promise<OAuthCallback>,
+  codeInput: Promise<{ page: Page; locator: Locator }>,
+  passwordInput: Promise<{ page: Page; locator: Locator }>,
+  emailInput?: Promise<{ page: Page; locator: Locator }>,
+): Promise<AutomatedStep> {
+  const candidates: Array<Promise<AutomatedStep>> = [
+    callback.then((captured) => ({ kind: "callback" as const, callback: captured })),
+    codeInput.then(({ page, locator }) => ({ kind: "code" as const, page, locator })),
+    passwordInput.then(() => ({ kind: "password" as const })),
+  ];
+  if (emailInput) {
+    candidates.push(emailInput.then(({ page, locator }) => ({ kind: "email" as const, page, locator })));
+  }
+  try {
+    return await Promise.race(candidates);
+  } catch {
+    return explainAutomatedTimeout(context);
+  }
+}
+
+async function submitLoginEmail(page: Page, locator: Locator, loginEmail: string | undefined, timeoutMs: number): Promise<void> {
+  if (!loginEmail) {
+    throw new Error("LOGIN_EMAIL is required when the authorization page asks for an email address");
+  }
+  await locator.fill(loginEmail);
+  const continueButton = page.getByRole("button", { name: /^(continue|next|继续|下一步|sign in)$/i }).filter({ visible: true }).first();
+  try {
+    await continueButton.waitFor({ state: "visible", timeout: timeoutMs });
+    await continueButton.click({ noWaitAfter: true });
+  } catch {
+    throw new Error("email was entered, but a visible Continue/Next/Sign in button could not be clicked");
+  }
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -130,13 +172,15 @@ export async function authorizeInBrowser(
   config: BrowserAuthorizationConfig,
 ): Promise<OAuthCallback> {
   const capture = captureCallback(context, config.timeoutMs);
-  const codeCapture = config.isManual ? undefined : captureCodeInput(context, config.timeoutMs);
+  const codeCapture = config.isManual ? undefined : captureVisibleInput(context, CODE_SELECTORS);
+  const emailCapture = config.isManual ? undefined : captureVisibleInput(context, EMAIL_SELECTORS);
+  const passwordCapture = config.isManual ? undefined : captureVisibleInput(context, PASSWORD_SELECTORS);
   try {
     const page = context.pages()[0] ?? await context.newPage();
     if (config.isManual) {
       process.stderr.write("MANUAL 模式：请在浏览器完成登录和验证码；脚本正在等待 callback。\n");
     } else {
-      process.stderr.write(`OAuth started for ${config.provider}; waiting for the verification-code page or callback.\n`);
+      process.stderr.write(`OAuth started for ${config.provider}; waiting for an email field, verification-code page, or callback.\n`);
     }
     const navigation = page.goto(auth.url, { waitUntil: "domcontentloaded", timeout: config.timeoutMs });
     // A successful OAuth redirect can end in ERR_CONNECTION_REFUSED because the
@@ -151,14 +195,26 @@ export async function authorizeInBrowser(
     if (config.isManual) {
       callback = await capture.result;
     } else {
-      const next = await Promise.race([
-        capture.result.then((captured) => ({ kind: "callback" as const, callback: captured })),
-        codeCapture!.result.then(({ page: codePage, locator }) => ({ kind: "code" as const, page: codePage, locator })),
-      ]);
-      codeCapture!.stop();
+      let next = await waitForAutomatedStep(
+        context,
+        capture.result,
+        codeCapture!.result,
+        passwordCapture!.result,
+        emailCapture!.result,
+      );
+      if (next.kind === "email") {
+        emailCapture!.stop();
+        await submitLoginEmail(next.page, next.locator, config.loginEmail, config.timeoutMs);
+        next = await waitForAutomatedStep(context, capture.result, codeCapture!.result, passwordCapture!.result);
+      }
+      emailCapture!.stop();
+      passwordCapture!.stop();
       if (next.kind === "callback") {
         callback = next.callback;
+      } else if (next.kind === "password") {
+        throw new Error("password/SSO required; manual takeover needed; retry with MANUAL=true");
       } else {
+        codeCapture!.stop();
         process.stderr.write("Waiting for a manually supplied verification code.\n");
         const code = await readVerificationCode(config.codeFile, config.timeoutMs);
         try {
@@ -176,6 +232,8 @@ export async function authorizeInBrowser(
     return callback;
   } finally {
     codeCapture?.stop();
+    emailCapture?.stop();
+    passwordCapture?.stop();
     capture.stop();
   }
 }
