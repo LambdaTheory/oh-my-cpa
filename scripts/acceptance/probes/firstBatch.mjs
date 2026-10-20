@@ -108,7 +108,7 @@ const automationState = {
 function automationListBody(state) {
   const adopted = state.phase !== 'first';
   return {
-    settings: { ...state.settings, accounts: adopted ? 3 : 0 },
+    settings: { ...state.settings, accounts: adopted ? 4 : 0 },
     accounts: adopted
       ? [
         {
@@ -163,6 +163,20 @@ function automationListBody(state) {
           // A stale timestamp from an older server is history without an active
           // recovery status and must not render as an expected recovery.
           recovery_at_ms: Date.now() - 86_400_000,
+          attempt_count: 0,
+          has_weekly_evidence: false,
+          intent_version: 1,
+        },
+        {
+          auth_index: 'historical-idle',
+          provider: 'claude',
+          account_label: 'Idle account',
+          is_adopted: true,
+          is_enabled: false,
+          state: 'idle',
+          monitor_reason: 'switch_off',
+          auto_disable_supported: true,
+          disabled_by_automation: false,
           attempt_count: 0,
           has_weekly_evidence: false,
           intent_version: 1,
@@ -280,7 +294,7 @@ export async function accountAutomation({ base, page, check }) {
   const roster = await openAutomationDrawer(page);
   await until(async () => (await roster.getByText('a@example.test', { exact: true }).count()) > 0, { label: 'the adopted roster to render' });
   check('the managed roster retains friendly account labels', !(await roster.innerText()).includes(VERIFIED_CLAUDE));
-  check('the roster summarizes adopted and live credential counts separately', (await roster.innerText()).includes('Adopted 3 / 4 credentials'));
+  check('the roster explains adopted accounts outside the live inventory', (await roster.innerText()).includes('Adopted 4 / 4 credentials · Including 1 absent from gateway'));
   check('an overdue disabled plan is retry work rather than an expected recovery',
     await roster.getByText('Recovery time passed; waiting to retry', { exact: true }).count() === 1);
   check('a stale timestamp outside an active recovery plan is not rendered',
@@ -290,9 +304,15 @@ export async function accountAutomation({ base, page, check }) {
   check('verified monitoring remains an auto-disable-capable monitoring state',
     await verifiedMonitoringCard.getByText('Monitoring', { exact: true }).count() === 1
       && await verifiedMonitoringCard.getByText('Monitor only', { exact: true }).count() === 0);
-  check('only an unverified roster account carries the monitor-only badge',
-    await monitorOnlyCard.getByText('Monitoring', { exact: true }).count() === 1
+  check('an unverified roster account has one monitor-only status and one capability explanation',
+    await monitorOnlyCard.locator('.status-label').count() === 1
+      && await monitorOnlyCard.getByText('Monitoring', { exact: true }).count() === 0
+      && await monitorOnlyCard.getByText('· Account weekly capability unverified; automatic disable unavailable', { exact: true }).count() === 1
       && await monitorOnlyCard.getByText('Monitor only', { exact: true }).count() === 1);
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'adoption feedback to clear before capture' });
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/account-automation-desktop.png' });
   const stateFilter = roster.getByRole('combobox');
   await stateFilter.click();
   await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'Monitor only' }).click();
@@ -341,11 +361,22 @@ export async function accountAutomation({ base, page, check }) {
   await automationEntry.click();
   const phoneDrawer = await openAutomationDrawer(page);
   await settleLayout(page);
-  await page.screenshot({ path: 'tmp/account-automation-phone.png' });
   check('the account automation drawer fits the phone viewport', await phoneDrawer.evaluate((node) => {
     const rect = node.getBoundingClientRect();
     return rect.left >= 0 && rect.right <= window.innerWidth;
   }));
+  check('every phone account keeps visible status text beside its switch', await phoneDrawer.locator('[role="switch"]').evaluateAll((controls) => controls.slice(1).length === 4 && controls.slice(1).every(control => {
+    const status = control.parentElement.querySelector('.status-label');
+    if (!status || !status.textContent.trim()) return false;
+    const rect = status.getBoundingClientRect();
+    const toggle = control.getBoundingClientRect();
+    return rect.width > 0 && rect.left >= 0 && toggle.right <= window.innerWidth && Math.abs(rect.top - toggle.top) < 12;
+  })));
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'account feedback to clear before capture' });
+  await page.setViewportSize({ width: 375, height: 1800 });
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/account-automation-phone.png' });
+  await page.setViewportSize({ width: 375, height: 900 });
 }
 
 // ── Lane B: Ollama accounts ──────────────────────────────────────────────────

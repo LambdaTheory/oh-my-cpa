@@ -2291,8 +2291,12 @@ The live candidate projection keeps roster admission separate from action capabi
 can address; `auto_disable_supported` means the provider also has a verified account-level
 weekly mapping. Candidate and roster projections both expose the capability fact. Every
 controllable credential can therefore join the roster, while an unverified provider is
-persisted in `monitoring` with `unverified_account_weekly_capability` and separately
-displayed as monitor-only. The capability registry remains an invariant on
+persisted in `monitoring` with `unverified_account_weekly_capability` and displayed with
+one monitor-only row status, including a switch-off qualifier when its account setting
+is off. A missing controllable credential also displays monitor-only. Each row explains
+its capability limitation once. The roster count keeps historical adopted accounts and
+annotates those absent from the live inventory in both statistics and footer; degraded
+inventory reads leave the total and absence count unknown. The capability registry remains an invariant on
 the decision and recovery paths, so adoption cannot widen automatic disablement or
 enablement. An uncontrollable credential remains outside the roster even if its auth index
 is submitted directly.
