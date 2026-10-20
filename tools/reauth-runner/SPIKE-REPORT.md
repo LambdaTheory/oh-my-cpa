@@ -2,6 +2,8 @@
 
 Date: 2026-10-20
 
+Implementation commit: `ad74a143abd0fe3a2b7c7141863961bd4946f7f3`
+
 ## Result
 
 The offline proof succeeds: Playwright completes the synthetic email and verification-code pages, observes the outgoing loopback callback request even though no server is listening on `localhost:54545`, and parses `fixture-code` plus `fixture-state`. The live CPA/Anthropic flow is implemented but was not executed because this worktree received no test Claude account, one-time code, CPA endpoint, or management key. No OMC product code was changed.
