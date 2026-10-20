@@ -19,6 +19,16 @@ change; keep the claim's strength, not its address. Nothing in the map is frozen
 
 ## 1. Where a new test belongs
 
+Claude reauthentication is covered without external services: `internal/reauth` uses
+an injected clock and temporary SQLite databases for transitions, episode deduplication,
+serialization, code consumption/expiry, restart loss, audit refusal and verification
+backoff. Feishu tests drive the actual message handler with a fake sender, including
+identity/type/format rejection, no waiting job, mention markup and log privacy. API
+tests exercise the mounted sub-path, session/network boundary, DTO allowlist, one-time
+code response and a fake CPA returning authentication failure then healthy quota.
+Migration tests extend the existing upgrade chain through 049; the historical 010–014
+gap remains unchanged. No real group, mailbox or browser participates.
+
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.
 

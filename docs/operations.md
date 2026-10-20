@@ -196,10 +196,71 @@ never triggers a refresh. Settings and status live under `/api/v1/feishu/setting
 | `OMCPA_FEISHU_APP_ID` | unset | Overrides the self-built app's App ID |
 | `OMCPA_FEISHU_APP_SECRET` | unset | Overrides the app secret. Held in memory only; never written to a response or a log |
 | `OMCPA_FEISHU_CHAT_ID` | unset | Overrides the target group `chat_id` |
+| `OMCPA_FEISHU_OAUTH_CHAT_ID` | unset | Dedicated OAuth management group; enables credential recovery only together with the contact and a usable enabled bot |
+| `OMCPA_FEISHU_OAUTH_CONTACT_OPEN_ID` | unset | Fixed code contact, in `ou_...` form |
+| `OMCPA_REAUTH_RUNNER_CIDRS` | loopback, RFC 1918 IPv4 and IPv6 ULA | Comma-separated CIDR allowlist for direct runner connections; narrow this to the actual Docker network and required loopback ranges |
 
 An empty value is treated as unset, so a compose file that passes a variable through
 without a value cannot pin the feature off. The console shows the effective source
 (`env_disabled`, `env_enabled`, `web` or `default_off`).
+
+### Claude credential recovery
+
+Recovery reuses the effective Feishu app ID, secret and enable switch. Missing either
+OAuth setting disables recovery without changing ordinary alert delivery. An OAuth-only
+deployment can omit the ordinary alert group. The environment force-off and demo mode
+also disable recovery. No browser, mailbox reader or runner is embedded in OMC.
+
+Enable the app-level `im:message.group_msg` scope and subscribe to
+`im.message.receive_v1`. This permission covers every group the bot joins; keep group
+membership limited and restrict the OAuth group to the contact and necessary
+administrators. The OAuth path requires the exact configured chat, exact contact
+`open_id`, group text message, a nonempty message ID, exactly six ASCII digits and a
+waiting job. It ignores all other messages without storing or logging their bodies.
+The dedicated group does not answer ordinary bot queries. Other groups retain the
+existing mention-based query behavior. SDK event diagnostics use fixed categories.
+
+Run one runner against the configured base path, normally `/omc/api/v1`. It signs in
+through `/omc/api/login` with the management key, then uses the resulting OMC session
+cookie. The MCP read-only key is not accepted. These endpoints require a direct
+connection from an allowlisted private or loopback IP; public IPs and forwarding
+headers are refused. The default CIDRs are `127.0.0.0/8`, `::1/128`, `10.0.0.0/8`,
+`172.16.0.0/12`, `192.168.0.0/16` and `fc00::/7`. Use the internal OMC service address
+for a Dokploy sidecar and narrow the allowlist to that Docker subnet. Do not publish
+runner access through a reverse proxy. Network admission never replaces authentication.
+
+| Method and path under the API base | Contract |
+| --- | --- |
+| `GET /management/reauth/jobs/next?provider=claude` | Current active job, otherwise oldest pending job; 204 when empty |
+| `GET /management/reauth/jobs/{id}` | Safe metadata and state; never a code |
+| `GET /management/reauth/jobs/{id}/code` | One-time `{code}` response; 204 when unavailable or already consumed; always `Cache-Control: no-store` |
+| `POST /management/reauth/jobs/{id}/status` | `{status,last_error?}`; invalid transitions return 409 |
+
+Report `oauth_started` only after the login flow is ready for the contact to send a
+code. OMC enters `waiting_code` and sends the request card on its next background
+tick. After consuming the code, report `code_submitted`; after callback/token exchange
+finishes, report `succeeded`. This starts verification rather than immediately declaring
+recovery. A runner failure reports `failed` with one of `password_required`,
+`sso_required`, `code_unavailable`, `token_exchange_failed` or `runner_failed` in
+`last_error`; arbitrary error text and unknown fields are refused. Never send tokens,
+passwords, callback URLs or code text in a status report.
+
+OMC waits two minutes after runner success, then re-reads the credential list and quota.
+Failed verification retries after two and four minutes, for at most three checks. A
+healthy reading produces a success card. Exhausted verification produces a failure card
+and one final quota refresh; transport uncertainty is labeled `verification_unavailable`,
+not authentication failure. Runner failures produce a failure card without automatic
+OAuth retry. A waiting code expires after ten minutes; an accepted code expires after
+five minutes. After consumption the runner has ten minutes per remaining OAuth step.
+Expiry sends no reminder or failure card. A process restart loses unconsumed codes and
+expires those tasks; durable verification deadlines survive restarts. Failed or expired
+episodes are rearmed only by a healthy reading followed by a new authentication failure.
+
+The code endpoint is the sole credential-delivery response and is intended only for the
+runner. Codes never enter logs, audit details, database records or frontend storage.
+Task state changes, code acceptance/consumption, card sends and verification are audited
+before their sensitive effects. The private `reauth_jobs` table is unavailable to
+operator SQL queries. No endpoint accepts an outbound target URL.
 
 ### Update checks and demo
 

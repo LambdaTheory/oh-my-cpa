@@ -91,6 +91,7 @@ var QUERY_READABLE_TABLES = map[string][]string{
 
 // QUERY_HIDDEN_TABLES are never readable, with the reason recorded for the next reviewer.
 var QUERY_HIDDEN_TABLES = map[string]string{
+	"reauth_jobs":        "private credential recovery labels and message identities",
 	"custom_icons":       "operator-uploaded artwork is only returned by the authenticated image endpoint",
 	"fonts":              "the font library is read through its own endpoint",
 	"font_faces":         "font files are binary and only returned by the authenticated face endpoint",

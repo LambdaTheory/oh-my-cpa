@@ -32,6 +32,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/fontasset"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/ollama"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/reauth"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/web"
@@ -124,6 +125,7 @@ type Handler struct {
 	// SetFeishuAPI; its routes are registered only once it exists, so a test that
 	// does not wire it serves no Feishu endpoint.
 	feishu *FeishuAPI
+	reauth *reauth.Service
 }
 
 // SetAutomation installs the account auto-management service the HTTP routes and
@@ -264,6 +266,7 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/resources", h.listResources)
 				v1.Patch("/resources/{id}/override", h.updateResourceOverride)
 				v1.Get("/management/model-square", h.listModelSquare)
+				h.registerReauthRoutes(v1)
 				v1.Get("/management/overview", h.managementOverview)
 				v1.Get("/management/dashboard", h.dashboard)
 				v1.Get("/management/dashboard/tail", h.dashboardTail)

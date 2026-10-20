@@ -483,6 +483,11 @@ func (h *Handler) recordQuotaSignal(ctx context.Context, q *quota.NormalizedQuot
 	if err := h.repo.SaveFeishuAccountSignal(ctx, signal); err != nil && h.logger != nil {
 		h.logger.Warn("record feishu quota signal", "auth_index", authIndex, "error", err)
 	}
+	if h.reauth != nil {
+		if err := h.reauth.Observe(ctx, authIndex, signal.Provider, q.Name, state); err != nil && h.logger != nil {
+			h.logger.Warn("reauth observation failed", "reason", "storage_unavailable")
+		}
+	}
 }
 
 // classifyQuotaSignal maps a refresh result to the fixed collection-state

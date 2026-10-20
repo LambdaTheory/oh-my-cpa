@@ -57,13 +57,16 @@ type Options struct {
 // denoise/dispatch loop. A nil or degraded configuration leaves it loaded but
 // inert: it never fails process startup.
 type Service struct {
-	mu       sync.RWMutex
-	resolved Resolved
-	store    Store
-	source   ReportSource
-	renderer ReportRenderer
-	logger   *slog.Logger
-	now      func() time.Time
+	oauthChatID        string
+	oauthContactOpenID string
+	oauthCodeHandler   func(context.Context, string, string) error
+	mu                 sync.RWMutex
+	resolved           Resolved
+	store              Store
+	source             ReportSource
+	renderer           ReportRenderer
+	logger             *slog.Logger
+	now                func() time.Time
 
 	sender      Sender
 	dispatcher  *Dispatcher
@@ -193,7 +196,7 @@ func (s *Service) Start(ctx context.Context) error {
 
 func (s *Service) startLocked(ctx context.Context) {
 	resolved := s.resolvedNow()
-	if !resolved.Ready() {
+	if !resolved.ConnectionReady() {
 		s.logger.InfoContext(ctx, "feishu module inactive",
 			"reason", s.inactiveReason(resolved), "source", resolved.Source, "degraded", resolved.Degraded)
 		return
@@ -284,7 +287,7 @@ func (s *Service) Reload(ctx context.Context, web Config, overlay Overlay) {
 		s.ensureSenderLocked(resolved)
 		return
 	}
-	if !connectionChanged(prev, resolved) && resolved.Ready() {
+	if !connectionChanged(prev, resolved) && resolved.ConnectionReady() {
 		// Policy-only change: keep the connection, apply thresholds on the next pass.
 		s.logger.InfoContext(ctx, "feishu configuration reloaded", "source", resolved.Source)
 		return
@@ -320,7 +323,7 @@ func connectionChanged(a, b Resolved) bool {
 	return a.Enabled != b.Enabled ||
 		a.AppID != b.AppID ||
 		a.AppSecret != b.AppSecret ||
-		a.Ready() != b.Ready()
+		a.ConnectionReady() != b.ConnectionReady()
 }
 
 func (s *Service) inactiveReason(resolved Resolved) string {
@@ -340,6 +343,9 @@ func (s *Service) inactiveReason(resolved Resolved) string {
 // then hands the slow render/send half to a goroutine and returns promptly, so a
 // redelivered event cannot produce two replies.
 func (s *Service) HandleMessage(ctx context.Context, in Inbound) error {
+	if s.handleOAuthMessage(ctx, in) {
+		return nil
+	}
 	if in.FromBot || in.ChatID == "" {
 		return nil
 	}

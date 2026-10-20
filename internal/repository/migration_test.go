@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough048(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -276,10 +276,11 @@ func TestMigration045UpgradesForkSchemaThrough048(t *testing.T) {
 	}
 
 	if err := database.Migrate(ctx); err != nil {
-		t.Fatalf("migrate schema 45 through 48: %v", err)
+		t.Fatalf("migrate schema 45 through 49: %v", err)
 	}
 
 	upstreamTables := []string{
+		"reauth_jobs",
 		"credential_warmup_policies",
 		"credential_warmup_state",
 		"credential_warmup_runs",
@@ -328,11 +329,11 @@ func TestMigration045UpgradesForkSchemaThrough048(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 43)
+	expectedVersions := make([]int, 0, 44)
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 48; version++ {
+	for version := 15; version <= 49; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
