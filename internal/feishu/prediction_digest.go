@@ -103,10 +103,10 @@ func (job *PredictionJob) tick(ctx context.Context) {
 			report, hasReport = service.source.ReadReport(ctx)
 		}
 	}
-	service.stateMu.Lock()
+	service.lockStateTransition()
 	state, err := service.store.Load(ctx)
 	if err != nil {
-		service.stateMu.Unlock()
+		service.unlockStateTransition()
 		service.setLastError(err)
 		service.logger.WarnContext(ctx, "feishu prediction state load failed", "error", err)
 		return
@@ -117,12 +117,12 @@ func (job *PredictionJob) tick(ctx context.Context) {
 	}
 	state.UpdatedAt = now
 	if err := service.store.Save(ctx, state); err != nil {
-		service.stateMu.Unlock()
+		service.unlockStateTransition()
 		service.setLastError(err)
 		service.logger.WarnContext(ctx, "feishu prediction state save failed", "error", err)
 		return
 	}
-	service.stateMu.Unlock()
+	service.unlockStateTransition()
 	if !withinQuiet(resolved, now) {
 		service.deliverOutbox(ctx, resolved)
 	}

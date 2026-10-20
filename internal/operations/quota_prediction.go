@@ -152,9 +152,8 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 		result.Items = append(result.Items, item)
 	}
 	if input.FindingsOnly {
-		if len(result.Items) > quotaPredictionFindingsLimit {
-			result.Omitted = len(result.Items) - quotaPredictionFindingsLimit
-			result.Items = result.Items[:quotaPredictionFindingsLimit]
+		if err := boundQuotaPredictionFindings(&result); err != nil {
+			return QuotaPredictionResult{}, err
 		}
 	} else {
 		if len(result.Items) > limit {
@@ -314,6 +313,14 @@ func predictionWindowKind(window quota.QuotaWindow) string {
 		return strings.TrimSpace(window.ID)
 	}
 	return "unknown"
+}
+
+func boundQuotaPredictionFindings(result *QuotaPredictionResult) error {
+	if len(result.Items) > quotaPredictionFindingsLimit {
+		result.Omitted += len(result.Items) - quotaPredictionFindingsLimit
+		result.Items = result.Items[:quotaPredictionFindingsLimit]
+	}
+	return boundQuotaPrediction(result)
 }
 
 func boundQuotaPrediction(result *QuotaPredictionResult) error {

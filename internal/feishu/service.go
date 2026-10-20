@@ -90,9 +90,23 @@ type Service struct {
 
 	// stateMu serializes replacement of the whole runtime document. External
 	// report reads and Feishu sends stay outside it.
-	stateMu                   sync.Mutex
+	stateMu sync.Mutex
+	// beforeStateTransitionLock is a test-only observation point for proving a
+	// competing document transition has reached the lock boundary.
+	beforeStateTransitionLock func()
 	deliveryMu                sync.Mutex
 	predictionSchedulerActive atomic.Bool
+}
+
+func (s *Service) lockStateTransition() {
+	if s.beforeStateTransitionLock != nil {
+		s.beforeStateTransitionLock()
+	}
+	s.stateMu.Lock()
+}
+
+func (s *Service) unlockStateTransition() {
+	s.stateMu.Unlock()
 }
 
 // NewService builds the bot. It never returns an error: an invalid configuration
@@ -609,10 +623,10 @@ func (s *Service) tick(ctx context.Context) {
 		rep, has = s.source.ReadReport(ctx)
 	}
 
-	s.stateMu.Lock()
+	s.lockStateTransition()
 	state, err := s.store.Load(ctx)
 	if err != nil {
-		s.stateMu.Unlock()
+		s.unlockStateTransition()
 		s.setLastError(err)
 		s.logger.WarnContext(ctx, "feishu state load failed", "error", err)
 		return
@@ -669,12 +683,12 @@ func (s *Service) tick(ctx context.Context) {
 
 	state.UpdatedAt = now
 	if err := s.store.Save(ctx, state); err != nil {
-		s.stateMu.Unlock()
+		s.unlockStateTransition()
 		s.setLastError(err)
 		s.logger.WarnContext(ctx, "feishu state save failed", "error", err)
 		return
 	}
-	s.stateMu.Unlock()
+	s.unlockStateTransition()
 	if !quiet {
 		s.deliverOutbox(ctx, resolved)
 	}
@@ -832,16 +846,16 @@ func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
 	// before this point, so a slow Feishu request cannot block either scheduler.
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
-	s.stateMu.Lock()
+	s.lockStateTransition()
 	state, err := s.store.Load(ctx)
-	s.stateMu.Unlock()
+	s.unlockStateTransition()
 	if err != nil {
 		s.setLastError(err)
 		return
 	}
 	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, state.Outbox)
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
+	s.lockStateTransition()
+	defer s.unlockStateTransition()
 	latest, err := s.store.Load(ctx)
 	if err != nil {
 		s.setLastError(err)

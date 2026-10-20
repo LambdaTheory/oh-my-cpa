@@ -282,15 +282,17 @@ func TestPredictionOwnershipDoesNotSuppressImmediateAlert(t *testing.T) {
 }
 
 type blockingFirstLoadStore struct {
-	base    *MemoryStore
-	mu      sync.Mutex
-	blocked bool
-	loaded  chan struct{}
-	release chan struct{}
+	base     *MemoryStore
+	mu       sync.Mutex
+	blocked  bool
+	loaded   chan struct{}
+	release  chan struct{}
+	saved    chan struct{}
+	saveOnce sync.Once
 }
 
 func newBlockingFirstLoadStore() *blockingFirstLoadStore {
-	return &blockingFirstLoadStore{base: NewMemoryStore(), loaded: make(chan struct{}), release: make(chan struct{})}
+	return &blockingFirstLoadStore{base: NewMemoryStore(), loaded: make(chan struct{}), release: make(chan struct{}), saved: make(chan struct{})}
 }
 
 func (s *blockingFirstLoadStore) Load(ctx context.Context) (*State, error) {
@@ -312,18 +314,11 @@ func (s *blockingFirstLoadStore) Load(ctx context.Context) (*State, error) {
 }
 
 func (s *blockingFirstLoadStore) Save(ctx context.Context, state *State) error {
-	return s.base.Save(ctx, state)
-}
-
-type notifyingReportSource struct {
-	report Report
-	read   chan struct{}
-	once   sync.Once
-}
-
-func (s *notifyingReportSource) ReadReport(context.Context) (Report, bool) {
-	s.once.Do(func() { close(s.read) })
-	return s.report, true
+	err := s.base.Save(ctx, state)
+	if err == nil {
+		s.saveOnce.Do(func() { close(s.saved) })
+	}
+	return err
 }
 
 func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
@@ -333,19 +328,24 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 			web, overlay := readyConfig()
 			web.QuietStart, web.QuietEnd = "00:00", "23:59"
 			store := newBlockingFirstLoadStore()
-			reportSource := &notifyingReportSource{read: make(chan struct{}), report: Report{GeneratedAt: now, Providers: []ProviderReport{{
+			reportSource := &fakeReportSource{has: true, report: Report{GeneratedAt: now, Providers: []ProviderReport{{
 				Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
 			}}}}
 			service := NewService(Options{
 				Web: web, Overlay: overlay, Store: store, Source: reportSource, Now: func() time.Time { return now },
 				SenderFactory: func(Resolved) Sender { return newFakeSender() }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 			})
+			lockBoundary := make(chan bool, 2)
+			service.beforeStateTransitionLock = func() {
+				isHeld := !service.stateMu.TryLock()
+				if !isHeld {
+					service.stateMu.Unlock()
+				}
+				lockBoundary <- isHeld
+			}
 			service.predictionSchedulerActive.Store(true)
-			predictionRead := make(chan struct{})
-			var predictionOnce sync.Once
 			used, projected := 60.0, 120.0
 			job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-				predictionOnce.Do(func() { close(predictionRead) })
 				return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "prediction", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
 			})
 
@@ -355,13 +355,20 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 			if first == "prediction" {
 				go runPrediction()
 				<-store.loaded
+				<-lockBoundary
 				go runService()
-				<-reportSource.read
 			} else {
 				go runService()
 				<-store.loaded
+				<-lockBoundary
 				go runPrediction()
-				<-predictionRead
+			}
+			isFirstTransitionHeld := <-lockBoundary
+			if !isFirstTransitionHeld {
+				// With serialization removed, the contender loads and saves the stale
+				// document before the first transition is released, forcing the old
+				// last-writer-wins failure instead of relying on goroutine scheduling.
+				<-store.saved
 			}
 			close(store.release)
 			<-serviceDone

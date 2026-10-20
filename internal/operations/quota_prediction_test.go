@@ -220,6 +220,28 @@ func TestBoundQuotaPredictionTruncatesByteTail(t *testing.T) {
 	}
 }
 
+func TestBoundQuotaPredictionFindingsTruncatesByteTail(t *testing.T) {
+	const alreadyOmitted = 3
+	result := QuotaPredictionResult{Items: make([]QuotaPredictionItem, quotaPredictionFindingsLimit), Omitted: alreadyOmitted}
+	for index := range result.Items {
+		result.Items[index] = QuotaPredictionItem{
+			CredentialLabel: strings.Repeat("x", 256),
+			WindowKind:      fmt.Sprintf("custom-%03d", index),
+			Verdict:         quota.PredictionVerdictWillExhaust,
+		}
+	}
+	if err := boundQuotaPredictionFindings(&result); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) >= quotaPredictionFindingsLimit || result.Omitted != alreadyOmitted+quotaPredictionFindingsLimit-len(result.Items) || len(encoded) > quotaPredictionByteLimit {
+		t.Fatalf("findings byte-tail result = %d items, %d omitted, %d bytes", len(result.Items), result.Omitted, len(encoded))
+	}
+}
+
 func TestQuotaPredictionPassiveOverlayPreservesKnownReset(t *testing.T) {
 	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-passive.db"))
 	if err != nil {
@@ -286,7 +308,7 @@ func TestQuotaPredictionFindingsArePrioritizedAndCapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(public.Items)+public.Omitted != 181 || public.Omitted == 0 || len(findings.Items) != quotaPredictionFindingsLimit || findings.Omitted != 3 {
+	if len(public.Items)+public.Omitted != 181 || public.Omitted == 0 || len(findings.Items)+findings.Omitted != 181 || len(findings.Items) > quotaPredictionFindingsLimit || findings.Omitted < 3 {
 		t.Fatalf("public=%d/%d findings=%d/%d", len(public.Items), public.Omitted, len(findings.Items), findings.Omitted)
 	}
 	for _, item := range findings.Items {
