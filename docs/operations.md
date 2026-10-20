@@ -180,7 +180,8 @@ The Feishu bot reuses one long connection to answer read-only queries and to sen
 denoised notifications. The app secret is encrypted at rest and never returned by
 the API, a log or a database read. The bot is answered from OMC's stored data and
 never triggers a refresh. Settings and status live under `/api/v1/feishu/settings`,
-`/api/v1/feishu/status` and `/api/v1/feishu/test`; the bot never runs in demo mode.
+`/api/v1/feishu/status`, `/api/v1/feishu/test` and
+`POST /api/v1/feishu/prediction-test`; the bot never runs in demo mode.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

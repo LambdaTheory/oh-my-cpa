@@ -1,4 +1,5 @@
-import { until } from '../harness.mjs';
+import { settleLayout, until } from '../harness.mjs';
+import { fulfillFixture } from '../browser-guard.mjs';
 
 const PREDICTION_RESPONSE = {
   generated_at_ms: Date.parse('2026-10-20T08:00:00Z'),
@@ -13,6 +14,8 @@ const PREDICTION_RESPONSE = {
           auth_index: 'codex-operator',
           provider: 'codex',
           window_kind: 'weekly',
+          window_id: 'weekly',
+          window_scope: 'standard',
           used_percent: 65,
           reset_at_ms: Date.parse('2026-10-21T08:00:00Z'),
           observed_at_ms: Date.parse('2026-10-20T07:55:00Z'),
@@ -34,9 +37,19 @@ const PREDICTION_RESPONSE = {
 export async function dashboardQuotaPrediction({ base, page, check }) {
   let reads = 0;
   let sends = 0;
+  let hasReadError = false;
+  const sample = PREDICTION_RESPONSE.providers[0].items[0];
+  const predictions = { ...PREDICTION_RESPONSE, providers: [
+    ...PREDICTION_RESPONSE.providers,
+    { provider: 'claude', items: [{ ...sample, provider: 'claude', credential_label: 'stale@example.com', verdict: 'unknown', reasons: ['stale_reading'], data_age_seconds: 90000, projected_percent_at_reset: null }] },
+    { provider: 'antigravity', items: [{ ...sample, provider: 'antigravity', credential_label: 'gravity@example.com' }] },
+  ] };
+  await page.route('**/omc/api/**/preferences', (route) => route.fulfill({
+    json: { preferences: { omc_dashboard_layout: [{ id: 'quota_prediction', span: 2, hidden: false }] }, time_zone: { server_timezone: 'UTC' } },
+  }));
   await page.route('**/omc/api/v1/management/dashboard/predictions', async (route) => {
     reads += 1;
-    await route.fulfill({ json: PREDICTION_RESPONSE });
+    await fulfillFixture(route, hasReadError ? { status: 500, json: { error: 'Prediction read failed' } } : { json: predictions });
   });
   await page.route('**/omc/api/v1/feishu/prediction-test', async (route) => {
     sends += 1;
@@ -48,10 +61,38 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
   await panel.waitFor({ timeout: 20_000 });
   await panel.getByText('operator@example.com').waitFor();
   check('the dashboard groups and renders the operator prediction row',
-    await panel.locator('[data-verdict="will_exhaust"]').count() === 1
+    await panel.locator('[data-verdict="will_exhaust"]').count() === 2
       && (await panel.innerText()).includes('65.0%')
       && (await panel.innerText()).includes('110.0%')
       && (await panel.innerText()).includes('7 ms'));
+  const groups = await panel.locator('section').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')));
+  check('provider headings follow dashboard order', groups.join(',') === 'Antigravity,Claude,Codex', groups.join(','));
+  check('unknown stale evidence remains visible', await panel.locator('[data-verdict="unknown"]').count() === 1
+    && await panel.getByText(/Quota reading is stale|额度读数已过期/).count() === 1);
+
+  const cell = page.locator('[data-widget="quota_prediction"]');
+  await until(async () => await cell.getAttribute('data-span') === '2', { label: 'the prediction span-2 arrangement' });
+  async function checkGeometry(label) {
+    await settleLayout(page);
+    const geometry = await panel.evaluate((node) => {
+      const bounds = node.getBoundingClientRect();
+      const facts = [...node.querySelectorAll('dd[title]')];
+      return {
+        width: bounds.width,
+        overflow: node.scrollWidth > node.clientWidth + 1,
+        documentOverflow: document.documentElement.scrollWidth > window.innerWidth + 1,
+        facts: facts.length,
+        fullValues: facts.every((fact) => fact.title === fact.textContent && fact.scrollWidth <= fact.clientWidth + 1 && fact.scrollHeight <= fact.clientHeight + 1),
+        rowsInside: [...node.querySelectorAll('li')].every((row) => row.getBoundingClientRect().right <= bounds.right + 1),
+      };
+    });
+    check(`${label} fits its container and preserves complete reset/projection/ETA values`,
+      !geometry.overflow && !geometry.documentOverflow && geometry.rowsInside && geometry.facts >= 6 && geometry.fullValues, JSON.stringify(geometry));
+  }
+  await checkGeometry('desktop span 2');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await until(async () => (await panel.boundingBox()).width < 390, { label: 'the mobile prediction container' });
+  await checkGeometry('mobile span 2');
 
   const initialReads = reads;
   await panel.getByRole('button', { name: /刷新额度预测|Refresh quota prediction/ }).click();
@@ -64,4 +105,11 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
   check('a confirmed manual send posts exactly once', sends === 1);
   await page.getByText(/没有可发送的预测发现|No prediction findings to send/).waitFor();
   check('a no-findings result is reported as an informational toast', sends === 1);
+
+  hasReadError = true;
+  await panel.getByRole('button', { name: /刷新额度预测|Refresh quota prediction/ }).click();
+  await panel.getByText(/Prediction read failed/).waitFor();
+  check('a failed refresh retains the last rows and disables send',
+    await panel.getByText('operator@example.com').count() === 1
+      && await panel.getByRole('button', { name: /发送预测摘要到飞书|Send prediction summary to Feishu/ }).isDisabled());
 }

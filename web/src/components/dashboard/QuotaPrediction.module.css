@@ -1,4 +1,5 @@
 .panel {
+  container-type: inline-size;
   min-width: 0;
 }
 
@@ -70,7 +71,7 @@
 
 .row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) auto minmax(130px, 0.8fr) minmax(130px, 0.8fr) minmax(260px, 1.5fr);
+  grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1.5fr);
   gap: 10px 14px;
   align-items: center;
   min-width: 0;
@@ -87,10 +88,8 @@
   min-width: 0;
 }
 
-.identity strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.identity {
+  overflow-wrap: anywhere;
 }
 
 .identity span,
@@ -108,7 +107,8 @@
 
 .facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
   gap: 8px;
   margin: 0;
 }
@@ -124,11 +124,9 @@
 
 .facts dd {
   margin: 2px 0 0;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   color: var(--fg-2);
   font-size: var(--text-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .reasons {
@@ -139,16 +137,9 @@
   gap: 6px;
 }
 
-.loading {
-  min-height: 120px;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-}
-
-@media (max-width: 1000px) {
+@container (max-width: 1050px) {
   .row {
-    grid-template-columns: minmax(150px, 1fr) auto minmax(130px, 1fr) minmax(130px, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1fr);
   }
 
   .facts {
@@ -156,7 +147,7 @@
   }
 }
 
-@media (max-width: 640px) {
+@container (max-width: 700px) {
   .header {
     align-items: stretch;
     flex-direction: column;
@@ -167,7 +158,7 @@
   }
 
   .row {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .meter-cell,

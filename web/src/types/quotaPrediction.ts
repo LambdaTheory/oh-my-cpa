@@ -4,6 +4,9 @@ export interface QuotaPredictionItem {
   credential_label: string;
   provider: string;
   window_kind: string;
+  window_id: string;
+  window_scope: string;
+  window_model?: string;
   auth_index?: string;
   used_percent: number | null;
   reset_at_ms: number | null;

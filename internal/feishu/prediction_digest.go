@@ -49,7 +49,8 @@ func (job *PredictionJob) Ready() bool {
 
 // SendNow queues and delivers one operator-requested prediction card. Unlike a
 // scheduled digest it does not claim the summary minute or alter LastSummaryAt,
-// so it cannot suppress either configured daily digest.
+// so it cannot suppress either configured daily digest. An explicit operator send
+// bypasses quiet hours; scheduled delivery and retries still honor them.
 func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 	if job == nil || job.service == nil || job.source == nil {
 		return false, fmt.Errorf("feishu prediction sender is unavailable")

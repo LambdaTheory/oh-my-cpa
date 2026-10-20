@@ -13,7 +13,8 @@ import {
 import { api } from '../src/api/client';
 import type { DashboardPredictionsResponse, QuotaPredictionItem } from '../src/types/quotaPrediction';
 
-vi.mock('../src/api/client', () => ({
+vi.mock('../src/api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/api/client')>(),
   api: {
     getDashboardPredictions: vi.fn(),
     postFeishuPredictionTest: vi.fn(),
@@ -24,6 +25,8 @@ const item = (overrides: Partial<QuotaPredictionItem> = {}): QuotaPredictionItem
   credential_label: 'operator@example.com',
   provider: 'codex',
   window_kind: 'weekly',
+  window_id: 'weekly',
+  window_scope: 'standard',
   auth_index: 'auth-1',
   used_percent: 65,
   reset_at_ms: Date.parse('2026-10-21T08:00:00Z'),
@@ -115,7 +118,7 @@ describe('dashboard quota prediction', () => {
 
   it('confirms the Feishu action before calling it', async () => {
     const send = vi.fn();
-    render(surface(<QuotaPredictionPanel data={response([])} onSend={send} />));
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item()] }])} onSend={send} />));
     fireEvent.click(screen.getByRole('button', { name: 'Send prediction summary to Feishu' }));
     expect(send).not.toHaveBeenCalled();
     fireEvent.click(await screen.findByRole('button', { name: 'Send summary' }));
@@ -123,12 +126,80 @@ describe('dashboard quota prediction', () => {
   });
 
   it('shows only an informational toast when the manual send has no findings', async () => {
-    vi.mocked(api.getDashboardPredictions).mockResolvedValue(response([]));
+    vi.mocked(api.getDashboardPredictions).mockResolvedValue(response([{ provider: 'codex', items: [item()] }]));
     vi.mocked(api.postFeishuPredictionTest).mockResolvedValue({ sent: false, reason: 'no_findings' });
     renderOwner();
-    fireEvent.click(await screen.findByRole('button', { name: 'Send prediction summary to Feishu' }));
+    await screen.findByText('operator@example.com');
+    fireEvent.click(screen.getByRole('button', { name: 'Send prediction summary to Feishu' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Send summary' }));
     await waitFor(() => expect(api.postFeishuPredictionTest).toHaveBeenCalledTimes(1));
     expect(await screen.findByText('No prediction findings to send')).toBeTruthy();
+  });
+
+  it('distinguishes model windows for the same credential without duplicate keys', () => {
+    const errors = vi.spyOn(console, 'error');
+    try {
+      render(surface(<QuotaPredictionPanel data={response([{ provider: 'claude', items: [
+        item({ window_kind: 'model_scoped', window_id: 'seven_day_opus', window_scope: 'model', window_model: 'claude-opus' }),
+        item({ window_kind: 'model_scoped', window_id: 'seven_day_sonnet', window_scope: 'model', window_model: 'claude-sonnet' }),
+      ] }])} />));
+      expect(screen.getByText('Model window · claude-opus')).toBeTruthy();
+      expect(screen.getByText('Model window · claude-sonnet')).toBeTruthy();
+      expect(errors.mock.calls.some((args) => args.join(' ').includes('same key'))).toBe(false);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it.each([['fallback-auth', 'fallback-auth'], [undefined, 'Unknown credential']])('names both meters with the resolved identity %s', (authIndex, label) => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ credential_label: '', auth_index: authIndex })] }])} />));
+    expect(screen.getByText(label)).toBeTruthy();
+    expect(screen.getByRole('meter', { name: `${label} quota used now` })).toBeTruthy();
+    expect(screen.getByRole('meter', { name: `${label} projected quota at reset` })).toBeTruthy();
+  });
+
+  it('keeps one refresh in flight through rapid clicks and renders its final result', async () => {
+    let complete!: (data: DashboardPredictionsResponse) => void;
+    vi.mocked(api.getDashboardPredictions)
+      .mockResolvedValueOnce(response([{ provider: 'codex', items: [item()] }]))
+      .mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+    renderOwner();
+    await screen.findByText('operator@example.com');
+    const refresh = screen.getByRole('button', { name: 'Refresh quota prediction' });
+    fireEvent.click(refresh);
+    fireEvent.click(refresh);
+    fireEvent.click(refresh);
+    await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(true));
+    expect(api.getDashboardPredictions).toHaveBeenCalledTimes(2);
+    complete(response([{ provider: 'codex', items: [item({ used_percent: 72 })] }]));
+    await screen.findByText('72.0%');
+    await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(false));
+    expect(api.getDashboardPredictions).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([{ isLoading: true }, { isError: true }, { data: response([]) }])('disables send without usable data: %j', (props) => {
+    render(surface(<QuotaPredictionPanel onSend={vi.fn()} {...props} />));
+    expect((screen.getByRole('button', { name: 'Send prediction summary to Feishu' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it.each(['pending', 'rejected'])('reports send failure without success for %s delivery', async (mode) => {
+    vi.mocked(api.getDashboardPredictions).mockResolvedValue(response([{ provider: 'codex', items: [item()] }]));
+    let complete!: () => void;
+    vi.mocked(api.postFeishuPredictionTest).mockImplementationOnce(() => new Promise((resolve, reject) => {
+      complete = () => mode === 'pending' ? resolve({ sent: false, error: 'Delivery pending' }) : reject(new Error('Transport failed'));
+    }));
+    renderOwner();
+    await screen.findByText('operator@example.com');
+    const trigger = screen.getByRole('button', { name: 'Send prediction summary to Feishu' });
+    fireEvent.click(trigger);
+    const confirm = await screen.findByRole('button', { name: 'Send summary' });
+    fireEvent.click(confirm);
+    await waitFor(() => expect((trigger as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(trigger);
+    fireEvent.click(confirm);
+    expect(api.postFeishuPredictionTest).toHaveBeenCalledTimes(1);
+    complete();
+    expect(await screen.findByText('Could not send prediction summary')).toBeTruthy();
+    expect(screen.queryByText('Prediction summary sent to Feishu')).toBeNull();
   });
 });

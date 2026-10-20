@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,13 +22,14 @@ import (
 type apiPredictionSender struct {
 	mu    sync.Mutex
 	sends int
+	err   error
 }
 
 func (s *apiPredictionSender) SendCard(context.Context, string, map[string]any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sends++
-	return nil
+	return s.err
 }
 func (s *apiPredictionSender) ReplyText(context.Context, string, string) error { return nil }
 func (s *apiPredictionSender) ReplyCard(context.Context, string, map[string]any) error {
@@ -256,6 +258,29 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 	}
 	if sender.count() != 1 {
 		t.Fatalf("no-finding request sent another card: %d", sender.count())
+	}
+
+	now = now.Add(time.Minute)
+	sender.err = errors.New("simulated sender failure")
+	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{CredentialLabel: "operator", Verdict: "will_exhaust"}}}
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil))
+	var failed struct {
+		Sent  bool   `json:"sent"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &failed); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || failed.Sent || failed.Error == "" {
+		t.Fatalf("failed delivery response=%d %s", recorder.Code, recorder.Body.String())
+	}
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Outbox) != 2 || state.Outbox[1].State != feishu.NotifyPending || !state.Outbox[1].NextAttemptAt.After(now) {
+		t.Fatalf("failed route delivery must retain retry: %+v", state.Outbox)
 	}
 }
 

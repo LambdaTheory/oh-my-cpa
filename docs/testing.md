@@ -79,6 +79,8 @@ Rules that keep the suite fast and honest:
 ### Rendered component integration
 
 `pnpm test:components` runs the complete, automatically discovered frontend integration layer: rendered `*.component.test.tsx` suites and Node-environment `*.contract.test.ts` suites.
+For a focused iteration, run `pnpm --dir web exec vitest run tests/quota-prediction.component.test.tsx`
+(substitute the suite path as needed); the repository wrapper intentionally takes no arguments.
 It uses development-only Vitest, jsdom and React Testing Library, not Chromium, a
 product Vite HTTP listener, Go or fake CPA. The separate config performs in-process
 Vite/JSX transforms without loading the product build/proxy/asset plugins. Isolated

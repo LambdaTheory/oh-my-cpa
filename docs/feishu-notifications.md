@@ -259,7 +259,8 @@ additional findings were omitted when the bound was reached.
 
 The dashboard's “send prediction summary” action calls the prediction-test route after a
 confirmation. It evaluates current stored findings immediately and persists one notification
-before delivery through the existing sender/outbox. Delivery is restricted to that new row,
+before delivery through the existing sender/outbox. This explicit operator send bypasses
+quiet hours; scheduled delivery and retries still honor them. Delivery is restricted to that new row,
 so unrelated pending alerts are not flushed by the action. With no `will_exhaust` or
 `under_used` finding it returns `{sent:false, reason:"no_findings"}` and sends no card. A
 manual send never changes `LastSummaryAt`, never claims the current summary minute and cannot

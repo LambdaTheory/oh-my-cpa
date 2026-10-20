@@ -25,11 +25,14 @@ type dashboardPredictionsResponse struct {
 // operator needs the credential label and auth index that MCP withholds.
 func (h *Handler) dashboardPredictions(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
+	ctx := capability.WithAnchor(request.Context(), h.now().UnixMilli())
+	service := h.operationsService()
 	started := time.Now()
-	result, err := h.operationsService().QuotaPrediction(
-		capability.WithAnchor(request.Context(), h.now().UnixMilli()),
+	result, err := service.QuotaPrediction(
+		ctx,
 		operations.QuotaPredictionInput{FindingsOnly: false},
 	)
+	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
 		writeInternalError(writer, err)
 		return
@@ -37,7 +40,7 @@ func (h *Handler) dashboardPredictions(writer http.ResponseWriter, request *http
 
 	response := dashboardPredictionsResponse{
 		GeneratedAtMS: result.GeneratedAtMS,
-		DurationMS:    time.Since(started).Milliseconds(),
+		DurationMS:    durationMS,
 		Omitted:       result.Omitted,
 		Providers:     []dashboardPredictionProvider{},
 	}

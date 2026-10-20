@@ -5,12 +5,16 @@ import { api } from '../../api/client';
 import { useT } from '../../i18n';
 import { isDemoMode } from '../../types/demoMode';
 import type { DashboardPredictionsResponse, QuotaPredictionItem, QuotaPredictionVerdict } from '../../types/quotaPrediction';
-import { formatTokensFull } from '../../types/tokenDisplay';
+import { formatCost, formatTokensFull } from '../../types/tokenDisplay';
 import dayjs from '../../utils/time';
 import { ConfirmAction } from '../common/ConfirmAction';
 import { EmptyState } from '../common/EmptyState';
 import { Meter } from '../common/Meter';
 import { Panel } from '../common/Panel';
+import { ParagraphPlaceholder } from '../common/ContentPlaceholder';
+import { SectionHeading } from '../common/SectionHeading';
+import { credentialProviderIconId } from '../common/providerMetadata';
+import { ProviderBrandIcon } from '../LobeIcon';
 import { RefreshButton } from '../common/RefreshButton';
 import { Tag, type TagTone } from '../common/Tag';
 import { LoadFailure, Notice, useToast } from '../feedback';
@@ -67,7 +71,7 @@ function formatProjection(item: QuotaPredictionItem, t: ReturnType<typeof useT>)
     parts.push(t('dash.prediction.tokens_value', { n: formatTokensFull(item.projected_tokens_at_reset) }));
   }
   if (item.projected_cost_nanos_at_reset !== null) {
-    parts.push(`$${(item.projected_cost_nanos_at_reset / 1_000_000_000).toFixed(4)}`);
+    parts.push(formatCost(item.projected_cost_nanos_at_reset / 1_000_000_000));
   }
   return parts.length > 0 ? parts.join(' · ') : '—';
 }
@@ -87,11 +91,14 @@ function translatedValue(prefix: string, value: string, t: ReturnType<typeof use
 const PredictionRow: React.FC<{ item: QuotaPredictionItem }> = ({ item }) => {
   const t = useT();
   const isStale = item.reasons.includes('stale_reading');
+  const credentialLabel = item.credential_label || item.auth_index || t('dash.prediction.credential_unknown');
+  const windowLabel = translatedValue('dash.prediction.window', item.window_kind, t);
+  const windowDetail = item.window_model || item.window_id;
   return (
     <li className={styles['row']} data-verdict={item.verdict}>
       <div className={styles['identity']}>
-        <strong>{item.credential_label || item.auth_index || t('dash.prediction.credential_unknown')}</strong>
-        <span>{translatedValue('dash.prediction.window', item.window_kind, t)}</span>
+        <strong title={credentialLabel}>{credentialLabel}</strong>
+        <span>{item.window_kind === 'model_scoped' ? `${windowLabel} · ${windowDetail}` : windowLabel}</span>
       </div>
       <div className={styles['verdict']}>
         <Tag size="small" tone={VERDICT_TONES[item.verdict]}>{t(`dash.prediction.verdict.${item.verdict}`)}</Tag>
@@ -99,15 +106,18 @@ const PredictionRow: React.FC<{ item: QuotaPredictionItem }> = ({ item }) => {
       </div>
       <div className={styles['meter-cell']}>
         <span>{t('dash.prediction.used')} <b>{formatPercent(item.used_percent)}</b></span>
-        {item.used_percent !== null && <Meter value={item.used_percent} label={t('dash.prediction.used_meter', { name: item.credential_label })} />}
+        {item.used_percent !== null && <Meter value={item.used_percent} label={t('dash.prediction.used_meter', { name: credentialLabel })} />}
       </div>
       <div className={styles['meter-cell']}>
         <span>{t('dash.prediction.projected')} <b>{formatPercent(item.projected_percent_at_reset)}</b></span>
-        {item.projected_percent_at_reset !== null && <Meter value={item.projected_percent_at_reset} label={t('dash.prediction.projected_meter', { name: item.credential_label })} />}
+        {item.projected_percent_at_reset !== null && <Meter value={item.projected_percent_at_reset} label={t('dash.prediction.projected_meter', { name: credentialLabel })} />}
       </div>
       <dl className={styles['facts']}>
-        <div><dt>{t('dash.prediction.reset')}</dt><dd>{formatReset(item.reset_at_ms)}</dd></div>
-        <div><dt>{t('dash.prediction.projection')}</dt><dd>{formatProjection(item, t)}</dd></div>
+        <div><dt>{t('dash.prediction.reset')}</dt><dd title={formatReset(item.reset_at_ms)}>{formatReset(item.reset_at_ms)}</dd></div>
+        <div><dt>{t('dash.prediction.projection')}</dt><dd title={formatProjection(item, t)}>{formatProjection(item, t)}</dd></div>
+        {item.verdict === 'will_exhaust' && item.exhaustion_eta_ms !== null && (
+          <div><dt>{t('dash.prediction.exhaustion')}</dt><dd title={formatReset(item.exhaustion_eta_ms)}>{formatReset(item.exhaustion_eta_ms)}</dd></div>
+        )}
         <div><dt>{t('dash.prediction.data_age')}</dt><dd>{formatAge(item.data_age_seconds, t)}</dd></div>
       </dl>
       <div className={styles['reasons']}>
@@ -144,10 +154,7 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
   return (
     <Panel className={styles['panel']} data-testid="dashboard-quota-prediction">
       <div className={styles['header']}>
-        <div>
-          <h2>{t('dash.prediction.title')}</h2>
-          <p>{t('dash.prediction.description')}</p>
-        </div>
+        <SectionHeading as="h2" title={t('dash.prediction.title')} description={t('dash.prediction.description')} />
         <div className={styles['actions']}>
           {data && <span className={styles['duration']}>{t('dash.prediction.duration', { n: data.duration_ms })}</span>}
           {onSend && (
@@ -158,10 +165,10 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
               isConfirming={isSending}
               onConfirm={onSend}
             >
-              <Button icon={<SendOutlined />} disabled={isDemo || isSending}>{t('dash.prediction.send')}</Button>
+              <Button icon={<SendOutlined />} disabled={isDemo || isSending || isLoading || isError || groups.length === 0}>{t('dash.prediction.send')}</Button>
             </ConfirmAction>
           )}
-          {onRefresh && <RefreshButton isIconOnly label={t('dash.prediction.refresh')} isRefreshing={isFetching} onRefresh={onRefresh} />}
+          {onRefresh && <RefreshButton isIconOnly label={t('dash.prediction.refresh')} isRefreshing={isFetching} disabled={isFetching} onRefresh={onRefresh} />}
         </div>
       </div>
 
@@ -169,7 +176,7 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
       {isError && !data ? (
         <LoadFailure title={t('dash.prediction.error')} error={error} onRetry={onRefresh} />
       ) : isLoading && !data ? (
-        <div className={styles['loading']} role="status" aria-busy="true">{t('dash.prediction.loading')}</div>
+        <ParagraphPlaceholder rows={4} />
       ) : groups.length === 0 ? (
         <EmptyState size="compact" title={t('dash.prediction.empty')} description={t('dash.prediction.empty_desc')} />
       ) : (
@@ -177,10 +184,10 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
           {groups.map((group) => (
             <section key={group.provider} className={styles['group']} aria-label={providerLabel(group.provider, t)}>
               <div className={styles['group-head']}>
-                <h3>{providerLabel(group.provider, t)}</h3>
-                <Tag size="small">{group.items.length}</Tag>
+                <ProviderBrandIcon iconId={credentialProviderIconId(group.provider)} size={18} />
+                <SectionHeading as="h3" level="label" title={providerLabel(group.provider, t)} count={group.items.length} />
               </div>
-              <ul>{group.items.map((item) => <PredictionRow key={`${item.auth_index ?? item.credential_label}:${item.window_kind}`} item={item} />)}</ul>
+              <ul>{group.items.map((item) => <PredictionRow key={JSON.stringify([item.auth_index ?? item.credential_label, item.window_id, item.window_scope, item.window_model])} item={item} />)}</ul>
             </section>
           ))}
           {data && data.omitted > 0 && <Notice tone="info" title={t('dash.prediction.omitted', { n: data.omitted })} />}
@@ -222,7 +229,7 @@ export const QuotaPrediction: React.FC = () => {
       error={query.error}
       isSending={send.isPending}
       isDemo={isDemoMode()}
-      onRefresh={() => void query.refetch()}
+      onRefresh={() => void query.refetch({ cancelRefetch: false })}
       onSend={() => send.mutate()}
     />
   );
