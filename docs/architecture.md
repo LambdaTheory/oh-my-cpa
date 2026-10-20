@@ -2491,11 +2491,11 @@ fix a defect with a new migration, never by editing `schema_migrations`
 
 The fork occupies migrations 041–045. A schema 45 deployment keeps those tables
 and advances through 046 (credential warmup), 047 (font library), and 048 (channel
-model prices). The migration backup is created and smoke-tested before 046; each
+model prices), then 049 (reset announcements). The migration backup is created and smoke-tested before 046; each
 subsequent migration commits separately. A failed migration stops startup, and
 restoring an older executable requires restoring the matching pre-upgrade database
 backup. The repository's synthetic upgrade test checks both sets of tables, a
-pre-existing fork row, and the gap-free 041–048 upgrade sequence without duplicate
+pre-existing fork row, and the gap-free 041–049 upgrade sequence without duplicate
 versions. Versions 010–014 were never part of this repository's migration history.
 
 ## 10. Background loops
@@ -3763,3 +3763,26 @@ credential state but refuses policy writes and consumption, and never starts the
 
 Warmup round ordering is oldest observation first. Fleets exceeding a round's capacity
 remain queued rather than increasing concurrency or skipping protection.
+
+## Reset announcement evidence
+
+Migration 049 adds reset_announcements without changing quota_snapshots or previous
+migrations. The repository owns input admission, insertion and paginated reads; the
+handwritten DTOs in internal/api/reset_announcements.go expose only the announcement
+fields through GET/POST /management/quota/reset-announcements. These ordinary management
+routes require a console session; no operations capability is registered. The raw
+operator-entered text is excluded from the read-only SQL capability.
+
+An all scope has no target, model scope has only model, and credential scope has only
+auth_index. The table checks this invariant and stores separate registration/creation
+instants. A single read transaction uses one injected reader clock for count, page and
+active/expired status. A nullable expected_reset_at_ms has no expiration; a non-null
+instant expires inclusively at that boundary. No status column or expiration job exists.
+
+The SQL source domain reserves manual/status_rss/x_api; current ingestion validates
+manual only. Later adapters must preserve the same evidence shape and validate their
+own source admission, without inferring confidence from transport. The read-only advice
+decision is tracked separately in ADR 0109 (PR #52); ADR 0110 records this store and its
+source extension boundary. Existing prediction/advice evaluation is unchanged. The
+console's quota workspace lists active records, checks cached expirations against the
+visible clock, and invalidates its query after registration.

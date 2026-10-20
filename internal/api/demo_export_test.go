@@ -170,6 +170,7 @@ func demoExportCases() []demoExportCase {
 		{Name: "warmup-codex-secondary", Path: "/api/v1/management/quota/warmup/credentials/auth-codex-02", Route: "/api/v1/management/quota/warmup/credentials/{authIndex}"},
 		{Name: "warmup-claude", Path: "/api/v1/management/quota/warmup/credentials/auth-claude-01", Route: "/api/v1/management/quota/warmup/credentials/{authIndex}"},
 		{Name: "quota", Path: "/api/v1/management/quota"},
+		{Name: "reset-announcements", Path: "/api/v1/management/quota/reset-announcements"},
 		// One credential's quota detail, for the page the quota list links into.
 		{Name: "quota-codex", Path: "/api/v1/management/quota/auth-codex-01"},
 		// Account auto-management reads the demo's own roster and resolved master

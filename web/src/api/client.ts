@@ -1,4 +1,5 @@
 import type { WarmupCredential, WarmupPolicy, WarmupResult, WarmupSettings } from '../types/warmup';
+import type { ResetAnnouncement, ResetAnnouncementInput, ResetAnnouncementPage } from '../types/resetAnnouncements';
 import type { ModelSquareDirectory } from '../types/modelSquare';
 import type { CustomIcon } from '../types/customIcons';
 import type { InstalledFont } from '../types/fonts';
@@ -363,6 +364,12 @@ export interface AuthSession {
 }
 
 export const api = {
+  async listResetAnnouncements(page = 1): Promise<ResetAnnouncementPage> {
+    return request('/management/quota/reset-announcements?status=active&limit=20&offset=' + ((page - 1) * 20));
+  },
+  async createResetAnnouncement(input: ResetAnnouncementInput): Promise<ResetAnnouncement> {
+    return request('/management/quota/reset-announcements', { method: 'POST', body: JSON.stringify(input) });
+  },
   getWarmupSettings(): Promise<WarmupSettings> {
     return request('/management/quota/warmup/settings', { method: 'GET' });
   },
