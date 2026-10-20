@@ -192,8 +192,8 @@ type QuotaConfig struct {
 	// names, keyed by the normalized provider key the credential resolution
 	// produces. A provider absent from the map uses CredentialFloor.
 	CredentialFloorByProvider map[string]time.Duration
-	// GlobalConcurrency bounds simultaneous active refreshes; a single provider is
-	// always serialized at one.
+	// GlobalConcurrency bounds simultaneous active refreshes across credentials.
+	// The shared probe lock separately permits only one active read per credential.
 	GlobalConcurrency int
 	// BackoffBase and BackoffMax shape the exponential fallback used when an
 	// upstream answers 429 without a Retry-After.

@@ -1,10 +1,33 @@
 package quota
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 )
+
+func TestCredentialLockSeparatesSiblingsAndCancelsWaiters(t *testing.T) {
+	backoff := NewBackoff(time.Minute, time.Hour)
+	firstUnlock, err := backoff.LockCredential(context.Background(), "codex", "first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstUnlock()
+
+	siblingUnlock, err := backoff.LockCredential(context.Background(), "codex", "second")
+	if err != nil {
+		t.Fatalf("sibling credential was serialized: %v", err)
+	}
+	siblingUnlock()
+
+	waitCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := backoff.LockCredential(waitCtx, "codex", "first"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled waiter error = %v, want context.Canceled", err)
+	}
+}
 
 func TestBackoffHonoursRetryAfterThenClears(t *testing.T) {
 	backoff := NewBackoff(5*time.Minute, 6*time.Hour)

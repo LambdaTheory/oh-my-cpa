@@ -15,11 +15,11 @@ export const QUOTA_REFRESH_TOAST_KEY = 'omc-quota-refresh';
  *
  * A run whose targets all answered - including one that skipped credentials which were never
  * eligible, since that is decided before the run rather than by it - is an acknowledgement that
- * leaves on its own. A failed or unknown target is a result to inspect: the toast becomes a report
+ * leaves on its own. A failed or rate-limited target is a result to inspect: the toast becomes a report
  * that lists each target's reason and stays until it is closed.
  */
 export function quotaRefreshOutcomeKind(
-  report: { failed: number; unknown: number },
+  report: { failed: number; rateLimited: number },
 ): 'acknowledgement' | 'report' {
-  return report.failed > 0 || report.unknown > 0 ? 'report' : 'acknowledgement';
+  return report.failed > 0 || report.rateLimited > 0 ? 'report' : 'acknowledgement';
 }

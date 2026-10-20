@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -78,8 +79,14 @@ type Backoff struct {
 	providers   map[string]time.Time
 	// providerOwners records which credential created the current provider park,
 	// so one concurrent sibling's successful probe cannot clear another's refusal.
-	providerOwners map[string]string
-	attempts       map[string]int
+	providerOwners  map[string]string
+	attempts        map[string]int
+	credentialLocks map[string]*credentialProbeLock
+}
+
+type credentialProbeLock struct {
+	permit chan struct{}
+	users  int
 }
 
 // NewBackoff builds a backoff registry with the exponential fallback bounds.
@@ -94,13 +101,71 @@ func NewBackoff(base, maximum time.Duration) *Backoff {
 		maximum = base
 	}
 	return &Backoff{
-		now:            time.Now,
-		Base:           base,
-		Max:            maximum,
-		credentials:    map[string]time.Time{},
-		providers:      map[string]time.Time{},
-		providerOwners: map[string]string{},
-		attempts:       map[string]int{},
+		now:             time.Now,
+		Base:            base,
+		Max:             maximum,
+		credentials:     map[string]time.Time{},
+		providers:       map[string]time.Time{},
+		providerOwners:  map[string]string{},
+		attempts:        map[string]int{},
+		credentialLocks: map[string]*credentialProbeLock{},
+	}
+}
+
+// LockCredential keeps manual refreshes and the scheduler from probing the same
+// credential concurrently without serializing independent credentials of one
+// provider. Waiting follows the caller's context, so a disconnected request does
+// not remain queued behind a long upstream probe.
+func (b *Backoff) LockCredential(ctx context.Context, provider, authIndex string) (func(), error) {
+	if b == nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return func() {}, nil
+	}
+	key := normalizeProbeKey(provider, authIndex)
+	b.mu.Lock()
+	if b.credentialLocks == nil {
+		b.credentialLocks = map[string]*credentialProbeLock{}
+	}
+	lock, ok := b.credentialLocks[key]
+	if !ok {
+		lock = &credentialProbeLock{permit: make(chan struct{}, 1)}
+		lock.permit <- struct{}{}
+		b.credentialLocks[key] = lock
+	}
+	lock.users++
+	b.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		b.releaseCredentialLock(key, lock, false)
+		return nil, ctx.Err()
+	case <-lock.permit:
+		if err := ctx.Err(); err != nil {
+			b.releaseCredentialLock(key, lock, true)
+			return nil, err
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() { b.releaseCredentialLock(key, lock, true) })
+		}, nil
+	}
+}
+
+func normalizeProbeKey(provider, authIndex string) string {
+	return strings.ToLower(strings.TrimSpace(provider)) + "\x00" + strings.TrimSpace(authIndex)
+}
+
+func (b *Backoff) releaseCredentialLock(key string, lock *credentialProbeLock, hasPermit bool) {
+	if hasPermit {
+		lock.permit <- struct{}{}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	lock.users--
+	if lock.users == 0 && b.credentialLocks[key] == lock {
+		delete(b.credentialLocks, key)
 	}
 }
 

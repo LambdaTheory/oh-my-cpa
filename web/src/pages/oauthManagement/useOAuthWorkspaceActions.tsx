@@ -15,6 +15,7 @@ import {
 } from './oauthWorkspaceLogic';
 import {
   quotaRefreshFailureReason,
+  quotaRefreshRateLimitReason,
   refreshCredentialQuotas,
 } from '../../utils/quotaRefresh';
 import {
@@ -510,18 +511,20 @@ export function useOAuthWorkspaceActions(
       return record ? deriveAuthFileIdentity(record.file, t('credential.account_fallback', { provider: record.displayProvider })).primary
         : t('credential.account_fallback', { provider: '' });
     };
-    // Kept apart so the report lists what needs attention first: a failure, then a target with no
-    // outcome, then what was never eligible.
-    const unknowns: ToastItem[] = conflicting.map((index) => ({ name: labelForIndex(index), reason: t('omc.operation_conflict') }));
+    const failures: ToastItem[] = conflicting.map((index) => ({ name: labelForIndex(index), reason: t('omc.operation_conflict') }));
     const busyIndexes = [...targetIndexes, ...targetOllamaIds.map((id) => `ollama:${id}`)];
     markQuotaBusy(busyIndexes, true);
     try {
       const outcome = await refreshCredentialQuotas(targetIndexes, mergeReturnedQuota);
-      const failures: ToastItem[] = outcome.failures.map((failure) => ({
+      const successes: ToastItem[] = outcome.successes.map((success) => ({ name: labelForIndex(success.authIndex) }));
+      failures.push(...outcome.failures.map((failure) => ({
         name: labelForIndex(failure.authIndex),
         reason: quotaRefreshFailureReason(failure, t),
+      })));
+      const rateLimited: ToastItem[] = outcome.rateLimited.map((result) => ({
+        name: labelForIndex(result.authIndex),
+        reason: quotaRefreshRateLimitReason(result, t),
       }));
-      outcome.unknownIndexes.forEach((index) => unknowns.push({ name: labelForIndex(index), reason: t('omc.quota_refresh_unknown') }));
       let succeeded = outcome.succeeded;
       // The dedicated helper retains last-good cache data and reports server backoff.
       // Keep one aggregate report instead of a toast per monitored account.
@@ -532,28 +535,33 @@ export function useOAuthWorkspaceActions(
           queryClient, t,
           toast: { success: () => {}, info: () => {}, warning: captureReason, error: captureReason },
         });
-        if (result.success) succeeded += 1;
-        else failures.push({ name: labelForIndex(`ollama:${id}`), reason: failureReason });
+        if (result.success) {
+          succeeded += 1;
+          successes.push({ name: labelForIndex(`ollama:${id}`) });
+        }
+        else if (result.retryAtMS) {
+          rateLimited.push({
+            name: labelForIndex(`ollama:${id}`),
+            reason: quotaRefreshRateLimitReason({ authIndex: `ollama:${id}`, name: labelForIndex(`ollama:${id}`), retryAtMS: result.retryAtMS }, t),
+          });
+        } else failures.push({ name: labelForIndex(`ollama:${id}`), reason: failureReason });
       }
       const failed = failures.length;
-      // A target held by another operation was not refreshed either. Counting it as skipped
-      // would let a run that refreshed nothing report a clean acknowledgement, so it is
-      // unrefreshed: the run is reported, with the conflict named per target.
-      const unknown = unknowns.length;
       // A clean run - including one that skipped targets which were never eligible - is an
-      // acknowledgement that leaves on its own. A run with a failed or unknown target is a report:
+      // acknowledgement that leaves on its own. A run with a failed or rate-limited target is a report:
       // it lists each target's reason and stays until it is closed, because the reasons are what
       // the operator has to read.
       const skippedCount = skipped.length;
-      if (quotaRefreshOutcomeKind({ failed, unknown }) === 'report') {
+      if (quotaRefreshOutcomeKind({ failed, rateLimited: rateLimited.length }) === 'report') {
         toast.warning(
-          t('omc.quota_refresh_report', { succeeded, failed: failed + unknown, skipped: skippedCount }),
+          t('omc.quota_refresh_report', { succeeded, rateLimited: rateLimited.length, failed, skipped: skippedCount }),
           {
             key: QUOTA_REFRESH_TOAST_KEY,
             testId: 'quota-operation-report',
             items: [
+              ...successes.map((item) => ({ ...item, group: t('toast.group_success'), isGroupSummarised: true })),
+              ...rateLimited.map((item) => ({ ...item, group: t('toast.group_rate_limited') })),
               ...failures.map((item) => ({ ...item, group: t('toast.group_failed') })),
-              ...unknowns.map((item) => ({ ...item, group: t('toast.group_unknown') })),
               ...skipped.map((item) => ({ ...item, group: t('toast.group_skipped'), isGroupSummarised: true })),
             ],
           },
