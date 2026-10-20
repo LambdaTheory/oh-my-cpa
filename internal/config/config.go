@@ -56,6 +56,8 @@ type Config struct {
 	// would touch real secret material. It is off unless OMCPA_DEMO_MODE is set,
 	// which is what keeps the self-hosted default byte-for-byte unchanged.
 	IsDemoMode bool
+
+	ResetAdviceExpiryWindow time.Duration
 }
 
 // DefaultUpdaterURL is the updater sidecar's address: the name both an installed
@@ -474,6 +476,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	resetAdviceExpiryWindow, err := parseDurationEnv("OMCPA_RESET_ADVICE_EXPIRY_WINDOW", 72*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 	automationConfig, err := loadAutomationConfig()
 	if err != nil {
 		return Config{}, err
@@ -553,6 +559,8 @@ func Load() (Config, error) {
 		GoogleFontsURL:    strings.TrimSpace(os.Getenv("OMCPA_GOOGLE_FONTS_URL")),
 		CPA:               cpa,
 		IsDemoMode:        demoMode,
+
+		ResetAdviceExpiryWindow: resetAdviceExpiryWindow,
 	}, nil
 }
 

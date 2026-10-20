@@ -3284,6 +3284,8 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "agent.capability.model_advice": "模型建議",
   "agent.capability.model_advice.description": "依已記錄的配額資訊排序可用模型；不重新讀取額度。",
   "agent.capability.quota_prediction": "額度預測",
+  "agent.capability.reset_advice": "重置建議",
+  "agent.capability.reset_advice.description": "依已記錄的重置次數、到期時間與額度讀數建議到期前使用或保留以備急需；不重新讀取額度或領取重置。",
   "agent.capability.quota_prediction.description": "依已記錄的額度觀測與使用歷史預測重置前的耗盡或閒置風險；不重新讀取額度。",
   "models.group_count": "{count} 個模型",
   "models.summary_line": "{models} 個模型 · {makers} 個廠商 · models.dev 資料 {date}",

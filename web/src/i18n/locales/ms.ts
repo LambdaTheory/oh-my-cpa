@@ -3348,6 +3348,8 @@ export const MS: Readonly<Record<string, string>> = {
   "agent.capability.model_advice": "Cadangan model",
   "agent.capability.model_advice.description": "Susun model mengikut bacaan kuota tersimpan tanpa menyegar semula kuota.",
   "agent.capability.quota_prediction": "Ramalan kuota",
+  "agent.capability.reset_advice": "Cadangan tetapan semula",
+  "agent.capability.reset_advice.description": "Cadangkan penggunaan tetapan semula sebelum tamat tempoh atau simpan untuk pemulihan berdasarkan hak dan bacaan kuota tersimpan; tidak menyegar semula kuota atau menebus tetapan semula.",
   "agent.capability.quota_prediction.description": "Unjur risiko kehabisan atau kurang digunakan sebelum tetapan semula daripada pemerhatian kuota dan penggunaan tersimpan; tidak menyegar semula kuota.",
   "nav.model_square": "Dataran Model",
   "nav.account_automation": "Automasi Akaun",

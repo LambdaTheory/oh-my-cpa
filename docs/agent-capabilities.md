@@ -605,6 +605,40 @@ as `used_percent_below_five`, `no_traffic`, `no_price` or
 `insufficient_priced_usage`. This is not the capacity API and returns no capacity field.
 See ADR 0098.
 
+### Reset advice
+
+`reset_advice` is a low-risk `read` shared by Agent and MCP. Optional inputs are
+`provider`, `window_kind`, `auth_index` and `limit` (default and maximum 100).
+Read-only MCP callers must omit `auth_index`; their results omit that field and mask
+email-shaped credential labels with the existing account-label rule. The result contains
+`generated_at_ms`, `items` and `omitted`, with a 32 KiB ceiling and deterministic ordering.
+Each row includes `credential_label`, `provider`, `window_id`, `window_kind`,
+`remaining_resets`, `earliest_expiry_ms`, `used_percent`, `reset_observed_at_ms`,
+`quota_observed_at_ms`, `verdict`, `evidence` and bounded reason codes. Missing numeric
+readings are null. Per-window entitlement counts must not be summed across windows.
+
+The four verdicts are `use_before_expiry`, `keep_for_emergency`, `no_action` and
+`unknown`. Fresh remaining entitlements expiring within the configured horizon
+(default 72 hours) yield `use_before_expiry` below 90% used; a reading at or above
+90% takes precedence and yields `keep_for_emergency`. A known zero remaining count
+or already expired grants yields `no_action`; a positive count outside the horizon
+also yields `no_action`. Missing grants, count/detail disagreement, missing expiry,
+unknown grant scope, absent quota boundaries and missing or stale readings yield
+`unknown` with a reason. Claude grants apply only to their explicit `clears` windows;
+Codex credits apply to standard windows. A stored credential without a snapshot is
+still returned as unknown. A requested kind selects existing windows; for a credential
+without any windows, it labels the unknown row.
+
+`fact` identifies a known zero remaining balance; `projection` identifies advice from
+current readings, including a positive balance outside the expiry horizon; `unknown`
+identifies insufficient evidence. Entitlement snapshots must be at most two hours old.
+Quota freshness follows the existing window-aware two-to-twenty-four-hour bound; newer
+passive observations update only quota, never the entitlement timestamp. All inputs
+come from local metadata, snapshots and observations. The capability never contacts CPA,
+refreshes upstream quota or claims a reset. This advice does not assert that a provider
+will allow redemption at the current instant. Announcement evidence is a future
+extension described in ADR 0109, not a data source in this capability version.
+
 ### Model advice
 
 `model_advice` is a low-risk `read` on Agent and MCP, including the read-only MCP
