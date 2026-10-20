@@ -764,12 +764,18 @@ without a new adapter or any secret-bearing response.
 `account_automation_status` is a low-risk read exposed to the Agent and MCP. It returns
 the resolved master switch (whether the environment variable or the console's web
 switch is in effect) and, for each adopted credential, its plan: the state, why it has
-no automatic control, whether OMC disabled it, the scheduled recovery instant, and
-whether a standard weekly reading exists with its used share. It returns no credential
-material, and it is read-only by construction: the console's
-`/api/v1/account-automation` write routes are session-and-same-origin authenticated and
+no automatic control, whether OMC disabled it, an active recovery instant with
+`recovery_status=scheduled|overdue`, and whether a standard weekly reading exists with
+its used share. `scheduled` means the still-disabled credential has a future recovery;
+`overdue` means that instant passed and retry work remains. Completed or abandoned plans
+omit both recovery fields, including historical rows written before the consumed instant
+was cleared. It returns no credential material, and it is read-only by construction: the
+console's `/api/v1/account-automation` write routes are session-and-same-origin authenticated and
 the read-only MCP key cannot reach them, so the agent cannot adopt, switch, cancel or
-set a recovery time. See ADR 0105.
+set a recovery time. Controllable credentials may be adopted even before their provider
+capability is verified; the read then reports `state=monitoring` with
+`monitor_reason=unverified_account_weekly_capability`, and no automatic disable or
+recovery action is permitted. See ADR 0105 and ADR 0108.
 
 ### Ollama and Feishu status
 

@@ -88,7 +88,8 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled: false,
             controllable: true,
             adopted: false,
-            eligible: true,
+            adoptable: true,
+            auto_disable_supported: true,
           },
           {
             auth_index: 'auth_cand_2',
@@ -98,7 +99,8 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled: true,
             controllable: true,
             adopted: false,
-            eligible: true,
+            adoptable: true,
+            auto_disable_supported: true,
           },
         ],
       };
@@ -141,28 +143,31 @@ describe('First Batch OMC UI Component Tests', () => {
       });
     });
 
-    it('displays already-disabled accounts with recovery plan and distinguishes external disable vs auto disable', async () => {
+    it('shows only active future recovery plans and labels overdue retry work', async () => {
+      const now = Date.now();
       const mockResponse: AccountAutomationListResponse = {
         settings: {
           web_enabled: true,
           enabled: true,
           source: 'web',
           master_from_env: false,
-          accounts: 2,
+          accounts: 4,
         },
         accounts: [
           {
             auth_index: 'acc_auto_disabled',
             account_label: 'acc_auto_disabled: Auto account',
             is_adopted: true,
-            is_enabled: false,
+            is_enabled: true,
             state: 'disabled',
+            auto_disable_supported: true,
             disabled_by_automation: true,
             attempt_count: 0,
             has_weekly_evidence: true,
             weekly_used_percent: 100,
-            weekly_reset_at_ms: Date.now() + 86400000,
-            recovery_at_ms: Date.now() + 86400000,
+            weekly_reset_at_ms: now + 86400000,
+            recovery_at_ms: now + 86400000,
+            recovery_status: 'scheduled',
             intent_version: 1,
           },
           {
@@ -172,10 +177,45 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: false,
             state: 'idle',
             monitor_reason: 'externally_disabled',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: false,
             intent_version: 1,
+          },
+          {
+            auth_index: 'acc_overdue',
+            account_label: 'Overdue account',
+            is_adopted: true,
+            is_enabled: true,
+            state: 'error',
+            monitor_reason: 'backoff',
+            auto_disable_supported: true,
+            disabled_by_automation: true,
+            recovery_at_ms: now - 60_000,
+            recovery_status: 'overdue',
+            next_attempt_at_ms: now + 300_000,
+            attempt_count: 1,
+            has_weekly_evidence: true,
+            weekly_used_percent: 100,
+            intent_version: 2,
+          },
+          {
+            auth_index: 'acc_recovered',
+            account_label: 'Recovered account',
+            is_adopted: true,
+            is_enabled: true,
+            state: 'monitoring',
+            monitor_reason: 'not_exhausted',
+            auto_disable_supported: true,
+            disabled_by_automation: false,
+            // A compatibility-shaped stale timestamp is not an active recovery plan
+            // unless the server also projects its recovery status.
+            recovery_at_ms: now - 3600_000,
+            attempt_count: 0,
+            has_weekly_evidence: true,
+            weekly_used_percent: 19,
+            intent_version: 3,
           },
         ],
         candidates: [],
@@ -187,7 +227,10 @@ describe('First Batch OMC UI Component Tests', () => {
       renderWithClient(<AccountAutomationDrawer open={true} onClose={() => {}} />);
 
       expect(await screen.findByText('Auto account')).toBeDefined();
-      expect(screen.getByText('7d耗尽自动关闭')).toBeDefined();
+      expect(screen.getAllByText('7d耗尽自动关闭').length).toBe(2);
+      expect(screen.getAllByText(/预计恢复:/).length).toBe(1);
+      expect(screen.getByText('已过预计恢复时间，等待重试')).toBeDefined();
+      expect(screen.getByText('Recovered account')).toBeDefined();
 
       expect(screen.getByText('External account')).toBeDefined();
       expect(screen.getByText('外部停用')).toBeDefined();
@@ -209,6 +252,7 @@ describe('First Batch OMC UI Component Tests', () => {
             is_enabled: true,
             state: 'monitoring',
             monitor_reason: 'missing_reset',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: true,
@@ -280,7 +324,7 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(await screen.findByText('CPA gateway unreachable')).toBeDefined();
     });
 
-    it('disables unverified/ineligible candidates from selection and explains canonical reasons including unverified capability and identity mismatch', async () => {
+    it('adopts unverified controllable candidates, blocks uncontrollable ones, and separates monitoring from monitor-only capability', async () => {
       const mockResponse: AccountAutomationListResponse = {
         settings: {
           web_enabled: false,
@@ -288,18 +332,33 @@ describe('First Batch OMC UI Component Tests', () => {
           source: 'default_off',
           disabled_reason: 'default_off',
           master_from_env: false,
-          accounts: 1,
+          accounts: 2,
         },
         accounts: [
           {
             auth_index: 'acc_mismatched',
+            account_label: 'Mismatched Acc',
             is_adopted: true,
             is_enabled: true,
             state: 'monitoring',
             monitor_reason: 'evidence_identity_mismatch',
+            auto_disable_supported: true,
             disabled_by_automation: false,
             attempt_count: 0,
             has_weekly_evidence: true,
+            intent_version: 1,
+          },
+          {
+            auth_index: 'acc_idle',
+            provider: 'unknown-vendor',
+            account_label: 'Idle Acc',
+            is_adopted: true,
+            is_enabled: true,
+            state: 'idle',
+            auto_disable_supported: false,
+            disabled_by_automation: false,
+            attempt_count: 0,
+            has_weekly_evidence: false,
             intent_version: 1,
           },
         ],
@@ -312,61 +371,87 @@ describe('First Batch OMC UI Component Tests', () => {
             disabled: false,
             controllable: true,
             adopted: false,
-            eligible: false,
-            ineligible_reason: 'unverified_account_weekly_capability',
+            adoptable: true,
+            auto_disable_supported: false,
           },
           {
-            auth_index: 'cand_verified_eligible',
+            auth_index: 'cand_verified_adoptable',
             provider: 'claude',
             name: 'claude-1.json',
             account_label: 'Claude Acc',
             disabled: false,
             controllable: true,
             adopted: false,
-            eligible: true,
+            adoptable: true,
+            auto_disable_supported: true,
+          },
+          {
+            auth_index: 'cand_uncontrollable',
+            provider: 'unknown-vendor',
+            account_label: 'Runtime-only Acc',
+            disabled: false,
+            controllable: false,
+            adopted: false,
+            adoptable: false,
+            adoption_blocked_reason: 'no_controllable_credential',
+            auto_disable_supported: false,
           },
         ],
       };
 
       vi.mocked(api.getAccountAutomation).mockResolvedValue(mockResponse);
       vi.mocked(api.getAccountAutomationSettings).mockResolvedValue(mockResponse.settings);
+      vi.mocked(api.postAccountAutomationAdopt).mockResolvedValue({ adopted: 2 });
 
       renderWithClient(<AccountAutomationDrawer open={true} onClose={() => {}} />);
 
       // Verify roster displays evidence_identity_mismatch human copy
-      expect(await screen.findByText('账号', { exact: true })).toBeDefined();
+      expect(await screen.findByText('Mismatched Acc')).toBeDefined();
       expect(screen.queryByText('acc_mismatched')).toBeNull();
       expect(screen.getByText(/凭据与观测身份不一致，暂停自动操作/)).toBeDefined();
+      expect(screen.getByText('监控中', { exact: true })).toBeDefined();
+      expect(screen.getAllByText('只监控', { exact: true }).length).toBeGreaterThan(0);
 
       // Open adopt modal
       const adoptBtn = screen.getByRole('button', { name: '批量接管账号' });
       fireEvent.click(adoptBtn);
 
-      // Verify unverified provider candidate displays humanized ineligible reason
+      // An unverified provider is explicitly monitor-only but remains adoptable.
       expect(await screen.findByText('Unknown Vendor Acc')).toBeDefined();
-      expect(screen.getByText(/能力未核实暂监控/)).toBeDefined();
+      expect(screen.getByText(/能力未核实，接管后只监控/)).toBeDefined();
 
-      // Checkbox for ineligible candidate is disabled
+      // The unverified candidate is enabled; only the uncontrollable candidate is blocked.
       const unknownCheckbox = screen.getByLabelText('Unknown Vendor Acc') as HTMLInputElement;
-      expect(unknownCheckbox.disabled).toBe(true);
+      expect(unknownCheckbox.disabled).toBe(false);
+      const runtimeOnlyCheckbox = screen.getByLabelText('Runtime-only Acc') as HTMLInputElement;
+      expect(runtimeOnlyCheckbox.disabled).toBe(true);
+      expect(screen.getByText(/缺少可控凭据/)).toBeDefined();
 
-      // Checkbox for eligible candidate is enabled
-      const eligibleCheckbox = screen.getByLabelText('Claude Acc') as HTMLInputElement;
-      expect(eligibleCheckbox.disabled).toBe(false);
+      const verifiedCheckbox = screen.getByLabelText('Claude Acc') as HTMLInputElement;
+      expect(verifiedCheckbox.disabled).toBe(false);
 
       // Default selection is empty; submit button is disabled
       const submitBtn = screen.getByRole('button', { name: '确认接管' });
       expect(submitBtn.getAttribute('disabled')).not.toBeNull();
 
-      // Select all only selects eligible candidates
+      // Select all includes every controllable candidate, including monitor-only.
       const selectAllBtn = screen.getByRole('button', { name: '全选未接管' });
       fireEvent.click(selectAllBtn);
-      expect(screen.getByText('已选择 1 个账号')).toBeDefined();
+      expect(screen.getByText('已选择 2 个账号')).toBeDefined();
+      expect(unknownCheckbox.checked).toBe(true);
+      expect(verifiedCheckbox.checked).toBe(true);
+      expect(runtimeOnlyCheckbox.checked).toBe(false);
+      expect(submitBtn.getAttribute('disabled')).toBeNull();
 
-      // Deselect all clears selection
-      const deselectAllBtn = screen.getByRole('button', { name: '取消全选' });
-      fireEvent.click(deselectAllBtn);
-      expect(screen.getByText('已选择 0 个账号')).toBeDefined();
+      fireEvent.click(submitBtn);
+      await waitFor(() => {
+        expect(api.postAccountAutomationAdopt).toHaveBeenCalledWith({
+          auth_indexes: ['cand_unknown_provider', 'cand_verified_adoptable'],
+          enable: true,
+          note: undefined,
+        });
+      });
+
     });
   });
 

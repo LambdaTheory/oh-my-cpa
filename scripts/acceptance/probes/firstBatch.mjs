@@ -10,7 +10,8 @@ import { chartDashboard, chartTokenHeatmap } from './dashboardFixtures.mjs';
  *
  *   - Lane A opens the account-auto-management drawer from the OAuth workspace: an
  *     empty roster is offered the gateway's live credentials for a one-time batch
- *     adoption, an ineligible candidate is disabled and left out of the adopted set,
+ *     adoption, an unverified provider joins as monitor-only while an uncontrollable
+ *     candidate is disabled and left out of the adopted set,
  *     and a planned account exposes both the retry cancellation and the hand-filled
  *     recovery time.
  *   - Lane B adds and edits an Ollama account: the cookie is accepted on write,
@@ -29,9 +30,10 @@ import { chartDashboard, chartTokenHeatmap } from './dashboardFixtures.mjs';
 
 // ── Lane A: account auto-management ──────────────────────────────────────────
 
-const ELIGIBLE_ANTHROPIC = 'cand-anthropic-a';
-const ELIGIBLE_OPENAI = 'cand-openai-b';
-const INELIGIBLE_UNVERIFIED = 'cand-unverified-c';
+const VERIFIED_CLAUDE = 'cand-claude-a';
+const VERIFIED_CODEX = 'cand-codex-b';
+const MONITOR_ONLY_UNVERIFIED = 'cand-unverified-c';
+const BLOCKED_UNCONTROLLABLE = 'cand-runtime-only-d';
 
 const automationSettings = (overrides = {}) => ({
   web_enabled: false,
@@ -79,7 +81,7 @@ async function dismissNotification(page, title, label) {
   await notification.waitFor({ state: 'detached', timeout: CONDITION_TIMEOUT_MS });
 }
 
-function candidate(authIndex, { provider, name, label, disabled, controllable, adopted, eligible, reason }) {
+function candidate(authIndex, { provider, name, label, disabled, controllable, adopted, adoptable, autoDisableSupported, reason }) {
   return {
     auth_index: authIndex,
     provider,
@@ -88,8 +90,9 @@ function candidate(authIndex, { provider, name, label, disabled, controllable, a
     disabled,
     controllable,
     adopted,
-    eligible,
-    ineligible_reason: reason || undefined,
+    adoptable,
+    adoption_blocked_reason: reason || undefined,
+    auto_disable_supported: autoDisableSupported,
   };
 }
 
@@ -105,19 +108,22 @@ const automationState = {
 function automationListBody(state) {
   const adopted = state.phase !== 'first';
   return {
-    settings: { ...state.settings, accounts: adopted ? 2 : 0 },
+    settings: { ...state.settings, accounts: adopted ? 3 : 0 },
     accounts: adopted
       ? [
         {
-          auth_index: ELIGIBLE_ANTHROPIC,
-          provider: 'anthropic',
-          name: 'Anthropic A',
-          account_label: `${ELIGIBLE_ANTHROPIC}: a@example.test`,
+          auth_index: VERIFIED_CLAUDE,
+          provider: 'claude',
+          name: 'Claude A',
+          account_label: `${VERIFIED_CLAUDE}: a@example.test`,
           is_adopted: true,
           is_enabled: true,
           state: 'waiting',
           monitor_reason: 'backoff',
-          disabled_by_automation: false,
+          auto_disable_supported: true,
+          disabled_by_automation: true,
+          recovery_at_ms: Date.now() - 60_000,
+          recovery_status: 'overdue',
           attempt_count: 2,
           next_attempt_at_ms: Date.now() + 300_000,
           has_weekly_evidence: true,
@@ -126,26 +132,48 @@ function automationListBody(state) {
           intent_version: 3,
         },
         {
-          auth_index: ELIGIBLE_OPENAI,
-          provider: 'openai',
-          name: 'OpenAI B',
+          auth_index: VERIFIED_CODEX,
+          provider: 'codex',
+          name: 'Codex B',
           account_label: 'b@example.test',
           is_adopted: true,
           is_enabled: true,
-          state: 'monitoring',
-          monitor_reason: 'missing_reset',
+          state: state.manualReset ? 'waiting' : 'monitoring',
+          monitor_reason: state.manualReset ? 'recovery_scheduled' : 'missing_reset',
+          auto_disable_supported: true,
           disabled_by_automation: false,
+          recovery_at_ms: state.manualReset?.reset_at_ms,
+          recovery_status: state.manualReset ? 'scheduled' : undefined,
           attempt_count: 0,
           has_weekly_evidence: true,
           weekly_used_percent: 100,
           intent_version: 4,
         },
+        {
+          auth_index: MONITOR_ONLY_UNVERIFIED,
+          provider: 'unverified-vendor',
+          name: 'Unverified C',
+          account_label: 'c@example.test',
+          is_adopted: true,
+          is_enabled: true,
+          state: 'monitoring',
+          monitor_reason: 'unverified_account_weekly_capability',
+          auto_disable_supported: false,
+          disabled_by_automation: false,
+          // A stale timestamp from an older server is history without an active
+          // recovery status and must not render as an expected recovery.
+          recovery_at_ms: Date.now() - 86_400_000,
+          attempt_count: 0,
+          has_weekly_evidence: false,
+          intent_version: 1,
+        },
       ]
       : [],
     candidates: [
-      candidate(ELIGIBLE_ANTHROPIC, { provider: 'anthropic', name: 'Anthropic A', label: `${ELIGIBLE_ANTHROPIC}: a@example.test`, disabled: false, controllable: true, adopted, eligible: true }),
-      candidate(ELIGIBLE_OPENAI, { provider: 'openai', name: 'OpenAI B', label: 'b@example.test', disabled: true, controllable: true, adopted, eligible: true }),
-      candidate(INELIGIBLE_UNVERIFIED, { provider: 'unverified-vendor', name: 'Unverified C', label: 'c@example.test', disabled: false, controllable: false, adopted, eligible: false, reason: 'unverified_account_weekly_capability' }),
+      candidate(VERIFIED_CLAUDE, { provider: 'claude', name: 'Claude A', label: `${VERIFIED_CLAUDE}: a@example.test`, disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
+      candidate(VERIFIED_CODEX, { provider: 'codex', name: 'Codex B', label: 'b@example.test', disabled: true, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
+      candidate(MONITOR_ONLY_UNVERIFIED, { provider: 'unverified-vendor', name: 'Unverified C', label: 'c@example.test', disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: false }),
+      candidate(BLOCKED_UNCONTROLLABLE, { provider: 'unverified-vendor', name: '', label: 'runtime-only@example.test', disabled: false, controllable: false, adopted: false, adoptable: false, autoDisableSupported: false, reason: 'no_controllable_credential' }),
     ],
   };
 }
@@ -206,47 +234,73 @@ export async function accountAutomation({ base, page, check }) {
   // The batch selection modal lists the gateway credentials as checkboxes; the roles
   // are located by their accessible name so page-wide nested text nodes cannot inflate
   // the count.
-  const candidateNames = { [ELIGIBLE_ANTHROPIC]: 'a@example.test', [ELIGIBLE_OPENAI]: 'b@example.test', [INELIGIBLE_UNVERIFIED]: 'c@example.test' };
+  const candidateNames = { [VERIFIED_CLAUDE]: 'a@example.test', [VERIFIED_CODEX]: 'b@example.test', [MONITOR_ONLY_UNVERIFIED]: 'c@example.test', [BLOCKED_UNCONTROLLABLE]: 'runtime-only@example.test' };
   const candidateBox = (authIndex) => page.getByRole('checkbox', { name: candidateNames[authIndex], exact: true });
-  await until(async () => (await candidateBox(ELIGIBLE_ANTHROPIC).count()) === 1, { label: 'the candidate list to arrive' });
-  check('every live credential is listed for the batch selection', await candidateBox(ELIGIBLE_ANTHROPIC).count() === 1
-    && await candidateBox(INELIGIBLE_UNVERIFIED).count() === 1);
-  check('an ineligible candidate is disabled rather than silently offered', await candidateBox(INELIGIBLE_UNVERIFIED).isDisabled());
+  await until(async () => (await candidateBox(VERIFIED_CLAUDE).count()) === 1, { label: 'the candidate list to arrive' });
+  check('every live credential is listed for the batch selection', await candidateBox(VERIFIED_CLAUDE).count() === 1
+    && await candidateBox(MONITOR_ONLY_UNVERIFIED).count() === 1
+    && await candidateBox(BLOCKED_UNCONTROLLABLE).count() === 1);
+  check('an unverified controllable candidate remains selectable', !(await candidateBox(MONITOR_ONLY_UNVERIFIED).isDisabled()));
+  check('an uncontrollable candidate is disabled rather than silently offered', await candidateBox(BLOCKED_UNCONTROLLABLE).isDisabled());
   // The reason is shown as the operator's own copy, never as the canonical token the API sends.
-  const ineligibleCopy = await page.locator('label.ant-checkbox-wrapper').filter({ hasText: 'c@example.test' }).innerText();
-  check('an ineligible candidate names why it cannot be adopted in friendly copy',
-    ineligibleCopy.includes('Capability unverified (monitor only)')
-      && !ineligibleCopy.includes('unverified_account_weekly_capability'), ineligibleCopy);
+  const monitorOnlyCopy = await page.locator('label.ant-checkbox-wrapper').filter({ hasText: 'c@example.test' }).innerText();
+  check('the unverified candidate says adoption is monitor-only in friendly copy',
+    monitorOnlyCopy.includes('Capability unverified; monitor-only after adoption')
+      && !monitorOnlyCopy.includes('unverified_account_weekly_capability'), monitorOnlyCopy);
+  const blockedCopy = await page.locator('label.ant-checkbox-wrapper').filter({ hasText: 'runtime-only@example.test' }).innerText();
+  check('the uncontrollable candidate names why adoption is blocked', blockedCopy.includes('No controllable credential'), blockedCopy);
   // The batch starts empty: adoption is an explicit choice, so the operator selects the
   // accounts rather than inheriting a default the page chose for them.
   const confirmAdoption = page.getByRole('button', { name: 'Confirm Adoption', exact: true });
   await until(async () => (await page.getByText('0 accounts selected', { exact: true }).count()) === 1, { label: 'the empty default selection' });
-  check('the batch starts with nothing selected', !(await candidateBox(ELIGIBLE_ANTHROPIC).isChecked())
-    && !(await candidateBox(ELIGIBLE_OPENAI).isChecked())
+  check('the batch starts with nothing selected', !(await candidateBox(VERIFIED_CLAUDE).isChecked())
+    && !(await candidateBox(VERIFIED_CODEX).isChecked())
+    && !(await candidateBox(MONITOR_ONLY_UNVERIFIED).isChecked())
     && await confirmAdoption.isDisabled());
   check('adoption labels hide standalone and prefixed internal indexes',
-    !(await page.locator('.ant-modal:visible').innerText()).includes(ELIGIBLE_ANTHROPIC)
-      && !(await candidateBox(ELIGIBLE_ANTHROPIC).getAttribute('aria-label')).includes(ELIGIBLE_ANTHROPIC));
+    !(await page.locator('.ant-modal:visible').innerText()).includes(VERIFIED_CLAUDE)
+      && !(await candidateBox(VERIFIED_CLAUDE).getAttribute('aria-label')).includes(VERIFIED_CLAUDE));
   await page.screenshot({ path: 'tmp/credential-adoption-desktop.png' });
-  // Select the two eligible accounts explicitly; the ineligible one cannot join the set.
-  await candidateBox(ELIGIBLE_ANTHROPIC).click();
-  await candidateBox(ELIGIBLE_OPENAI).click();
-  await until(() => confirmAdoption.isEnabled(), { label: 'the explicit selection to enable the confirmation' });
-  check('the explicitly selected eligible accounts are the batch', await candidateBox(ELIGIBLE_ANTHROPIC).isChecked()
-    && await candidateBox(ELIGIBLE_OPENAI).isChecked()
-    && !(await candidateBox(INELIGIBLE_UNVERIFIED).isChecked()));
+  await page.getByRole('button', { name: 'Select all unadopted', exact: true }).click();
+  await until(() => confirmAdoption.isEnabled(), { label: 'the controllable selection to enable the confirmation' });
+  check('select all includes verified and monitor-only candidates but not the uncontrollable one', await candidateBox(VERIFIED_CLAUDE).isChecked()
+    && await candidateBox(VERIFIED_CODEX).isChecked()
+    && await candidateBox(MONITOR_ONLY_UNVERIFIED).isChecked()
+    && !(await candidateBox(BLOCKED_UNCONTROLLABLE).isChecked()));
   await confirmAdoption.click();
 
   await until(() => automationState.adopt !== null, { label: 'the adoption request to reach the gateway' });
   const adoptedIndexes = automationState.adopt?.auth_indexes ?? [];
-  check('adoption carries exactly the eligible candidates', adoptedIndexes.length === 2
-    && adoptedIndexes.includes(ELIGIBLE_ANTHROPIC) && adoptedIndexes.includes(ELIGIBLE_OPENAI)
-    && !adoptedIndexes.includes(INELIGIBLE_UNVERIFIED), JSON.stringify(automationState.adopt));
+  check('adoption carries every controllable candidate including monitor-only', adoptedIndexes.length === 3
+    && adoptedIndexes.includes(VERIFIED_CLAUDE) && adoptedIndexes.includes(VERIFIED_CODEX)
+    && adoptedIndexes.includes(MONITOR_ONLY_UNVERIFIED)
+    && !adoptedIndexes.includes(BLOCKED_UNCONTROLLABLE), JSON.stringify(automationState.adopt));
 
   // The roster now exists: one account is waiting on a retry, one is missing its reset.
   const roster = await openAutomationDrawer(page);
   await until(async () => (await roster.getByText('a@example.test', { exact: true }).count()) > 0, { label: 'the adopted roster to render' });
-  check('the managed roster retains friendly account labels', !(await roster.innerText()).includes(ELIGIBLE_ANTHROPIC));
+  check('the managed roster retains friendly account labels', !(await roster.innerText()).includes(VERIFIED_CLAUDE));
+  check('the roster summarizes adopted and live credential counts separately', (await roster.innerText()).includes('Adopted 3 / 4 credentials'));
+  check('an overdue disabled plan is retry work rather than an expected recovery',
+    await roster.getByText('Recovery time passed; waiting to retry', { exact: true }).count() === 1);
+  check('a stale timestamp outside an active recovery plan is not rendered',
+    await roster.getByText(/Recovery at:/).count() === 0);
+  const verifiedMonitoringCard = roster.getByText('b@example.test', { exact: true }).locator('..').locator('..').locator('..');
+  const monitorOnlyCard = roster.getByText('c@example.test', { exact: true }).locator('..').locator('..').locator('..');
+  check('verified monitoring remains an auto-disable-capable monitoring state',
+    await verifiedMonitoringCard.getByText('Monitoring', { exact: true }).count() === 1
+      && await verifiedMonitoringCard.getByText('Monitor only', { exact: true }).count() === 0);
+  check('only an unverified roster account carries the monitor-only badge',
+    await monitorOnlyCard.getByText('Monitoring', { exact: true }).count() === 1
+      && await monitorOnlyCard.getByText('Monitor only', { exact: true }).count() === 1);
+  const stateFilter = roster.getByRole('combobox');
+  await stateFilter.click();
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'Monitor only' }).click();
+  await until(async () => (await roster.getByText('c@example.test', { exact: true }).count()) === 1, { label: 'the monitor-only filter to apply' });
+  check('the monitor-only capability is visible and filterable', await roster.getByText('c@example.test', { exact: true }).count() === 1
+    && await roster.getByText('a@example.test', { exact: true }).count() === 0);
+  await stateFilter.click();
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option').filter({ hasText: 'All accounts' }).click();
   check('the plan distinguishes a scheduled retry from a missing reset',
     await roster.getByRole('button', { name: 'Cancel Retry', exact: true }).count() === 1
       && await roster.getByRole('button', { name: 'Set Manual Reset', exact: true }).count() === 1);
@@ -256,7 +310,7 @@ export async function accountAutomation({ base, page, check }) {
   await confirm.waitFor({ state: 'visible' });
   await confirm.getByRole('button', { name: 'OK', exact: true }).click();
   await until(() => automationState.cancel !== null, { label: 'the retry cancellation to reach the gateway' });
-  check('cancelling the retry plan targets the waiting account', automationState.cancel === ELIGIBLE_ANTHROPIC, String(automationState.cancel));
+  check('cancelling the retry plan targets the waiting account', automationState.cancel === VERIFIED_CLAUDE, String(automationState.cancel));
 
   await roster.getByRole('button', { name: 'Set Manual Reset', exact: true }).click();
   const resetModal = page.locator('.ant-modal:visible').filter({ hasText: 'Set One-time Recovery Time' });
@@ -271,6 +325,9 @@ export async function accountAutomation({ base, page, check }) {
   check('a hand-filled recovery time is a future instant and reaches the missing-reset account',
     typeof automationState.manualReset?.reset_at_ms === 'number' && automationState.manualReset.reset_at_ms > Date.now(),
     JSON.stringify(automationState.manualReset));
+  await until(async () => (await roster.getByText(/Recovery at:/).count()) === 1, { label: 'the scheduled recovery label to render' });
+  check('a future active recovery plan is rendered as an expected recovery',
+    await roster.getByText(/Recovery at:/).count() === 1);
   await roster.locator('.ant-drawer-close').click();
   await until(async () => (await page.locator('.ant-drawer-open').filter({ hasText: 'Account Automation' }).count()) === 0,
     { label: 'the account automation drawer to close' });

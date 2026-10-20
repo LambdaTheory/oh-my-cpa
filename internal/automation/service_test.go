@@ -103,6 +103,44 @@ func newTestService(repo *repository.Repository, clock *testClock, writer *fakeW
 	}
 }
 
+// TestServiceAdoptsUnverifiedCredentialsAsMonitorOnly proves roster admission and
+// automatic action admission are separate. A controllable provider with no verified
+// weekly capability joins the roster in monitoring, while an uncontrollable credential
+// is omitted even when a caller submits its auth index directly.
+func TestServiceAdoptsUnverifiedCredentialsAsMonitorOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1_000_000_000_000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{
+		{AuthIndex: "idx-unverified", Name: "openrouter-1.json", Provider: "openrouter", Controllable: true},
+		{AuthIndex: "idx-uncontrollable", Provider: "openrouter", Controllable: false},
+	}
+	service := newTestService(repo, clock, writer, &credentials)
+
+	adopted, err := service.Adopt(ctx, []string{"idx-unverified", "idx-uncontrollable"}, true, "monitoring batch")
+	if err != nil || adopted != 1 {
+		t.Fatalf("adopt = %d, %v", adopted, err)
+	}
+	account, found, err := repo.GetAutomationAccount(ctx, "idx-unverified")
+	if err != nil || !found {
+		t.Fatalf("read unverified account: found=%v err=%v", found, err)
+	}
+	if account.State != StateMonitoring || account.MonitorReason != ReasonUnverifiedCapability || !account.IsEnabled {
+		t.Fatalf("unverified adoption must start monitor-only: %+v", account)
+	}
+	if _, found, err := repo.GetAutomationAccount(ctx, "idx-uncontrollable"); err != nil || found {
+		t.Fatalf("uncontrollable credential must not be adopted: found=%v err=%v", found, err)
+	}
+
+	resetAt := clock.Now().Add(48 * time.Hour).UnixMilli()
+	insertWeekly(t, repo, "idx-unverified", "openrouter", 100, clock.Now().UnixMilli(), resetAt)
+	service.RunOnce(ctx)
+	if calls := writer.snapshot(); len(calls) != 0 {
+		t.Fatalf("monitor-only adoption must never disable: %+v", calls)
+	}
+}
+
 // TestServiceDisablesThenEnablesAtTheReset exercises the whole persisted plan: a
 // disable confirmed by CPA, then an on-time enable at the recorded reset with no
 // pre-probe, then a completed plan.
@@ -137,14 +175,15 @@ func TestServiceDisablesThenEnablesAtTheReset(t *testing.T) {
 		t.Fatalf("cycle reset = %+v", account.CycleResetAtMS)
 	}
 
-	// A second pass with the same reading must not disable again.
+	// CPA now reports the confirmed write. A second pass with the same reading
+	// must keep waiting rather than disable again.
+	credentials[0].Disabled = true
 	service.RunOnce(ctx)
 	if len(writer.snapshot()) != 1 {
 		t.Fatal("a repeated pass must not re-close the credential")
 	}
 
 	// The credential is now disabled in CPA; at the reset it must be enabled once.
-	credentials[0].Disabled = true
 	clock.Set(time.UnixMilli(resetAt))
 	service.RunOnce(ctx)
 	calls = writer.snapshot()
@@ -157,6 +196,12 @@ func TestServiceDisablesThenEnablesAtTheReset(t *testing.T) {
 	}
 	if account.LastError != "" || account.NextAttemptAtMS != nil {
 		t.Fatalf("a completed enable must clear the retry state: %+v", account)
+	}
+	if account.CycleResetAtMS != nil {
+		t.Fatalf("a completed enable must consume the cycle recovery time: %+v", account)
+	}
+	if recovery, ok := RecoveryDue(account, clock.Now()); ok {
+		t.Fatalf("a completed enable must not expose pending recovery: %+v", recovery)
 	}
 }
 
@@ -271,9 +316,9 @@ func TestServiceReconcilesAnExternalReEnable(t *testing.T) {
 	}
 }
 
-// TestServicePlansRecoveryForADisabledAdoptedAccount is the first takeover: adopting an
-// account that is already disabled upstream with a fresh exhausted weekly reading plans
-// the direct enable at the reset, without ever disabling it or recording a disable.
+// TestServicePlansRecoveryForADisabledAdoptedAccount also covers rows written by the
+// original takeover implementation, which stored the reset on an idle row. That row
+// shape must still enable at the reset without ever recording a disable.
 func TestServicePlansRecoveryForADisabledAdoptedAccount(t *testing.T) {
 	ctx := context.Background()
 	repo := automationRepo(t)
@@ -302,6 +347,16 @@ func TestServicePlansRecoveryForADisabledAdoptedAccount(t *testing.T) {
 	if account.ManualResetAtMS != nil || account.ManualResetConsumed {
 		t.Fatalf("a takeover must not invent a manual reset: %+v", account)
 	}
+	if _, err := repo.SQL().ExecContext(ctx, `
+		UPDATE account_automation_accounts
+		SET state = ?, monitor_reason = ''
+		WHERE auth_index = ?`, StateIdle, "idx-1"); err != nil {
+		t.Fatal(err)
+	}
+	account, _, _ = repo.GetAutomationAccount(ctx, "idx-1")
+	if account.LastDisableAtMS != nil || account.LastEnableAtMS != nil {
+		t.Fatalf("legacy takeover fixture must have no completed action: %+v", account)
+	}
 
 	// Before the reset the account is monitored; nothing is written to CPA.
 	service.RunOnce(ctx)
@@ -322,6 +377,58 @@ func TestServicePlansRecoveryForADisabledAdoptedAccount(t *testing.T) {
 	}
 	if account.IsDisabledByAutomation() || account.LastDisableAtMS != nil {
 		t.Fatalf("a takeover enable must not be reported as an automation disable: %+v", account)
+	}
+}
+
+// TestServiceRetriesALegacyTakeoverAfterEnableFailure protects takeover rows written
+// before adoption persisted waiting/recovery_scheduled. Their empty monitor reason must
+// not make the admitted reset disappear when the first enable attempt enters backoff.
+func TestServiceRetriesALegacyTakeoverAfterEnableFailure(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1_000_000_000_000)}
+	writer := &fakeWriter{fail: errors.New("upstream said no")}
+	credentials := []Credential{{AuthIndex: "idx-1", Name: "claude-1.json", Provider: "claude", Disabled: true, Controllable: true}}
+	service := newTestService(repo, clock, writer, &credentials)
+
+	resetAt := clock.Now().Add(time.Hour).UnixMilli()
+	insertWeekly(t, repo, "idx-1", "claude", 100, clock.Now().UnixMilli(), resetAt)
+	if _, err := service.Adopt(ctx, []string{"idx-1"}, true, "legacy takeover"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SQL().ExecContext(ctx, `
+		UPDATE account_automation_accounts
+		SET state = ?, monitor_reason = ''
+		WHERE auth_index = ?`, StateIdle, "idx-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.Set(time.UnixMilli(resetAt))
+	service.RunOnce(ctx)
+	account, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	if account.State != StateError || account.MonitorReason != "" || account.NextAttemptAtMS == nil || account.AttemptCount != 1 {
+		t.Fatalf("legacy takeover after failed enable = %+v", account)
+	}
+	if recovery, ok := RecoveryDue(account, clock.Now()); !ok || recovery.AtMS != resetAt || recovery.Status != RecoveryOverdue {
+		t.Fatalf("failed legacy takeover lost its recovery plan: %+v/%v", recovery, ok)
+	}
+
+	writer.setFailure(nil)
+	clock.Set(time.UnixMilli(*account.NextAttemptAtMS))
+	service.RunOnce(ctx)
+	calls := writer.snapshot()
+	if len(calls) != 2 || calls[0].disabled || calls[1].disabled {
+		t.Fatalf("legacy takeover retries = %+v", calls)
+	}
+	account, _, _ = repo.GetAutomationAccount(ctx, "idx-1")
+	if account.State != StateIdle || account.LastEnableAtMS == nil || account.CycleResetAtMS != nil {
+		t.Fatalf("legacy takeover after retry success = %+v", account)
+	}
+
+	clock.Set(clock.Now().Add(time.Hour))
+	service.RunOnce(ctx)
+	if calls := writer.snapshot(); len(calls) != 2 {
+		t.Fatalf("completed legacy recovery must not execute again: %+v", calls)
 	}
 }
 

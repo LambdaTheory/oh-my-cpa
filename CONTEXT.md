@@ -471,7 +471,12 @@ recorded and at least 95 percent of requests carried request-time pricing.
   at that recorded reset without a pre-enable probe. The roster is opt-in: a credential is
   under control only once an operator adopts it, a credential discovered later is not
   adopted by default, and an account that was already disabled is adopted explicitly and
-  never reported as disabled by this feature. A five-hour window, a model- or
+  never reported as disabled by this feature. Adoption requires a controllable CPA
+  credential, not a verified provider capability: an adopted provider whose account-level
+  weekly mapping is not verified remains **monitor-only**, with that capability visible
+  and filterable separately from its runtime state in the console. It cannot be disabled
+  or re-enabled automatically until its capability is deliberately added to the registry.
+  A five-hour window, a model- or
   group-scoped window, a partial reading, an ordinary 429, an authentication failure or a
   collection failure never disables. A reading whose reset is missing or already past
   produces no disable; the console shows the recovery time is missing, and the operator
@@ -479,7 +484,10 @@ recorded and at least 95 percent of requests carried request-time pricing.
   schedules. A disable stores the reading's `observed_at` and the cycle's reset as an
   evidence watermark, so a later pass needs strictly newer evidence in a different cycle
   and a closed cycle cannot re-close. A failed enable persists its retry schedule and is
-  complete only once CPA confirms it. The process master switch,
+  complete only once CPA confirms it. A **Recovery Plan** is active only while the
+  credential is still disabled and awaiting that enable: a future instant is scheduled,
+  a passed instant is overdue retry work, and a completed or abandoned plan has no current
+  recovery instant. The process master switch,
   `OMCPA_ACCOUNT_AUTOMATION_ENABLED`, defaults off, and an explicit `false` is an
   out-of-band emergency off the console cannot override; the console shows which source
   is in effect. An external `disabled` change is never read as intent: a credential that is

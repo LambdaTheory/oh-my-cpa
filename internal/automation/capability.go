@@ -51,8 +51,9 @@ func verifiedWeeklyCapability(provider string) (accountWeeklyCapability, bool) {
 
 // ProviderHasVerifiedWeeklyCapability reports whether provider's account-level weekly
 // window is a capability OMC has verified. It is the public face of the registry for
-// the API's candidate eligibility: a provider that is not verified - including an
-// unknown or empty one - must not be offered as able to be auto-managed yet.
+// the API's candidate projection: a provider that is not verified - including an
+// unknown or empty one - may be monitored after adoption but must not be presented as
+// supporting automatic disablement.
 func ProviderHasVerifiedWeeklyCapability(provider string) bool {
 	_, ok := verifiedWeeklyCapability(provider)
 	return ok
