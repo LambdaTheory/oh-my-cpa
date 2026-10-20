@@ -911,11 +911,21 @@ async function verifyWorkspaceScale({ base, page, check }) {
     peakBatches = Math.max(peakBatches, activeBatches);
     if (batches.length === 1) await new Promise(resolve => pendingBatches.push(resolve));
     activeBatches -= 1;
-    await route.fulfill({ json: { status: 'ok', quotas: indexes
+    const quotas = indexes
       .filter((index) => index !== 'scale-13')
       .map((index) => ({ ...scaleQuota.find((item) => item.auth_index === index),
         ...(index === 'scale-7' ? { status: 'error', error: `Fixture upstream failure (refresh ${Math.ceil(batches.length / 3)})` } : {}),
-      })) } });
+      }));
+    await route.fulfill({ json: { status: 'ok', quotas, total: indexes.length, results: indexes.map((index) => {
+      const quota = quotas.find((item) => item.auth_index === index);
+      if (index === 'scale-13') return {
+        auth_index: index, name: 'operator-2@example.test', outcome: 'rate_limited', retry_at_ms: Date.now() + 120_000, retry_after_ms: 120_000,
+      };
+      if (index === 'scale-7') return {
+        auth_index: index, name: quota.name, outcome: 'failed', error: quota.error, quota,
+      };
+      return { auth_index: index, name: quota.name, outcome: 'success', quota };
+    }) } });
   };
   const countModels = (request) => {
     if (request.url().includes('/auth-files/models')) reads.models += 1;
@@ -946,10 +956,14 @@ async function verifyWorkspaceScale({ base, page, check }) {
       batches.map((batch) => batch.length).join('/') === '10/10/3'
         && new Set(batches.flat()).size === 23 && peakBatches === 1,
       JSON.stringify({ sizes: batches.map((batch) => batch.length), peakBatches }));
-    check('batch errors and missing results remain visible to the operator',
-      report.includes('Fixture upstream failure') && report.includes('operator-2@example.test')
-        && report.includes('The response did not include an outcome for this target')
+    check('the refresh report separates success, rate limit, failure and skipped targets',
+      report.includes('21 succeeded, 1 rate limited, 1 failed, 25 skipped')
+        && report.includes('Succeeded') && report.includes('Rate limited')
+        && report.includes('Failed') && report.includes('Skipped')
+        && report.includes('Fixture upstream failure') && report.includes('operator-2@example.test')
+        && report.includes('retry at') && !report.includes('rate_limited_backoff')
         && !report.includes('scale-13'), report);
+    await page.screenshot({ path: 'tmp/oauth-quota-refresh-report.png' });
     // Exercise the real copy action without depending on the machine's clipboard permission.
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: async () => {} },

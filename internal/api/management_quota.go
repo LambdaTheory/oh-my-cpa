@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/warmup"
 )
 
@@ -47,6 +47,16 @@ func (h *Handler) getQuotaOverview(writer http.ResponseWriter, request *http.Req
 type refreshQuotaRequest struct {
 	AuthIndex   string   `json:"auth_index,omitempty"`
 	AuthIndexes []string `json:"auth_indexes,omitempty"`
+}
+
+type refreshQuotaResultDTO struct {
+	AuthIndex    string                 `json:"auth_index"`
+	Name         string                 `json:"name"`
+	Outcome      string                 `json:"outcome"`
+	Quota        *quota.NormalizedQuota `json:"quota,omitempty"`
+	Error        string                 `json:"error,omitempty"`
+	RetryAtMS    *int64                 `json:"retry_at_ms,omitempty"`
+	RetryAfterMS *int64                 `json:"retry_after_ms,omitempty"`
 }
 
 func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *http.Request) {
@@ -158,77 +168,115 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 		}
 	}
 	svc := quota.NewService(client)
-	results := make([]*quota.NormalizedQuota, len(targetIndexes))
-	var rateMu sync.Mutex
-	var firstRateLimit *quota.RateLimitError
-	var wg sync.WaitGroup
-	sem := make(chan struct{}, 4)
-
-	for i, idx := range targetIndexes {
-		cleanIdx := strings.TrimSpace(idx)
-		file, exists := fileMap[cleanIdx]
+	type refreshCompletion struct {
+		index     int
+		file      management.AuthFile
+		refreshed *quota.NormalizedQuota
+		err       error
+	}
+	completed := make(chan refreshCompletion, len(targetIndexes))
+	launch := func(index int) {
+		authIndex := targetIndexes[index]
+		file, exists := fileMap[authIndex]
 		if !exists {
-			continue
+			completed <- refreshCompletion{index: index, err: errors.New("credential not found")}
+			return
 		}
-		wg.Add(1)
-		go func(index int, authIdx string, f management.AuthFile) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			prior := h.loadPriorNormalizedQuota(ctx, authIdx)
-			refreshed, rErr := h.readCredentialQuota(ctx, svc, f, prior)
-			if rErr != nil {
-				var rateLimit *quota.RateLimitError
-				if errors.As(rErr, &rateLimit) {
-					rateMu.Lock()
-					if firstRateLimit == nil {
-						firstRateLimit = rateLimit
-					}
-					rateMu.Unlock()
-				}
-				return
-			}
-			if refreshed != nil {
-				results[index] = refreshed
-				if h.repo != nil {
-					_ = h.persistNormalizedQuotaSnapshot(ctx, refreshed)
-				}
-			}
-		}(i, cleanIdx, file)
-	}
-	wg.Wait()
-
-	// A batch is not a successful empty collection when one credential was parked:
-	// partial success already changes durable state, so the caller still needs 429
-	// to schedule the remaining work.
-	rateMu.Lock()
-	rateLimit := firstRateLimit
-	rateMu.Unlock()
-	if rateLimit != nil {
-		writeQuotaRateLimited(writer, h.now().Add(rateLimit.RetryAfter))
-		return
+		go func() {
+			prior := h.loadPriorNormalizedQuota(ctx, authIndex)
+			refreshed, refreshErr := h.readCredentialQuota(ctx, svc, file, prior)
+			completed <- refreshCompletion{index: index, file: file, refreshed: refreshed, err: refreshErr}
+		}()
 	}
 
-	out := make([]*quota.NormalizedQuota, 0, len(results))
-	for _, r := range results {
-		if r != nil {
-			if r.Provider == "meta" && !r.Disabled {
-				outcome := "success"
-				if r.Error != "" {
-					outcome = "failure"
-				}
-				_ = h.recordAudit(request, "quota.refresh", "quota", r.AuthIndex, outcome, map[string]any{"status": r.Status})
+	results := make([]refreshQuotaResultDTO, len(targetIndexes))
+	refreshedByIndex := make([]*quota.NormalizedQuota, len(targetIndexes))
+	nextIndex := 0
+	inFlight := 0
+	isSerial := false
+	for nextIndex < len(targetIndexes) && inFlight < 4 {
+		launch(nextIndex)
+		nextIndex++
+		inFlight++
+	}
+	for settled := 0; settled < len(targetIndexes); settled++ {
+		completion := <-completed
+		inFlight--
+		authIndex := targetIndexes[completion.index]
+		name := strings.TrimSpace(completion.file.Name)
+		if name == "" {
+			name = authIndex
+		}
+		result := refreshQuotaResultDTO{AuthIndex: authIndex, Name: name}
+		var rateLimit *quota.RateLimitError
+		switch {
+		case errors.As(completion.err, &rateLimit):
+			now := h.now()
+			retryAt := now.Add(rateLimit.RetryAfter)
+			if blocked, until := h.quotaBackoffBlocked(quota.DetectProvider(completion.file.Type, completion.file.Provider), authIndex); blocked {
+				retryAt = until
 			}
-			h.attachWindowCapacity(ctx, r, h.now().UnixMilli())
-			out = append(out, r)
+			retryAfterMS := max(int64(0), retryAt.Sub(now).Milliseconds())
+			retryAtMS := retryAt.UnixMilli()
+			result.Outcome = "rate_limited"
+			result.RetryAtMS = &retryAtMS
+			result.RetryAfterMS = &retryAfterMS
+			isSerial = true
+		case completion.err != nil:
+			result.Outcome = "failed"
+			result.Error = security.RedactText(completion.err.Error())
+		case completion.refreshed == nil:
+			result.Outcome = "failed"
+			result.Error = "quota refresh returned no result"
+		default:
+			result.Quota = completion.refreshed
+			if h.repo != nil {
+				_ = h.persistNormalizedQuotaSnapshot(ctx, completion.refreshed)
+			}
+			h.attachWindowCapacity(ctx, completion.refreshed, h.now().UnixMilli())
+			refreshedByIndex[completion.index] = completion.refreshed
+			if completion.refreshed.Error != "" || completion.refreshed.Status == "error" || completion.refreshed.Status == "stale" {
+				result.Outcome = "failed"
+				result.Error = completion.refreshed.Error
+			} else {
+				result.Outcome = "success"
+			}
+		}
+		results[completion.index] = result
+		if quota.DetectProvider(completion.file.Type, completion.file.Provider) == "meta" {
+			auditOutcome := "success"
+			if result.Outcome != "success" {
+				auditOutcome = "failure"
+			}
+			_ = h.recordAudit(request, "quota.refresh", "quota", authIndex, auditOutcome, map[string]any{"outcome": result.Outcome})
+		}
+
+		if isSerial {
+			if inFlight == 0 && nextIndex < len(targetIndexes) {
+				launch(nextIndex)
+				nextIndex++
+				inFlight++
+			}
+		} else {
+			for nextIndex < len(targetIndexes) && inFlight < 4 {
+				launch(nextIndex)
+				nextIndex++
+				inFlight++
+			}
+		}
+	}
+	quotas := make([]*quota.NormalizedQuota, 0, len(targetIndexes))
+	for _, refreshed := range refreshedByIndex {
+		if refreshed != nil {
+			quotas = append(quotas, refreshed)
 		}
 	}
 
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"status": "ok",
-		"quotas": out,
-		"total":  len(out),
+		"status":  "ok",
+		"quotas":  quotas,
+		"results": results,
+		"total":   len(quotas),
 	})
 }
 

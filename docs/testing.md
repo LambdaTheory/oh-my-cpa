@@ -1124,7 +1124,10 @@ Credential feedback regressions live in `scripts/test-credential-labels.ts`,
 `web/tests/credential-actions.component.test.tsx`. The rendered tests drive the
 actual workspace action hook and typed client, including mixed-source selection,
 eleven eligible targets in a thirteen-entry inventory, collection/deletion routing,
-a held 429 and last-good snapshot retention. Existing first-batch automation and
+a held 429 and last-good snapshot retention. They also own the four quota-refresh
+report groups and the readable retry time for a rate-limited credential. The OAuth
+scale probe renders the same mixed succeeded/rate-limited/failed/skipped report from
+synthetic data. Existing first-batch automation and
 Ollama probes own friendly adoption labels, real checkbox/action wiring and
 desktop/phone screenshots. These extend the existing automatic discovery layers.
 

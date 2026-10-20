@@ -185,10 +185,9 @@ type Scheduler struct {
 	// evaluationInterval is how often the loop wakes; tests shorten it.
 	evaluationInterval time.Duration
 
-	mu            sync.Mutex
-	lastQuery     map[string]time.Time
-	resetSeen     map[string]bool
-	providerLocks map[string]*sync.Mutex
+	mu        sync.Mutex
+	lastQuery map[string]time.Time
+	resetSeen map[string]bool
 }
 
 // NewScheduler builds a scheduler with the given rules and backoff registry.
@@ -213,7 +212,6 @@ func NewScheduler(cfg SchedulerConfig, logger *slog.Logger, backoff *Backoff) *S
 		evaluationInterval: time.Minute,
 		lastQuery:          map[string]time.Time{},
 		resetSeen:          map[string]bool{},
-		providerLocks:      map[string]*sync.Mutex{},
 	}
 }
 
@@ -293,9 +291,8 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 		go func(file management.AuthFile, provider, authIndex, resetKey string, prior *NormalizedQuota, isReset bool) {
 			defer wait.Done()
 			defer func() { <-semaphore }()
-			lock := s.providerLock(provider)
-			lock.Lock()
-			defer lock.Unlock()
+			unlock := s.Backoff.LockProvider(provider)
+			defer unlock()
 			s.query(ctx, file, provider, authIndex, prior)
 			if isReset {
 				s.markReset(resetKey)
@@ -381,15 +378,4 @@ func (s *Scheduler) markReset(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resetSeen[key] = true
-}
-
-func (s *Scheduler) providerLock(provider string) *sync.Mutex {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	lock, ok := s.providerLocks[provider]
-	if !ok {
-		lock = &sync.Mutex{}
-		s.providerLocks[provider] = lock
-	}
-	return lock
 }

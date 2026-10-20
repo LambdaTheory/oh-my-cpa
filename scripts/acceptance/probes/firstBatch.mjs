@@ -517,7 +517,11 @@ export async function ollamaAccounts({ base, page, check }) {
   await page.route('**/ollama/quota', (route) => route.fulfill({ json: { accounts: [{ account_id: monitor.id, enabled: true, quota: monitorQuota }] } }));
   await page.route('**/management/quota/refresh', (route) => {
     quotaRefreshIndexes.push(...route.request().postDataJSON().auth_indexes);
-    return route.fulfill({ json: { status: 'ok', quotas: mixedQuotas.filter((quota) => quotaRefreshIndexes.includes(quota.auth_index)) } });
+    const quotas = mixedQuotas.filter((quota) => quotaRefreshIndexes.includes(quota.auth_index));
+    return route.fulfill({ json: {
+      status: 'ok', quotas, total: quotas.length,
+      results: quotas.map((quota) => ({ auth_index: quota.auth_index, name: quota.name, outcome: 'success', quota })),
+    } });
   });
   await page.route(`**/ollama/accounts/${monitor.id}/refresh`, (route) => {
     monitorRefreshes += 1;

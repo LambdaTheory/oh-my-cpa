@@ -865,11 +865,13 @@ preference read fails, the controls remain usable through URL state; saves stay
 disabled until the stored document has been read successfully.
 
 A quota refresh reports its outcome once, as a toast, so it never pushes the
-credential list down (ADR 0045). A run without a failing target - including one
+credential list down (ADR 0045). The batch endpoint returns one result per credential;
+an upstream rate limit is a result with its retry time rather than an HTTP failure for
+the whole batch (ADR 0107). A run without a failed or rate-limited target - including one
 that skipped credentials which were never eligible - is acknowledged by a toast
-that closes itself. A run with a failed or unknown target raises a report toast
-that lists each target's reason under its group (failed, no outcome, skipped) and
-stays until it is closed; the next refresh replaces it rather than stacking. Destructive and export actions on a
+that closes itself. A mixed run raises a report toast grouped as succeeded, rate limited,
+failed and skipped, with each failed target's own reason, and stays until it is closed;
+the next refresh replaces it rather than stacking. Destructive and export actions on a
 credential name their target in the confirmation, not in the menu label, which
 stays short for any file-name length.
 

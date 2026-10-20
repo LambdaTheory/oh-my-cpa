@@ -21,6 +21,7 @@ import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../../types/quota';
 import {
   quotaRefreshFailureReason,
+  quotaRefreshRateLimitReason,
   refreshCredentialQuotas,
 } from '../../utils/quotaRefresh';
 import {
@@ -343,13 +344,13 @@ export const CredentialQuota: React.FC = () => {
     try {
       const outcome = await refreshCredentialQuotas(targets);
       const failed = outcome.failures.length;
-      const unknown = outcome.unknownIndexes.length;
-      if (quotaRefreshOutcomeKind({ failed, unknown }) === 'report') {
-        toast.warning(t('omc.quota_refresh_report', { succeeded: outcome.succeeded, failed: failed + unknown, skipped: 0 }), {
+      if (quotaRefreshOutcomeKind({ failed, rateLimited: outcome.rateLimited.length }) === 'report') {
+        toast.warning(t('omc.quota_refresh_report', { succeeded: outcome.succeeded, rateLimited: outcome.rateLimited.length, failed, skipped: 0 }), {
           key: QUOTA_REFRESH_TOAST_KEY,
           items: [
+            ...outcome.successes.map((success) => ({ name: success.name, group: t('toast.group_success'), isGroupSummarised: true })),
+            ...outcome.rateLimited.map((result) => ({ name: result.name, reason: quotaRefreshRateLimitReason(result, t), group: t('toast.group_rate_limited') })),
             ...outcome.failures.map((failure) => ({ name: failure.name, reason: quotaRefreshFailureReason(failure, t), group: t('toast.group_failed') })),
-            ...outcome.unknownIndexes.map((name) => ({ name, reason: t('omc.quota_refresh_unknown'), group: t('toast.group_unknown') })),
           ],
         });
       } else {

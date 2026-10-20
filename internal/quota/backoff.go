@@ -80,6 +80,7 @@ type Backoff struct {
 	// so one concurrent sibling's successful probe cannot clear another's refusal.
 	providerOwners map[string]string
 	attempts       map[string]int
+	providerLocks  map[string]*sync.Mutex
 }
 
 // NewBackoff builds a backoff registry with the exponential fallback bounds.
@@ -101,7 +102,29 @@ func NewBackoff(base, maximum time.Duration) *Backoff {
 		providers:      map[string]time.Time{},
 		providerOwners: map[string]string{},
 		attempts:       map[string]int{},
+		providerLocks:  map[string]*sync.Mutex{},
 	}
+}
+
+// LockProvider serializes active quota probes for one provider across every
+// caller sharing this backoff registry. The returned function releases the lock.
+func (b *Backoff) LockProvider(provider string) func() {
+	if b == nil {
+		return func() {}
+	}
+	provider = strings.TrimSpace(provider)
+	b.mu.Lock()
+	if b.providerLocks == nil {
+		b.providerLocks = map[string]*sync.Mutex{}
+	}
+	lock, ok := b.providerLocks[provider]
+	if !ok {
+		lock = &sync.Mutex{}
+		b.providerLocks[provider] = lock
+	}
+	b.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 // DefaultBackoffBase is the first wait a 429 without a Retry-After produces. It

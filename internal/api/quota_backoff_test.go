@@ -126,8 +126,15 @@ func TestManualRefreshHonoursAndRecordsRateLimitBackoff(t *testing.T) {
 	}
 }
 
-func TestManualBatchRefreshReturnsRateLimitBackoff(t *testing.T) {
-	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, isRateLimited: true, retryAfter: 120}
+func TestManualBatchRefreshReportsRateLimitBesideSuccessfulResults(t *testing.T) {
+	fixture := &quotaAutoRefreshFixture{
+		reads: map[string]int{},
+		filesJSON: `{"files":[
+			{"id":"codex","name":"Codex limited","auth_index":"codex-reset","type":"codex","provider":"codex"},
+			{"id":"kimi","name":"Kimi ready","auth_index":"kimi-ready","type":"kimi","provider":"kimi"}
+		]}`,
+		isRateLimited: true, rateLimitedAuthIndex: "codex-reset", retryAfter: 120,
+	}
 	handler := newQuotaAutoRefreshHandler(t, fixture)
 	now := time.Now().UTC()
 	handler.nowFn = func() time.Time { return now }
@@ -145,24 +152,37 @@ func TestManualBatchRefreshReturnsRateLimitBackoff(t *testing.T) {
 	}
 	login.Body.Close()
 
-	for _, attempt := range []string{"first", "second"} {
-		response, err := client.Post(appServer.URL+"/api/v1/management/quota/refresh", "application/json", bytes.NewBufferString(`{"auth_indexes":["codex-reset"]}`))
+	for attempt := 1; attempt <= 2; attempt++ {
+		response, err := client.Post(appServer.URL+"/api/v1/management/quota/refresh", "application/json", bytes.NewBufferString(`{"auth_indexes":["codex-reset","kimi-ready"]}`))
 		if err != nil {
 			t.Fatal(err)
 		}
 		body, _ := io.ReadAll(response.Body)
 		response.Body.Close()
-		if response.StatusCode != http.StatusTooManyRequests || !strings.Contains(string(body), "rate_limited_backoff") {
-			t.Fatalf("%s batch refresh = %d %s, want rate_limited_backoff", attempt, response.StatusCode, body)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("batch refresh %d = %d %s, want 200", attempt, response.StatusCode, body)
 		}
 		if got := fixture.usageReads("codex-reset"); got != 1 {
-			t.Fatalf("%s batch refresh upstream reads = %d, want 1", attempt, got)
+			t.Fatalf("batch refresh %d rate-limited upstream reads = %d, want 1", attempt, got)
 		}
-		var refusal struct {
-			RetryAtMS int64 `json:"retry_at_ms"`
+		var result struct {
+			Quotas []struct {
+				AuthIndex string `json:"auth_index"`
+			} `json:"quotas"`
+			Results []struct {
+				AuthIndex string `json:"auth_index"`
+				Outcome   string `json:"outcome"`
+				RetryAtMS int64  `json:"retry_at_ms"`
+			} `json:"results"`
 		}
-		if err := json.Unmarshal(body, &refusal); err != nil || refusal.RetryAtMS <= now.UnixMilli() {
-			t.Fatalf("%s batch refusal carried no retry time: %s (%v)", attempt, body, err)
+		if err := json.Unmarshal(body, &result); err != nil {
+			t.Fatalf("decode batch %d: %v (%s)", attempt, err, body)
+		}
+		if len(result.Quotas) != 1 || result.Quotas[0].AuthIndex != "kimi-ready" {
+			t.Fatalf("batch %d successful quotas = %+v, want Kimi reading retained", attempt, result.Quotas)
+		}
+		if len(result.Results) != 2 || result.Results[0].Outcome != "rate_limited" || result.Results[0].RetryAtMS <= now.UnixMilli() || result.Results[1].Outcome != "success" {
+			t.Fatalf("batch %d results = %+v, want rate-limited then success", attempt, result.Results)
 		}
 	}
 }

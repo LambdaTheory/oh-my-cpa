@@ -118,6 +118,12 @@ loop and credential warmup's consuming requests share the park. Quota refreshes 
 successful quota read clears its own credential park, while a provider park is released only by
 the read that created the current refusal. The state is in memory only, so a restart clears it.
 
+The console's multi-credential refresh reports the park per credential instead of failing the
+whole request. Successful siblings remain in the response, rate-limited entries carry their retry
+time, and an already parked credential does not reach upstream again. The manual batch and the
+background scheduler share the same provider lock: normal batches retain four-way concurrency
+across providers, then send remaining targets one at a time after the first rate limit settles.
+
 ### Account auto-management
 
 Account auto-management stops using a credential on explicit account-level weekly (7d)
