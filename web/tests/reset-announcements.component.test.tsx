@@ -1,6 +1,6 @@
 import { App as AntdApp } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../src/i18n';
 import { ResetAnnouncements } from '../src/pages/quota/ResetAnnouncements';
@@ -22,6 +22,45 @@ function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(<QueryClientProvider client={client}><I18nProvider><AntdApp><ResetAnnouncements /></AntdApp></I18nProvider></QueryClientProvider>);
 }
+
+it.each([false, true])('delays first-load feedback and keeps loaded content during refresh (slow read: %s)', async (isSlowRead) => {
+  vi.useFakeTimers();
+  let resolveRead!: (response: Response) => void;
+  const fetcher = vi.fn(() => new Promise<Response>((resolve) => { resolveRead = resolve; }));
+  vi.stubGlobal('fetch', fetcher);
+  const view = mount();
+  try {
+    const region = screen.getByRole('region', { name: 'Active reset announcements' });
+    expect(region.classList.contains('panel')).toBe(true);
+    expect(within(region).queryByRole('status')).toBeNull();
+    expect(within(region).queryByText('No active announcements')).toBeNull();
+    await act(() => vi.advanceTimersByTimeAsync(199));
+    expect(within(region).queryByRole('status')).toBeNull();
+    if (isSlowRead) {
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(within(region).getByRole('status', { name: 'Loading…' }).classList.contains('block-loading')).toBe(true);
+    }
+    await act(async () => {
+      resolveRead(new Response(JSON.stringify({ items: [], total: 0 })));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(within(region).queryByRole('status')).toBeNull();
+    expect(within(region).getByText('No active announcements').closest('.empty-state')?.classList.contains('is-compact')).toBe(true);
+    fireEvent.click(within(region).getByRole('button', { name: 'Refresh' }));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(200));
+    expect(within(region).queryByRole('status')).toBeNull();
+    expect(within(region).getByText('No active announcements')).toBeTruthy();
+    await act(async () => {
+      resolveRead(new Response(JSON.stringify({ items: [item()], total: 1 })));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(within(region).getByText('Public reset notice')).toBeTruthy();
+  } finally {
+    view.unmount();
+    vi.useRealTimers();
+  }
+});
 
 it('validates required provider, confidence and future time, then posts and reloads active announcements', async () => {
   const items: ResetAnnouncement[] = [];

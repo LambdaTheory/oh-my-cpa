@@ -8,6 +8,9 @@ import { isDemoMode } from '../../types/demoMode';
 import type { ResetAnnouncementInput } from '../../types/resetAnnouncements';
 import { SectionHeading } from '../../components/common/SectionHeading';
 import { Pager } from '../../components/common/Pager';
+import { Panel } from '../../components/common/Panel';
+import { PageLoading } from '../../components/common/PageLoading';
+import { EmptyState } from '../../components/common/EmptyState';
 import { LoadFailure, useToast } from '../../components/feedback';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import dayjs from '../../utils/time';
@@ -28,6 +31,16 @@ export function ResetAnnouncements() {
   const [form] = Form.useForm<AnnouncementForm>();
   const scope = Form.useWatch('scope', form);
   const query = useQuery({ queryKey: ['reset-announcements', page], queryFn: () => api.listResetAnnouncements(page), refetchInterval: 30_000 });
+  const [isLoadingVisible, setIsLoadingVisible] = React.useState(false);
+  React.useEffect(() => {
+    if (!query.isPending) {
+      setIsLoadingVisible(false);
+      return;
+    }
+    // Fast reads stay quiet; background refreshes retain the existing content.
+    const timer = window.setTimeout(() => setIsLoadingVisible(true), 200);
+    return () => window.clearTimeout(timer);
+  }, [query.isPending]);
   const mutation = useMutation({
     mutationFn: (values: AnnouncementForm) => api.createResetAnnouncement({
       provider: values.provider, source: 'manual', scope: values.scope,
@@ -48,7 +61,7 @@ export function ResetAnnouncements() {
   const items = (query.data?.items ?? []).filter((item) => item.status === 'active' && (item.expected_reset_at_ms === null || item.expected_reset_at_ms > nowMS));
   const required = { required: true, whitespace: true, message: t('ann.required') };
   return (
-    <section className={styles.panel} aria-label={t('ann.title')}>
+    <Panel role="region" aria-label={t('ann.title')}>
       <SectionHeading className={styles.heading} title={t('ann.title')} description={t('ann.description')} extra={
         <Space wrap>
           <Button size="small" onClick={() => void query.refetch()}>{t('common.refresh')}</Button>
@@ -56,8 +69,8 @@ export function ResetAnnouncements() {
         </Space>
       } />
       {query.isError && <LoadFailure title={t('ann.load_failed')} error={query.error} onRetry={() => void query.refetch()} />}
-      {query.isPending && <p>{t('common.loading')}</p>}
-      {!query.isPending && !query.isError && items.length === 0 && <p className={styles.empty}>{t('ann.empty')}</p>}
+      {query.isPending && isLoadingVisible && <PageLoading variant="block" />}
+      {!query.isPending && !query.isError && items.length === 0 && <EmptyState size="compact" title={t('ann.empty')} />}
       <ul className={styles.list}>
         {items.map((item) => <li key={item.id} className={styles.item}>
           <div className={styles.meta}>
@@ -100,6 +113,6 @@ export function ResetAnnouncements() {
           </Form.Item>
         </Form>
       </Modal>
-    </section>
+    </Panel>
   );
 }
