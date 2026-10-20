@@ -343,12 +343,7 @@ func hasPendingRecoveryState(account repository.AutomationAccount) bool {
 	case StateDisabled, StateWaiting:
 		return true
 	case StateIdle:
-		// Older takeover plans stored the cycle reset while leaving the row idle.
-		// Their evidence watermark proves the timestamp was admitted as a plan, while
-		// the absent action timestamps distinguish them from completed history.
-		return account.CycleResetAtMS != nil &&
-			account.DisableObservedAtMS != nil && account.CycleKey != "" &&
-			account.LastDisableAtMS == nil && account.LastEnableAtMS == nil
+		return hasLegacyTakeoverRecovery(account)
 	case StateError:
 		// A disable write can fail too. Error alone therefore does not prove that
 		// the credential is awaiting enable; retain only errors whose preceding
@@ -356,7 +351,8 @@ func hasPendingRecoveryState(account repository.AutomationAccount) bool {
 		return account.IsDisabledByAutomation() ||
 			account.MonitorReason == ReasonRecoveryScheduled ||
 			account.MonitorReason == ReasonExternallyDisabled ||
-			hasPendingManualReset(account)
+			hasPendingManualReset(account) ||
+			hasLegacyTakeoverRecovery(account)
 	case StateMonitoring:
 		// A takeover of an already-disabled credential is not recorded as OMC's
 		// disable, but its admitted reset still belongs to an active recovery plan.
@@ -367,6 +363,16 @@ func hasPendingRecoveryState(account repository.AutomationAccount) bool {
 	default:
 		return false
 	}
+}
+
+func hasLegacyTakeoverRecovery(account repository.AutomationAccount) bool {
+	// Older takeover plans stored the cycle reset while leaving the row idle. If
+	// their first enable failed, the same row moved to error without gaining a
+	// monitor reason. The evidence watermark proves the timestamp was admitted as
+	// a plan, while absent action timestamps distinguish it from completed history.
+	return account.CycleResetAtMS != nil &&
+		account.DisableObservedAtMS != nil && account.CycleKey != "" &&
+		account.LastDisableAtMS == nil && account.LastEnableAtMS == nil
 }
 
 func hasPendingManualReset(account repository.AutomationAccount) bool {

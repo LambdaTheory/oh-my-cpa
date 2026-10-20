@@ -380,6 +380,58 @@ func TestServicePlansRecoveryForADisabledAdoptedAccount(t *testing.T) {
 	}
 }
 
+// TestServiceRetriesALegacyTakeoverAfterEnableFailure protects takeover rows written
+// before adoption persisted waiting/recovery_scheduled. Their empty monitor reason must
+// not make the admitted reset disappear when the first enable attempt enters backoff.
+func TestServiceRetriesALegacyTakeoverAfterEnableFailure(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1_000_000_000_000)}
+	writer := &fakeWriter{fail: errors.New("upstream said no")}
+	credentials := []Credential{{AuthIndex: "idx-1", Name: "claude-1.json", Provider: "claude", Disabled: true, Controllable: true}}
+	service := newTestService(repo, clock, writer, &credentials)
+
+	resetAt := clock.Now().Add(time.Hour).UnixMilli()
+	insertWeekly(t, repo, "idx-1", "claude", 100, clock.Now().UnixMilli(), resetAt)
+	if _, err := service.Adopt(ctx, []string{"idx-1"}, true, "legacy takeover"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SQL().ExecContext(ctx, `
+		UPDATE account_automation_accounts
+		SET state = ?, monitor_reason = ''
+		WHERE auth_index = ?`, StateIdle, "idx-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	clock.Set(time.UnixMilli(resetAt))
+	service.RunOnce(ctx)
+	account, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	if account.State != StateError || account.MonitorReason != "" || account.NextAttemptAtMS == nil || account.AttemptCount != 1 {
+		t.Fatalf("legacy takeover after failed enable = %+v", account)
+	}
+	if recovery, ok := RecoveryDue(account, clock.Now()); !ok || recovery.AtMS != resetAt || recovery.Status != RecoveryOverdue {
+		t.Fatalf("failed legacy takeover lost its recovery plan: %+v/%v", recovery, ok)
+	}
+
+	writer.setFailure(nil)
+	clock.Set(time.UnixMilli(*account.NextAttemptAtMS))
+	service.RunOnce(ctx)
+	calls := writer.snapshot()
+	if len(calls) != 2 || calls[0].disabled || calls[1].disabled {
+		t.Fatalf("legacy takeover retries = %+v", calls)
+	}
+	account, _, _ = repo.GetAutomationAccount(ctx, "idx-1")
+	if account.State != StateIdle || account.LastEnableAtMS == nil || account.CycleResetAtMS != nil {
+		t.Fatalf("legacy takeover after retry success = %+v", account)
+	}
+
+	clock.Set(clock.Now().Add(time.Hour))
+	service.RunOnce(ctx)
+	if calls := writer.snapshot(); len(calls) != 2 {
+		t.Fatalf("completed legacy recovery must not execute again: %+v", calls)
+	}
+}
+
 // TestServiceAdoptionWithoutAQualifyingResetWaitsForTheOperator proves the reset-less
 // half of the takeover: no reading means no planned recovery, the account is shown as
 // missing_reset, and the operator's hand-filled future time then schedules exactly one
