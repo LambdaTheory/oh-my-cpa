@@ -400,7 +400,7 @@ func TestExportDemoDataset(t *testing.T) {
 			normalised[name] = response
 			continue
 		}
-		encoded, err := json.Marshal(demoExportMirrorTailAsOfMS(demoExportRebase(decoded, deltaMS, requestIDs)))
+		encoded, err := json.Marshal(demoExportNormaliseResponse(name, decoded, deltaMS, requestIDs))
 		if err != nil {
 			t.Fatalf("re-base %s: %v", name, err)
 		}
@@ -596,7 +596,7 @@ func demoExportRebase(value any, deltaMS int64, requestIDs map[string]int) any {
 				typed[key] = demoExportNormaliseDayBoundary(typed, key, item)
 			case demoExportHostKeys[key] != "":
 				typed[key] = demoExportHostKeys[key]
-			case (key == "occurred_at_ms" || key == "effective_from_ms" || key == "created_at_ms" || key == "updated_at_ms") && demoExportIsSeededInstant(item):
+			case (key == "occurred_at_ms" || key == "effective_from_ms" || key == "created_at_ms" || key == "updated_at_ms" || key == "catalog_updated_at_ms") && demoExportIsSeededInstant(item):
 				// Seeded audit, price and metadata timestamps already use the reference's
 				// calendar; only a value the export itself stamped needs moving onto it.
 			case key == "effective_from_ms":
@@ -673,6 +673,36 @@ func demoExportMirrorTailAsOfMS(decoded any) any {
 		live["as_of_ms"] = to
 	}
 	return decoded
+}
+
+func demoExportNormaliseResponse(name string, decoded any, deltaMS int64, requestIDs map[string]int) any {
+	if name == "pricing" || strings.HasPrefix(name, "pricing-") {
+		demoExportNormalisePricingTimes(decoded)
+	}
+	return demoExportMirrorTailAsOfMS(demoExportRebase(decoded, deltaMS, requestIDs))
+}
+
+// Pricing writes precede history seeding, whose duration can exceed the rebase's
+// minute rounding window. Only those runtime writes use the fixed export instant;
+// seeded historical versions and unset timestamps retain their original meaning.
+func demoExportNormalisePricingTimes(value any) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			switch key {
+			case "updated_at_ms", "catalog_updated_at_ms", "effective_from_ms":
+				if millis, ok := demoExportNumericMillis(item); ok && millis > float64(demoExportReference.UnixMilli()) {
+					typed[key] = demoExportReference.UnixMilli()
+				}
+			default:
+				demoExportNormalisePricingTimes(item)
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			demoExportNormalisePricingTimes(item)
+		}
+	}
 }
 
 func demoExportShiftMillis(item any, deltaMS int64) any {
@@ -1425,6 +1455,44 @@ func TestDemoExportRebaseIsIndependentOfTheExportClock(t *testing.T) {
 	runtimeFacts := first["runtime"].(map[string]any)
 	if runtimeFacts["go_version"] != demoExportHostKeys["go_version"] || runtimeFacts["os_arch"] != demoExportHostKeys["os_arch"] {
 		t.Fatalf("the exporting host leaked into the dataset: %v", runtimeFacts)
+	}
+}
+
+func TestDemoExportPricingTimesIgnoreSeedDuration(t *testing.T) {
+	reference := demoExportReference.UnixMilli()
+	seededAt := demoExportReference.Add(24 * time.Hour)
+	for _, duration := range []time.Duration{5 * time.Second, 45 * time.Second, 90 * time.Second} {
+		t.Run(duration.String(), func(t *testing.T) {
+			for _, name := range []string{"pricing", "pricing-catalog", "pricing-model-synthetic"} {
+				body := map[string]any{
+					"updated_at_ms":         seededAt.UnixMilli(),
+					"catalog_updated_at_ms": seededAt.UnixMilli(),
+					"versions": []any{
+						map[string]any{"effective_from_ms": seededAt.UnixMilli()},
+						map[string]any{"effective_from_ms": reference - 86_400_000},
+					},
+					"channels": []any{map[string]any{"updated_at_ms": int64(0)}},
+				}
+				rebased := demoExportNormaliseResponse(name, body, demoExportReference.Sub(seededAt.Add(duration)).Milliseconds(), map[string]int{}).(map[string]any)
+				for _, key := range []string{"updated_at_ms", "catalog_updated_at_ms"} {
+					got, _ := demoExportNumericMillis(rebased[key])
+					if got != float64(reference) {
+						t.Fatalf("%s %s=%v want=%d", name, key, got, reference)
+					}
+				}
+				versions := rebased["versions"].([]any)
+				for i, want := range []int64{reference, reference - 86_400_000} {
+					got, _ := demoExportNumericMillis(versions[i].(map[string]any)["effective_from_ms"])
+					if got != float64(want) {
+						t.Fatalf("%s version %d=%v want=%d", name, i, got, want)
+					}
+				}
+				got, _ := demoExportNumericMillis(rebased["channels"].([]any)[0].(map[string]any)["updated_at_ms"])
+				if got != 0 {
+					t.Fatal("unset pricing timestamp moved")
+				}
+			}
+		})
 	}
 }
 

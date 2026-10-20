@@ -221,7 +221,7 @@ The dedicated group does not answer ordinary bot queries. Other groups retain th
 existing mention-based query behavior. SDK event diagnostics use fixed categories.
 
 Run one runner against the configured base path, normally `/omc/api/v1`. It signs in
-through `/omc/api/login` with the management key, then uses the resulting OMC session
+through `/omc/api/auth/login` with the management key, then uses the resulting OMC session
 cookie. The MCP read-only key is not accepted. These endpoints require a direct
 connection from an allowlisted private or loopback IP; public IPs and forwarding
 headers are refused. The default CIDRs are `127.0.0.0/8`, `::1/128`, `10.0.0.0/8`,

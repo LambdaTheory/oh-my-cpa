@@ -72,7 +72,8 @@ func (r *Repository) SaveReauthJob(ctx context.Context, j ReauthJob, previous st
 }
 
 func (r *Repository) CloseReauthCycle(ctx context.Context, authIndex string, nowMS int64) error {
-	_, err := r.SQL().ExecContext(ctx, `UPDATE reauth_jobs SET cycle_closed_at_ms=?, state=CASE WHEN state='pending' THEN 'expired' ELSE state END WHERE auth_index=? AND cycle_closed_at_ms=0 AND state IN ('pending','succeeded','failed','expired')`, nowMS, authIndex)
+	// Episode ownership ends on health; active work keeps its contact slot until it settles.
+	_, err := r.SQL().ExecContext(ctx, `UPDATE reauth_jobs SET cycle_closed_at_ms=?, state=CASE WHEN state='pending' THEN 'expired' ELSE state END WHERE auth_index=? AND cycle_closed_at_ms=0`, nowMS, authIndex)
 	return err
 }
 

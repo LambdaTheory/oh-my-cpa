@@ -22,10 +22,14 @@ change; keep the claim's strength, not its address. Nothing in the map is frozen
 Claude reauthentication is covered without external services: `internal/reauth` uses
 an injected clock and temporary SQLite databases for transitions, episode deduplication,
 serialization, code consumption/expiry, restart loss, audit refusal and verification
-backoff. Feishu tests drive the actual message handler with a fake sender, including
+backoff. Active-episode recovery tests run the real migrations in memory and cover a
+healthy reading before expiry or failure; failing senders cannot block due verification
+or its final refresh. Feishu tests drive the actual message handler with a fake sender, including
 identity/type/format rejection, no waiting job, mention markup and log privacy. API
 tests exercise the mounted sub-path, session/network boundary, DTO allowlist, one-time
 code response and a fake CPA returning authentication failure then healthy quota.
+Demo export pricing timestamps use the fixed reference instant for runtime-stamped
+writes, with regression coverage for slow seeding and unchanged historical versions.
 Migration tests extend the existing upgrade chain through 049; the historical 010–014
 gap remains unchanged. No real group, mailbox or browser participates.
 

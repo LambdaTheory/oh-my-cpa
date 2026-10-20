@@ -2422,7 +2422,9 @@ produce a snapshot; `Handler.recordQuotaSignal` observes it through an idempoten
 seam. Transport and unknown outcomes cannot create a job. Migration 049 adds
 `reauth_jobs`, with one open episode per auth index and one running job across the fixed
 contact. Pending jobs queue. Failed and expired jobs retain episode ownership until a
-healthy reading closes it. This survives process restarts.
+healthy reading closes it, including when that reading arrives during active work.
+Closing the episode does not release an active job's contact slot before it settles.
+This survives process restarts.
 
 The state progression is `pending` → `oauth_started` → `waiting_code` → `code_received`
 → `oauth_submitted` → `verifying` → `succeeded` or `failed`. Waiting/unfinished OAuth
@@ -2448,6 +2450,9 @@ ambiguous auth index and uses the existing Claude quota reader and shared rate-l
 backoff. A successful runner callback is not proof of credential health. Only a healthy
 quota result produces success; uncertain transport results remain explicitly uncertain.
 The loop sends request, processing and outcome cards; ten-minute wait expiry sends none.
+Notification errors retain delivery intent for retry and are reported independently of
+due verification and the final refresh; delivery failures cannot retain the contact slot
+after verification settles.
 
 The four routes under `/api/v1/management/reauth/jobs` are `GET /next?provider=claude`,
 `GET /{id}`, `GET /{id}/code` and `POST /{id}/status`. They inherit the configured base

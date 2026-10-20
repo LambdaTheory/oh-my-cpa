@@ -2,6 +2,7 @@ package reauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -108,6 +109,53 @@ func TestInvalidCycleAndSerialAdmission(t *testing.T) {
 		t.Fatal("new episode did not create job")
 	}
 }
+func TestHealthyObservationClosesActiveEpisode(t *testing.T) {
+	for _, state := range []string{"waiting_code", "code_received", "oauth_submitted"} {
+		for _, terminal := range []string{"expired", "failed"} {
+			t.Run(state+"/"+terminal, func(t *testing.T) {
+				f := newFixture(t)
+				ctx := context.Background()
+				id := f.start(t)
+				if state != "waiting_code" {
+					if err := f.service.AcceptCode(ctx, "synthetic-message", "123456"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if state == "oauth_submitted" {
+					if _, err := f.service.TakeCode(ctx, id); err != nil {
+						t.Fatal(err)
+					}
+					if err := f.service.Report(ctx, id, "code_submitted", ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := f.service.Observe(ctx, "synthetic-account", "claude", "test", "healthy"); err != nil {
+					t.Fatal(err)
+				}
+				j, err := f.service.Next(ctx)
+				if err != nil || j.ID != id || j.State != state {
+					t.Fatalf("healthy reading released active contact: job=%+v err=%v", j, err)
+				}
+				if terminal == "expired" {
+					f.now = time.UnixMilli(j.NextAttemptAtMS)
+					if err := f.service.Tick(ctx); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := f.service.Report(ctx, id, "failed", "runner_failed"); err != nil {
+					t.Fatal(err)
+				}
+				if err := f.service.Observe(ctx, "synthetic-account", "claude", "test", "auth_invalid"); err != nil {
+					t.Fatal(err)
+				}
+				j, err = f.service.Next(ctx)
+				if err != nil || j.ID == id || j.State != "pending" {
+					t.Fatalf("new invalid episode suppressed: job=%+v err=%v", j, err)
+				}
+			})
+		}
+	}
+}
+
 func TestCodeOnceExpiryAndRestart(t *testing.T) {
 	for _, mode := range []string{"consume", "expire", "restart"} {
 		t.Run(mode, func(t *testing.T) {
@@ -203,6 +251,116 @@ func TestVerificationSettlementAndBackoff(t *testing.T) {
 		})
 	}
 }
+func TestNotificationFailureDoesNotBlockVerification(t *testing.T) {
+	for _, result := range []string{"healthy", "auth_invalid"} {
+		t.Run(result, func(t *testing.T) {
+			f := newFixture(t)
+			f.result = result
+			ctx := context.Background()
+			id := f.start(t)
+			f.submit(t, id)
+			sendErr := errors.New("synthetic sender unavailable")
+			sends := 0
+			f.service.opts.Notify = func(context.Context, repository.ReauthJob, string) error {
+				sends++
+				return sendErr
+			}
+			if err := f.service.Tick(ctx); !errors.Is(err, sendErr) {
+				t.Fatalf("notification failure not reported: %v", err)
+			}
+			if f.refreshes != 0 {
+				t.Fatal("settle delay bypassed")
+			}
+			attempts := 1
+			if result == "auth_invalid" {
+				attempts = MAX_VERIFY_ATTEMPTS
+			}
+			for attempt := 1; attempt <= attempts; attempt++ {
+				j, err := f.service.Get(ctx, id)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.now = time.UnixMilli(j.NextAttemptAtMS)
+				if err := f.service.Tick(ctx); !errors.Is(err, sendErr) {
+					t.Fatalf("notification failure not reported: %v", err)
+				}
+				if f.refreshes != attempt {
+					t.Fatalf("notification blocked due verification: refreshes=%d want=%d", f.refreshes, attempt)
+				}
+			}
+			j, err := f.service.Get(ctx, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := "succeeded"
+			if result == "auth_invalid" {
+				expected = "failed"
+			}
+			if j.State != expected || j.Notification != "processing,"+expected || sends != attempts+1 {
+				t.Fatalf("state=%s notification=%s sends=%d", j.State, j.Notification, sends)
+			}
+			// Deliver the acknowledgement, then fail the outcome receipt itself.
+			f.service.opts.Notify = func(_ context.Context, _ repository.ReauthJob, kind string) error {
+				if kind == "processing" {
+					return nil
+				}
+				return sendErr
+			}
+			if err := f.service.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if result == "auth_invalid" && f.refreshes != MAX_VERIFY_ATTEMPTS+1 {
+				t.Fatal("queued failure receipt blocked final refresh")
+			}
+			if err := f.service.Tick(ctx); !errors.Is(err, sendErr) {
+				t.Fatalf("outcome receipt was not retried: %v", err)
+			}
+			if err := f.service.Observe(ctx, "second", "claude", "second", "auth_invalid"); err != nil {
+				t.Fatal(err)
+			}
+			next, err := f.service.Next(ctx)
+			if err != nil || next.AuthIndex != "second" {
+				t.Fatalf("contact slot retained: job=%+v err=%v", next, err)
+			}
+			if err := f.service.Report(ctx, next.ID, "oauth_started", ""); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFailedReceiptDoesNotBlockFinalRefresh(t *testing.T) {
+	f := newFixture(t)
+	f.result = "auth_invalid"
+	ctx := context.Background()
+	id := f.start(t)
+	f.submit(t, id)
+	for attempt := 0; attempt < MAX_VERIFY_ATTEMPTS; attempt++ {
+		j, err := f.service.Get(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.now = time.UnixMilli(j.NextAttemptAtMS)
+		if err := f.service.Tick(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sendErr := errors.New("synthetic sender unavailable")
+	f.service.opts.Notify = func(_ context.Context, _ repository.ReauthJob, kind string) error {
+		if kind != "failed" {
+			t.Fatalf("receipt=%s", kind)
+		}
+		return sendErr
+	}
+	if err := f.service.Tick(ctx); !errors.Is(err, sendErr) {
+		t.Fatalf("notification failure not reported: %v", err)
+	}
+	j, err := f.service.Get(ctx, id)
+	if err != nil || j.State != "failed" || j.NextAttemptAtMS != 0 || f.refreshes != MAX_VERIFY_ATTEMPTS+1 {
+		t.Fatalf("failed receipt blocked final refresh: job=%+v refreshes=%d err=%v", j, f.refreshes, err)
+	}
+}
+
 func TestAuditFailureRefusesCodeAndStatus(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

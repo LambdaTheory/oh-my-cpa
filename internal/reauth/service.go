@@ -320,7 +320,7 @@ func (s *Service) Tick(ctx context.Context) error {
 	}
 	return errors.Join(failures...)
 }
-func (s *Service) step(ctx context.Context, id string) error {
+func (s *Service) step(ctx context.Context, id string) (stepErr error) {
 	s.mu.Lock()
 	j, err := s.opts.Repo.GetReauthJob(ctx, id)
 	if err != nil {
@@ -351,35 +351,9 @@ func (s *Service) step(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	if j.Notification != "" {
-		notification, _, _ := strings.Cut(j.Notification, ",")
-		if s.opts.Notify == nil {
-			return ErrDisabled
-		}
-		if err := s.audit(ctx, j, "notify."+notification); err != nil {
-			return err
-		}
-		sendCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
-		err = s.opts.Notify(sendCtx, j, notification)
-		cancel()
-		if err != nil {
-			return err
-		}
-		s.mu.Lock()
-		latest, readErr := s.opts.Repo.GetReauthJob(ctx, id)
-		first, remaining, _ := strings.Cut(latest.Notification, ",")
-		if readErr == nil && first == notification {
-			latest.Notification = remaining
-			readErr = s.save(ctx, latest, latest.State)
-		}
-		s.mu.Unlock()
-		if readErr != nil {
-			return readErr
-		}
-		if latest.Notification != "" {
-			return nil
-		}
-	}
+	// Delivery remains retryable without holding verification or the contact slot hostage.
+	notifyErr := s.notify(ctx, j)
+	defer func() { stepErr = errors.Join(notifyErr, stepErr) }()
 	if (j.State != "verifying" && j.State != "failed") || j.NextAttemptAtMS == 0 || now.UnixMilli() < j.NextAttemptAtMS {
 		return nil
 	}
@@ -428,6 +402,37 @@ func (s *Service) step(ctx context.Context, id string) error {
 		return s.opts.Repo.CloseReauthCycle(ctx, latest.AuthIndex, now.UnixMilli())
 	}
 	return nil
+}
+
+func (s *Service) notify(ctx context.Context, j repository.ReauthJob) error {
+	if j.Notification == "" {
+		return nil
+	}
+	notification, _, _ := strings.Cut(j.Notification, ",")
+	if s.opts.Notify == nil {
+		return ErrDisabled
+	}
+	if err := s.audit(ctx, j, "notify."+notification); err != nil {
+		return err
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, 2500*time.Millisecond)
+	err := s.opts.Notify(sendCtx, j, notification)
+	cancel()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	latest, err := s.opts.Repo.GetReauthJob(ctx, j.ID)
+	if err != nil {
+		return err
+	}
+	first, remaining, _ := strings.Cut(latest.Notification, ",")
+	if first != notification {
+		return nil
+	}
+	latest.Notification = remaining
+	return s.save(ctx, latest, latest.State)
 }
 
 // A fast runner must not replace the acknowledgement before the contact sees it.
