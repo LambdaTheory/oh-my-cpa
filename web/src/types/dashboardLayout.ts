@@ -2,9 +2,10 @@
  * The dashboard as a set of widgets, and the operator's arrangement of them.
  *
  * The page ships a fixed catalog - the six KPI tiles, the two model panels, the live routing map,
- * the activity grid, credential quota and the provider list - but which of them a deployment reads,
- * in what order and how wide is not fixed: an operator who never prices anything has no use for the
- * spend tile, and one who runs a single credential has no use for the quota list beside the grid.
+ * the activity grid, credential quota, quota prediction and the provider list - but which of them a
+ * deployment reads, in what order and how wide is not fixed: an operator who never prices anything
+ * has no use for the spend tile, and one who runs a single credential has no use for both quota
+ * panels beside the grid.
  * The model lives here rather than in the page so every rule about a stored arrangement is a pure
  * function the logic suite can pin without a browser.
  *
@@ -31,6 +32,7 @@ export type DashboardWidgetId =
   | 'model_usage'
   | 'token_activity'
   | 'credential_quota'
+  | 'quota_prediction'
   | 'providers';
 
 export interface DashboardWidgetSpec {
@@ -65,6 +67,7 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetSpec[] = Object.freeze([
   { id: 'routing', labelKey: 'routing.title', defaultSpan: 4, spans: [3, 4], isPhoneOmitted: true },
   { id: 'token_activity', labelKey: 'dash.heatmap.title', defaultSpan: 2, spans: HALF_OR_WIDER },
   { id: 'credential_quota', labelKey: 'dash.quota.title', defaultSpan: 2, spans: HALF_OR_WIDER },
+  { id: 'quota_prediction', labelKey: 'dash.prediction.title', defaultSpan: 4, spans: HALF_OR_WIDER },
   { id: 'providers', labelKey: 'dash.providers', defaultSpan: 4, spans: HALF_OR_WIDER },
 ] satisfies DashboardWidgetSpec[]);
 

@@ -146,6 +146,7 @@ func TestDemoPolicyKeepsTheReadingSurface(t *testing.T) {
 		{http.MethodGet, "/favicon.svg"},
 		{http.MethodGet, "/api/v1/management/dashboard"},
 		{http.MethodGet, "/api/v1/management/dashboard/token-heatmap"},
+		{http.MethodGet, "/api/v1/management/dashboard/predictions"},
 		{http.MethodGet, "/api/v1/usage/events"},
 		{http.MethodGet, "/api/v1/usage/events/41"},
 		{http.MethodGet, "/api/v1/usage/facets"},

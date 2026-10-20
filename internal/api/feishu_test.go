@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/config"
@@ -15,6 +18,28 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
+
+type apiPredictionSender struct {
+	mu    sync.Mutex
+	sends int
+	err   error
+}
+
+func (s *apiPredictionSender) SendCard(context.Context, string, map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sends++
+	return s.err
+}
+func (s *apiPredictionSender) ReplyText(context.Context, string, string) error { return nil }
+func (s *apiPredictionSender) ReplyCard(context.Context, string, map[string]any) error {
+	return nil
+}
+func (s *apiPredictionSender) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sends
+}
 
 // newFeishuAPITest builds a handler, repository and Feishu API over an in-memory
 // database and serves the Feishu routes on a bare chi router, so routing and the
@@ -186,6 +211,76 @@ func TestFeishuTestRouteUsesInjectedSender(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"sent":false`) {
 		t.Fatalf("expected sent=false for an inactive module: %s", body)
+	}
+}
+
+func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T) {
+	now := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
+	sender := &apiPredictionSender{}
+	store := feishu.NewMemoryStore()
+	secret := "fake-secret"
+	service := feishu.NewService(feishu.Options{
+		Web:     feishu.Config{Enabled: true, AppID: "fake-app", ChatID: "fake-chat", Timezone: "UTC"},
+		Overlay: feishu.Overlay{AppSecret: &secret}, Store: store, Now: func() time.Time { return now },
+		SenderFactory: func(feishu.Resolved) feishu.Sender { return sender },
+		SourceFactory: func(feishu.Resolved) feishu.EventSource { return nil },
+	})
+	used, projected := 60.0, 120.0
+	digest := feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{
+		CredentialLabel: "operator", Provider: "codex", WindowKind: "weekly",
+		UsedPercent: &used, ProjectedPercentAtReset: &projected,
+		ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+	}}}
+	api := &FeishuAPI{service: service}
+	api.prediction = feishu.NewPredictionJob(service, func(context.Context) (feishu.PredictionDigest, error) { return digest, nil })
+	router := chi.NewRouter()
+	RegisterFeishuRoutes(router, api)
+
+	request := httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"sent":true`) || sender.count() != 1 {
+		t.Fatalf("finding response=%d %s sends=%d", recorder.Code, recorder.Body.String(), sender.count())
+	}
+	state, err := store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.LastSummaryAt.IsZero() {
+		t.Fatalf("manual send changed last summary: %s", state.LastSummaryAt)
+	}
+
+	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{Verdict: "on_track"}}}
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"sent":false`) || !strings.Contains(recorder.Body.String(), `"reason":"no_findings"`) {
+		t.Fatalf("no-finding response=%d %s", recorder.Code, recorder.Body.String())
+	}
+	if sender.count() != 1 {
+		t.Fatalf("no-finding request sent another card: %d", sender.count())
+	}
+
+	now = now.Add(time.Minute)
+	sender.err = errors.New("simulated sender failure")
+	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{CredentialLabel: "operator", Verdict: "will_exhaust"}}}
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil))
+	var failed struct {
+		Sent  bool   `json:"sent"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &failed); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.Code != http.StatusOK || failed.Sent || failed.Error == "" {
+		t.Fatalf("failed delivery response=%d %s", recorder.Code, recorder.Body.String())
+	}
+	state, err = store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Outbox) != 2 || state.Outbox[1].State != feishu.NotifyPending || !state.Outbox[1].NextAttemptAt.After(now) {
+		t.Fatalf("failed route delivery must retain retry: %+v", state.Outbox)
 	}
 }
 

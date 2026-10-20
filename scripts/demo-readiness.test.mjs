@@ -129,6 +129,7 @@ test('dashboard readiness waits for its activity, credential quota and live rout
     '/management/dashboard/token-heatmap',
     '/management/overview',
     '/management/dashboard/providers',
+    '/management/dashboard/predictions',
     '/management/auth-files',
     '/management/quota',
     '/usage/routing',

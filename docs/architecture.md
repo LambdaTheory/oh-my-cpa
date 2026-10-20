@@ -3494,12 +3494,23 @@ after deterministic sorting by hidden stored identity, and those identities are 
 The internal Feishu projection filters first, prioritises exhaustion findings, and caps the
 card input at 178 rows while carrying an omitted count to the renderer.
 
-`internal/feishu/prediction_digest.go` is the daily prediction component. At configured
-summary minutes the Feishu loop evaluates it before the legacy scheduled summary. A
-`will_exhaust` or `under_used` finding queues one card through the same persisted outbox
-and claims that minute; without a finding, the existing summary path runs unchanged. The
-component shares timezone, chat, quiet hours, sender and retry behavior and remains inert
-when Feishu is not ready. Its footer discloses omitted findings before the renderer's fixed
+`internal/api/management_dashboard_predictions.go` exposes the same stored computation to
+the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler
+uses the operator projection (credential labels and auth indexes are retained), groups rows
+by provider and measures the actual computation duration. It does not refresh quota or call
+CPA. `web/src/components/dashboard/QuotaPrediction.tsx` renders that response as a
+reorderable dashboard panel, refreshes it every five minutes only while the page is visible,
+and keeps explicit empty, unknown and stale states.
+
+`internal/feishu/prediction_digest.go` is the scheduled and operator-triggered prediction
+component. At configured summary minutes the Feishu loop evaluates it before the legacy
+scheduled summary. A `will_exhaust` or `under_used` finding queues one card through the same
+persisted outbox and claims that minute; without a finding, the existing summary path runs
+unchanged. `POST /api/v1/feishu/prediction-test` reads the same stored findings and delivers
+only its newly persisted card. That explicit action does not change `LastSummaryAt`, does
+not claim a scheduled minute and returns `no_findings` without sending when there is nothing
+actionable. The component shares timezone, chat and sender behavior and remains inert when
+Feishu is not ready. Its footer discloses omitted findings before the renderer's fixed
 card-element ceiling can hide them.
 
 ## 15. Where to look next

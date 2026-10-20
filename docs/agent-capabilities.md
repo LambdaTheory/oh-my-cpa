@@ -572,6 +572,9 @@ fit the card envelope while also applying the 32 KiB result bound. Its `omitted`
 disclosed in the prediction card footer, so a finding cannot disappear silently behind
 either a non-finding row, the byte bound or renderer truncation.
 
+Each item includes the source window identity (`window_id`, `window_scope` and optional
+`window_model`), stable within its credential and independent of forecast values. These
+additive fields distinguish model/group windows without changing the tool name or filters.
 Each item states the current used percentage, reset and observation times, data age,
 burn rate, projected used percentage at reset, optional projected tokens and cost,
 optional exhaustion ETA, verdict, evidence tier and reason codes. Verdicts are
@@ -582,6 +585,14 @@ unsafe arithmetic and unavailable usage are explicit reasons. A missing number i
 serialized as a fabricated zero; model/group usage that cannot be assigned safely reports
 `scope_unknown`. Freshness is window-aware: at least the two-hour idle
 refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
+
+The dashboard reads the same operation through
+`GET /api/v1/management/dashboard/predictions` with `findings_only=false`. This console
+projection retains operator-visible credential labels and auth indexes, groups the bounded
+items by provider, and adds prediction-call duration `duration_ms`. The existing
+`quota_prediction` tool keeps its name, filters and prediction semantics, with the additive
+window identity fields described above. The five-minute foreground refresh and the manual dashboard refresh
+therefore recompute only from stored evidence and never probe CPA.
 
 The tool assembles its roster and current readings only from persisted safe credential
 metadata and quota snapshots, then reads passive and active observations without refreshing
