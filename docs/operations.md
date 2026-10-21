@@ -251,6 +251,21 @@ runner access through a reverse proxy. Network admission never replaces authenti
 | `GET /management/reauth/jobs/{id}` | Allowlisted state, flow/code kind and device display metadata; never an email OTP |
 | `GET /management/reauth/jobs/{id}/code` | OTP flows only: one-time `{code}` response; 204 when unavailable or already consumed; always `Cache-Control: no-store` |
 | `POST /management/reauth/jobs/{id}/status` | `{status,last_error?,flow?,user_code?,verification_url?,expires_in?}`; invalid transitions return 409 |
+| `POST /management/reauth/jobs/{id}/dismiss` | `{confirmed_misclassification:true}`; explicitly dismiss one reviewed false-positive job, preserve history, and release its contact slot; same session/network boundary |
+
+Authentication classification uses the source and endpoint of each failure. An upstream
+401 or explicit token/session rejection can require reauthentication; ordinary 403,
+payment, quota, entitlement, policy, scope, rate limits and CPA management failures do
+not. A model cooldown remains separate from account authentication. Recovery requires
+a new successful, recognized quota response, not merely a different error status.
+
+For a confirmed historical false positive, stop the corresponding runner flow and
+review the specific job ID and provider evidence before calling `dismiss`. The operation
+appends `reauth.dismiss_misclassified`, retains the job as `failed` with
+`misclassified_auth_failure`, closes only that episode, clears its pending notifications
+and OTP, and resets its invalid collection signal to unknown. It refuses a completed
+episode or an unwritable audit. It performs no OAuth call and makes no claim of recovery.
+There is no bulk dismissal; a fresh quota read establishes the next observation.
 
 Report `oauth_started` when the browser or device flow is ready. Device starts require
 `flow=device`, `user_code`, an HTTPS `verification_url` and `expires_in`

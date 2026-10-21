@@ -112,6 +112,33 @@ func (s *Service) Get(ctx context.Context, id string) (repository.ReauthJob, err
 	}
 	return s.opts.Repo.GetReauthJob(ctx, id)
 }
+
+// Dismiss is an operator-confirmed correction, never automatic recovery. It
+// takes the tick lock so an in-flight verifier or notification cannot revive it.
+func (s *Service) Dismiss(ctx context.Context, id string) error {
+	if !s.Enabled() {
+		return ErrDisabled
+	}
+	s.tickMu.Lock()
+	defer s.tickMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, err := s.opts.Repo.GetReauthJob(ctx, id)
+	if err != nil {
+		return err
+	}
+	if j.State == "succeeded" || j.CycleClosedAtMS != 0 {
+		return ErrConflict
+	}
+	if err := s.audit(ctx, j, "dismiss_misclassified"); err != nil {
+		return err
+	}
+	if err := s.opts.Repo.DismissReauthJob(ctx, j, s.opts.Now().UnixMilli()); err != nil {
+		return err
+	}
+	delete(s.codes, id)
+	return nil
+}
 func (s *Service) audit(ctx context.Context, j repository.ReauthJob, action string) error {
 	_, err := s.opts.Repo.RecordAuditEvent(ctx, repository.AuditEvent{OccurredAtMS: s.opts.Now().UnixMilli(), Action: "reauth." + action, TargetType: "reauth_job", TargetID: j.ID, Result: "admitted"})
 	return err

@@ -1,13 +1,16 @@
 package quota
 
-import "strings"
+import "github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 
 // EvaluateStatusAndRecommendation calculates the lifecycle status and actionable
-// guidance. The checks are exclusive and ordered by how much they constrain the
-// operator: an active cooldown outranks a disabled credential, which outranks a
-// transport error, which outranks window arithmetic, and only a credential that
-// fails none of them is reported as idle.
+// guidance. Account authentication rejection remains actionable even when a
+// separate model cooldown exists. Cooldowns are retained beside that decision.
 func EvaluateStatusAndRecommendation(q *NormalizedQuota, nowMS int64) {
+	if !q.Disabled && hasAuthFailure(q) {
+		q.Status = "error"
+		q.Recommendation = QuotaRecommendation{Status: "needs_reauth", Priority: "critical", Action: "reauth", Reason: "上游认证失败或凭据失效，建议重新配置密钥或登录授权"}
+		return
+	}
 	if q.ActiveCooldown != nil && q.ActiveCooldown.IsActive && activeCooldownExpired(q.ActiveCooldown, nowMS) {
 		q.ActiveCooldown.IsActive = false
 	}
@@ -38,17 +41,6 @@ func EvaluateStatusAndRecommendation(q *NormalizedQuota, nowMS int64) {
 	}
 
 	if q.Error != "" {
-		errLower := strings.ToLower(q.Error)
-		if looksLikeAuthFailure(errLower) {
-			q.Status = "error"
-			q.Recommendation = QuotaRecommendation{
-				Status:   "needs_reauth",
-				Priority: "critical",
-				Action:   "reauth",
-				Reason:   "上游认证失败或凭据失效，建议重新配置密钥或登录授权",
-			}
-			return
-		}
 
 		// Non-auth transient error: keep stale status if preserved from previous snapshot
 		if q.Status != "stale" {
@@ -153,29 +145,11 @@ func EvaluateStatusAndRecommendation(q *NormalizedQuota, nowMS int64) {
 	}
 }
 
-func looksLikeAuthFailure(text string) bool {
-	for _, marker := range []string{
-		"unauthorized",
-		"forbidden",
-		"invalid_api_key",
-		"invalid api key",
-		"authentication failed",
-		"auth failed",
-		"token expired",
-		"credential expired",
-	} {
-		if strings.Contains(text, marker) {
-			return true
-		}
+func hasAuthFailure(q *NormalizedQuota) bool {
+	if q.Failure != nil {
+		return q.Failure.NeedsReauth()
 	}
-	for _, token := range strings.FieldsFunc(text, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && !(r >= '0' && r <= '9')
-	}) {
-		if token == "401" || token == "403" {
-			return true
-		}
-	}
-	return false
+	return authfailure.FromText(q.Error).NeedsReauth()
 }
 
 func activeCooldownExpired(cooldown *ActiveCooldown, nowMS int64) bool {

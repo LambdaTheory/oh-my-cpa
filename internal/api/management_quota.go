@@ -731,6 +731,15 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		}
 	}
 
+	quota.ApplyCredentialStatus(&normalized, *targetFile, nowMS)
+	if h.repo != nil {
+		signals, err := h.repo.GetFeishuAccountSignals(ctx, []string{authIndex})
+		if err != nil {
+			writeInternalError(writer, err)
+			return
+		}
+		applyQuotaCollectionSignal(&normalized, signals[authIndex])
+	}
 	quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 	h.attachWindowCapacity(ctx, &normalized, nowMS)
 	h.overlayPassiveObservations(ctx, &normalized)
@@ -809,8 +818,13 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 	var latestSnapshots map[string]repository.QuotaSnapshotRecord
 	var latestAttempts map[string]repository.QuotaRefreshAttempt
 	var activeCooldowns map[string]repository.ActiveCooldownRecord
+	var collectionSignals map[string]repository.FeishuAccountSignal
 
 	if h.repo != nil && len(authIndexes) > 0 {
+		collectionSignals, err = h.repo.GetFeishuAccountSignals(ctx, authIndexes)
+		if err != nil {
+			return quotaOverviewData{}, err
+		}
 		latestAttempts, err = h.repo.GetQuotaRefreshAttempts(ctx, authIndexes)
 		if err != nil {
 			return quotaOverviewData{}, err
@@ -907,6 +921,8 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 			}
 		}
 
+		quota.ApplyCredentialStatus(&normalized, file, nowMS)
+		applyQuotaCollectionSignal(&normalized, collectionSignals[authIndex])
 		quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 		h.attachWindowCapacity(ctx, &normalized, nowMS)
 		h.overlayPassiveObservations(ctx, &normalized)

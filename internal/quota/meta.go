@@ -114,7 +114,7 @@ func (s *Service) fetchMetaQuota(ctx context.Context, file management.AuthFile, 
 	// Transport and HTTP failures can echo either the DCA token or a minted key.
 	// Their bodies and underlying error strings must not enter the public result.
 	if err != nil {
-		return nil, nil, errors.New("Meta quota request failed")
+		return nil, nil, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, nil, fmt.Errorf("Meta quota request failed (HTTP %d)", response.StatusCode)

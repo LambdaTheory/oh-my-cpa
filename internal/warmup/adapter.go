@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 )
 
@@ -67,7 +68,11 @@ func Send(ctx context.Context, caller Caller, file management.AuthFile, provider
 		case 400, 404, 422:
 			return Outcome{Status: "failed", Reason: "protocol_unsupported"}
 		case 401, 403:
-			return Outcome{Status: "failed", Reason: "needs_reauth"}
+			raw, _ := response.NormalizedBody()
+			if authfailure.Parse(authfailure.Inference, endpoint, response.StatusCode, raw).NeedsReauth() {
+				return Outcome{Status: "failed", Reason: "needs_reauth"}
+			}
+			return Outcome{Status: "uncertain", Reason: "outcome_unknown"}
 		case 429:
 			return Outcome{Status: "failed", Reason: "rate_limited"}
 		default:

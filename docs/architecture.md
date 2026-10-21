@@ -2448,6 +2448,17 @@ healthy reading closes it, including when that reading arrives during active wor
 Closing the episode does not release an active job's contact slot before it settles.
 This survives process restarts.
 
+`internal/authfailure` classifies transient structured evidence shared by quota and
+warmup: source, fixed endpoint, HTTP status, code/type/message/description/reason.
+Raw evidence never enters JSON, logs, snapshots or audit; only safe status text and
+the classified collection signal cross those boundaries. CPA management rejection
+and transport errors cannot invalidate the upstream credential. Upstream 401 is
+authentication evidence; 403 requires explicit token/session rejection, and
+`invalid_grant` requires refresh-token provenance. Rate limits retain typed backoff.
+Recognized quota documents are required for success, including HTTP 200 responses.
+CPA model cooldowns retain their scope beside account authentication, and overview
+and detail overlay the durable collection signal before computing recommendations.
+
 | Recovery flow / code kind | Canonical providers | Contact action and callback boundary |
 | --- | --- | --- |
 | `redirect_otp` / `otp` | `claude` (alias `anthropic`), `codex` | Browser login with CPA forwarder; reply with six digits only if email OTP is requested |
@@ -2496,8 +2507,8 @@ Notification errors retain delivery intent for retry and are reported independen
 due verification and the final refresh; delivery failures cannot retain the contact slot
 after verification settles.
 
-The four routes under `/api/v1/management/reauth/jobs` are `GET /next?provider=<canonical>`,
-`GET /{id}`, `GET /{id}/code` and `POST /{id}/status`. They inherit the configured base
+The routes under `/api/v1/management/reauth/jobs` are `GET /next?provider=<canonical>`,
+`GET /{id}`, `GET /{id}/code`, `POST /{id}/status` and `POST /{id}/dismiss`. They inherit the configured base
 path and console session authentication. The runner signs in with the management key.
 An additional configurable private/loopback CIDR check uses the TCP peer and refuses
 forwarding headers; it supports direct Docker sidecar access without trusting a public
@@ -2506,6 +2517,10 @@ dedicated one-time code response is restricted to this authenticated runner boun
 Status input accepts a fixed vocabulary and safe error codes only, never a callback URL
 or outbound target. Demo routes refuse every recovery operation. Audit admission must
 succeed before a sensitive effect. The table is hidden from operator SQL queries.
+The explicit, per-job dismissal appends an audit admission before atomically retiring
+the reviewed false-positive episode and resetting its invalid signal to unknown.
+It serializes with verifier/notification work, releases the contact slot, clears
+transient codes and pending notifications, and preserves every job and historical audit.
 
 ## 9. Storage
 
