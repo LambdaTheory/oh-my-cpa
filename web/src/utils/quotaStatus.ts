@@ -1,4 +1,16 @@
 import type { QuotaItem } from '../types/quota';
+import type { TFunc } from '../i18n';
+
+export function quotaRefreshReasonLabel(attempt: QuotaItem['last_refresh'], t: TFunc): string {
+  if (attempt?.http_status) return `HTTP ${attempt.http_status}`;
+  switch (attempt?.reason) {
+    case 'timeout': return t('quota.refresh_reason_timeout');
+    case 'network': return t('quota.refresh_reason_network');
+    case 'auth': return t('quota.refresh_reason_auth');
+    case 'parse': return t('quota.refresh_reason_parse');
+    default: return t('quota.refresh_reason_unknown');
+  }
+}
 
 // Two idle scheduler cycles allow a delayed collection without trusting an old
 // reading indefinitely. Ollama collects every 15 minutes; CPA adaptive idle is

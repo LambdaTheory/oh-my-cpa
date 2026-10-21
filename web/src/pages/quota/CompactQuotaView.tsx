@@ -25,6 +25,7 @@ import { Meter } from '../../components/common/Meter';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import { claudeResetGrantSummary } from '../../utils/quotaResets';
 import { ResetAdviceTag } from './ResetAdviceView';
+import { quotaRefreshReasonLabel } from '../../utils/quotaStatus';
 
 interface CompactQuotaViewProps {
   item: QuotaItem;
@@ -116,7 +117,7 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
       </div>
         {item.last_refresh && item.last_refresh.outcome !== 'success' && (
           <span className={styles['refresh-detail']}>
-            {item.last_refresh.http_status ? `HTTP ${item.last_refresh.http_status} · ` : ''}
+            {quotaRefreshReasonLabel(item.last_refresh, t)} ·
             {item.last_refresh.retry_at_ms ? `${t('quota.refresh_retry_at', { time: formatShortDateTime(item.last_refresh.retry_at_ms) })} · ` : ''}
             {t('quota.last_success', { time: item.last_success_at_ms ? formatShortDateTime(item.last_success_at_ms) : t('advice.unknown') })}
           </span>

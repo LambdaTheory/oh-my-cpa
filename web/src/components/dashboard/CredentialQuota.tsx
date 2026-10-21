@@ -19,6 +19,7 @@ import {
 } from '../icons';
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../../types/quota';
+import { quotaRefreshReasonLabel } from '../../utils/quotaStatus';
 import {
   quotaRefreshFailureReason,
   quotaRefreshRateLimitReason,
@@ -61,9 +62,6 @@ const WINDOW_LABEL_KEYS: Record<QuotaWindowPeriod, string> = {
 
 /** The states whose row says what is wrong instead of drawing the windows it cannot use. */
 const STATUS_ROW_STATES: Partial<Record<CredentialQuotaState, { labelKey: string; Icon: React.ComponentType<{ className?: string }> }>> = {
-  refresh_failed: { labelKey: 'quota.status_refresh_failed', Icon: CloseCircleOutlined },
-  rate_limited: { labelKey: 'quota.status_rate_limited', Icon: PauseCircleOutlined },
-  stale: { labelKey: 'quota.status_data_stale', Icon: ClockCircleOutlined },
   reauth: { labelKey: 'dash.quota.state_reauth', Icon: KeyOutlined },
   cooldown: { labelKey: 'dash.quota.state_cooldown', Icon: PauseCircleOutlined },
   problem: { labelKey: 'dash.quota.state_problem', Icon: CloseCircleOutlined },
@@ -115,6 +113,10 @@ const QuotaWindowMeter: React.FC<{ window: QuotaWindow }> = ({ window }) => {
 const CredentialQuotaRowView: React.FC<{ row: CredentialQuotaRow; nowMS: number }> = ({ row, nowMS }) => {
   const t = useT();
   const status = STATUS_ROW_STATES[row.state];
+  const readingLabel = row.readingStatus === 'refresh_failed'
+    ? `${t('quota.status_refresh_failed')} · ${quotaRefreshReasonLabel(row.lastRefresh, t)}`
+    : row.readingStatus === 'rate_limited' ? t('quota.status_rate_limited')
+      : row.readingStatus === 'stale' ? t('quota.status_data_stale') : undefined;
   // A blocked row counts down to when it serves again; a serving one to when its tightest window
   // refills. An instant the provider did not state exactly keeps its `~`.
   const reset = row.bindingWindow?.reset_at_ms;
@@ -142,7 +144,10 @@ const CredentialQuotaRowView: React.FC<{ row: CredentialQuotaRow; nowMS: number 
         </span>
       ) : (
         <span className="quota-row-windows">
+          {readingLabel && <span className="quota-reading-warning" title={[readingLabel, row.lastRefresh?.reason_summary].filter(Boolean).join(' · ')}>{readingLabel}</span>}
+          <span className="quota-window-readings" data-quota-reading-trusted={row.readingStatus ? 'false' : 'true'}>
           {row.windows.map((window) => <QuotaWindowMeter key={window.id || window.label} window={window} />)}
+          </span>
         </span>
       )}
       <span className="quota-row-when">

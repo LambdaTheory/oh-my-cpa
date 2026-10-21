@@ -10,7 +10,7 @@ import type { TFunc } from '../../i18n';
 import type { QuotaItem } from '../../types/quota';
 import { resolveQuotaCooldownTooltip } from './quotaCooldown';
 import { Tag } from '../../components/common/Tag';
-import { resolveQuotaStatus } from '../../utils/quotaStatus';
+import { quotaRefreshReasonLabel, resolveQuotaStatus } from '../../utils/quotaStatus';
 import { formatShortDateTime } from './quotaFormat';
 
 /**
@@ -23,8 +23,9 @@ export function quotaStatusTag(item: QuotaItem, t: TFunc, nowMS = Date.now()): R
   const status = resolveQuotaStatus(item, nowMS);
   if (status === 'disabled') return <Tag>{t('af.disabled')}</Tag>;
   if (status === 'refresh_failed') {
-    const reason = item.last_refresh?.http_status ? `HTTP ${item.last_refresh.http_status}` : t('quota.refresh_failed_reason');
-    return <Tooltip title={reason}><Tag tone="danger">{t('quota.status_refresh_failed')}</Tag></Tooltip>;
+    const reason = quotaRefreshReasonLabel(item.last_refresh, t);
+    const detail = [reason, item.last_refresh?.reason_summary].filter(Boolean).join(' · ');
+    return <Tooltip title={detail}><Tag tone="danger">{t('quota.status_refresh_failed')} · {reason}</Tag></Tooltip>;
   }
   if (status === 'rate_limited') {
     const retry = item.last_refresh?.retry_at_ms;

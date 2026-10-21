@@ -18,7 +18,7 @@ import { resolveQuotaStatus } from '../../utils/quotaStatus';
 export type CredentialQuotaState = 'refresh_failed' | 'rate_limited' | 'stale' | 'reauth' | 'cooldown' | 'exhausted' | 'problem' | 'low' | 'healthy' | 'unread';
 
 const STATE_ORDER: CredentialQuotaState[] = ['refresh_failed', 'rate_limited', 'stale', 'reauth', 'cooldown', 'exhausted', 'problem', 'low', 'healthy', 'unread'];
-const BLOCKED_STATES = new Set<CredentialQuotaState>(['refresh_failed', 'rate_limited', 'stale', 'reauth', 'cooldown', 'exhausted', 'problem']);
+const BLOCKED_STATES = new Set<CredentialQuotaState>(['reauth', 'cooldown', 'exhausted', 'problem']);
 
 /** The remaining shares at which a window stops reading as plentiful, and then as nearly spent. */
 export const QUOTA_AMPLE_PERCENT = 70;
@@ -88,6 +88,8 @@ export interface CredentialQuotaRow {
   primary: string;
   provider: string;
   state: CredentialQuotaState;
+  readingStatus?: 'refresh_failed' | 'rate_limited' | 'stale';
+  lastRefresh?: QuotaItem['last_refresh'];
   /** The credential's own model family, shortest limit first; at most two. */
   windows: QuotaWindow[];
   /** The tightest of `windows`, which is the limit that stops the credential first. */
@@ -113,9 +115,10 @@ export function isCredentialQuotaBlocked(state: CredentialQuotaState): boolean {
 
 function resolveState(file: ManagementAuthFile, item: QuotaItem | undefined, remainingPercent: number | undefined, nowMS: number): CredentialQuotaState {
   const status = item ? resolveQuotaStatus(item, nowMS) : 'idle';
-  if (status === 'refresh_failed' || status === 'rate_limited' || status === 'stale') return status;
+  if (isUnavailable(file)) return 'problem';
   if (item?.recommendation?.action === 'reauth' || item?.recommendation?.status === 'needs_reauth') return 'reauth';
   if (item?.active_cooldown?.is_active || item?.status === 'cooldown') return 'cooldown';
+  if (status === 'refresh_failed' || status === 'rate_limited' || status === 'stale') return status;
   if (item?.status === 'exhausted' || remainingPercent === 0) return 'exhausted';
   if (isUnavailable(file) || item?.status === 'error') return 'problem';
   if (remainingPercent == null) return 'unread';
@@ -177,6 +180,9 @@ export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: Q
       primary: (file.email || file.project_id || file.name || '').trim() || '—',
       provider: (file.type || file.provider || 'unknown').trim().toLowerCase(),
       state,
+      readingStatus: item && ['refresh_failed', 'rate_limited', 'stale'].includes(resolveQuotaStatus(item, nowMS))
+        ? resolveQuotaStatus(item, nowMS) as CredentialQuotaRow['readingStatus'] : undefined,
+      lastRefresh: item?.last_refresh,
       windows,
       bindingWindow,
       remainingPercent,

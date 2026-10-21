@@ -2136,7 +2136,9 @@ proxies (ADR 0097): there is no user-supplied URL or generic `/api-call` surface
 Migration 051 adds `quota_refresh_attempts`, one latest attempt per credential, independent
 of successful snapshots. Manual, interval and adaptive refresh paths record success, failure
 or rate limiting, the attempt instant, an optional HTTP status code and the effective retry
-instant. Upstream error bodies are never stored in this table. Overview and detail DTOs expose
+instant. Migration 052 adds a bounded failure reason (timeout, network, auth, HTTP, parse,
+or unknown) and a redacted, at most 240-character summary for unknown failures; raw upstream
+error bodies are never stored in this table. Overview and detail DTOs expose
 `last_refresh` and `last_success_at_ms`; passive observations cannot clear a failed active
 attempt. The snapshot success gate and provider backoff are unchanged.
 
@@ -2145,6 +2147,9 @@ reading freshness and snapshot status. CPA freshness is one quarter of the short
 window, bounded to two through four hours: the lower bound accommodates one adaptive idle
 cycle, and the upper bound is two idle cycles. Ollama uses thirty minutes, two collection
 cycles. These display evidence limits do not change automation eligibility or scheduling.
+File-level CPA problems remain excluded from the workspace's normal count. The dashboard
+counts refresh failures, rate limiting and stale readings as data-quality warnings rather
+than service blockers, keeps their windows visible, and marks those readings untrusted.
 
 Beside that refresh path, the rate-limit headers an upstream already publishes on every
 response are read without any probe. `internal/quota/passive.go` parses them, and

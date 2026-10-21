@@ -2,11 +2,66 @@ package api
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 )
+
+func TestQuotaRefreshReasonsPersistWithoutRawErrors(t *testing.T) {
+	handler := newQuotaAutoRefreshHandler(t, &quotaAutoRefreshFixture{reads: map[string]int{}, isSingle: true})
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		err     error
+		message string
+		want    string
+	}{
+		{"typed-timeout", context.DeadlineExceeded, "", "timeout"},
+		{"normalized-timeout", nil, "CPA request failed: context deadline exceeded", "timeout"},
+		{"network", nil, "dial tcp: connection refused", "network"},
+		{"parse", nil, "invalid codex payload: unexpected end of JSON input", "parse"},
+		{"auth", nil, "HTTP 401", "auth"},
+		{"http", nil, "HTTP 483", "http"},
+		{"unknown", errors.New("provider rejected request token=synthetic-sensitive-value " + strings.Repeat("detail ", 60)), "", "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := management.AuthFile{AuthIndex: tc.name}
+			value := &quota.NormalizedQuota{Status: "error", Error: tc.message}
+			if err := handler.recordQuotaRefreshAttempt(ctx, file, value, tc.err); err != nil {
+				t.Fatal(err)
+			}
+			attempts, err := handler.repo.GetQuotaRefreshAttempts(ctx, []string{file.AuthIndex})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attempt := attempts[file.AuthIndex]
+			dto := projectQuotaRefreshAttempt(attempt)
+			if dto.Reason != tc.want || dto.Outcome != "failed" {
+				t.Fatalf("reason = %+v", dto)
+			}
+			if strings.Contains(attempt.ReasonSummary, "synthetic-sensitive-value") || len([]rune(dto.ReasonSummary)) > 240 {
+				t.Fatal("unsafe summary")
+			}
+			if tc.want == "unknown" && !strings.Contains(dto.ReasonSummary, "[redacted]") {
+				t.Fatalf("missing redacted summary: %q", dto.ReasonSummary)
+			}
+			if err := handler.recordQuotaRefreshAttempt(ctx, file, &quota.NormalizedQuota{Status: "healthy"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			attempts, err = handler.repo.GetQuotaRefreshAttempts(ctx, []string{file.AuthIndex})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attempt = attempts[file.AuthIndex]; attempt.Reason != "" || attempt.ReasonSummary != "" {
+				t.Fatal("successful attempt kept failure reason")
+			}
+		})
+	}
+}
 
 func TestQuotaOverviewRetainsSuccessfulReadingAfterFailedRefresh(t *testing.T) {
 	fixture := &quotaAutoRefreshFixture{reads: map[string]int{}, isSingle: true}

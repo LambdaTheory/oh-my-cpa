@@ -877,7 +877,11 @@ For changes here, run affected self-tests, `pnpm verify`, `pnpm check:ui` and
 `internal/api/quota_refresh_status_test.go` drives success, failure, rate limiting and recovery
 through the real quota service and overview, retaining successful snapshots across failures.
 The credential-quota component suite owns shared row/dashboard status, exhaustive counts,
-HTTP diagnostics, last success time and freshness boundaries. The existing OAuth workspace
+HTTP and non-HTTP diagnostics (including tooltip rendering), last success time and freshness
+boundaries. It also owns exclusion of CPA file problems from normal counts and retention of
+serving counts and untrusted windows when scheduling stops updating readings. The Go suite
+checks bounded reason persistence, unknown-summary redaction and successful-attempt cleanup.
+The existing OAuth workspace
 scale probe owns post-refresh overview/report agreement and desktop/phone screenshots.
 
 `internal/quota` owns what each provider's documents mean. That includes the xAI pair

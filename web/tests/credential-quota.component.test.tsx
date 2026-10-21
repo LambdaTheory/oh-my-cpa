@@ -10,6 +10,7 @@ import {
 import { buildCredentialQuotaBoard, credentialQuotaRefreshTargets } from '../src/components/dashboard/credentialQuotaLogic';
 import { CredentialQuotaBody } from '../src/pages/quota/CredentialQuotaBody';
 import { CompactQuotaView } from '../src/pages/quota/CompactQuotaView';
+import { OAuthCredentialRecord } from '../src/pages/oauthManagement/OAuthCredentialRecord';
 import { buildOAuthWorkspaceProjection, countWorkspaceQuotaStatuses } from '../src/pages/oauthManagement/oauthWorkspaceLogic';
 import { quotaFreshnessMS, resolveQuotaStatus } from '../src/utils/quotaStatus';
 import type { ManagementAuthFile } from '../src/types/managementAuthFile';
@@ -69,10 +70,43 @@ function QuotaSurface(props: Partial<CredentialQuotaPanelProps>) {
 const panelState = () => screen.getByTestId('dashboard-credential-quota').getAttribute('data-quota-panel-state');
 
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   window.localStorage.setItem('omc-lang', 'en');
 });
 
 describe('credential quota board', () => {
+  it.each([{ unavailable: true }, { status: 'error' }])('excludes CPA file problems from normal counts: %j', (problem) => {
+    const entry = file('unavailable', problem);
+    const item = quota(entry.name, [quotaWindow('five_hour', 80, 3)]);
+    const record = buildOAuthWorkspaceProjection([entry], [item], [], [], [], NOW_MS).records[0];
+    expect(countWorkspaceQuotaStatuses([record], NOW_MS)).toEqual({ error: 1 });
+    render(<I18nProvider><OAuthCredentialRecord file={entry} displayProvider="codex" identityKey="unavailable" selected={false} busy={false} canTargetFile={false} onSelect={vi.fn()} onToggle={vi.fn()} onDownload={vi.fn()} onDelete={vi.fn()} onEdit={vi.fn()} onShowModels={vi.fn()} onShowDetails={vi.fn()} /></I18nProvider>);
+    expect(screen.getByText('Problems')).toBeTruthy();
+  });
+
+  it('keeps serving credentials and their retained windows when scheduling leaves readings stale', () => {
+    const items = [
+      quota('stale', [quotaWindow('five_hour', 80, 3)], { observed_at_ms: NOW_MS - 12 * HOUR_MS }),
+      quota('failed', [quotaWindow('five_hour', 70, 3)], { last_refresh: { outcome: 'failed', attempted_at_ms: NOW_MS, reason: 'timeout' } }),
+      quota('limited', [quotaWindow('five_hour', 60, 3)], { last_refresh: { outcome: 'rate_limited', attempted_at_ms: NOW_MS } }),
+    ];
+    const files = items.map((item) => file(item.auth_index));
+    expect(buildCredentialQuotaBoard(files, items, NOW_MS)).toMatchObject({ servingCount: 3, blockedCount: 0 });
+    const { container } = render(<QuotaSurface files={files} quotas={items} />);
+    expect(screen.getAllByRole('meter').map((meter) => meter.getAttribute('aria-valuenow'))).toEqual(['70', '60', '80']);
+    expect(screen.getByText('Data stale')).toBeTruthy();
+    expect(screen.getByText(/Refresh failed.*Request timed out/)).toBeTruthy();
+    expect(container.querySelectorAll('[data-quota-reading-trusted="false"]')).toHaveLength(3);
+    expect(buildCredentialQuotaBoard(files.map((entry) => ({ ...entry, unavailable: true })), items, NOW_MS).servingCount).toBe(0);
+  });
+
+  it('shows a credential-specific non-HTTP failure in its row and tooltip', async () => {
+    const item = quota('timeout', [], { last_refresh: { outcome: 'failed', attempted_at_ms: NOW_MS, reason: 'timeout' } });
+    render(<I18nProvider><CompactQuotaView item={item} nowMS={NOW_MS} /></I18nProvider>);
+    const tag = screen.getByText('Refresh failed · Request timed out');
+    fireEvent.mouseOver(tag);
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Request timed out');
+  });
   it('shares latest-attempt and freshness status between rows, counts and dashboard', () => {
     const oldMS = NOW_MS - 12 * HOUR_MS;
     const items = [
@@ -90,7 +124,7 @@ describe('credential quota board', () => {
     expect(buildCredentialQuotaBoard(files, items, NOW_MS).rows.map((row) => row.state)).toEqual(['refresh_failed', 'rate_limited', 'stale', 'healthy']);
     const { container } = render(<I18nProvider>{items.map((item) => <CompactQuotaView key={item.auth_index} item={item} nowMS={NOW_MS} />)}</I18nProvider>);
     const failed = within(container.querySelector('[data-quota-body="failed"]') as HTMLElement);
-    expect(failed.getByText('Refresh failed')).toBeTruthy();
+    expect(failed.getByText('Refresh failed · HTTP 483')).toBeTruthy();
     expect(failed.queryByText('Normal')).toBeNull();
     expect(failed.getByText(/HTTP 483.*Last successful reading/)).toBeTruthy();
     expect(screen.getByText('Rate limited')).toBeTruthy();

@@ -1,4 +1,4 @@
-import { matchesStatusFilter, providerOf, type AuthFileSortKey, type AuthFileStatusFilter } from '../../components/authFiles/authFileLogic';
+import { isAuthFileDisabled, isAuthFileProblem, matchesStatusFilter, providerOf, type AuthFileSortKey, type AuthFileStatusFilter } from '../../components/authFiles/authFileLogic';
 import { getCredentialProviderMetadata } from '../../components/common/providerMetadata';
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { PluginItem } from '../../types/plugin';
@@ -614,7 +614,8 @@ export function workspaceProviderCounts(records: OAuthWorkspaceRecord[]): Record
 export function countWorkspaceQuotaStatuses(records: OAuthWorkspaceRecord[], nowMS = Date.now()): Partial<Record<QuotaDisplayStatus, number>> {
   const counts: Partial<Record<QuotaDisplayStatus, number>> = {};
   for (const record of records) {
-    const status = record.file.disabled || record.file.status === 'disabled' ? 'disabled'
+    const status = isAuthFileDisabled(record.file) ? 'disabled'
+      : isAuthFileProblem(record.file) ? 'error'
       : record.quota ? resolveQuotaStatus(record.quota, nowMS) : 'idle';
     counts[status] = (counts[status] ?? 0) + 1;
   }
