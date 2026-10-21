@@ -101,6 +101,7 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 		Web: web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
 		Logger: h.logger, Now: h.now,
 	})
+	h.buildReauthService(api.service)
 	api.prediction = feishu.NewPredictionJob(api.service, func(ctx context.Context) (feishu.PredictionDigest, error) {
 		prediction, err := h.operationsService().QuotaPrediction(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.QuotaPredictionInput{FindingsOnly: true})
 		if err != nil {

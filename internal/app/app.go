@@ -314,6 +314,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 // override. The plaintext app secret is carried here only.
 func feishuOverlay(cfg config.Config) feishu.Overlay {
 	return feishu.Overlay{
+		OAuthChatID:   cfg.Feishu.OAuthChatID,
 		ForceDisabled: cfg.Feishu.ForceDisabled,
 		Enabled:       cfg.Feishu.Enabled,
 		AppID:         cfg.Feishu.AppID,
@@ -524,6 +525,14 @@ func (a *App) Run(ctx context.Context) error {
 	// Start is a no-op for a disabled, forced-off or degraded configuration, so an
 	// unusable Feishu setup never fails startup.
 	if a.feishu != nil && !a.cfg.IsDemoMode {
+		reauthDone := make(chan struct{})
+		go func() {
+			defer close(reauthDone)
+			if err := a.handler.RunReauth(runCtx); err != nil && runCtx.Err() == nil {
+				a.logger.Warn("reauth loop stopped", "reason", "service_unavailable")
+			}
+		}()
+		defer func() { <-reauthDone }()
 		var predictionDone chan struct{}
 		if a.prediction != nil {
 			a.prediction.Activate()

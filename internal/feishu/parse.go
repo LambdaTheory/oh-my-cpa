@@ -12,6 +12,7 @@ import (
 // this rather than on the SDK type, so tests can drive the handlers without
 // constructing SDK events or reaching the network.
 type Inbound struct {
+	MessageType  string
 	EventID      string
 	MessageID    string
 	ChatID       string
@@ -61,6 +62,9 @@ func parseMessage(event *larkim.P2MessageReceiveV1) Inbound {
 				in.BotMentioned = true
 				break
 			}
+		}
+		if message.MessageType != nil {
+			in.MessageType = *message.MessageType
 		}
 		if message.MessageType != nil && *message.MessageType == larkim.MsgTypeText && message.Content != nil {
 			in.Text = extractText(*message.Content)

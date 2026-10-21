@@ -505,3 +505,29 @@ func TestLoadRejectsBadCredentialFloorByProvider(t *testing.T) {
 		}
 	}
 }
+
+func TestFeishuOAuthEnvironment(t *testing.T) {
+	t.Setenv("OMCPA_FEISHU_ENABLED", "true")
+	t.Setenv("OMCPA_FEISHU_FORCE_DISABLED", "false")
+	t.Setenv("OMCPA_FEISHU_APP_ID", "cli_synthetic")
+	t.Setenv("OMCPA_FEISHU_APP_SECRET", "synthetic-app-secret")
+	t.Setenv("OMCPA_FEISHU_OAUTH_CHAT_ID", " oc_oauth ")
+	t.Setenv("OMCPA_FEISHU_OAUTH_CONTACT_OPEN_ID", " ou_contact ")
+	t.Setenv("OMCPA_REAUTH_RUNNER_CIDRS", "")
+	cfg, err := loadFeishuConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OAuthChatID != "oc_oauth" || cfg.OAuthContactOpenID != "ou_contact" || len(cfg.ReauthRunnerCIDRs) != 6 {
+		t.Fatal("OAuth environment not loaded")
+	}
+	t.Setenv("OMCPA_REAUTH_RUNNER_CIDRS", "172.18.0.0/16")
+	cfg, err = loadFeishuConfig()
+	if err != nil || len(cfg.ReauthRunnerCIDRs) != 1 || cfg.ReauthRunnerCIDRs[0] != "172.18.0.0/16" {
+		t.Fatal("allowlist override not applied")
+	}
+	t.Setenv("OMCPA_REAUTH_RUNNER_CIDRS", "invalid")
+	if _, err := loadFeishuConfig(); err == nil {
+		t.Fatal("invalid CIDR accepted")
+	}
+}

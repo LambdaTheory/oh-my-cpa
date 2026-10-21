@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough052(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough053(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -276,10 +276,11 @@ func TestMigration045UpgradesForkSchemaThrough052(t *testing.T) {
 	}
 
 	if err := database.Migrate(ctx); err != nil {
-		t.Fatalf("migrate schema 45 through 52: %v", err)
+		t.Fatalf("migrate schema 45 through 53: %v", err)
 	}
 
 	upstreamTables := []string{
+		"reauth_jobs",
 		"credential_warmup_policies",
 		"credential_warmup_state",
 		"credential_warmup_runs",
@@ -331,11 +332,11 @@ func TestMigration045UpgradesForkSchemaThrough052(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 47)
+	expectedVersions := make([]int, 0, 48)
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 52; version++ {
+	for version := 15; version <= 53; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
@@ -475,5 +476,52 @@ func TestBackupRestoreSmokeAndFreeSpaceCheck(t *testing.T) {
 	}
 	if encFiles > 2 {
 		t.Fatalf("expected at most 2 retained backups, got %d", encFiles)
+	}
+}
+
+func TestMigration053ProviderFlowsShareContactSlot(t *testing.T) {
+	ctx := context.Background()
+	db := openDatabaseAtMigration(t, 52)
+	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO reset_announcements
+		(id, provider, source, scope, confidence, original_text, registered_at_ms, created_at_ms)
+		VALUES ('synthetic-announcement', 'claude', 'manual', 'all', 'confirmed', 'Synthetic reset notice', 1000, 1000)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var preservedCount int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM reset_announcements
+		WHERE id = 'synthetic-announcement' AND original_text = 'Synthetic reset notice'`).Scan(&preservedCount); err != nil {
+		t.Fatal(err)
+	}
+	if preservedCount != 1 {
+		t.Fatalf("announcement count after upgrade = %d, want 1", preservedCount)
+	}
+	var count, distinctCount, maxVersion int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT version), MAX(version) FROM schema_migrations`).Scan(&count, &distinctCount, &maxVersion); err != nil {
+		t.Fatal(err)
+	}
+	if count != 48 || distinctCount != 48 || maxVersion != 53 {
+		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 48/48/53", count, distinctCount, maxVersion)
+	}
+	for i, p := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
+		if _, err := db.SQL.ExecContext(ctx, "INSERT INTO reauth_jobs (id,auth_index,provider,account_label,flow,code_kind,state,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,'pending',?,?)", p, p, p, p, "device_code", "device", i, i); err != nil {
+			t.Fatalf("provider %s: %v", p, err)
+		}
+	}
+	for _, state := range []string{"oauth_started", "waiting_code", "waiting_browser", "waiting_callback", "waiting_device", "code_received", "oauth_submitted", "verifying"} {
+		if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state=? WHERE id='claude'", state); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='waiting_device' WHERE id='kimi'"); err == nil {
+			t.Fatalf("contact index admitted concurrent %s and device", state)
+		}
+	}
+	if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='succeeded' WHERE id='claude'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='waiting_device' WHERE id='kimi'"); err != nil {
+		t.Fatal(err)
 	}
 }

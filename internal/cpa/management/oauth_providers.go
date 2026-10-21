@@ -84,11 +84,10 @@ var OAuthProviders = []OAuthProvider{
 		UsesLoopbackCallback: true,
 	},
 	{
-		ID:                   "xai",
-		Name:                 "xAI Grok",
-		Description:          "xAI Grok OAuth authentication flow",
-		Flow:                 OAuthFlowRedirect,
-		UsesLoopbackCallback: true,
+		ID:          "xai",
+		Name:        "xAI Grok",
+		Description: "xAI Grok device code / OAuth flow",
+		Flow:        OAuthFlowDevice,
 	},
 	{
 		ID:   "devin",
@@ -99,7 +98,7 @@ var OAuthProviders = []OAuthProvider{
 		// the browser could not reach and pastes the URL back.
 		Description:          "Devin OAuth flow; the redirect lands on CPA's own loopback callback and is submitted manually when the browser is remote",
 		Flow:                 OAuthFlowRedirect,
-		UsesLoopbackCallback: true,
+		UsesLoopbackCallback: false,
 	},
 	{
 		ID:          "meta",

@@ -19,6 +19,25 @@ change; keep the claim's strength, not its address. Nothing in the map is frozen
 
 ## 1. Where a new test belongs
 
+OAuth reauthentication is covered without external services: `internal/reauth` uses
+an injected clock and temporary SQLite databases for transitions, episode deduplication,
+cross-provider serialization, flow-specific waiting states, device expiry, OTP consumption, restart loss, audit refusal and verification
+backoff. Active-episode recovery tests run the real migrations in memory and cover a
+healthy reading before expiry or failure; failing senders cannot block due verification
+or its final refresh. Feishu tests drive the actual message handler with a fake sender, including
+identity/type/format rejection, no waiting job, provider/flow card copy, device metadata, mention markup and log privacy. API
+tests exercise the mounted sub-path, session/network boundary, DTO allowlist, one-time
+code response and a fake CPA returning authentication failure then healthy quota.
+Account-kind regressions use CPA's opaque 16-character hex index and distinguish
+`api_key`, unknown kinds, `oauth` and empty account types through quota signal
+recording and recovery refresh; rejected recovery refreshes make no quota call.
+Service tests also enforce account-kind admission directly at `reauth.Observe`.
+Demo export pricing timestamps use the fixed reference instant for runtime-stamped
+writes, with regression coverage for slow seeding and unchanged historical versions.
+Migration tests extend the existing upgrade chain through 053, including a 052-to-053
+upgrade preserving reset announcements and enforcing the shared OAuth contact slot; the historical 010–014
+gap remains unchanged. No real group, mailbox or browser participates.
+
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.
 

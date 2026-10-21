@@ -418,16 +418,15 @@ func TestOAuthProviderRegistryWiring(t *testing.T) {
 	if flows["devin"] != "redirect" {
 		t.Fatalf("devin flow = %q, want redirect", flows["devin"])
 	}
-	if flows["meta"] != "device" {
+	if flows["meta"] != "device" || flows["xai"] != "device" {
 		t.Fatalf("meta flow = %q, want device", flows["meta"])
 	}
 	if flows["kimi"] != "device" || flows["codex"] != "redirect" {
 		t.Fatalf("existing providers changed flow: %#v", flows)
 	}
 
-	// The loopback flag is what makes CPA serve the redirect locally. Devin needs
-	// it, and a device grant must never receive it: there is no redirect for a
-	// forwarder to receive, and asking would make CPA bind an unused port.
+	// Devin uses CPA's own callback port; device grants have no redirect.
+	// Neither should start a separate loopback forwarder.
 	isWebUIFor := func(provider string) string {
 		state.mu.Lock()
 		state.lastAuthURLQuery = ""
@@ -442,8 +441,11 @@ func TestOAuthProviderRegistryWiring(t *testing.T) {
 		return state.lastAuthURLQuery
 	}
 
-	if query := isWebUIFor("devin"); query != "true" {
-		t.Fatalf("devin is_webui = %q, want true", query)
+	if query := isWebUIFor("devin"); query != "" {
+		t.Fatalf("devin is_webui = %q, want empty", query)
+	}
+	if query := isWebUIFor("xai"); query != "" {
+		t.Fatalf("xai requested forwarder: %s", query)
 	}
 	if query := isWebUIFor("meta"); query != "" {
 		t.Fatalf("meta must not request the loopback callback, got is_webui=%q", query)

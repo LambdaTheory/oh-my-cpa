@@ -61,6 +61,7 @@ type Config struct {
 // field replaces the web value for that field only. The plaintext secret travels
 // here and nowhere else.
 type Overlay struct {
+	OAuthChatID   string
 	ForceDisabled bool
 	Enabled       *bool
 	AppID         *string
@@ -81,6 +82,7 @@ const (
 // environment overlay are combined and validated. The app secret is present only
 // here, never in Config or in any DTO.
 type Resolved struct {
+	OAuthChatID             string
 	Enabled                 bool
 	AppID                   string
 	AppSecret               string
@@ -109,6 +111,10 @@ func (r Resolved) Ready() bool {
 	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && r.ChatID != ""
 }
 
+func (r Resolved) ConnectionReady() bool {
+	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && (r.ChatID != "" || r.OAuthChatID != "")
+}
+
 // clock is a wall-clock time of day in minutes since midnight.
 type clock int
 
@@ -118,6 +124,7 @@ type clock int
 // than fail startup. The environment force-off is applied first and wins.
 func resolveConfig(web Config, overlay Overlay) Resolved {
 	out := Resolved{
+		OAuthChatID:             overlay.OAuthChatID,
 		Enabled:                 web.Enabled,
 		AppID:                   strings.TrimSpace(web.AppID),
 		ChatID:                  strings.TrimSpace(web.ChatID),
@@ -190,7 +197,7 @@ func validateResolved(r Resolved) string {
 	if r.AppSecret == "" {
 		return "缺少应用 App Secret"
 	}
-	if r.ChatID == "" {
+	if r.ChatID == "" && r.OAuthChatID == "" {
 		return "缺少目标群 chat_id"
 	}
 	return ""

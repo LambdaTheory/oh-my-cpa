@@ -65,7 +65,9 @@ func (s *larkSource) Run(ctx context.Context, handler EventHandler) error {
 		OnP2MessageReactionCreatedV1(ignoreMessageReactionCreated).
 		OnP2MessageReactionDeletedV1(ignoreMessageReactionDeleted)
 
+	eventDispatcher.Config.Logger = eventLogger{logger: s.logger}
 	client := larkws.NewClient(s.appID, s.appSecret,
+		larkws.WithLogger(eventLogger{logger: s.logger}),
 		larkws.WithEventHandler(eventDispatcher),
 		larkws.WithLogLevel(larkcore.LogLevelInfo),
 		larkws.WithOnReconnecting(func() {
