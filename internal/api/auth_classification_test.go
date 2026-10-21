@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ func TestAuthClassificationAcrossCollectionPaths(t *testing.T) {
 		wantJobs       int
 	}{
 		{"payment", "antigravity", 403, `{"error":{"reason":"payment_required"}}`, false, 0},
+		{"payment expired account", "antigravity", 403, `{"error":{"reason":"payment_required"}}`, false, 1},
 		{"claude expired", "claude", 401, `{"error":{"message":"OAuth access token has expired"}}`, false, 1},
 		{"codex 401", "codex", 401, `{}`, false, 1},
 		{"scope", "claude", 403, `{"error":{"message":"insufficient scope"}}`, false, 0},
@@ -45,8 +47,11 @@ func TestAuthClassificationAcrossCollectionPaths(t *testing.T) {
 					switch r.URL.Path {
 					case "/v8/management/credentials":
 						file := map[string]any{"id": "synthetic-file", "name": "synthetic.json", "auth_index": "synthetic", "type": tc.provider, "provider": tc.provider, "account_type": "oauth", "status": "active", "project_id": "synthetic"}
-						if tc.name == "payment" {
+						if strings.HasPrefix(tc.name, "payment") {
 							file["cooldowns"] = []map[string]any{{"scope": "model", "model_key": "synthetic-model", "reason": "payment_required", "http_status": 403, "retry_at": "2030-01-01T00:00:00Z"}}
+						}
+						if tc.name == "payment expired account" {
+							file["status"], file["status_message"] = "error", "OAuth access token has expired"
 						}
 						writeJSON(w, 200, map[string]any{"files": []any{file}})
 					case "/v8/management/requests/api-call":
@@ -115,6 +120,9 @@ func TestAuthClassificationAcrossCollectionPaths(t *testing.T) {
 				if (overview.Quotas[0].Recommendation.Status == "needs_reauth") != (tc.wantJobs == 1) {
 					t.Fatalf("reload recommendation=%+v", overview.Quotas[0].Recommendation)
 				}
+				if strings.HasPrefix(tc.name, "payment") && (len(overview.Quotas[0].Cooldowns) != 1 || overview.Quotas[0].Cooldowns[0].Reason != "payment_required") {
+					t.Fatal("model payment cooldown lost")
+				}
 				response, err := client.Get(base + "/omc/api/v1/management/quota/synthetic")
 				if err != nil {
 					t.Fatal(err)
@@ -144,5 +152,112 @@ func TestAuthClassificationAcrossCollectionPaths(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
+	for _, hasTimestamp := range []bool{false, true} {
+		t.Run(fmt.Sprint("timestamp=", hasTimestamp), func(t *testing.T) {
+			ctx := context.Background()
+			var handler *Handler
+			var updatedAt atomic.Int64
+			var isRejected atomic.Bool
+			if hasTimestamp {
+				updatedAt.Store(time.Now().Add(-time.Hour).UnixMilli())
+			}
+			client, base, repo := startDashboardTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v8/management/credentials":
+					writeJSON(w, 200, map[string]any{"files": []any{map[string]any{"id": "synthetic-file", "name": "synthetic.json", "auth_index": "synthetic", "type": "claude", "provider": "claude", "account_type": "oauth", "status": "error", "status_message": "OAuth access token has expired", "updated_at": updatedAt.Load()}}})
+				case "/v8/management/requests/api-call":
+					status, body := 200, `{"five_hour":{"utilization":20}}`
+					if isRejected.Load() {
+						status, body = 403, `{"error":{"code":"payment_required"}}`
+					}
+					writeJSON(w, 200, map[string]any{"status_code": status, "body": json.RawMessage(body)})
+				default:
+					w.WriteHeader(404)
+				}
+			}, func(h *Handler) {
+				handler = h
+				h.reauth = reauth.New(reauth.Options{Repo: h.repo, Enabled: func() bool { return true }})
+			})
+			seedAuthFile(t, repo, "synthetic", "synthetic.json", "claude", false, false, time.Now())
+			refresh := func() {
+				t.Helper()
+				response, err := client.Post(base+"/omc/api/v1/management/quota/refresh", "application/json", strings.NewReader(`{"auth_index":"synthetic"}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				if response.StatusCode != 200 {
+					t.Fatalf("refresh status=%d", response.StatusCode)
+				}
+			}
+			assertReload := func(wantAuth bool) {
+				t.Helper()
+				cpa, err := handler.capabilityClient(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				overview, err := handler.buildQuotaOverview(ctx, cpa)
+				if err != nil || len(overview.Quotas) != 1 {
+					t.Fatalf("overview: %v", err)
+				}
+				if (overview.Quotas[0].Recommendation.Status == "needs_reauth") != wantAuth {
+					t.Fatalf("overview status=%s", overview.Quotas[0].Recommendation.Status)
+				}
+				if !wantAuth && overview.Quotas[0].Status != "healthy" {
+					t.Fatalf("recovery status=%s", overview.Quotas[0].Status)
+				}
+				response, err := client.Get(base + "/omc/api/v1/management/quota/synthetic")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var detail map[string]any
+				err = json.NewDecoder(response.Body).Decode(&detail)
+				response.Body.Close()
+				if err != nil || response.StatusCode != 200 {
+					t.Fatalf("detail status=%d error=%v", response.StatusCode, err)
+				}
+				encoded, _ := json.Marshal(detail)
+				if strings.Contains(string(encoded), `"needs_reauth"`) != wantAuth {
+					t.Fatalf("detail mismatch: %s", encoded)
+				}
+			}
+			assertReport := func(wantAuth bool) {
+				t.Helper()
+				report, _ := handler.BuildFeishuReportSource().ReadReport(ctx)
+				provider := reportProvider(t, report, "claude")
+				wantState := feishu.StateHealthy
+				if wantAuth {
+					wantState = feishu.StateInvalid
+				}
+				if len(provider.Accounts) != 1 || provider.Accounts[0].State != wantState {
+					t.Fatalf("report=%v", provider.Accounts)
+				}
+			}
+			refresh()
+			assertReload(false)
+			assertReport(false)
+			var initialJobs int
+			if err := repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&initialJobs); err != nil || initialJobs != 0 {
+				t.Fatalf("recovered jobs=%d error=%v", initialJobs, err)
+			}
+			snapshots, err := repo.GetLatestQuotaSnapshots(ctx, []string{"synthetic"})
+			if err != nil || snapshots["synthetic"].ObservedAtMS <= 0 {
+				t.Fatalf("snapshot: %v", err)
+			}
+			updatedAt.Store(snapshots["synthetic"].ObservedAtMS + 1)
+			assertReload(true)
+			isRejected.Store(true)
+			refresh()
+			assertReload(true)
+			assertReport(true)
+			var jobs int
+			if err := repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&jobs); err != nil || jobs != 1 {
+				t.Fatalf("jobs=%d error=%v", jobs, err)
+			}
+		})
 	}
 }

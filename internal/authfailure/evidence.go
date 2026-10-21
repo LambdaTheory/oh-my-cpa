@@ -101,15 +101,37 @@ func (e *Evidence) NeedsReauth() bool {
 	if e.HTTPStatus == 429 || e.HTTPStatus >= 500 {
 		return false
 	}
+	structured := strings.ToLower(strings.Join([]string{e.Code, e.Type, e.Reason}, " "))
 	text := strings.ToLower(strings.Join([]string{e.Code, e.Type, e.Message, e.Description, e.Reason}, " "))
+	// Provider identifiers carry deliberate semantics. Endpoint vocabulary in
+	// prose cannot veto an explicit token/session rejection, while structured
+	// client and permission failures still do not ask the user to log in again.
+	if containsAny(structured, "invalid_client", "unauthorized_client") {
+		return false
+	}
+	if strings.Contains(structured, "invalid_grant") {
+		return e.Source == TokenRefresh
+	}
+	if e.HTTPStatus == 401 {
+		if containsAny(text, "invalid_client", "unauthorized_client") {
+			return false
+		}
+		if strings.Contains(text, "invalid_grant") {
+			return e.Source == TokenRefresh
+		}
+		return true
+	}
+	if containsAny(structured, "payment_required", "quota", "entitlement", "policy", "scope", "risk", "challenge") {
+		return false
+	}
+	if containsAny(structured, "invalid_token", "token_expired", "invalid_session", "session_expired", "session_revoked", "authentication_error", "unauthenticated", "invalid_api_key") {
+		return true
+	}
 	if containsAny(text, "invalid_client", "unauthorized_client") {
 		return false
 	}
 	if strings.Contains(text, "invalid_grant") {
 		return e.Source == TokenRefresh
-	}
-	if e.HTTPStatus == 401 {
-		return true
 	}
 	if containsAny(text, "payment_required", "quota", "entitlement", "policy", "scope", "risk", "challenge") {
 		return false

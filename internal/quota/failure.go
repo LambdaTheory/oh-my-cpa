@@ -49,7 +49,7 @@ func isRecognizedQuotaPayload(endpoint string, body []byte) bool {
 	case CodexUsageURL:
 		keys = []string{"plan_type", "rate_limit", "code_review_rate_limit", "additional_rate_limits"}
 	case ClaudeUsageURL:
-		keys = []string{"five_hour", "seven_day", "usage_limits", "limits", "extra_usage", "iguana_necktie"}
+		return isRecognizedClaudeUsage(body)
 	case AntigravityQuotaURLDaily, AntigravityQuotaURLSandbox, AntigravityQuotaURLCloud:
 		keys = []string{"groups"}
 	case KimiUsageURL, KimiInternationalUsageURL:

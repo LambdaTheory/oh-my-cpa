@@ -797,7 +797,7 @@ func TestWarmupAutomationRetainsBillingProtection(t *testing.T) {
 	for _, provider := range []string{"claude", "codex"} {
 		for _, evidence := range []string{"enabled", "unknown"} {
 			t.Run(provider+"/"+evidence, func(t *testing.T) {
-				fixture := &warmupFixture{provider: provider, isPaid: evidence == "enabled", isPaidUnknown: evidence == "unknown"}
+				fixture := &warmupFixture{provider: provider, isActive: true, isPaid: evidence == "enabled", isPaidUnknown: evidence == "unknown"}
 				handler := newWarmupHandler(t, fixture)
 				if err := handler.runCredentialWarmupRound(context.Background()); err != nil {
 					t.Fatal(err)

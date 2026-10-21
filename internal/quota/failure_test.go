@@ -26,6 +26,10 @@ func TestFetcherPreservesCredentialFailureEvidence(t *testing.T) {
 		{"claude", 200, `{"error":{"message":"Re-authenticate"}}`, true},
 		{"codex", 200, `{}`, false},
 		{"claude", 200, `{"unrelated":true}`, false},
+		{"claude", 200, `{}`, false},
+		{"claude", 200, `{"usage_limits":[]}`, false},
+		{"claude", 200, `{"five_hour":null,"seven_day":null}`, false},
+		{"claude", 200, `{"seven_day_sonnet":{"utilization":20},"error":{"code":"invalid_token"}}`, true},
 	} {
 		t.Run(tc.provider+tc.body, func(t *testing.T) {
 			client := &mockCPAClient{apiCallFunc: func(_ context.Context, req management.ApiCallRequest) (management.ApiCallResponse, error) {
@@ -39,6 +43,73 @@ func TestFetcherPreservesCredentialFailureEvidence(t *testing.T) {
 				if q.Failure == nil || q.Failure.Endpoint == "" || q.Failure.Source != authfailure.UpstreamQuota {
 					t.Fatal("missing evidence")
 				}
+			}
+		})
+	}
+}
+
+func TestClaudeStandaloneObservationsProveAcceptance(t *testing.T) {
+	payloads := map[string]string{
+		"limits":       `{"limits":[{"percent":20,"scope":{"model":{"display_name":"Fable"}}}]}`,
+		"empty limits": `{"limits":[]}`,
+		"extra usage":  `{"extra_usage":{"is_enabled":false}}`,
+		"balance":      `{"iguana_necktie":{"limit_dollars":10,"used_dollars":2}}`,
+	}
+	for _, window := range []string{"five_hour", "seven_day", "seven_day_sonnet", "seven_day_opus", "seven_day_oauth_apps", "seven_day_cowork", "iguana_necktie"} {
+		payloads[window] = `{"` + window + `":{"utilization":20}}`
+	}
+	for name, body := range payloads {
+		t.Run(name, func(t *testing.T) {
+			client := &mockCPAClient{apiCallFunc: func(context.Context, management.ApiCallRequest) (management.ApiCallResponse, error) {
+				return management.ApiCallResponse{StatusCode: 200, Body: json.RawMessage(body)}, nil
+			}}
+			q, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{Type: "claude", AuthIndex: "synthetic"}, nil)
+			if err != nil || q.Error != "" || !q.HasAuthenticatedRead {
+				t.Fatalf("supported observation rejected: error=%v quotaError=%s accepted=%v", err, q.Error, q.HasAuthenticatedRead)
+			}
+		})
+	}
+}
+
+func TestPersistedAcceptanceOrdersAccountEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name, updatedAt string
+		wantAuth        bool
+	}{
+		{"undated", `null`, false},
+		{"older", `"2023-11-14T22:13:19Z"`, false},
+		{"same", `1700000000000`, false},
+		{"newer", `"2023-11-14T22:13:21Z"`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &NormalizedQuota{LastAuthenticatedReadAtMS: 1700000000000}
+			ApplyCredentialStatus(q, management.AuthFile{Status: "error", StatusMessage: "OAuth access token has expired", UpdatedAt: json.RawMessage(tc.updatedAt)}, 1700000002000)
+			EvaluateStatusAndRecommendation(q, 1700000002000)
+			if (q.Recommendation.Status == "needs_reauth") != tc.wantAuth || q.HasAuthenticatedRead {
+				t.Fatalf("auth=%s freshAcceptance=%v", q.Recommendation.Status, q.HasAuthenticatedRead)
+			}
+		})
+	}
+}
+
+func TestNonAuthEndpointFailureDoesNotMaskAccountRejection(t *testing.T) {
+	for _, source := range []string{"status", "account cooldown", "credential cooldown", "active"} {
+		t.Run(source, func(t *testing.T) {
+			file := management.AuthFile{Status: "active", Cooldowns: []management.AuthCooldown{{Scope: "model", Reason: "payment_required", HTTPStatus: 403}}}
+			if source == "status" {
+				file.Status, file.StatusMessage = "error", "OAuth access token has expired"
+			} else if source != "active" {
+				scope := "account"
+				if source == "credential cooldown" {
+					scope = "credential"
+				}
+				file.Cooldowns = append(file.Cooldowns, management.AuthCooldown{Scope: scope, Reason: "invalid_token", HTTPStatus: 403})
+			}
+			q := &NormalizedQuota{Error: "HTTP 403", Failure: &authfailure.Evidence{Source: authfailure.UpstreamQuota, HTTPStatus: 403, Code: "payment_required"}}
+			ApplyCredentialStatus(q, file, 1)
+			EvaluateStatusAndRecommendation(q, 1)
+			if (q.Recommendation.Status == "needs_reauth") != (source != "active") || q.ActiveCooldown == nil || q.Cooldowns[0].Reason != "payment_required" {
+				t.Fatalf("recommendation=%s cooldown=%v", q.Recommendation.Status, q.Cooldowns)
 			}
 		})
 	}

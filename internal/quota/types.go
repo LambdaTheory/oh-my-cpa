@@ -195,6 +195,9 @@ type NormalizedQuota struct {
 	Cooldowns            []CredentialCooldown  `json:"cooldowns,omitempty"`
 	Failure              *authfailure.Evidence `json:"-"`
 	HasAuthenticatedRead bool                  `json:"-"`
+	// Historical acceptance orders CPA status on reload; it cannot satisfy the
+	// verifier's requirement for a new authenticated read.
+	LastAuthenticatedReadAtMS int64 `json:"-"`
 	// AccountType carries CPA provenance through refresh admission, never into a
 	// public quota response or a persisted snapshot of an earlier credential.
 	AccountType    string                 `json:"-"`

@@ -12,9 +12,11 @@ import (
 )
 
 // ApplyCredentialStatus keeps CPA's model cooldowns beside the account outcome.
-// A fresh successful quota read supersedes old account status, never its model
-// restrictions; a model restriction never clears an account authentication error.
+// A live successful read supersedes the CPA status fetched before that read.
+// Persisted acceptance supersedes undated or older CPA status; only a later CPA
+// update can reject it. Model restrictions remain independent of authentication.
 func ApplyCredentialStatus(q *NormalizedQuota, file management.AuthFile, nowMS int64) {
+	canApplyAccountStatus := !q.HasAuthenticatedRead && (q.LastAuthenticatedReadAtMS <= 0 || cooldownRetryAt(file.UpdatedAt) > q.LastAuthenticatedReadAtMS)
 	for _, raw := range file.Cooldowns {
 		retry := cooldownRetryAt(raw.RetryAt)
 		if retry > 0 && retry <= nowMS {
@@ -32,7 +34,7 @@ func ApplyCredentialStatus(q *NormalizedQuota, file management.AuthFile, nowMS i
 				q.ActiveCooldown.RecoverAtMS = &retry
 			}
 		}
-		if scope != "model" && !q.HasAuthenticatedRead && q.Failure == nil {
+		if scope != "model" && canApplyAccountStatus {
 			evidence := &authfailure.Evidence{Source: authfailure.CredentialStatus, HTTPStatus: raw.HTTPStatus, Reason: raw.Reason}
 			if evidence.NeedsReauth() {
 				q.Failure = evidence
@@ -40,14 +42,14 @@ func ApplyCredentialStatus(q *NormalizedQuota, file management.AuthFile, nowMS i
 			}
 		}
 	}
-	if q.HasAuthenticatedRead || q.Failure != nil || q.Error != "" {
+	if !canApplyAccountStatus {
 		return
 	}
 	// An active file may carry model failure text. Only an account error state
 	// admits the legacy status-message fallback.
 	if file.Status == "error" || file.Unavailable {
 		evidence := authfailure.FromText(file.StatusMessage)
-		if strings.TrimSpace(file.StatusMessage) != "" {
+		if evidence.NeedsReauth() || (q.Failure == nil && q.Error == "" && strings.TrimSpace(file.StatusMessage) != "") {
 			q.Failure = evidence
 			q.Error = evidence.Error()
 		}

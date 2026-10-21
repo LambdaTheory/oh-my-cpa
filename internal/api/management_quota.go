@@ -703,6 +703,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
 			if snapshot, ok := snapshots[authIndex]; ok {
 				normalized.ObservedAtMS = snapshot.ObservedAtMS
+				normalized.LastAuthenticatedReadAtMS = snapshot.ObservedAtMS
 				normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 				// See buildQuotaOverview: an empty reading survives only through the stored status.
 				normalized.Status = snapshot.Status
@@ -731,7 +732,6 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		}
 	}
 
-	quota.ApplyCredentialStatus(&normalized, *targetFile, nowMS)
 	if h.repo != nil {
 		signals, err := h.repo.GetFeishuAccountSignals(ctx, []string{authIndex})
 		if err != nil {
@@ -740,6 +740,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		}
 		applyQuotaCollectionSignal(&normalized, signals[authIndex])
 	}
+	quota.ApplyCredentialStatus(&normalized, *targetFile, nowMS)
 	quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 	h.attachWindowCapacity(ctx, &normalized, nowMS)
 	h.overlayPassiveObservations(ctx, &normalized)
@@ -885,6 +886,7 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		if snapshot, ok := latestSnapshots[authIndex]; ok {
 			normalized.ObservedAtMS = snapshot.ObservedAtMS
+			normalized.LastAuthenticatedReadAtMS = snapshot.ObservedAtMS
 			normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 			// The stored status is what the last read produced, and an empty reading is only
 			// knowable from it: without it the evaluation below recomputes the credential as one
@@ -921,8 +923,8 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 			}
 		}
 
-		quota.ApplyCredentialStatus(&normalized, file, nowMS)
 		applyQuotaCollectionSignal(&normalized, collectionSignals[authIndex])
+		quota.ApplyCredentialStatus(&normalized, file, nowMS)
 		quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
 		h.attachWindowCapacity(ctx, &normalized, nowMS)
 		h.overlayPassiveObservations(ctx, &normalized)

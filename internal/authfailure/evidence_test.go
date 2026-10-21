@@ -45,7 +45,7 @@ func TestLegacyEvidenceAndSafeError(t *testing.T) {
 			t.Errorf("missed %q", text)
 		}
 	}
-	for _, text := range []string{"HTTP 403 forbidden", "CPA returned HTTP 401", "CPA returned HTTP 403 invalid_token", "invalid_grant", "40100 bytes read before timeout", "request id 14013", "token expired network timeout"} {
+	for _, text := range []string{"HTTP 403 forbidden", "CPA returned HTTP 401", "CPA returned HTTP 403 invalid_token", "invalid_grant", "HTTP 401 invalid_client", "HTTP 401 unauthorized_client", "HTTP 401 invalid_grant", "40100 bytes read before timeout", "request id 14013", "token expired network timeout"} {
 		if FromText(text).NeedsReauth() {
 			t.Errorf("false positive %q", text)
 		}
@@ -56,5 +56,26 @@ func TestLegacyEvidenceAndSafeError(t *testing.T) {
 	}
 	if e.Error() != "HTTP 403" {
 		t.Fatal("unsafe display")
+	}
+}
+
+func TestStructuredRejectionPrecedesIncidentalProse(t *testing.T) {
+	for _, marker := range []string{"quota", "scope", "policy"} {
+		for _, field := range []string{"code", "type", "reason"} {
+			e := Parse(UpstreamQuota, "/synthetic", 403, []byte(`{"error":{"`+field+`":"invalid_token","message":"`+marker+` request authentication failed"}}`))
+			if !e.NeedsReauth() {
+				t.Errorf("%s invalid_token vetoed by %s", field, marker)
+			}
+		}
+		e := &Evidence{Source: UpstreamQuota, HTTPStatus: 403, Type: "authentication_error", Message: marker + " request rejected"}
+		if !e.NeedsReauth() {
+			t.Errorf("authentication_error vetoed by %s", marker)
+		}
+	}
+	for _, code := range []string{"payment_required", "quota_exceeded", "insufficient_scope", "policy", "entitlement", "risk", "challenge", "invalid_client", "unauthorized_client", "invalid_grant"} {
+		e := &Evidence{Source: UpstreamQuota, HTTPStatus: 403, Code: code, Type: "authentication_error", Message: "invalid_token"}
+		if e.NeedsReauth() {
+			t.Errorf("structured non-credential rejection %s admitted", code)
+		}
 	}
 }

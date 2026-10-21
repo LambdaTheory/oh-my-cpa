@@ -2456,8 +2456,19 @@ and transport errors cannot invalidate the upstream credential. Upstream 401 is
 authentication evidence; 403 requires explicit token/session rejection, and
 `invalid_grant` requires refresh-token provenance. Rate limits retain typed backoff.
 Recognized quota documents are required for success, including HTTP 200 responses.
+Claude recognition follows its parser's supported windows, balances and extra usage;
+an explicit empty limits collection represents published absence. Structured token
+or session rejection takes precedence over incidental quota/scope/policy prose,
+while structured permission and client errors retain their own semantics.
 CPA model cooldowns retain their scope beside account authentication, and overview
 and detail overlay the durable collection signal before computing recommendations.
+A live accepted read supersedes the CPA account status obtained before it. On reload,
+the successful snapshot or healthy collection signal's observation instant supersedes
+undated or older CPA status; only a strictly later CPA `updated_at` admits renewed
+account rejection. Historical acceptance never satisfies the verifier's requirement
+for a new read. An endpoint's non-auth refusal cannot suppress independent account
+rejection, and both outcomes retain model cooldown metadata. Feishu continues to
+consume only persisted collection outcomes and successful snapshots.
 
 | Recovery flow / code kind | Canonical providers | Contact action and callback boundary |
 | --- | --- | --- |
