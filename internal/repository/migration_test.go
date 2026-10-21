@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough052(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -276,7 +276,7 @@ func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 	}
 
 	if err := database.Migrate(ctx); err != nil {
-		t.Fatalf("migrate schema 45 through 50: %v", err)
+		t.Fatalf("migrate schema 45 through 52: %v", err)
 	}
 
 	upstreamTables := []string{
@@ -287,6 +287,7 @@ func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 		"font_faces",
 		"channel_model_prices",
 		"reset_announcements",
+		"quota_refresh_attempts",
 	}
 	for _, table := range append(forkTables, upstreamTables...) {
 		var count int
@@ -308,8 +309,9 @@ func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 	}
 
 	for table, column := range map[string]string{
-		"quota_snapshots":      "warmup_json",
-		"model_price_versions": "channel",
+		"quota_snapshots":        "warmup_json",
+		"model_price_versions":   "channel",
+		"quota_refresh_attempts": "reason_summary",
 	} {
 		var count int
 		if err := database.SQL.QueryRowContext(ctx,
@@ -329,11 +331,11 @@ func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 44)
+	expectedVersions := make([]int, 0, 47)
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 50; version++ {
+	for version := 15; version <= 52; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
@@ -353,7 +355,7 @@ func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 		if err := rows.Scan(&extra); err != nil {
 			t.Fatal(err)
 		}
-		t.Fatalf("unexpected duplicate migration version %d", extra)
+		t.Fatalf("unexpected migration version %d", extra)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)

@@ -23,6 +23,8 @@ import (
 // embedded normalized quota, so older clients still see the summary they expect.
 type QuotaItemDTO struct {
 	quota.NormalizedQuota
+	LastRefresh      *quotaRefreshAttemptDTO               `json:"last_refresh,omitempty"`
+	LastSuccessAtMS  int64                                 `json:"last_success_at_ms,omitempty"`
 	ResetAdvice      *resetAdviceDTO                       `json:"reset_advice,omitempty"`
 	Quota            *managementQuotaObservation           `json:"quota,omitempty"`
 	ModelQuotas      map[string]managementQuotaObservation `json:"model_quotas,omitempty"`
@@ -739,11 +741,21 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		writeInternalError(writer, err)
 		return
 	}
+	var lastRefresh *quotaRefreshAttemptDTO
+	var lastSuccessAtMS int64
+	if h.repo != nil {
+		attempts, err := h.repo.GetQuotaRefreshAttempts(ctx, []string{authIndex})
+		if err != nil {
+			writeInternalError(writer, err)
+			return
+		}
+		lastRefresh = projectQuotaRefreshAttempt(attempts[authIndex])
+		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
+			lastSuccessAtMS = snapshots[authIndex].ObservedAtMS
+		}
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"quota": struct {
-			quota.NormalizedQuota
-			ResetAdvice *resetAdviceDTO `json:"reset_advice,omitempty"`
-		}{normalized, advice[authIndex]},
+		"quota":        QuotaItemDTO{NormalizedQuota: normalized, ResetAdvice: advice[authIndex], LastRefresh: lastRefresh, LastSuccessAtMS: lastSuccessAtMS},
 		"history":      history,
 		"model_quotas": projectModelQuotas(targetFile.ModelQuotas),
 	})
@@ -789,9 +801,14 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 	nowMS := h.now().UnixMilli()
 	var latestSnapshots map[string]repository.QuotaSnapshotRecord
+	var latestAttempts map[string]repository.QuotaRefreshAttempt
 	var activeCooldowns map[string]repository.ActiveCooldownRecord
 
 	if h.repo != nil && len(authIndexes) > 0 {
+		latestAttempts, err = h.repo.GetQuotaRefreshAttempts(ctx, authIndexes)
+		if err != nil {
+			return quotaOverviewData{}, err
+		}
 		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, authIndexes); err == nil {
 			latestSnapshots = snapshots
 		}
@@ -906,6 +923,8 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		dto := QuotaItemDTO{
 			NormalizedQuota: normalized,
+			LastRefresh:     projectQuotaRefreshAttempt(latestAttempts[authIndex]),
+			LastSuccessAtMS: latestSnapshots[authIndex].ObservedAtMS,
 			Quota:           projectQuota(file.Quota),
 			ModelQuotas:     projectModelQuotas(file.ModelQuotas),
 		}

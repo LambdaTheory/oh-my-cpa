@@ -60,6 +60,7 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"error_events":                  {"body"},
 	"feishu_channel_tracks":         nil,
 	"feishu_account_signals":        nil,
+	"quota_refresh_attempts":        nil,
 	"feishu_notifications":          nil,
 	"feishu_pending_items":          nil,
 	"feishu_settings":               nil,

@@ -1,5 +1,6 @@
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../../types/quota';
+import { resolveQuotaStatus } from '../../utils/quotaStatus';
 
 /*
  * This module reads the two management responses directly and shares no code with the credential
@@ -87,6 +88,8 @@ export interface CredentialQuotaRow {
   primary: string;
   provider: string;
   state: CredentialQuotaState;
+  readingStatus?: 'refresh_failed' | 'rate_limited' | 'stale';
+  lastRefresh?: QuotaItem['last_refresh'];
   /** The credential's own model family, shortest limit first; at most two. */
   windows: QuotaWindow[];
   /** The tightest of `windows`, which is the limit that stops the credential first. */
@@ -111,6 +114,7 @@ export function isCredentialQuotaBlocked(state: CredentialQuotaState): boolean {
 }
 
 function resolveState(file: ManagementAuthFile, item: QuotaItem | undefined, remainingPercent: number | undefined): CredentialQuotaState {
+  if (isUnavailable(file)) return 'problem';
   if (item?.recommendation?.action === 'reauth' || item?.recommendation?.status === 'needs_reauth') return 'reauth';
   if (item?.active_cooldown?.is_active || item?.status === 'cooldown') return 'cooldown';
   if (item?.status === 'exhausted' || remainingPercent === 0) return 'exhausted';
@@ -141,7 +145,7 @@ function resolveRecovery(state: CredentialQuotaState, item: QuotaItem | undefine
  * the operator's own decision and are only counted; the runtime entries CPA lists for configured
  * API keys are not subscriptions and carry no quota, so they are left to the provider table.
  */
-export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: QuotaItem[]): CredentialQuotaBoard {
+export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: QuotaItem[], nowMS = Date.now()): CredentialQuotaBoard {
   const quotaByAuthIndex = new Map<string, QuotaItem>();
   for (const item of quotas) {
     if (item.auth_index && !quotaByAuthIndex.has(item.auth_index)) quotaByAuthIndex.set(item.auth_index, item);
@@ -173,11 +177,14 @@ export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: Q
       primary: (file.email || file.project_id || file.name || '').trim() || '—',
       provider: (file.type || file.provider || 'unknown').trim().toLowerCase(),
       state,
+      readingStatus: item && ['refresh_failed', 'rate_limited', 'stale'].includes(resolveQuotaStatus(item, nowMS))
+        ? resolveQuotaStatus(item, nowMS) as CredentialQuotaRow['readingStatus'] : undefined,
+      lastRefresh: item?.last_refresh,
       windows,
       bindingWindow,
       remainingPercent,
       recoverAtMS: resolveRecovery(state, item, windows),
-      detail: (file.status_message || item?.error || item?.recommendation?.reason || '').trim() || undefined,
+      detail: (item?.last_refresh?.http_status ? `HTTP ${item.last_refresh.http_status}` : file.status_message || item?.error || item?.recommendation?.reason || '').trim() || undefined,
     });
   }
 
