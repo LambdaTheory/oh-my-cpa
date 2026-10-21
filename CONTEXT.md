@@ -477,8 +477,11 @@ recorded and at least 95 percent of requests carried request-time pricing.
   adopted by default, and an account that was already disabled is adopted explicitly and
   never reported as disabled by this feature. Adoption requires a controllable CPA
   credential, not a verified provider capability: an adopted provider whose account-level
-  weekly mapping is not verified remains **monitor-only**, with that capability visible
-  and filterable separately from its runtime state in the console. It cannot be disabled
+  weekly mapping is not verified remains **monitor-only**, with one **Monitor only** row
+  status and a capability-based filter. Turning its account setting off adds an explicit
+  switch-off qualifier. The adopted count includes the persisted roster and explicitly
+  counts adopted accounts absent from the live gateway inventory; an unavailable
+  inventory leaves the total unknown. It cannot be disabled
   or re-enabled automatically until its capability is deliberately added to the registry.
   A five-hour window, a model- or
   group-scoped window, a partial reading, an ordinary 429, an authentication failure or a

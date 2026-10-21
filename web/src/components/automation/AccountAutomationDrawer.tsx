@@ -26,6 +26,10 @@ interface AccountAutomationDrawerProps {
   onClose: () => void;
 }
 
+function isMonitorOnly(account: AccountAutomationAccountDTO): boolean {
+  return !account.auto_disable_supported || account.monitor_reason?.toLowerCase() === 'no_controllable_credential';
+}
+
 function getAccountAutomationDisplayName(item: { auth_index?: string; account_label?: string; name?: string; provider?: string } | null | undefined, fallback: string): {
   primary: string;
   secondary?: string;
@@ -189,19 +193,25 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
     let disabled = 0;
     let waiting = 0;
     let error = 0;
+    const candidateIndexes = new Set(candidates.map((candidate) => candidate.auth_index));
+    let absent = 0;
 
     for (const a of accounts) {
-      if (a.is_adopted) adopted++;
+      if (a.is_adopted) {
+        adopted++;
+        if (!candidateIndexes.has(a.auth_index)) absent++;
+      }
       const s = a.state?.toLowerCase();
-      if (!a.auto_disable_supported) monitorOnly++;
+      if (isMonitorOnly(a)) monitorOnly++;
       if (s === 'disabled') disabled++;
       if (s === 'waiting') waiting++;
       if (s === 'error') error++;
     }
 
     const credentialTotal = listQuery.data?.candidates_degraded ? null : candidates.length;
-    return { credentialTotal, adopted, monitorOnly, disabled, waiting, error };
-  }, [accounts, candidates.length, listQuery.data?.candidates_degraded]);
+    return { credentialTotal, adopted, absent: credentialTotal === null ? null : absent, monitorOnly, disabled, waiting, error };
+  }, [accounts, candidates, listQuery.data?.candidates_degraded]);
+  const absentSummary = stats.absent ? t('automation.adopted_absent', { n: stats.absent }) : '';
 
   // Filtered accounts
   const filteredAccounts = useMemo(() => {
@@ -209,7 +219,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       const s = a.state?.toLowerCase();
       if (filterState === 'adopted' && !a.is_adopted) return false;
       if (filterState === 'unadopted' && a.is_adopted) return false;
-      if (filterState === 'monitor_only' && a.auto_disable_supported) return false;
+      if (filterState === 'monitor_only' && !isMonitorOnly(a)) return false;
       if (filterState === 'disabled' && s !== 'disabled') return false;
       if (filterState === 'waiting' && s !== 'waiting') return false;
       if (filterState === 'error' && s !== 'error') return false;
@@ -227,6 +237,11 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
 
   // State Tone & Label
   const getStatusInfo = (a: AccountAutomationAccountDTO): { tone: StatusTone; label: string } => {
+    if (!a.is_adopted) return { tone: 'neutral', label: t('automation.tag_not_adopted') };
+    if (isMonitorOnly(a)) {
+      return { tone: 'neutral', label: t(a.is_enabled ? 'automation.state_monitor_only' : 'automation.state_monitor_only_off') };
+    }
+    if (!a.is_enabled) return { tone: 'neutral', label: t('automation.state_idle') };
     const s = a.state?.toLowerCase();
     switch (s) {
       case 'idle':
@@ -240,7 +255,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       case 'error':
         return { tone: 'danger', label: t('automation.state_error') };
       default:
-        return { tone: 'neutral', label: a.state || '—' };
+        return { tone: 'neutral', label: t('automation.state_unknown') };
     }
   };
 
@@ -256,6 +271,18 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       case 'SWITCH_OFF':
       case 'switch_off':
         return t('automation.reason_switch_off');
+      case 'NO_WEEKLY_EVIDENCE':
+      case 'no_weekly_evidence':
+        return t('automation.no_weekly_summary');
+      case 'NOT_EXHAUSTED':
+      case 'not_exhausted':
+        return t('automation.reason_not_exhausted');
+      case 'EXPIRED_RESET':
+      case 'expired_reset':
+        return t('automation.reason_expired_reset');
+      case 'STALE_EVIDENCE':
+      case 'stale_evidence':
+        return t('automation.reason_stale_evidence');
       case 'MISSING_RESET':
       case 'missing_reset':
       case 'EXHAUSTED_MISSING_RESET':
@@ -332,6 +359,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
             adopted: stats.adopted,
             total: stats.credentialTotal ?? '—',
           })}
+          {absentSummary && ` · ${absentSummary}`}
         </span>
       }
       footer={
@@ -406,6 +434,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
           <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_adopted')}</div>
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--accent)' }}>{stats.adopted}</div>
+            {absentSummary && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{absentSummary}</div>}
           </div>
           <div>
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_credentials')}</div>
@@ -489,6 +518,12 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
               const isWaitingOrError = s === 'waiting' || s === 'error';
               const r = account.monitor_reason?.toLowerCase();
               const isMissingReset = r === 'missing_reset' || r === 'exhausted_missing_reset';
+              const hasWeeklyUsage = account.weekly_used_percent !== undefined && account.weekly_used_percent !== null;
+              const reason = !account.is_adopted ? ''
+                : r === 'no_controllable_credential' ? getReasonLabel(r)
+                : !account.auto_disable_supported ? t('automation.reason_unverified_account_weekly_capability')
+                : r === 'no_weekly_evidence' && !hasWeeklyUsage ? ''
+                : getReasonLabel(account.monitor_reason);
 
                   const nameInfo = displayName(account);
 
@@ -518,21 +553,14 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                           {nameInfo.provider && (
                             <Tag size="small">{nameInfo.provider}</Tag>
                           )}
-                          {account.is_adopted ? (
+                          {account.is_adopted && (
                             <Tag size="small" tone="accent">{t('automation.tag_adopted')}</Tag>
-                          ) : (
-                            <Tag size="small">{t('automation.tag_not_adopted')}</Tag>
-                          )}
-                          {!account.auto_disable_supported && (
-                            <Tag size="small" tone="warn">{t('automation.tag_monitor_only')}</Tag>
                           )}
                           {account.disabled_by_automation ? (
                             <Tag size="small" tone="danger">{t('automation.tag_disabled_by_auto')}</Tag>
-                          ) : !account.is_enabled ? (
-                            <Tag size="small">{t('automation.tag_disabled_external')}</Tag>
                           ) : null}
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
                           <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
                           <Switch
                             size="small"
@@ -562,9 +590,9 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                      {account.weekly_used_percent !== undefined && account.weekly_used_percent !== null ? (
+                      {hasWeeklyUsage ? (
                         <span>
-                          {t('automation.weekly_used', { n: account.weekly_used_percent.toFixed(1) })}
+                          {t('automation.weekly_used', { n: account.weekly_used_percent!.toFixed(1) })}
                           {account.weekly_reset_at_ms && (
                             <span style={{ marginLeft: 6, color: 'var(--muted)' }}>
                               ({t('automation.weekly_reset', { time: formatTime(account.weekly_reset_at_ms) })})
@@ -572,12 +600,12 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                           )}
                         </span>
                       ) : (
-                        <span style={{ color: 'var(--muted)' }}>{t('automation.no_weekly')}</span>
+                        <span style={{ color: 'var(--muted)' }}>{t(isMonitorOnly(account) ? 'automation.no_weekly_summary' : 'automation.no_weekly')}</span>
                       )}
 
-                      {account.monitor_reason && (
+                      {reason && (
                         <span style={{ color: 'var(--warn)' }}>
-                          · {getReasonLabel(account.monitor_reason)}
+                          · {reason}
                         </span>
                       )}
                     </div>
