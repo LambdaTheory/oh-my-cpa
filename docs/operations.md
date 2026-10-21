@@ -664,6 +664,20 @@ absolute usage a share cannot, and a pool states no counts of its own. A pool ke
 naming no known period keeps its own name as an unclassified window rather than
 being filed under a period it does not describe (ADR 0071).
 
+## Read-only reset advice
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OMCPA_RESET_ADVICE_EXPIRY_WINDOW` | `72h` | Positive Go duration defining how soon a remaining reset entitlement expires for `reset_advice`; invalid, zero or negative values refuse startup |
+
+The horizon affects only the Agent/MCP read-only advice. A fresh quota reading at or
+above 90% used prioritizes retaining a reset for recovery. Entitlement snapshots older
+than two hours yield unknown, even when recent passive headers exist; a current
+window must also have a fresh percentage and an unexpired reset boundary. A shorter
+horizon does not change refresh cadence or provider redemption rules. Restart after
+changing the variable. No upstream refresh or reset redemption occurs when asking
+for advice. See `docs/agent-capabilities.md` and ADR 0109.
+
 ## Automatic quota refresh
 
 In `interval` mode, OMC Settings → Quota holds the deployment-wide automatic quota refresh

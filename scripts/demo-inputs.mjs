@@ -73,6 +73,7 @@ export const INPUTS = [
   'internal/operations/model_square.go',
   'internal/operations/model_advice.go',
   'internal/operations/quota_prediction.go',
+  'internal/operations/reset_advice.go',
   'internal/modelcatalog/catalog.go',
   'internal/modelcatalog/snapshot.json',
   'internal/cpa/management/client_providers.go',

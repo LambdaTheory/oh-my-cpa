@@ -9,6 +9,8 @@ import {
 } from '../src/components/dashboard/CredentialQuota';
 import { buildCredentialQuotaBoard, credentialQuotaRefreshTargets } from '../src/components/dashboard/credentialQuotaLogic';
 import { CredentialQuotaBody } from '../src/pages/quota/CredentialQuotaBody';
+import { CompactQuotaView } from '../src/pages/quota/CompactQuotaView';
+import { buildOAuthWorkspaceProjection } from '../src/pages/oauthManagement/oauthWorkspaceLogic';
 import type { ManagementAuthFile } from '../src/types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../src/types/quota';
 
@@ -237,6 +239,62 @@ describe('claude reset grants display', () => {
       </MemoryRouter>,
     );
     expect(screen.queryByText(/Claude reset grants/)).toBeNull();
+  });
+});
+
+describe('list row reset badge', () => {
+  const DAY_MS = 24 * HOUR_MS;
+  const renderRow = (item: QuotaItem) => render(
+    <I18nProvider><CompactQuotaView item={item} nowMS={NOW_MS} /></I18nProvider>,
+  );
+  const codexRow = quota('codex-credits', [], {
+    reset_credits: { available_count: 2, applicable_available_count: 2 },
+  });
+  const claudeRow = (grants: QuotaItem['reset_grants']) => quota('claude-grants', [], { provider: 'claude', type: 'claude', reset_grants: grants });
+  const LIVE_GRANTS: QuotaItem['reset_grants'] = [
+    { id: 'later', resets_total: 3, resets_left: 2, ends_at_ms: NOW_MS + 5 * DAY_MS },
+    { id: 'sooner', resets_total: 1, resets_left: 1, ends_at_ms: NOW_MS + 2 * DAY_MS + 3 * HOUR_MS },
+    // Spent and ending first: it must neither count nor set the earliest expiry.
+    { id: 'spent', resets_total: 1, resets_left: 0, ends_at_ms: NOW_MS + HOUR_MS },
+  ];
+
+  it('shows banked Codex credits as the available count', () => {
+    renderRow(codexRow);
+    expect(screen.getByText(/Available 2/)).toBeTruthy();
+    expect(document.querySelector('[data-reset-grants]')).toBeNull();
+  });
+
+  it('sums unspent Claude grants and names the soonest expiry of a live grant', () => {
+    renderRow(claudeRow(LIVE_GRANTS));
+    const badge = document.querySelector('[data-reset-grants]') as HTMLElement;
+    expect(badge.textContent).toContain('Available 3');
+    expect(badge.textContent).toContain('Earliest: 2d 3h left');
+    expect(badge.getAttribute('title')).toContain('Claude resets currently available');
+  });
+
+  it('shows no badge when every grant is spent or none was issued', () => {
+    const { unmount } = renderRow(claudeRow([{ id: 'spent', resets_total: 1, resets_left: 0, ends_at_ms: NOW_MS + DAY_MS }]));
+    expect(document.querySelector('[data-reset-grants]')).toBeNull();
+    expect(screen.queryByText(/Available/)).toBeNull();
+    unmount();
+    renderRow(quota('plain', []));
+    expect(screen.queryByText(/Available/)).toBeNull();
+  });
+
+  it('reports an available reset for Codex and Claude alike, but offers redemption only for Codex', () => {
+    const files = [file('codex-credits'), file('claude-grants', { type: 'claude' }), file('claude-spent', { type: 'claude' }), file('plain')];
+    const records = buildOAuthWorkspaceProjection(files, [
+      { ...codexRow, capabilities: { refresh_supported: true, clear_cooldown_supported: true, reset_credit_supported: true } },
+      claudeRow(LIVE_GRANTS),
+      { ...claudeRow([{ id: 'spent', resets_total: 1, resets_left: 0 }]), auth_index: 'claude-spent' },
+      quota('plain', []),
+    ], []).records;
+    expect(records.map((record) => [record.fileName, record.hasAvailableReset, record.canRedeemCredit])).toEqual([
+      ['codex-credits', true, true],
+      ['claude-grants', true, false],
+      ['claude-spent', false, false],
+      ['plain', false, false],
+    ]);
   });
 });
 
