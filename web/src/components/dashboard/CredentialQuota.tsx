@@ -61,6 +61,9 @@ const WINDOW_LABEL_KEYS: Record<QuotaWindowPeriod, string> = {
 
 /** The states whose row says what is wrong instead of drawing the windows it cannot use. */
 const STATUS_ROW_STATES: Partial<Record<CredentialQuotaState, { labelKey: string; Icon: React.ComponentType<{ className?: string }> }>> = {
+  refresh_failed: { labelKey: 'quota.status_refresh_failed', Icon: CloseCircleOutlined },
+  rate_limited: { labelKey: 'quota.status_rate_limited', Icon: PauseCircleOutlined },
+  stale: { labelKey: 'quota.status_data_stale', Icon: ClockCircleOutlined },
   reauth: { labelKey: 'dash.quota.state_reauth', Icon: KeyOutlined },
   cooldown: { labelKey: 'dash.quota.state_cooldown', Icon: PauseCircleOutlined },
   problem: { labelKey: 'dash.quota.state_problem', Icon: CloseCircleOutlined },
@@ -201,7 +204,7 @@ export const CredentialQuotaPanel: React.FC<CredentialQuotaPanelProps> = ({
   className,
 }) => {
   const t = useT();
-  const board = React.useMemo(() => (files ? buildCredentialQuotaBoard(files, quotas ?? []) : null), [files, quotas]);
+  const board = React.useMemo(() => (files ? buildCredentialQuotaBoard(files, quotas ?? [], nowMS) : null), [files, quotas, nowMS]);
   const state = resolveCredentialQuotaPanelState(board, isLoading);
 
   return (

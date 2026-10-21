@@ -62,7 +62,7 @@ func quotaBackoffError(provider, authIndex string, until, now time.Time) error {
 	return &quota.RateLimitError{Provider: provider, AuthIndex: authIndex, RetryAfter: until.Sub(now), HasRetryAfter: true}
 }
 
-func (h *Handler) readCredentialQuota(ctx context.Context, service *quota.Service, file management.AuthFile, prior *quota.NormalizedQuota) (*quota.NormalizedQuota, error) {
+func (h *Handler) readCredentialQuota(ctx context.Context, service *quota.Service, file management.AuthFile, prior *quota.NormalizedQuota) (value *quota.NormalizedQuota, err error) {
 	authIndex := strings.TrimSpace(file.AuthIndex)
 	provider := quota.DetectProvider(file.Type, file.Provider)
 	unlock, err := h.quotaBackoff.LockCredential(ctx, provider, authIndex)
@@ -70,10 +70,15 @@ func (h *Handler) readCredentialQuota(ctx context.Context, service *quota.Servic
 		return nil, err
 	}
 	defer unlock()
+	defer func() {
+		if recordErr := h.recordQuotaRefreshAttempt(ctx, file, value, err); recordErr != nil {
+			err = errors.Join(err, recordErr)
+		}
+	}()
 	if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {
 		return nil, quotaBackoffError(provider, authIndex, until, h.now())
 	}
-	value, err := service.RefreshCredentialQuota(ctx, file, prior)
+	value, err = service.RefreshCredentialQuota(ctx, file, prior)
 	if err != nil {
 		if h.recordQuotaRateLimit(authIndex, provider, err) {
 			if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {
@@ -141,6 +146,7 @@ func (h *Handler) QuotaScheduler(logger *slog.Logger) *quota.Scheduler {
 		}
 		return quota.NewService(client).RefreshCredentialQuota(ctx, file, prior)
 	}
+	scheduler.ObserveResult = h.recordQuotaRefreshAttempt
 	scheduler.Persist = func(ctx context.Context, value *quota.NormalizedQuota) error {
 		// Every result flows through the same persistence entry so a failed refresh
 		// still records its safe collection signal; the success gate inside the

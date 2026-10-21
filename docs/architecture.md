@@ -2133,6 +2133,19 @@ the resulting snapshot is normalized and stored in `quota_snapshots`. Quota obse
 and the fixed credential warmup adapters are the only server-initiated CPA request
 proxies (ADR 0097): there is no user-supplied URL or generic `/api-call` surface.
 
+Migration 050 adds `quota_refresh_attempts`, one latest attempt per credential, independent
+of successful snapshots. Manual, interval and adaptive refresh paths record success, failure
+or rate limiting, the attempt instant, an optional HTTP status code and the effective retry
+instant. Upstream error bodies are never stored in this table. Overview and detail DTOs expose
+`last_refresh` and `last_success_at_ms`; passive observations cannot clear a failed active
+attempt. The snapshot success gate and provider backoff are unchanged.
+
+The console leaf module `web/src/utils/quotaStatus.ts` resolves refresh outcomes before
+reading freshness and snapshot status. CPA freshness is one quarter of the shortest reported
+window, bounded to two through four hours: the lower bound accommodates one adaptive idle
+cycle, and the upper bound is two idle cycles. Ollama uses thirty minutes, two collection
+cycles. These display evidence limits do not change automation eligibility or scheduling.
+
 Beside that refresh path, the rate-limit headers an upstream already publishes on every
 response are read without any probe. `internal/quota/passive.go` parses them, and
 `repository.CommitUsageDecoded` writes the resulting windows into `quota_observations`
@@ -2260,8 +2273,8 @@ attempt is `interval_minutes` old, less a thirty-second slack for the observatio
 stamped after its tick. Due credentials - reset-driven first,
 then oldest reading first, at most sixteen per round and four at a time - go through
 `RefreshCredentialQuota` and `persistNormalizedQuotaSnapshot`, exactly as a manual
-refresh does. Attempts are remembered in process memory because a failed read is not
-persisted, and a round failure is logged when it starts or changes rather than every
+refresh does. Scheduling attempts are remembered in process memory; the latest display outcome is
+persisted separately from successful snapshots, and a round failure is logged when it starts or changes rather than every
 minute. `app.Run` joins the loop before returning, as it does the pipeline. Disabled credentials, providers without a probe, duplicated `auth_index`
 claims and Meta (whose observation is an audited key exchange) are skipped. The
 preference API refuses any document for this key other than

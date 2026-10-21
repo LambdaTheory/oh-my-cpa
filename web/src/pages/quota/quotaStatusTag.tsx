@@ -10,6 +10,8 @@ import type { TFunc } from '../../i18n';
 import type { QuotaItem } from '../../types/quota';
 import { resolveQuotaCooldownTooltip } from './quotaCooldown';
 import { Tag } from '../../components/common/Tag';
+import { resolveQuotaStatus } from '../../utils/quotaStatus';
+import { formatShortDateTime } from './quotaFormat';
 
 /**
  * The one status vocabulary for credential quota.
@@ -17,8 +19,18 @@ import { Tag } from '../../components/common/Tag';
  * The list row and the Drawer's quota tab both read it, so a credential cannot be
  * "Normal" in one place and something else in the other.
  */
-export function quotaStatusTag(item: QuotaItem, t: TFunc): React.ReactNode {
-  if (item.active_cooldown?.is_active || item.status === 'cooldown') {
+export function quotaStatusTag(item: QuotaItem, t: TFunc, nowMS = Date.now()): React.ReactNode {
+  const status = resolveQuotaStatus(item, nowMS);
+  if (status === 'disabled') return <Tag>{t('af.disabled')}</Tag>;
+  if (status === 'refresh_failed') {
+    const reason = item.last_refresh?.http_status ? `HTTP ${item.last_refresh.http_status}` : t('quota.refresh_failed_reason');
+    return <Tooltip title={reason}><Tag tone="danger">{t('quota.status_refresh_failed')}</Tag></Tooltip>;
+  }
+  if (status === 'rate_limited') {
+    const retry = item.last_refresh?.retry_at_ms;
+    return <Tooltip title={retry ? t('quota.refresh_retry_at', { time: formatShortDateTime(retry) }) : undefined}><Tag tone="warn">{t('quota.status_rate_limited')}</Tag></Tooltip>;
+  }
+  if (status === 'cooldown') {
     const reason = item.active_cooldown?.reason;
     return (
       <Tooltip title={resolveQuotaCooldownTooltip(reason, t('quota.cooldown_active_desc'))}>
@@ -26,7 +38,7 @@ export function quotaStatusTag(item: QuotaItem, t: TFunc): React.ReactNode {
       </Tooltip>
     );
   }
-  switch (item.status) {
+  switch (status) {
     case 'healthy':
       return <Tag tone="success" icon={<CheckCircleOutlined />}>{t('quota.status_normal')}</Tag>;
     case 'warning':
@@ -36,7 +48,7 @@ export function quotaStatusTag(item: QuotaItem, t: TFunc): React.ReactNode {
     case 'error':
       return <Tag tone="danger">{t('quota.status_error')}</Tag>;
     case 'stale':
-      return <Tag>{t('quota.status_stale')}</Tag>;
+      return <Tag>{t('quota.status_data_stale')}</Tag>;
     case 'unpublished':
       // Distinct from idle: the read happened, and the provider published no window. The two must
       // not share a label, because only one of them is worth repeating.

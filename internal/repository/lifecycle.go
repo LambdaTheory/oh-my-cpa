@@ -128,6 +128,7 @@ var TABLE_LIFECYCLES = map[string]TableLifecycle{
 	"feishu_state":                  {Kind: LifecycleReplaced, Reason: "one module-memory row"},
 	"feishu_channel_tracks":         {Kind: LifecycleReplaced, Reason: "one monitor_down track per provider, upserted in place"},
 	"feishu_account_signals":        {Kind: LifecycleReplaced, Reason: "one enum-only collection outcome per credential, upserted in place"},
+	"quota_refresh_attempts":        {Kind: LifecycleReplaced, Reason: "latest bounded refresh result per credential, upserted in place"},
 	"feishu_pending_items":          {Kind: LifecycleOwnerBounded, Reason: "one row per ongoing or recently resolved problem, reconciled in place by the module"},
 	"feishu_notifications":          {Kind: LifecycleOwnerBounded, Reason: "the delivery outbox, trimmed by the module's own prune after it is sent or expires"},
 	"usage_aggregation_checkpoints": {Kind: LifecycleReplaced, Reason: "one watermark row"},

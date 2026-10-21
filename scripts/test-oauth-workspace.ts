@@ -57,7 +57,7 @@ function quota(overrides: Partial<QuotaItem> = {}): QuotaItem {
     provider: 'codex',
     disabled: false,
     status: 'healthy',
-    observed_at_ms: 1,
+    observed_at_ms: Date.now(),
     windows: [{ id: 'weekly', label: 'Weekly', kind: 'weekly', scope: 'standard', remaining_percent: 80 }],
     recommendation: { status: 'healthy', priority: 'none', action: 'none', reason: '' },
     capabilities: { refresh_supported: true, clear_cooldown_supported: true, reset_credit_supported: true },
@@ -186,12 +186,12 @@ test('quota conditions: an empty reading is unobserved without asking for anothe
   assert.equal(matchesQuotaFilter(record, 'unobserved'), true);
 });
 
-test('attention: stale is independently filterable and is not attention by itself', () => {
+test('attention: stale readings require attention and remain independently filterable', () => {
   const projection = buildOAuthWorkspaceProjection([file()], [quota({ status: 'stale' })], choices);
   const record = projection.records[0];
-  assert.equal(record.isQuotaAttention, false);
+  assert.equal(record.isQuotaAttention, true);
   assert.equal(matchesQuotaFilter(record, 'stale'), true);
-  assert.equal(matchesQuotaFilter(record, 'attention'), false);
+  assert.equal(matchesQuotaFilter(record, 'attention'), true);
 });
 
 test('filters and sorting preserve the shared collection semantics', () => {

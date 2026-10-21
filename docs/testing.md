@@ -874,6 +874,12 @@ For changes here, run affected self-tests, `pnpm verify`, `pnpm check:ui` and
 
 ### Quota reading coverage
 
+`internal/api/quota_refresh_status_test.go` drives success, failure, rate limiting and recovery
+through the real quota service and overview, retaining successful snapshots across failures.
+The credential-quota component suite owns shared row/dashboard status, exhaustive counts,
+HTTP diagnostics, last success time and freshness boundaries. The existing OAuth workspace
+scale probe owns post-refresh overview/report agreement and desktop/phone screenshots.
+
 `internal/quota` owns what each provider's documents mean. That includes the xAI pair
 (a credits document supplying the window with the ledger's figures kept beside it, either
 document usable alone, a pair with no config failing), Kimi's counted limits and ratio

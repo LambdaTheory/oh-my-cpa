@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -276,7 +276,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 	}
 
 	if err := database.Migrate(ctx); err != nil {
-		t.Fatalf("migrate schema 45 through 49: %v", err)
+		t.Fatalf("migrate schema 45 through 50: %v", err)
 	}
 
 	upstreamTables := []string{
@@ -287,6 +287,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 		"font_faces",
 		"channel_model_prices",
 		"reset_announcements",
+		"quota_refresh_attempts",
 	}
 	for _, table := range append(forkTables, upstreamTables...) {
 		var count int
@@ -329,11 +330,11 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 44)
+	expectedVersions := make([]int, 0, 45)
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 49; version++ {
+	for version := 15; version <= 50; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
@@ -353,7 +354,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 		if err := rows.Scan(&extra); err != nil {
 			t.Fatal(err)
 		}
-		t.Fatalf("unexpected duplicate migration version %d", extra)
+		t.Fatalf("unexpected migration version %d", extra)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)

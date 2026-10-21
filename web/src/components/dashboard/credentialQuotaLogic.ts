@@ -1,5 +1,6 @@
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../../types/quota';
+import { resolveQuotaStatus } from '../../utils/quotaStatus';
 
 /*
  * This module reads the two management responses directly and shares no code with the credential
@@ -14,10 +15,10 @@ import type { QuotaItem, QuotaWindow } from '../../types/quota';
  * operator can repeat, then the two that recover on their own clock, then a failure with no
  * recovery time to offer. `low` still serves and is the one worth knowing about before it stops.
  */
-export type CredentialQuotaState = 'reauth' | 'cooldown' | 'exhausted' | 'problem' | 'low' | 'healthy' | 'unread';
+export type CredentialQuotaState = 'refresh_failed' | 'rate_limited' | 'stale' | 'reauth' | 'cooldown' | 'exhausted' | 'problem' | 'low' | 'healthy' | 'unread';
 
-const STATE_ORDER: CredentialQuotaState[] = ['reauth', 'cooldown', 'exhausted', 'problem', 'low', 'healthy', 'unread'];
-const BLOCKED_STATES = new Set<CredentialQuotaState>(['reauth', 'cooldown', 'exhausted', 'problem']);
+const STATE_ORDER: CredentialQuotaState[] = ['refresh_failed', 'rate_limited', 'stale', 'reauth', 'cooldown', 'exhausted', 'problem', 'low', 'healthy', 'unread'];
+const BLOCKED_STATES = new Set<CredentialQuotaState>(['refresh_failed', 'rate_limited', 'stale', 'reauth', 'cooldown', 'exhausted', 'problem']);
 
 /** The remaining shares at which a window stops reading as plentiful, and then as nearly spent. */
 export const QUOTA_AMPLE_PERCENT = 70;
@@ -110,7 +111,9 @@ export function isCredentialQuotaBlocked(state: CredentialQuotaState): boolean {
   return BLOCKED_STATES.has(state);
 }
 
-function resolveState(file: ManagementAuthFile, item: QuotaItem | undefined, remainingPercent: number | undefined): CredentialQuotaState {
+function resolveState(file: ManagementAuthFile, item: QuotaItem | undefined, remainingPercent: number | undefined, nowMS: number): CredentialQuotaState {
+  const status = item ? resolveQuotaStatus(item, nowMS) : 'idle';
+  if (status === 'refresh_failed' || status === 'rate_limited' || status === 'stale') return status;
   if (item?.recommendation?.action === 'reauth' || item?.recommendation?.status === 'needs_reauth') return 'reauth';
   if (item?.active_cooldown?.is_active || item?.status === 'cooldown') return 'cooldown';
   if (item?.status === 'exhausted' || remainingPercent === 0) return 'exhausted';
@@ -124,6 +127,7 @@ function resolveState(file: ManagementAuthFile, item: QuotaItem | undefined, rem
  * latest of those resets rather than the soonest.
  */
 function resolveRecovery(state: CredentialQuotaState, item: QuotaItem | undefined, windows: QuotaWindow[]): number | undefined {
+  if (state === 'rate_limited') return item?.last_refresh?.retry_at_ms;
   if (state === 'cooldown') return item?.active_cooldown?.recover_at_ms ?? item?.next_recover_at_ms;
   if (state !== 'exhausted') return undefined;
   const resets = windows
@@ -141,7 +145,7 @@ function resolveRecovery(state: CredentialQuotaState, item: QuotaItem | undefine
  * the operator's own decision and are only counted; the runtime entries CPA lists for configured
  * API keys are not subscriptions and carry no quota, so they are left to the provider table.
  */
-export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: QuotaItem[]): CredentialQuotaBoard {
+export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: QuotaItem[], nowMS = Date.now()): CredentialQuotaBoard {
   const quotaByAuthIndex = new Map<string, QuotaItem>();
   for (const item of quotas) {
     if (item.auth_index && !quotaByAuthIndex.has(item.auth_index)) quotaByAuthIndex.set(item.auth_index, item);
@@ -166,7 +170,7 @@ export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: Q
         bindingWindow = window;
       }
     }
-    const state = resolveState(file, item, remainingPercent);
+    const state = resolveState(file, item, remainingPercent, nowMS);
     rows.push({
       key: file.auth_index || file.name,
       fileName: file.name,
@@ -177,7 +181,7 @@ export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: Q
       bindingWindow,
       remainingPercent,
       recoverAtMS: resolveRecovery(state, item, windows),
-      detail: (file.status_message || item?.error || item?.recommendation?.reason || '').trim() || undefined,
+      detail: (item?.last_refresh?.http_status ? `HTTP ${item.last_refresh.http_status}` : file.status_message || item?.error || item?.recommendation?.reason || '').trim() || undefined,
     });
   }
 

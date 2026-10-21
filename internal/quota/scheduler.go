@@ -181,6 +181,8 @@ type Scheduler struct {
 	// the active observations, exactly as a manual refresh does.
 	Refresh func(ctx context.Context, file management.AuthFile, prior *NormalizedQuota) (*NormalizedQuota, error)
 	Persist func(ctx context.Context, value *NormalizedQuota) error
+	// ObserveResult records the attempt after backoff has its final retry instant.
+	ObserveResult func(ctx context.Context, file management.AuthFile, value *NormalizedQuota, err error) error
 
 	// evaluationInterval is how often the loop wakes; tests shorten it.
 	evaluationInterval time.Duration
@@ -315,6 +317,13 @@ func (s *Scheduler) query(ctx context.Context, file management.AuthFile, provide
 	}
 	s.markQuery(authIndex, now)
 	value, err := s.Refresh(ctx, file, prior)
+	defer func() {
+		if s.ObserveResult != nil {
+			if recordErr := s.ObserveResult(ctx, file, value, err); recordErr != nil {
+				s.Logger.Warn("quota scheduler: attempt write failed", "error", recordErr)
+			}
+		}
+	}()
 	if err != nil {
 		if rateErr := rateLimitFrom(err); rateErr != nil {
 			s.Backoff.Record(provider, authIndex, rateErr.RetryAfter, rateErr.HasRetryAfter, now)

@@ -10,7 +10,8 @@ import {
 import { buildCredentialQuotaBoard, credentialQuotaRefreshTargets } from '../src/components/dashboard/credentialQuotaLogic';
 import { CredentialQuotaBody } from '../src/pages/quota/CredentialQuotaBody';
 import { CompactQuotaView } from '../src/pages/quota/CompactQuotaView';
-import { buildOAuthWorkspaceProjection } from '../src/pages/oauthManagement/oauthWorkspaceLogic';
+import { buildOAuthWorkspaceProjection, countWorkspaceQuotaStatuses } from '../src/pages/oauthManagement/oauthWorkspaceLogic';
+import { quotaFreshnessMS, resolveQuotaStatus } from '../src/utils/quotaStatus';
 import type { ManagementAuthFile } from '../src/types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../src/types/quota';
 
@@ -72,8 +73,36 @@ beforeEach(() => {
 });
 
 describe('credential quota board', () => {
+  it('shares latest-attempt and freshness status between rows, counts and dashboard', () => {
+    const oldMS = NOW_MS - 12 * HOUR_MS;
+    const items = [
+      quota('normal', [quotaWindow('five_hour', 80, 3)]),
+      quota('failed', [quotaWindow('five_hour', 80, 3)], { observed_at_ms: oldMS, last_success_at_ms: oldMS, last_refresh: { outcome: 'failed', attempted_at_ms: NOW_MS, http_status: 483 } }),
+      quota('limited', [], { last_refresh: { outcome: 'rate_limited', attempted_at_ms: NOW_MS, retry_at_ms: NOW_MS + 120_000 } }),
+      quota('stale', [quotaWindow('weekly', 80, 100)], { observed_at_ms: oldMS }),
+      quota('disabled', [], { disabled: true }),
+    ];
+    const files = items.map((item) => file(item.auth_index, { disabled: item.disabled }));
+    const records = buildOAuthWorkspaceProjection(files, items, [], [], [], NOW_MS).records;
+    const counts = countWorkspaceQuotaStatuses(records, NOW_MS);
+    expect(counts).toEqual({ healthy: 1, refresh_failed: 1, rate_limited: 1, stale: 1, disabled: 1 });
+    expect(Object.values(counts).reduce((sum, n) => sum + n, 0)).toBe(files.length);
+    expect(buildCredentialQuotaBoard(files, items, NOW_MS).rows.map((row) => row.state)).toEqual(['refresh_failed', 'rate_limited', 'stale', 'healthy']);
+    const { container } = render(<I18nProvider>{items.map((item) => <CompactQuotaView key={item.auth_index} item={item} nowMS={NOW_MS} />)}</I18nProvider>);
+    const failed = within(container.querySelector('[data-quota-body="failed"]') as HTMLElement);
+    expect(failed.getByText('Refresh failed')).toBeTruthy();
+    expect(failed.queryByText('Normal')).toBeNull();
+    expect(failed.getByText(/HTTP 483.*Last successful reading/)).toBeTruthy();
+    expect(screen.getByText('Rate limited')).toBeTruthy();
+    expect(screen.getByText('Data stale')).toBeTruthy();
+    expect(screen.getByText(/Retry at/)).toBeTruthy();
+    const boundary = { ...items[0], observed_at_ms: NOW_MS - quotaFreshnessMS(items[0]) };
+    expect(resolveQuotaStatus(boundary, NOW_MS)).toBe('healthy');
+    expect(resolveQuotaStatus(boundary, NOW_MS + 1)).toBe('stale');
+    expect(quotaFreshnessMS({ ...items[0], provider: 'ollama' })).toBe(30 * 60_000);
+  });
   it('orders credentials by what needs a decision first and only counts the disabled', () => {
-    const board = buildCredentialQuotaBoard(FILES, QUOTAS);
+    const board = buildCredentialQuotaBoard(FILES, QUOTAS, NOW_MS);
     expect(board.rows.map((row) => [row.fileName, row.state])).toEqual([
       ['expired', 'reauth'],
       ['cooling', 'cooldown'],
@@ -92,6 +121,7 @@ describe('credential quota board', () => {
     const board = buildCredentialQuotaBoard(
       [file('spent')],
       [quota('spent', [quotaWindow('five_hour', 0, 2), quotaWindow('weekly', 0, 40)], { status: 'exhausted' })],
+      NOW_MS,
     );
     expect(board.rows[0]).toMatchObject({ state: 'exhausted', recoverAtMS: NOW_MS + 40 * HOUR_MS });
   });
