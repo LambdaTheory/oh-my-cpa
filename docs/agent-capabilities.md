@@ -620,8 +620,19 @@ each applicable entitlement once, including grants that clear several windows.
 The window fields and `used_percent` identify the highest valid standard reading
 (window ID breaks ties); without a selected reading, the ID is empty and kind is `unknown`.
 `cooldown_active` is true/false from an existing correlated local cooldown record,
-or null when none is available. `announcements` is always an empty array in this
-version; future entries are additive and preserve the array shape.
+or null when none is available. `announcements` contains active matching evidence with
+ID, source, scope, optional model, confidence, expected reset and registration timestamps,
+influences_advice and has_conflict. It omits credential targets and original free text.
+local_evidence retains source=local_observation, the original verdict/evidence/reasons and
+quota_reset_at_ms. The existing top-level counts and observation times remain local readings.
+Timed confirmed/probable notices within the configured horizon override a known local
+verdict to use_before_expiry when positive eligible entitlements and an enabled, available
+credential are observed, including a local keep_for_emergency verdict. Unknown/zero capacity
+keeps its verdict and gains notice_without_local_capacity. Unverified, untimed or distant
+notices remain evidence only. A differing reset time or overridden conclusion carries
+has_conflict; neither source is erased or treated as an observed reset. Exact provider and
+credential scope matches are required; model scope requires an exact persisted model window.
+See ADR 0111.
 
 The four verdicts are `use_before_expiry`, `keep_for_emergency`, `no_action` and
 `unknown`. Fresh remaining entitlements expiring within the configured horizon

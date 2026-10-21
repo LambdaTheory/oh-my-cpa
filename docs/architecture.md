@@ -3495,7 +3495,7 @@ bound is independent of the quota window freshness and cannot be renewed by head
 
 The projection allowlists credential labels, provider/window identity, nullable count,
 expiry and highest valid standard used share, separate observation timestamps,
-nullable cooldown state, an empty announcements array, one verdict, evidence and
+nullable cooldown state, matched announcements, separate local_evidence, one verdict, evidence and
 reason codes. Read-only callers receive masked labels and no auth index; filters,
 the 100-row bound, 32 KiB ceiling and omitted count are owned by operations. Startup
 configuration supplies the expiry horizon through the existing operations wiring.
@@ -3806,6 +3806,19 @@ The SQL source domain reserves manual/status_rss/x_api; current ingestion valida
 manual only. Later adapters must preserve the same evidence shape and validate their
 own source admission, without inferring confidence from transport. The read-only advice
 decision is tracked separately in ADR 0109 (PR #52); ADR 0110 records this store and its
-source extension boundary. Existing prediction/advice evaluation is unchanged. The
-console's quota workspace lists active records, checks cached expirations against the
-visible clock, and invalidates its query after registration.
+source extension boundary. ADR 0111 defines announcement precedence in reset advice.
+Operations reads every active announcement page at the same anchor, matches provider and
+explicit scope, and preserves the original local verdict and reset boundary. Only trusted
+timed notices within the configured horizon can override known positive eligible capacity;
+unknown/zero balance, disabled/unavailable credentials and unknown local advice cannot.
+Unverified, untimed and outside-horizon notices remain evidence only. A different reset
+instant or an overridden local conclusion is explicitly conflicting evidence.
+
+The existing quota overview and detail handlers project this shared calculation through
+internal/api/reset_advice.go into each quota's reset_advice field. The console projection
+keeps the complete roster; Agent/MCP retain their existing row/byte bounds and omitted count.
+Advice never reads CPA. Announcement output excludes original free text and credential
+scope targets, including for read-only MCP. The quota workspace renders row labels and a
+detail Panel with separate local and announcement sections, then invalidates quota and
+announcement queries after registration. No routing, credential-state or redemption write
+is added.

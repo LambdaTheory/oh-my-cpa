@@ -901,7 +901,14 @@ presence, missing snapshots, row/byte bounds and provider filtering, one conclus
 per credential even under a window-kind filter, empty announcement arrays and
 cooldown true/false/null wire evidence. Configuration
 defaults, overrides and invalid durations belong to `internal/config/reset_advice_test.go`.
-There is no new UI or HTTP route; these claims remain in Go tests.
+internal/operations/reset_advice_announcements_test.go owns timed confidence rules,
+expiry/horizon boundaries, provider and explicit scope matching, disabled/zero-capacity
+refusals, emergency override, preserved conflicting readings and Agent/read-only MCP parity.
+web/tests/reset-advice.component.test.tsx owns the three row labels, unknown suppression,
+local reasons, source/confidence and separate conflicting reset times. The oauth-management
+probe registers a synthetic notice, observes advice changing without reload, and captures
+desktop/320px row and detail geometry. The existing quota HTTP routes carry advice through
+the handwritten API projection; no new route is introduced.
 
 ### Quota capacity coverage
 

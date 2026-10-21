@@ -14,6 +14,7 @@ import { SectionHeading } from '../../components/common/SectionHeading';
 import { Tag } from '../../components/common/Tag';
 import { ConfirmAction } from '../../components/common/ConfirmAction';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
+import { ResetAdviceView } from './ResetAdviceView';
 
 interface CredentialQuotaBodyProps {
   item: QuotaItem;
@@ -139,6 +140,7 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
         )}
       </div>
 
+      {item.reset_advice && <ResetAdviceView advice={item.reset_advice} nowMS={nowMS} />}
       {item.error && (
         <Notice
           tone="error"

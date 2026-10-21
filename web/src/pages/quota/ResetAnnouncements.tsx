@@ -54,7 +54,10 @@ export function ResetAnnouncements() {
       form.resetFields();
       setPage(1);
       toast.success(t('ann.saved'));
-      await client.invalidateQueries({ queryKey: ['reset-announcements'] });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['reset-announcements'] }),
+        client.invalidateQueries({ queryKey: ['management-quota'] }),
+      ]);
     },
     onError: () => toast.error(t('ann.save_failed')),
   });

@@ -24,6 +24,7 @@ import styles from './QuotaPresentation.module.css';
 import { Meter } from '../../components/common/Meter';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import { claudeResetGrantSummary } from '../../utils/quotaResets';
+import { ResetAdviceTag } from './ResetAdviceView';
 
 interface CompactQuotaViewProps {
   item: QuotaItem;
@@ -77,6 +78,7 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
     >
       <div className={styles.head}>
         {quotaStatusTag(item, t)}
+        <ResetAdviceTag advice={item.reset_advice} />
         {planText && <span className={styles.plan}>{planText}</span>}
         {item.plan?.subscription_active === false && (
           <span className={styles.plan} data-subscription-inactive="true">{t('quota.subscription_inactive')}</span>
