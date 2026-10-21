@@ -134,10 +134,7 @@ func ParseClaudeResetGrants(raw []byte) ([]ClaudeResetGrant, ResetGrantsStatus) 
 		return nil, ResetGrantsUnavailable
 	}
 	if body.CedarEmber.Grants == nil {
-		if body.CedarEmber.Eligible != nil && !*body.CedarEmber.Eligible {
-			return nil, ResetGrantsUnavailable
-		}
-		return nil, ResetGrantsFailed
+		return nil, ResetGrantsUnavailable
 	}
 	grants := make([]ClaudeResetGrant, 0, len(body.CedarEmber.Grants))
 	seen := make(map[string]bool, len(body.CedarEmber.Grants))

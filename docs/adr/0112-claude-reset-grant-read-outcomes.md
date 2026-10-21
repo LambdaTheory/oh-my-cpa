@@ -46,3 +46,13 @@ CPAMC comparison used commit `603539ab5c5343f32c3945c6e0cdb8333991c493`:
 reads `body.cedar_ember.grants`; its shared request constants include
 `claude-cli/2.1.280 (external, cli)` and `oauth-2025-04-20`. This comparison establishes
 the request and field contract, not the response of any operator's deployment.
+
+## Empty grant responses (Issue #61)
+
+A successful response with a `cedar_ember` object and omitted, null or empty
+`grants` is `unavailable`, including when `eligible` is true. Eligibility alone
+does not promise published grants. Invalid JSON, non-array non-null grants and
+malformed entries remain `failed`, as do transport failures and non-2xx responses.
+The existing migration 050 status field preserves this distinction without a new
+migration. Fresh advice supplies the distinct reason in both the credential list
+and detail; neither result asserts a zero balance.

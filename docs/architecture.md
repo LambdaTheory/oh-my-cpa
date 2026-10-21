@@ -3512,6 +3512,9 @@ failure. Fresh advice explains failure and unpublished entitlements separately,
 without treating either as zero or allowing an announcement to repair uncertainty.
 Only normalized grants and the safe enum persist; upstream error details do not.
 ADR 0112 defines the absent, empty and malformed response boundaries.
+An omitted, null or empty grant list is unavailable even with `eligible: true`;
+malformed grant data remains a failed read. The credential row and detail display
+the distinct fresh-advice reasons using the existing localized catalog entries.
 
 ## Read-only reset advice
 

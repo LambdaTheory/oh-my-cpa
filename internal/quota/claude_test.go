@@ -238,8 +238,6 @@ func TestParseClaudeResetGrantsRejectsMalformedBlock(t *testing.T) {
 		name string
 		raw  string
 	}{
-		{name: "missing block", raw: `{}`},
-		{name: "missing grants", raw: `{"cedar_ember":{}}`},
 		{name: "bad id", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"BAD ID!","resets_total":1,"resets_left":1}]}}`},
 		{name: "left exceeds total", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_total":1,"resets_left":2}]}}`},
 		{name: "float count", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_total":1.5,"resets_left":1}]}}`},
@@ -249,7 +247,7 @@ func TestParseClaudeResetGrantsRejectsMalformedBlock(t *testing.T) {
 		{name: "non-boolean flag", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_total":1,"resets_left":1,"paused":"no"}]}}`},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if grants, _ := ParseClaudeResetGrants([]byte(testCase.raw)); grants != nil {
+			if grants, status := ParseClaudeResetGrants([]byte(testCase.raw)); grants != nil || status != ResetGrantsFailed {
 				t.Fatalf("ParseClaudeResetGrants = %+v, want nil", grants)
 			}
 		})
@@ -269,7 +267,10 @@ func TestClaudeResetGrantReadingStates(t *testing.T) {
 		{"absent block", `{"five_hour":{"utilization":30}}`, ResetGrantsUnavailable},
 		{"null block", `{"cedar_ember":null}`, ResetGrantsUnavailable},
 		{"explicit ineligible", `{"cedar_ember":{"eligible":false}}`, ResetGrantsUnavailable},
-		{"missing grants", `{"cedar_ember":{"eligible":true}}`, ResetGrantsFailed},
+		{"eligible empty grants", `{"cedar_ember":{"eligible":true,"grants":[]}}`, ResetGrantsUnavailable},
+		{"missing grants", `{"cedar_ember":{"eligible":true}}`, ResetGrantsUnavailable},
+		{"null grants", `{"cedar_ember":{"eligible":true,"grants":null}}`, ResetGrantsUnavailable},
+		{"empty block", `{"cedar_ember":{}}`, ResetGrantsUnavailable},
 		{"invalid grants", `{"cedar_ember":{"eligible":false,"grants":{}}}`, ResetGrantsFailed},
 		{"partial grants", `{"cedar_ember":{"grants":[` + grant + `,{"id":"broken","resets_total":null,"resets_left":null}]}}`, ResetGrantsFailed},
 		{"null response", `null`, ResetGrantsFailed},
