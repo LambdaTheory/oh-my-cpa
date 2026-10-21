@@ -300,6 +300,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 	}
 
 	if prior != nil {
+		result.LastAuthenticatedReadAtMS = prior.LastAuthenticatedReadAtMS
 		result.RawSignals = prior.RawSignals
 		result.ActiveCooldown = prior.ActiveCooldown
 		result.Plan = prior.Plan
@@ -446,6 +447,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 
 	if fetchErr == nil {
 		result.HasAuthenticatedRead = true
+		result.LastAuthenticatedReadAtMS = nowMS
 		result.WarmupEvidence = s.warmupEvidence
 	}
 	ApplyCredentialStatus(result, file, nowMS)

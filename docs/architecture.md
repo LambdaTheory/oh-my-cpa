@@ -2465,10 +2465,13 @@ and detail overlay the durable collection signal before computing recommendation
 A live accepted read supersedes the CPA account status obtained before it. On reload,
 the successful snapshot or healthy collection signal's observation instant supersedes
 undated or older CPA status; only a strictly later CPA `updated_at` admits renewed
-account rejection. Historical acceptance never satisfies the verifier's requirement
-for a new read. An endpoint's non-auth refusal cannot suppress independent account
-rejection, and both outcomes retain model cooldown metadata. Feishu continues to
-consume only persisted collection outcomes and successful snapshots.
+account rejection. Refresh reconstruction and subsequent failed collections retain
+that acceptance instant, so an unchanged CPA error cannot reopen recovery. The failed
+collection still records its non-auth failure. Historical acceptance never satisfies
+the verifier's requirement for a new read. An endpoint's non-auth refusal cannot
+suppress independent account rejection, and both outcomes retain model cooldown
+metadata. Feishu continues to consume only persisted collection outcomes and
+successful snapshots.
 
 | Recovery flow / code kind | Canonical providers | Contact action and callback boundary |
 | --- | --- | --- |

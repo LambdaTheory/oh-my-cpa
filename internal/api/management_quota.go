@@ -346,6 +346,7 @@ func normalizedQuotaFromSnapshot(authIndex string, snapshot repository.QuotaSnap
 		ObservedAtMS:      snapshot.ObservedAtMS,
 		ResetGrantsStatus: quota.ResetGrantsStatus(snapshot.ResetGrantsStatus),
 	}
+	q.LastAuthenticatedReadAtMS = snapshot.ObservedAtMS
 	if plan := planFromSnapshot(snapshot); plan != nil {
 		q.Plan = plan
 	}

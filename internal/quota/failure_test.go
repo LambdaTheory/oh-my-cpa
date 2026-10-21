@@ -92,6 +92,49 @@ func TestPersistedAcceptanceOrdersAccountEvidence(t *testing.T) {
 	}
 }
 
+func TestRefreshRetainsHistoricalAcceptanceWithoutLiveProof(t *testing.T) {
+	for _, payload := range []string{
+		`{"five_hour":{"utilization":20}}`,
+		`{"limits":[]}`,
+	} {
+		for _, tc := range []struct {
+			name, body string
+			status     int
+			wantAuth   bool
+		}{
+			{"payment", `{"error":{"code":"payment_required"}}`, 403, false},
+			{"unauthorized", `{}`, 401, true},
+			{"invalid token", `{"error":{"code":"invalid_token"}}`, 403, true},
+		} {
+			t.Run(payload+"/"+tc.name, func(t *testing.T) {
+				ctx := context.Background()
+				now := time.UnixMilli(1700000000000)
+				response := management.ApiCallResponse{StatusCode: 200, Body: json.RawMessage(payload)}
+				client := &mockCPAClient{apiCallFunc: func(context.Context, management.ApiCallRequest) (management.ApiCallResponse, error) {
+					return response, nil
+				}}
+				svc := NewService(client)
+				svc.now = func() time.Time { return now }
+				file := management.AuthFile{Type: "claude", AuthIndex: "synthetic", Status: "error", StatusMessage: "OAuth access token has expired"}
+				prior, err := svc.RefreshCredentialQuota(ctx, file, nil)
+				if err != nil || !prior.HasAuthenticatedRead || prior.LastAuthenticatedReadAtMS != now.UnixMilli() {
+					t.Fatalf("live acceptance=%+v error=%v", prior, err)
+				}
+				acceptedAt := now.UnixMilli()
+				now = now.Add(time.Minute)
+				response = management.ApiCallResponse{StatusCode: tc.status, Body: json.RawMessage(tc.body)}
+				q, err := svc.RefreshCredentialQuota(ctx, file, prior)
+				if err != nil || q.LastAuthenticatedReadAtMS != acceptedAt || q.HasAuthenticatedRead {
+					t.Fatalf("historical acceptance=%+v error=%v", q, err)
+				}
+				if q.Error == "" || q.Failure == nil || (q.Recommendation.Status == "needs_reauth") != tc.wantAuth {
+					t.Fatalf("endpoint evidence lost: %+v", q)
+				}
+			})
+		}
+	}
+}
+
 func TestNonAuthEndpointFailureDoesNotMaskAccountRejection(t *testing.T) {
 	for _, source := range []string{"status", "account cooldown", "credential cooldown", "active"} {
 		t.Run(source, func(t *testing.T) {

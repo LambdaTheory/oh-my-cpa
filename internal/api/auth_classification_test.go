@@ -162,6 +162,7 @@ func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
 			var handler *Handler
 			var updatedAt atomic.Int64
 			var isRejected atomic.Bool
+			cards := 0
 			if hasTimestamp {
 				updatedAt.Store(time.Now().Add(-time.Hour).UnixMilli())
 			}
@@ -180,7 +181,7 @@ func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
 				}
 			}, func(h *Handler) {
 				handler = h
-				h.reauth = reauth.New(reauth.Options{Repo: h.repo, Enabled: func() bool { return true }})
+				h.reauth = reauth.New(reauth.Options{Repo: h.repo, Enabled: func() bool { return true }, Notify: func(context.Context, repository.ReauthJob, string) error { cards++; return nil }})
 			})
 			seedAuthFile(t, repo, "synthetic", "synthetic.json", "claude", false, false, time.Now())
 			refresh := func() {
@@ -194,7 +195,7 @@ func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
 					t.Fatalf("refresh status=%d", response.StatusCode)
 				}
 			}
-			assertReload := func(wantAuth bool) {
+			assertReload := func(wantAuth bool, wantStatus string) {
 				t.Helper()
 				cpa, err := handler.capabilityClient(ctx)
 				if err != nil {
@@ -207,7 +208,10 @@ func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
 				if (overview.Quotas[0].Recommendation.Status == "needs_reauth") != wantAuth {
 					t.Fatalf("overview status=%s", overview.Quotas[0].Recommendation.Status)
 				}
-				if !wantAuth && overview.Quotas[0].Status != "healthy" {
+				if !wantAuth && overview.Quotas[0].Recommendation.Action == "reauth" {
+					t.Fatal("overview requested reauthentication")
+				}
+				if wantStatus != "" && overview.Quotas[0].Status != wantStatus {
 					t.Fatalf("recovery status=%s", overview.Quotas[0].Status)
 				}
 				response, err := client.Get(base + "/omc/api/v1/management/quota/synthetic")
@@ -224,6 +228,13 @@ func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
 				if strings.Contains(string(encoded), `"needs_reauth"`) != wantAuth {
 					t.Fatalf("detail mismatch: %s", encoded)
 				}
+				if !wantAuth && strings.Contains(string(encoded), `"reauth"`) {
+					t.Fatalf("detail requested reauthentication: %s", encoded)
+				}
+				detailQuota, ok := detail["quota"].(map[string]any)
+				if !ok || (wantStatus != "" && detailQuota["status"] != wantStatus) {
+					t.Fatalf("detail quota=%v want status=%s", detail["quota"], wantStatus)
+				}
 			}
 			assertReport := func(wantAuth bool) {
 				t.Helper()
@@ -237,27 +248,49 @@ func TestAuthenticatedRecoverySurvivesReload(t *testing.T) {
 					t.Fatalf("report=%v", provider.Accounts)
 				}
 			}
-			refresh()
-			assertReload(false)
-			assertReport(false)
-			var initialJobs int
-			if err := repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&initialJobs); err != nil || initialJobs != 0 {
-				t.Fatalf("recovered jobs=%d error=%v", initialJobs, err)
+			assertSignalAndJobs := func(wantSignal string, wantJobs int) {
+				t.Helper()
+				signals, err := repo.GetFeishuAccountSignals(ctx, []string{"synthetic"})
+				if err != nil || signals["synthetic"].State != wantSignal {
+					t.Fatalf("signal=%+v error=%v want=%s", signals["synthetic"], err, wantSignal)
+				}
+				var jobs int
+				if err := repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&jobs); err != nil || jobs != wantJobs {
+					t.Fatalf("jobs=%d error=%v want=%d", jobs, err, wantJobs)
+				}
 			}
+			refresh()
+			assertReload(false, "healthy")
+			assertReport(false)
+			assertSignalAndJobs(repository.FeishuSignalHealthy, 0)
 			snapshots, err := repo.GetLatestQuotaSnapshots(ctx, []string{"synthetic"})
 			if err != nil || snapshots["synthetic"].ObservedAtMS <= 0 {
 				t.Fatalf("snapshot: %v", err)
 			}
-			updatedAt.Store(snapshots["synthetic"].ObservedAtMS + 1)
-			assertReload(true)
 			isRejected.Store(true)
 			refresh()
-			assertReload(true)
-			assertReport(true)
-			var jobs int
-			if err := repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&jobs); err != nil || jobs != 1 {
-				t.Fatalf("jobs=%d error=%v", jobs, err)
+			assertReload(false, "stale")
+			assertReport(false)
+			assertSignalAndJobs(repository.FeishuSignalTransport, 0)
+			state, err := handler.refreshReauthCredential(ctx, "synthetic")
+			if err != nil || state != repository.FeishuSignalUnknown {
+				t.Fatalf("historical acceptance satisfied verifier: state=%s error=%v", state, err)
 			}
+			assertReload(false, "stale")
+			assertReport(false)
+			assertSignalAndJobs(repository.FeishuSignalTransport, 0)
+			if err := handler.reauth.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if cards != 0 {
+				t.Fatal("false OAuth card after recovery")
+			}
+			updatedAt.Store(snapshots["synthetic"].ObservedAtMS + 1)
+			assertReload(true, "")
+			refresh()
+			assertReload(true, "")
+			assertReport(true)
+			assertSignalAndJobs(repository.FeishuSignalAuthInvalid, 1)
 		})
 	}
 }
