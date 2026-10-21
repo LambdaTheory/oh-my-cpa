@@ -65,6 +65,24 @@ describe('reset advice in credential quota', () => {
 
 describe('Claude entitlement read outcomes', () => {
   it.each([
+    ['unavailable', 'reset_not_provided', '上游未提供重置权益', '重置权益读取失败'],
+    ['failed', 'reset_reading_failed', '重置权益读取失败', '上游未提供重置权益'],
+  ] as const)('renders the %s outcome in the Chinese row and detail', (status, reason, copy, otherCopy) => {
+    window.localStorage.setItem('omc-lang', 'zh');
+    const advice: ResetAdvice = { ...ADVICE, verdict: 'unknown', evidence: 'unknown', reasons: [reason], remaining_resets: null, earliest_expiry_ms: null, announcements: [], local_evidence: { ...ADVICE.local_evidence, verdict: 'unknown', evidence: 'unknown', reasons: [reason] } };
+    const item: QuotaItem = { ...QUOTA, type: 'claude', provider: 'claude', reset_grants_status: status, reset_advice: advice };
+    const { unmount, container } = render(<I18nProvider><CompactQuotaView item={item} nowMS={NOW} /></I18nProvider>);
+    expect(screen.getByText(copy)).toBeTruthy();
+    expect(screen.queryByText(otherCopy)).toBeNull();
+    expect(container.querySelector('[data-reset-advice]')).toBeNull();
+    unmount();
+    render(<I18nProvider><CredentialQuotaBody item={item} nowMS={NOW} isDemo={false} /></I18nProvider>);
+    expect(screen.getAllByText(copy).length).toBeGreaterThan(0);
+    expect(screen.queryByText(otherCopy)).toBeNull();
+    expect(screen.getByText('剩余重置次数：未知')).toBeTruthy();
+  });
+
+  it.each([
     ['reset_reading_failed', 'Reset entitlement reading failed'],
     ['reset_not_provided', 'The upstream did not provide reset entitlements'],
   ])('explains %s without inventing a zero balance', (reason, copy) => {

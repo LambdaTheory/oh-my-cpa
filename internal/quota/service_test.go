@@ -884,6 +884,11 @@ func TestClaudeGrantFailurePreservesQuota(t *testing.T) {
 	}{
 		{"absent", 200, `{}`, nil, ResetGrantsUnavailable},
 		{"empty", 200, `{"cedar_ember":{"grants":[]}}`, nil, ResetGrantsUnavailable},
+		{"eligible empty", 200, `{"cedar_ember":{"eligible":true,"grants":[]}}`, nil, ResetGrantsUnavailable},
+		{"eligible omitted grants", 200, `{"cedar_ember":{"eligible":true}}`, nil, ResetGrantsUnavailable},
+		{"eligible null grants", 200, `{"cedar_ember":{"eligible":true,"grants":null}}`, nil, ResetGrantsUnavailable},
+		{"invalid json", 200, `{`, nil, ResetGrantsFailed},
+		{"network error", 0, ``, errors.New("synthetic connection closed"), ResetGrantsFailed},
 		{"malformed", 200, `{"cedar_ember":{"grants":false}}`, nil, ResetGrantsFailed},
 		{"unauthorized", 401, `{"error":"synthetic upstream detail"}`, nil, ResetGrantsFailed},
 		{"rate limited", 429, `{}`, nil, ResetGrantsFailed},

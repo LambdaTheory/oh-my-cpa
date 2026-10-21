@@ -238,6 +238,9 @@ func TestClaudeResetAdvicePersistedReadingStates(t *testing.T) {
 		{"eligible omitted", `{"cedar_ember":{"grants":[` + grant + `]}}`, "reset_expiring_soon", true},
 		{"ineligible", `{"cedar_ember":{"eligible":false,"grants":[` + grant + `]}}`, "reset_expiring_soon", true},
 		{"not provided", `{"cedar_ember":{"grants":[]}}`, "reset_not_provided", false},
+		{"eligible empty", `{"cedar_ember":{"eligible":true,"grants":[]}}`, "reset_not_provided", false},
+		{"eligible omitted grants", `{"cedar_ember":{"eligible":true}}`, "reset_not_provided", false},
+		{"eligible null grants", `{"cedar_ember":{"eligible":true,"grants":null}}`, "reset_not_provided", false},
 		{"absent", `{}`, "reset_not_provided", false},
 		{"failed", `{`, "reset_reading_failed", false},
 	} {

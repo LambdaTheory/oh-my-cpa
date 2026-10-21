@@ -60,6 +60,9 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   const cooldownDiagnostic = compactCooldownDiagnostic(item);
   const availableCredits = item.reset_credits?.available_count ?? 0;
   const grantSummary = claudeResetGrantSummary(item);
+  const grantReadReason = item.provider === 'claude' ? item.reset_advice?.reasons.find(
+    reason => reason === 'reset_not_provided' || reason === 'reset_reading_failed',
+  ) : undefined;
   const credits = verifiedQuotaCredits(item);
   const hasCreditBalance = Boolean(
     credits?.unlimited
@@ -80,6 +83,7 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
       <div className={styles.head}>
         {quotaStatusTag(item, t, nowMS)}
         <ResetAdviceTag advice={item.reset_advice} />
+        {grantReadReason && <span className={styles.plan}>{t(`advice.reason.${grantReadReason}`)}</span>}
         {planText && <span className={styles.plan}>{planText}</span>}
         {item.plan?.subscription_active === false && (
           <span className={styles.plan} data-subscription-inactive="true">{t('quota.subscription_inactive')}</span>
