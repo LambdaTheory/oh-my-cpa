@@ -372,7 +372,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 				result.Windows = windows
 				// Grant listing is supplementary: a failed or malformed
 				// grants read leaves the quota itself untouched.
-				result.ResetGrants = s.fetchClaudeResetGrants(ctx, file)
+				result.ResetGrants, result.ResetGrantsStatus = s.fetchClaudeResetGrants(ctx, file)
 			}
 
 		case "antigravity":
@@ -662,20 +662,21 @@ func (s *Service) fetchClaudeQuota(ctx context.Context, file management.AuthFile
 // fetchClaudeResetGrants lists Anthropic reset grants for display. It is a
 // read of the same usage endpoint with the grant program's query parameters,
 // and it never claims anything: spending an entitlement is out of scope.
-// Any failure yields no grants rather than failing the quota refresh.
-func (s *Service) fetchClaudeResetGrants(ctx context.Context, file management.AuthFile) []ClaudeResetGrant {
+// The safe outcome is retained without storing upstream error bodies.
+func (s *Service) fetchClaudeResetGrants(ctx context.Context, file management.AuthFile) ([]ClaudeResetGrant, ResetGrantsStatus) {
 	headers := management.WithQuotaCredential(map[string]string{
 		"Accept":         "application/json",
+		"User-Agent":     "claude-cli/2.1.280 (external, cli)",
 		"Content-Type":   "application/json",
 		"anthropic-beta": "oauth-2025-04-20",
 	})
 	resp, err := s.SafeApiCall(ctx, file.AuthIndex, "GET", ClaudeUsageURL+"?cedar_ember=1&skip_spend=1", headers, "")
 	if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil
+		return nil, ResetGrantsFailed
 	}
 	normBody, err := resp.NormalizedBody()
 	if err != nil {
-		return nil
+		return nil, ResetGrantsFailed
 	}
 	return ParseClaudeResetGrants(normBody)
 }

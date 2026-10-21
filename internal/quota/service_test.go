@@ -873,3 +873,42 @@ func TestRefreshClaudeKeepsBalancesWithoutAProfile(t *testing.T) {
 		t.Fatalf("plan = %+v, want an unlabelled plan carrying the balance and extra usage", result.Plan)
 	}
 }
+
+func TestClaudeGrantFailurePreservesQuota(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		code   int
+		body   string
+		err    error
+		status ResetGrantsStatus
+	}{
+		{"absent", 200, `{}`, nil, ResetGrantsUnavailable},
+		{"empty", 200, `{"cedar_ember":{"grants":[]}}`, nil, ResetGrantsUnavailable},
+		{"malformed", 200, `{"cedar_ember":{"grants":false}}`, nil, ResetGrantsFailed},
+		{"unauthorized", 401, `{"error":"synthetic upstream detail"}`, nil, ResetGrantsFailed},
+		{"rate limited", 429, `{}`, nil, ResetGrantsFailed},
+		{"server error", 503, `{}`, nil, ResetGrantsFailed},
+		{"timeout", 0, ``, context.DeadlineExceeded, ResetGrantsFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := &mockCPAClient{apiCallFunc: func(ctx context.Context, req management.ApiCallRequest) (management.ApiCallResponse, error) {
+				if strings.Contains(req.URL, "cedar_ember") {
+					calls++
+					if req.Method != "GET" || req.URL != ClaudeUsageURL+"?cedar_ember=1&skip_spend=1" || req.Header["anthropic-beta"] != "oauth-2025-04-20" || req.Header["User-Agent"] != "claude-cli/2.1.280 (external, cli)" {
+						t.Fatalf("unexpected request shape")
+					}
+					return management.ApiCallResponse{StatusCode: tc.code, Body: json.RawMessage(tc.body)}, tc.err
+				}
+				if req.URL == ClaudeUsageURL {
+					return management.ApiCallResponse{StatusCode: 200, Body: json.RawMessage(`{"five_hour":{"utilization":30}}`)}, nil
+				}
+				return management.ApiCallResponse{StatusCode: 200, Body: json.RawMessage(`{}`)}, nil
+			}}
+			result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{AuthIndex: "synthetic-claude", Provider: "claude"}, nil)
+			if err != nil || result.Error != "" || len(result.Windows) != 1 || result.Windows[0].UsedPercent == nil || *result.Windows[0].UsedPercent != 30 || result.ResetGrantsStatus != tc.status || calls != 1 {
+				t.Fatalf("result=%+v err=%v calls=%d", result, err, calls)
+			}
+		})
+	}
+}

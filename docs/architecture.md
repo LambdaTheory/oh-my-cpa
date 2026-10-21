@@ -3483,6 +3483,18 @@ and is superseded by ADR 0024, which records the single latest session that repl
 `scripts/test-playground.ts`, and desktop/phone probes cover this flow. Public-demo
 model reads are generated through the real facade; inference is explicitly refused, while one browser-local recorded example demonstrates the flow (ADR 0092).
 
+## Claude reset grant collection
+
+The fixed supplemental Claude usage GET reads `cedar_ember.grants` independently
+of `eligible`, using the OAuth beta and Claude CLI request headers. Migration 050
+persists `reset_grants_status` beside `reset_grants_json`; the existing quota
+response projects `available`, `unavailable` or `failed`. Historical empty status
+is not inferred from an empty array. Successful quota windows survive supplemental
+failure. Fresh advice explains failure and unpublished entitlements separately,
+without treating either as zero or allowing an announcement to repair uncertainty.
+Only normalized grants and the safe enum persist; upstream error details do not.
+ADR 0112 defines the absent, empty and malformed response boundaries.
+
 ## Read-only reset advice
 
 `internal/quota/reset_advice.go` owns the pure credential-level entitlement decision.

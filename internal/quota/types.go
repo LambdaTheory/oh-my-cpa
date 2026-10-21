@@ -193,12 +193,13 @@ type NormalizedQuota struct {
 	ResetCredits   *CodexResetCreditsInfo `json:"reset_credits,omitempty"`
 	// ResetGrants lists Anthropic rate-limit reset grants beside the Claude
 	// quota, display-only: claiming one spends an entitlement and is out of scope.
-	ResetGrants    []ClaudeResetGrant  `json:"reset_grants,omitempty"`
-	ActiveCooldown *ActiveCooldown     `json:"active_cooldown,omitempty"`
-	Recommendation QuotaRecommendation `json:"recommendation"`
-	Capabilities   QuotaCapabilities   `json:"capabilities"`
-	RawSignals     map[string]string   `json:"raw_signals,omitempty"`
-	Error          string              `json:"error,omitempty"`
+	ResetGrantsStatus ResetGrantsStatus   `json:"reset_grants_status,omitempty"`
+	ResetGrants       []ClaudeResetGrant  `json:"reset_grants,omitempty"`
+	ActiveCooldown    *ActiveCooldown     `json:"active_cooldown,omitempty"`
+	Recommendation    QuotaRecommendation `json:"recommendation"`
+	Capabilities      QuotaCapabilities   `json:"capabilities"`
+	RawSignals        map[string]string   `json:"raw_signals,omitempty"`
+	Error             string              `json:"error,omitempty"`
 }
 
 // QuotaOverviewSummary provides fleet-wide counts and stats.

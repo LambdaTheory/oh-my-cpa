@@ -177,6 +177,7 @@ export interface QuotaItem {
   windows: QuotaWindow[];
   reset_credits?: CodexResetCreditsInfo;
   reset_grants?: ClaudeResetGrant[];
+  reset_grants_status?: 'available' | 'unavailable' | 'failed';
   active_cooldown?: ActiveCooldown;
   recommendation: QuotaRecommendation;
   capabilities: QuotaCapabilities;
