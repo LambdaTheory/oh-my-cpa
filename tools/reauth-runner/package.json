@@ -1,0 +1,27 @@
+{
+  "name": "@oh-my-cpa/reauth-runner-spike",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 1 Playwright spike for Claude OAuth reauthorization",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "fixture": "tsx src/cli.ts fixture",
+    "start": "tsx src/cli.ts start",
+    "submit": "tsx src/cli.ts submit",
+    "status": "tsx src/cli.ts status",
+    "test": "tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
