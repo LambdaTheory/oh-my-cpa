@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough050(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -276,7 +276,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 	}
 
 	if err := database.Migrate(ctx); err != nil {
-		t.Fatalf("migrate schema 45 through 49: %v", err)
+		t.Fatalf("migrate schema 45 through 50: %v", err)
 	}
 
 	upstreamTables := []string{
@@ -333,7 +333,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 49; version++ {
+	for version := 15; version <= 50; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {

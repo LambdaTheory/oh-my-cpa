@@ -302,6 +302,7 @@ func decodeResetAdviceEntitlements(snapshot repository.QuotaSnapshotRecord, inpu
 		}
 	}
 	if input.Provider == "claude" {
+		input.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 		var grants []quota.ClaudeResetGrant
 		var presence []struct {
 			Left  *int `json:"resets_left"`

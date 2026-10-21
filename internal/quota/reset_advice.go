@@ -18,14 +18,15 @@ const (
 )
 
 type ResetAdviceInput struct {
-	Provider     string
-	Windows      []QuotaWindow
-	ResetCredits *CodexResetCreditsInfo
-	ResetGrants  []ClaudeResetGrant
-	Status       string
-	ObservedAtMS int64
-	NowMS        int64
-	ExpiryWindow time.Duration
+	Provider          string
+	Windows           []QuotaWindow
+	ResetCredits      *CodexResetCreditsInfo
+	ResetGrantsStatus ResetGrantsStatus
+	ResetGrants       []ClaudeResetGrant
+	Status            string
+	ObservedAtMS      int64
+	NowMS             int64
+	ExpiryWindow      time.Duration
 }
 
 type ResetAdvice struct {
@@ -57,6 +58,14 @@ func AdviseReset(input ResetAdviceInput) ResetAdvice {
 	}
 	if input.ObservedAtMS > input.NowMS || input.NowMS-input.ObservedAtMS > resetAdviceGrantFreshness.Milliseconds() {
 		return unknown("reset_reading_stale")
+	}
+	if input.Provider == "claude" {
+		switch input.ResetGrantsStatus {
+		case ResetGrantsFailed:
+			return unknown("reset_reading_failed")
+		case ResetGrantsUnavailable:
+			return unknown("reset_not_provided")
+		}
 	}
 	remaining, expiry, reason := resetEntitlements(input)
 	if reason != "" {
