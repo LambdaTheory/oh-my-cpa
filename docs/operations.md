@@ -828,3 +828,30 @@ supplied. The public demonstration refuses consuming and policy-write routes.
 
 Warmup round ordering is oldest observation first. Fleets exceeding a round's capacity
 remain queued rather than increasing concurrency or skipping protection.
+
+## Manual reset announcements
+
+On OAuth management, the quota workspace's **Active reset announcements** section
+below the credential collection offers **Register reset announcement**. Enter a lowercase
+provider identifier, scope, confidence and original public announcement text (1–4,000
+Unicode characters). Model scope requires a model identifier; credential scope requires
+its auth index. The optional expected reset time uses the displayed OMC timezone and
+must be in the future. Exclude credentials, keys and tokens from announcement text.
+
+Successful registration refreshes the list. The list shows source, confidence, scope
+and expected reset time; expired entries leave the active view but remain in SQLite
+and in API history. No automatic collector or background expiration task runs.
+Unverified and untimed entries remain evidence, not confirmation of a quota reset.
+
+Under the configured API prefix, GET/POST /management/quota/reset-announcements require
+a console session and writes use the existing same-origin guard. POST accepts provider,
+source (manual only), expected_reset_at_ms (future UTC milliseconds or null), scope
+(all/model/credential), model, auth_index, confidence (confirmed/probable/unverified)
+and original_text. The server assigns id, registered_at_ms and created_at_ms. GET
+returns items and total, with limit (1–100, default 20), offset (default 0), and optional
+status (active/expired; omitted includes history). Ordering is registration time then id,
+both descending. At the expected reset instant, status becomes expired. There is no
+rejection action or rejected row: invalid writes return 400 invalid_reset_announcement.
+
+The routes never call CPA and are not Agent/MCP capabilities. The public demonstration
+permits the empty list read and refuses registration. SQLite backups include the records.

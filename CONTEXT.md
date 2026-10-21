@@ -886,3 +886,19 @@ with normally distributed daily variation, quieter weekends and a small set of i
 - Early quota resets invalidate the prior cycle after observation. Redeeming a Codex reset
   credit retains its independent success even if cooldown clearing, refresh or warmup fails.
   Claude reset grants remain display-only.
+
+## Reset announcements
+
+A reset announcement is operator-entered external evidence, separate from quota
+snapshots and quota predictions. It records a lowercase provider identifier, source,
+optional expected reset instant, confidence, original public text, and an all/model/credential
+scope with an explicit target for narrower scopes. Registration and creation times are
+server-owned UTC milliseconds. An announcement is active until its expected reset time;
+an untimed announcement remains active. Expiration is derived on read and history remains
+queryable. Invalid input is rejected before insertion, not stored with a rejected status.
+
+Only console sessions register announcements. Source is currently manual; status_rss and
+x_api are reserved ingestion values. Source never implies confidence. Unverified or
+untimed announcements are evidence only; future advice integration may use timed
+confirmed/probable announcements without treating them as observed quota resets. This
+release does not change quota_prediction or reset_advice decisions (ADR 0110).

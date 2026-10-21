@@ -244,6 +244,7 @@ export function defaultRoutes() {
     [(url, method) => method === 'GET' && url.pathname.endsWith('/api/v1/fonts'), () => ({ fonts: [] })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/auth-files'), () => ({ files: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/quota'), () => ({ summary: { total_credentials: 0, healthy_count: 0, warning_count: 0, exhausted_count: 0, cooldown_count: 0, attention_count: 0 }, quotas: [], total: 0 })],
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/management/quota/reset-announcements'), () => ({ items: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/providers'), () => ({ providers: [], total: 0 })],
     [(url, method) => method === 'GET' && url.pathname.endsWith('/health'), () => ({ cpa_connected: true, version: 'probe', status: 'ok' })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/healthz', () => ({ cpa_connected: true, version: 'probe', status: 'ok' })],

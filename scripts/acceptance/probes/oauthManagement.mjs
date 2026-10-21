@@ -477,6 +477,43 @@ export async function oauthManagement({ base, page, check }) {
   check('OAuth priority sorting survives a fresh entry and orders the collection',
     (await page.locator('#oauth-collection-filters').innerText()).includes('Priority (High to Low)')
       && (await page.getByTestId('oauth-credential-record').first().getAttribute('data-auth-index')) === 'auth-02');
+  await checkResetAnnouncementLayout(page, check);
+}
+
+async function checkResetAnnouncementLayout(page, check) {
+  const notices = [];
+  const handler = async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON();
+      const item = { ...input, id: 'probe-announcement', registered_at_ms: Date.now(), created_at_ms: Date.now(), status: 'active' };
+      notices.push(item);
+      await route.fulfill({ status: 201, json: item });
+    } else { await route.fulfill({ json: { items: notices, total: notices.length } }); }
+  };
+  await page.route('**/management/quota/reset-announcements*', handler);
+  try {
+    const region = page.getByRole('region', { name: 'Active reset announcements' });
+    await region.getByRole('button', { name: 'Register reset announcement' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Register reset announcement' });
+    await dialog.waitFor();
+    await dialog.getByLabel('Provider identifier').fill('codex');
+    await dialog.getByRole('combobox', { name: 'Confidence' }).click();
+    await page.locator('.ant-select-dropdown:visible').getByText('Confirmed', { exact: true }).click();
+    await dialog.getByLabel('Original announcement').fill('Public announcement for layout verification');
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settleLayout(page);
+      check('announcement form fits viewport ' + width, await dialog.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth + 1;
+      }));
+    }
+    await dialog.getByRole('button', { name: 'Register', exact: true }).click();
+    await region.getByText('Public announcement for layout verification').waitFor();
+    await region.scrollIntoViewIfNeeded();
+    await settleLayout(page);
+    check('announcement result fits the phone viewport', await region.evaluate((element) => element.scrollWidth <= element.clientWidth + 1));
+  } finally { await page.unroute('**/management/quota/reset-announcements*', handler); }
 }
 
 

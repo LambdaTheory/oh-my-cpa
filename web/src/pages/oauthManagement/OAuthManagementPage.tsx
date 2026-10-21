@@ -47,6 +47,7 @@ import type { OllamaAccountDTO, OllamaAccountWritePayload } from '../../types/ol
 import { ProviderFilterTabs } from '../../components/common/ProviderFilterTabs';
 import { oauthProviderChoices } from '../oauthProviderLogic';
 import { CompactQuotaView } from '../quota/CompactQuotaView';
+import { ResetAnnouncements } from '../quota/ResetAnnouncements';
 import { CredentialQuotaBody } from '../quota/CredentialQuotaBody';
 import { VertexImportModal } from '../../components/authFiles/VertexImportModal';
 import { OAuthConnectPanel } from './OAuthConnectPanel';
@@ -1029,6 +1030,8 @@ export const OAuthManagementPage: React.FC = () => {
           </div>
         </>
       )}
+
+      <ResetAnnouncements />
 
       <OAuthConnectPanel
         open={isConnectOpen}

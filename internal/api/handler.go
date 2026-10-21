@@ -362,6 +362,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Post("/management/oauth/callback", h.handleOAuthCallback)
 				v1.Delete("/management/oauth/session", h.cancelOAuthSession)
 				v1.Get("/management/quota", h.getQuotaOverview)
+				v1.Get("/management/quota/reset-announcements", h.listResetAnnouncements)
+				v1.Post("/management/quota/reset-announcements", h.createResetAnnouncement)
 				v1.Post("/management/quota/reset", h.resetCredentialQuota)
 				v1.Post("/management/quota/clear-cooldown", h.clearCredentialCooldown)
 				v1.Post("/management/quota/refresh", h.refreshCredentialQuota)
