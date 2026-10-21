@@ -1,4 +1,4 @@
-import { appendPath, requestJson, type AuthUrlResponse } from "./http.js";
+import { HttpError, appendPath, requestJson, type AuthUrlResponse } from "./http.js";
 import { getProvider } from "./providers.js";
 import { delay } from "./wait.js";
 
@@ -54,6 +54,65 @@ export class OmcSession {
     await this.request(`reauth/jobs/${encodeURIComponent(job.id)}/status`, {
       status, ...start, ...(status === "failed" ? { last_error: "runner_failed" } : {}),
     }, signal);
+  }
+
+  async reconcileSuccess(job: ReauthJob, hasConsumedCode: boolean, signal?: AbortSignal): Promise<void> {
+    let state = "unknown";
+    let operation = "read job";
+    const readState = async (): Promise<string> => {
+      operation = "read job";
+      const current = await this.request<ReauthJob>(`reauth/jobs/${encodeURIComponent(job.id)}`, undefined, signal);
+      const states = ["pending", "oauth_started", "waiting_code", "waiting_browser", "waiting_callback",
+        "waiting_device", "code_received", "oauth_submitted", "verifying", "succeeded", "failed", "expired"];
+      if (!current || current.id !== job.id || current.provider !== job.provider || current.flow !== job.flow
+        || current.code_kind !== job.code_kind || !states.includes(current.state)) {
+        throw new Error("OMC returned an invalid reconciliation job");
+      }
+      state = current.state;
+      return state;
+    };
+    const settleCode = async (): Promise<void> => {
+      if (state !== "code_received") return;
+      if (job.code_kind !== "otp") throw new Error("only OTP jobs can reconcile code_received");
+      if (!hasConsumedCode) {
+        operation = "TakeCode";
+        // Manual/file input already completed at CPA. Consume the pending OMC
+        // code only to settle its one-use lifecycle; never log or resubmit it.
+        await this.request(`reauth/jobs/${encodeURIComponent(job.id)}/code`, undefined, signal);
+        await readState();
+        if (state !== "code_received") throw new Error("OMC code is no longer available for settlement");
+      }
+      // A 204 can also mean an earlier TakeCode committed but lost its response.
+      // Report enforces CodeConsumed server-side; the DTO does not expose it.
+      operation = "Report(code_submitted)";
+      await this.report(job, "code_submitted", undefined, signal);
+      state = "oauth_submitted";
+    };
+    try {
+      await readState();
+      await settleCode();
+      operation = "Report(succeeded)";
+      try {
+        await this.report(job, "succeeded", undefined, signal);
+      } catch (error) {
+        if (!(error instanceof HttpError) || error.status !== 409) throw error;
+        const previous = state;
+        await readState();
+        if (state === "verifying" || state === "succeeded") return;
+        // AcceptCode can race the read above. Reconcile that observed transition
+        // once; an unchanged conflict is not permission to retry or mark failed.
+        if (!["oauth_started", "waiting_code"].includes(previous) || state !== "code_received") {
+          operation = "Report(succeeded)";
+          throw error;
+        }
+        await settleCode();
+        operation = "Report(succeeded)";
+        await this.report(job, "succeeded", undefined, signal);
+      }
+    } catch (error) {
+      const reason = error instanceof HttpError ? `HTTP ${error.status}` : error instanceof Error ? error.message : "request failed";
+      throw new Error(`CPA OAuth succeeded, but OMC reconciliation failed at ${operation} (state=${state}): ${reason}; inspect the job before rerunning OAuth`);
+    }
   }
 
   async readCode(job: ReauthJob, timeoutMs: number, signal?: AbortSignal): Promise<string> {

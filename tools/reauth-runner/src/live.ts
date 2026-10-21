@@ -18,7 +18,6 @@ interface BrowserAuthorization {
 type BrowserAuthorizationConfig = Pick<StartConfig, "codeFile" | "isManual" | "loginEmail" | "provider" | "timeoutMs"> & {
   signal?: AbortSignal;
   readCode?: () => Promise<string>;
-  onCodeSubmitted?: () => Promise<void>;
 };
 
 export interface LiveFlowHooks {
@@ -248,7 +247,6 @@ export async function authorizeInBrowser(
         } catch {
           throw new Error("verification code could not be submitted");
         }
-        await config.onCodeSubmitted?.();
         callback = await capture.result;
       }
     }
@@ -299,6 +297,7 @@ export async function runLiveFlow(config: StartConfig, hooks: LiveFlowHooks = {}
   let job: ReauthJob | undefined;
   let hasStartedJob = false;
   let hasConsumedCode = false;
+  let hasCpaSucceeded = false;
   let isClosing = false;
   let browserClose: Promise<void> | undefined;
   const closeBrowser = (): void => {
@@ -343,7 +342,11 @@ export async function runLiveFlow(config: StartConfig, hooks: LiveFlowHooks = {}
     context.on("close", () => {
       if (!isClosing) controller.abort(new Error("OAuth run cancelled: browser was closed"));
     });
-    const poll = () => pollOAuthStatus(config.cpaBaseUrl, config.cpaManagementKey, auth.state, config.timeoutMs, signal);
+    const poll = async () => {
+      const current = await pollOAuthStatus(config.cpaBaseUrl, config.cpaManagementKey, auth.state, config.timeoutMs, signal);
+      hasCpaSucceeded = true;
+      return current;
+    };
     let status;
     if (auth.flow === "device") {
       const page = context.pages()[0] ?? await context.newPage();
@@ -365,9 +368,6 @@ export async function runLiveFlow(config: StartConfig, hooks: LiveFlowHooks = {}
             return readVerificationCode(config.codeFile, config.timeoutMs, signal);
           }
         } : undefined,
-        onCodeSubmitted: async () => {
-          if (hasConsumedCode) await omc!.report(job!, "code_submitted", undefined, signal);
-        },
       });
       const submit = async (): Promise<void> => {
         const callback = await authorization;
@@ -379,25 +379,26 @@ export async function runLiveFlow(config: StartConfig, hooks: LiveFlowHooks = {}
           if (!(error instanceof HttpError) || error.status !== 409) throw error;
           const current = await getOAuthStatus(config.cpaBaseUrl, config.cpaManagementKey, auth.state, config.timeoutMs, signal);
           if (current.status !== "ok" && current.status !== "success") throw error;
+          hasCpaSucceeded = true;
         }
       };
       const complete = async () => { await submit(); return poll(); };
       const completion = provider.codeKind === "otp" ? complete() : Promise.race([complete(), poll()]);
       status = hooks.onBrowserReady ? (await Promise.all([completion, hooks.onBrowserReady(context)]))[0] : await completion;
     }
+    if (omc && job) await omc.reconcileSuccess(job, hasConsumedCode, signal);
     signal.throwIfAborted();
-    if (omc && job) await omc.report(job, "succeeded", undefined, signal);
     return {
       provider: config.provider,
       state: auth.state,
       status: status.status,
     };
   } catch (error) {
-    if (omc && job && hasStartedJob) {
+    if (omc && job && hasStartedJob && !hasCpaSucceeded) {
       try { await omc.report(job, "failed"); }
       catch { notice("Warning: OMC failed-status report was not accepted; the job needs operator inspection."); }
     }
-    if (signal.aborted) throw abortError(signal);
+    if (signal.aborted && !hasCpaSucceeded) throw abortError(signal);
     throw error;
   } finally {
     clearTimeout(timer);

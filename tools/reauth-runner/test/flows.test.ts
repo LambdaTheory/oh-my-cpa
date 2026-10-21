@@ -8,6 +8,7 @@ import type { StartConfig } from "../src/config.js";
 import { runLiveFlow, type LiveFlowHooks } from "../src/live.js";
 import { getProvider } from "../src/providers.js";
 import { requestAuthUrl } from "../src/http.js";
+import { OmcFixture } from "./omc-fixture.js";
 
 interface FixtureOptions {
   provider: string;
@@ -20,6 +21,13 @@ interface FixtureOptions {
   hasCallbackConflict?: boolean;
   hasMissingDeviceCode?: boolean;
   hasCodeOutage?: boolean;
+  hasReceivedCode?: boolean;
+  hasLateCode?: boolean;
+  hasDeferredWaiting?: boolean;
+  hasExpiredCode?: boolean;
+  hasLostCodeResponse?: boolean;
+  hasPermanentCodeOutage?: boolean;
+  statusError?: number;
   expiresIn?: number;
 }
 
@@ -29,6 +37,8 @@ async function createFixture(options: FixtureOptions) {
   const requests: Array<{ url: URL; body: Record<string, unknown>; cookie?: string; origin?: string }> = [];
   const reports: Array<Record<string, unknown>> = [];
   const notices: string[] = [];
+  const omc = new OmcFixture(provider.id);
+  const rejectedReports: Array<Record<string, unknown>> = [];
   let baseUrl = "";
   let hasAuthorized = false;
   let codeReads = 0;
@@ -54,19 +64,32 @@ async function createFixture(options: FixtureOptions) {
         if (url.pathname.endsWith("/next")) {
           assert.equal(url.searchParams.get("provider"), provider.id);
           if (options.hasEmptyQueue) { response.writeHead(204).end(); return; }
-          response.end(JSON.stringify({ id: "job-fixture", provider: provider.id, flow: provider.flow, code_kind: provider.codeKind, state: "pending" })); return;
+          response.end(JSON.stringify(omc.job)); return;
         }
         if (url.pathname.endsWith("/status")) {
-          if (body.status === "code_submitted") assert.ok(codeReads > 0);
-          reports.push(body); response.end("{}"); return;
+          reports.push(body);
+          if (body.status === "succeeded" && options.hasLateCode) {
+            if (omc.job.state === "oauth_started") omc.advanceWaiting();
+            omc.acceptCode();
+          }
+          const error = body.status === "succeeded" ? options.statusError : undefined;
+          if (error || !omc.report(body)) {
+            rejectedReports.push(body); response.writeHead(error ?? 409).end(); return;
+          }
+          if (body.status === "oauth_started" && !options.hasDeferredWaiting) omc.advanceWaiting();
+          response.end(JSON.stringify(omc.job)); return;
         }
         if (url.pathname.endsWith("/code")) {
           assert.equal(provider.codeKind, "otp");
           codeReads += 1;
-          if (options.hasCodeOutage) { response.writeHead(503).end(); return; }
-          if (codeReads === 1) { response.writeHead(204).end(); return; }
-          response.end(JSON.stringify({ code: "123456" })); return;
+          if (options.hasPermanentCodeOutage || options.hasCodeOutage && !hasAuthorized) { response.writeHead(503).end(); return; }
+          if (codeReads > 1 || options.hasLostCodeResponse) omc.acceptCode();
+          const code = omc.takeCode();
+          if (options.hasLostCodeResponse && codeReads === 1) { response.writeHead(503).end(); return; }
+          if (!code) { response.writeHead(204).end(); return; }
+          response.end(JSON.stringify({ code })); return;
         }
+        if (url.pathname.endsWith("/job-fixture")) { response.end(JSON.stringify(omc.job)); return; }
       }
       if (url.pathname.startsWith("/v8/")) assert.equal(request.headers.authorization, "Bearer synthetic-cpa-key");
       if (url.pathname.endsWith("/oauth/auth-url")) {
@@ -98,6 +121,8 @@ async function createFixture(options: FixtureOptions) {
           response.end('<form action="/verify"><label>Code<input autocomplete="one-time-code" name="otp"></label><button>Verify</button></form>');
         } else if (url.pathname === "/verify") {
           assert.equal(url.searchParams.get("otp"), "123456");
+          if (options.hasReceivedCode) omc.acceptCode();
+          if (options.hasExpiredCode) omc.expireCode();
           response.writeHead(302, { Location: callbackUrl }).end();
         } else response.writeHead(404).end();
       } else {
@@ -136,7 +161,7 @@ async function createFixture(options: FixtureOptions) {
       }
     },
   };
-  return { config, hooks, requests, reports, notices,
+  return { config, hooks, requests, reports, notices, omc, rejectedReports,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await fs.rm(directory, { recursive: true, force: true });
@@ -263,8 +288,7 @@ test("closing the browser cancels the job and does not wait for the run deadline
   } finally { await fixture.close(); }
 });
 
-test("MANUAL OTP job leaves input and code retrieval to the operator", async () => {
-  const fixture = await createFixture({ provider: "claude", hasJob: true });
+function useManualInput(fixture: Awaited<ReturnType<typeof createFixture>>): void {
   fixture.config.isManual = true;
   fixture.hooks.onBrowserReady = async (context) => {
     const page = context.pages()[0]!;
@@ -273,12 +297,121 @@ test("MANUAL OTP job leaves input and code retrieval to the operator", async () 
     await page.getByLabel("Code").fill("123456");
     await page.getByRole("button", { name: "Verify" }).click({ noWaitAfter: true });
   };
+}
+
+test("MANUAL OTP job leaves input and code retrieval to the operator", async () => {
+  const fixture = await createFixture({ provider: "claude", hasJob: true });
+  useManualInput(fixture);
   try {
     assert.equal((await runLiveFlow(fixture.config, fixture.hooks)).status, "ok");
     assert.equal(fixture.requests.some((request) => request.url.pathname.endsWith("/code")), false);
     assert.deepEqual(fixture.reports.map((report) => report.status), ["oauth_started", "succeeded"]);
   } finally { await fixture.close(); }
 });
+
+test("OMC fixture enforces consumption and independent quota verification", () => {
+  const omc = new OmcFixture("claude");
+  assert.ok(omc.report({ status: "oauth_started", flow: "redirect_otp" }));
+  omc.advanceWaiting();
+  assert.equal(omc.report({ status: "code_submitted" }), false);
+  omc.acceptCode();
+  assert.equal(omc.report({ status: "succeeded" }), false);
+  assert.equal(omc.report({ status: "code_submitted" }), false);
+  assert.equal(omc.takeCode(), "123456");
+  assert.equal(omc.takeCode(), undefined);
+  assert.equal(omc.report({ status: "succeeded" }), false);
+  assert.ok(omc.report({ status: "code_submitted" }));
+  assert.ok(omc.report({ status: "succeeded" }));
+  assert.equal(omc.job.state, "verifying");
+  omc.verifyHealthy();
+  assert.deepEqual(omc.states, ["pending", "oauth_started", "waiting_code", "code_received", "oauth_submitted", "verifying", "succeeded"]);
+});
+
+for (const isManual of [true, false]) {
+  for (const hasLateCode of [false, true]) {
+    test(`${isManual ? "MANUAL" : "CODE_FILE fallback"} settles ${hasLateCode ? "racing" : "received"} OMC code after CPA success`, async () => {
+      const fixture = await createFixture({ provider: "claude", hasJob: true, hasCodeOutage: !isManual, hasReceivedCode: !hasLateCode, hasLateCode });
+      if (isManual) useManualInput(fixture);
+      else await fs.writeFile(fixture.config.codeFile!, "123456");
+      try {
+        assert.equal((await runLiveFlow(fixture.config, fixture.hooks)).status, "ok");
+        assert.deepEqual(fixture.reports.map((report) => report.status), hasLateCode
+          ? ["oauth_started", "succeeded", "code_submitted", "succeeded"]
+          : ["oauth_started", "code_submitted", "succeeded"]);
+        assert.equal(fixture.rejectedReports.length, hasLateCode ? 1 : 0);
+        assert.equal(fixture.omc.hasConsumedCode, true);
+        assert.equal(fixture.omc.job.state, "verifying");
+        fixture.omc.verifyHealthy();
+        assert.deepEqual(fixture.omc.states, ["pending", "oauth_started", "waiting_code", "code_received", "oauth_submitted", "verifying", "succeeded"]);
+        const statusRead = fixture.requests.findIndex((request) => request.url.pathname.endsWith("/oauth/status"));
+        const codeReport = fixture.requests.findIndex((request) => request.body.status === "code_submitted");
+        assert.ok(statusRead >= 0 && codeReport > statusRead);
+        assert.ok(!JSON.stringify(fixture.notices).includes("123456"));
+      } finally { await fixture.close(); }
+    });
+  }
+}
+
+test("lost TakeCode response can settle through server-enforced CodeConsumed after file fallback", async () => {
+  const fixture = await createFixture({ provider: "claude", hasJob: true, hasLostCodeResponse: true });
+  await fs.writeFile(fixture.config.codeFile!, "123456");
+  try {
+    assert.equal((await runLiveFlow(fixture.config, fixture.hooks)).status, "ok");
+    assert.equal(fixture.omc.hasConsumedCode, true);
+    assert.equal(fixture.omc.job.state, "verifying");
+    assert.equal(fixture.requests.filter((request) => request.url.pathname.endsWith("/code")).length, 2);
+  } finally { await fixture.close(); }
+});
+
+test("OMC waiting tick and contact reply can both race the success report", async () => {
+  const fixture = await createFixture({ provider: "claude", hasJob: true, hasLateCode: true, hasDeferredWaiting: true });
+  useManualInput(fixture);
+  try {
+    assert.equal((await runLiveFlow(fixture.config, fixture.hooks)).status, "ok");
+    assert.deepEqual(fixture.reports.map((report) => report.status), ["oauth_started", "succeeded", "code_submitted", "succeeded"]);
+    assert.equal(fixture.rejectedReports.length, 1);
+    assert.equal(fixture.omc.job.state, "verifying");
+  } finally { await fixture.close(); }
+});
+
+for (const statusError of [409, 503]) {
+  test(`OMC success-report HTTP ${statusError} preserves CPA success and exposes the failed transition`, async () => {
+    const fixture = await createFixture({ provider: "claude", hasJob: true, statusError });
+    useManualInput(fixture);
+    try {
+      await assert.rejects(runLiveFlow(fixture.config, fixture.hooks), new RegExp(`CPA OAuth succeeded.*Report\\(succeeded\\).*state=waiting_code.*HTTP ${statusError}`));
+      assert.deepEqual(fixture.reports.map((report) => report.status), ["oauth_started", "succeeded"]);
+      assert.equal(fixture.omc.job.state, "waiting_code");
+    } finally { await fixture.close(); }
+  });
+}
+
+for (const hasExpiredCode of [true, false]) {
+  test(`CPA success with ${hasExpiredCode ? "expired" : "unreachable"} OMC code reports reconciliation failure without marking failed`, async () => {
+    const fixture = await createFixture({ provider: "claude", hasJob: true, hasReceivedCode: true, hasExpiredCode, hasPermanentCodeOutage: !hasExpiredCode });
+    useManualInput(fixture);
+    try {
+      await assert.rejects(runLiveFlow(fixture.config, fixture.hooks), hasExpiredCode
+        ? /CPA OAuth succeeded.*state=expired.*no longer available/
+        : /CPA OAuth succeeded.*TakeCode.*state=code_received.*HTTP 503/);
+      assert.deepEqual(fixture.reports.map((report) => report.status), ["oauth_started"]);
+      assert.equal(fixture.omc.job.state, hasExpiredCode ? "expired" : "code_received");
+    } finally { await fixture.close(); }
+  });
+}
+
+for (const terminalStatus of ["error", "cancelled", "expired", "wait"]) {
+  test(`callback 409 with CPA ${terminalStatus} remains a failure`, async () => {
+    const fixture = await createFixture({ provider: "claude", hasJob: true, hasReceivedCode: true, hasCallbackConflict: true, terminalStatus });
+    useManualInput(fixture);
+    try {
+      await assert.rejects(runLiveFlow(fixture.config, fixture.hooks), /HTTP 409/);
+      assert.deepEqual(fixture.reports.map((report) => report.status), ["oauth_started", "failed"]);
+      assert.equal(fixture.omc.job.state, "failed");
+      assert.equal(fixture.omc.hasConsumedCode, false);
+    } finally { await fixture.close(); }
+  });
+}
 
 test("OTP waiting for a missing CODE_FILE ends at the global deadline", async () => {
   const fixture = await createFixture({ provider: "claude" });
