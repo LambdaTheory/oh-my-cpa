@@ -255,7 +255,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       case 'error':
         return { tone: 'danger', label: t('automation.state_error') };
       default:
-        return { tone: 'neutral', label: a.state || '—' };
+        return { tone: 'neutral', label: t('automation.state_unknown') };
     }
   };
 
@@ -271,6 +271,18 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
       case 'SWITCH_OFF':
       case 'switch_off':
         return t('automation.reason_switch_off');
+      case 'NO_WEEKLY_EVIDENCE':
+      case 'no_weekly_evidence':
+        return t('automation.no_weekly_summary');
+      case 'NOT_EXHAUSTED':
+      case 'not_exhausted':
+        return t('automation.reason_not_exhausted');
+      case 'EXPIRED_RESET':
+      case 'expired_reset':
+        return t('automation.reason_expired_reset');
+      case 'STALE_EVIDENCE':
+      case 'stale_evidence':
+        return t('automation.reason_stale_evidence');
       case 'MISSING_RESET':
       case 'missing_reset':
       case 'EXHAUSTED_MISSING_RESET':
@@ -506,9 +518,11 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
               const isWaitingOrError = s === 'waiting' || s === 'error';
               const r = account.monitor_reason?.toLowerCase();
               const isMissingReset = r === 'missing_reset' || r === 'exhausted_missing_reset';
+              const hasWeeklyUsage = account.weekly_used_percent !== undefined && account.weekly_used_percent !== null;
               const reason = !account.is_adopted ? ''
                 : r === 'no_controllable_credential' ? getReasonLabel(r)
                 : !account.auto_disable_supported ? t('automation.reason_unverified_account_weekly_capability')
+                : r === 'no_weekly_evidence' && !hasWeeklyUsage ? ''
                 : getReasonLabel(account.monitor_reason);
 
                   const nameInfo = displayName(account);
@@ -576,9 +590,9 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                      {account.weekly_used_percent !== undefined && account.weekly_used_percent !== null ? (
+                      {hasWeeklyUsage ? (
                         <span>
-                          {t('automation.weekly_used', { n: account.weekly_used_percent.toFixed(1) })}
+                          {t('automation.weekly_used', { n: account.weekly_used_percent!.toFixed(1) })}
                           {account.weekly_reset_at_ms && (
                             <span style={{ marginLeft: 6, color: 'var(--muted)' }}>
                               ({t('automation.weekly_reset', { time: formatTime(account.weekly_reset_at_ms) })})
@@ -586,7 +600,7 @@ export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = (
                           )}
                         </span>
                       ) : (
-                        <span style={{ color: 'var(--muted)' }}>{t('automation.no_weekly')}</span>
+                        <span style={{ color: 'var(--muted)' }}>{t(isMonitorOnly(account) ? 'automation.no_weekly_summary' : 'automation.no_weekly')}</span>
                       )}
 
                       {reason && (

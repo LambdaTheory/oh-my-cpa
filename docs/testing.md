@@ -1143,7 +1143,10 @@ The rendered first-batch test and `omc-account-automation` browser scenario own 
 Select all, enabled confirmation, capability-based monitor-only status/count/filtering,
 one status beside every account switch, and synthetic desktop/phone evidence. Rendered
 cases cover verified, unverified and uncontrollable credentials across adopted/unadopted
-and enabled/disabled settings, including an idle unverified row. A 13-adopted/12-live
+and enabled/disabled settings, including an idle unverified row. Missing-weekly cases
+in Chinese and English keep the capability explanation singular
+for monitor-only rows and preserve the verified-account no-auto-disable qualifier.
+Unknown runtime states use localized status copy. A 13-adopted/12-live
 regression requires the absent-account explanation in both statistics and footer;
 degraded inventory cannot claim absence. The browser scenario checks phone status/switch
 geometry and captures weekly-data, missing-weekly-data, monitor-only and idle rows.

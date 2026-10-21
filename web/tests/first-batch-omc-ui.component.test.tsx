@@ -69,6 +69,42 @@ describe('First Batch OMC UI Component Tests', () => {
   });
 
   describe('Lane A: Account Automation', () => {
+    it.each([
+      ['zh-CN', '未上报 7d 数据', '未上报 7d 数据（不参与自动关）', '账号周限额能力未核实，无法自动关停', '缺少可控凭据', '未知状态'],
+      ['en', 'No 7d evidence', 'No 7d evidence (not auto-disabled)', 'Account weekly capability unverified; automatic disable unavailable', 'No controllable credential', 'Unknown status'],
+    ])('explains missing weekly evidence once per capability in %s', async (language, missing, verifiedMissing, capabilityReason, credentialReason, unknownStatus) => {
+      window.localStorage.setItem('omc-lang', language);
+      const accounts = ['unverified', 'uncontrollable', 'verified'].map(capability => ({
+        auth_index: `fixture-${capability}`, account_label: `${capability} account`, is_adopted: true, is_enabled: true,
+        state: capability === 'verified' ? 'future_state' : 'monitoring',
+        auto_disable_supported: capability !== 'unverified',
+        monitor_reason: capability === 'uncontrollable' ? 'no_controllable_credential' : 'no_weekly_evidence',
+        disabled_by_automation: false, attempt_count: 0, has_weekly_evidence: false, intent_version: 1,
+      }));
+      const response: AccountAutomationListResponse = {
+        settings: { enabled: true, web_enabled: true, source: 'web', master_from_env: false, accounts: 3 },
+        accounts, candidates: [],
+      };
+      vi.mocked(api.getAccountAutomation).mockResolvedValue(response);
+      vi.mocked(api.getAccountAutomationSettings).mockResolvedValue(response.settings);
+      renderWithClient(<AccountAutomationDrawer open onClose={() => {}} />);
+      await screen.findByText('verified account');
+      for (const account of accounts) {
+        const row = screen.getByText(account.account_label).closest('div')!.parentElement!.parentElement!;
+        if (account.auth_index === 'fixture-verified') {
+          expect(within(row).getAllByText(verifiedMissing, { exact: true })).toHaveLength(1);
+          expect(row.querySelector('.status-label')!.textContent).toBe(unknownStatus);
+        } else {
+          expect(within(row).getByText(missing, { exact: true })).toBeDefined();
+          expect(within(row).queryByText(verifiedMissing, { exact: true })).toBeNull();
+          const reason = account.auth_index === 'fixture-unverified' ? capabilityReason : credentialReason;
+          expect(within(row).getAllByText(`· ${reason}`, { exact: true })).toHaveLength(1);
+        }
+        expect(row.textContent).not.toContain('no_weekly_evidence');
+        expect(row.textContent).not.toContain('future_state');
+      }
+    });
+
     it.each([true, false])('renders one status and the account setting for every capability/adoption combination (enabled=%s)', async (isEnabled) => {
       const accounts = [true, false].flatMap(isAdopted => ['verified', 'unverified', 'uncontrollable'].map(capability => ({
         auth_index: `${capability}-${isAdopted}`,
