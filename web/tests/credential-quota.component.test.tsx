@@ -93,9 +93,10 @@ describe('credential quota board', () => {
     const files = items.map((item) => file(item.auth_index));
     expect(buildCredentialQuotaBoard(files, items, NOW_MS)).toMatchObject({ servingCount: 3, blockedCount: 0 });
     const { container } = render(<QuotaSurface files={files} quotas={items} />);
-    expect(screen.getAllByRole('meter').map((meter) => meter.getAttribute('aria-valuenow'))).toEqual(['70', '60', '80']);
+    expect(screen.getAllByRole('meter').map((meter) => meter.getAttribute('aria-valuenow'))).toEqual(['60', '70', '80']);
     expect(screen.getByText('Data stale')).toBeTruthy();
     expect(screen.getByText(/Refresh failed.*Request timed out/)).toBeTruthy();
+    expect(screen.getByText('Rate limited')).toBeTruthy();
     expect(container.querySelectorAll('[data-quota-reading-trusted="false"]')).toHaveLength(3);
     expect(buildCredentialQuotaBoard(files.map((entry) => ({ ...entry, unavailable: true })), items, NOW_MS).servingCount).toBe(0);
   });
@@ -121,7 +122,12 @@ describe('credential quota board', () => {
     const counts = countWorkspaceQuotaStatuses(records, NOW_MS);
     expect(counts).toEqual({ healthy: 1, refresh_failed: 1, rate_limited: 1, stale: 1, disabled: 1 });
     expect(Object.values(counts).reduce((sum, n) => sum + n, 0)).toBe(files.length);
-    expect(buildCredentialQuotaBoard(files, items, NOW_MS).rows.map((row) => row.state)).toEqual(['refresh_failed', 'rate_limited', 'stale', 'healthy']);
+    expect(buildCredentialQuotaBoard(files, items, NOW_MS).rows.map((row) => [row.fileName, row.state, row.readingStatus])).toEqual([
+      ['failed', 'healthy', 'refresh_failed'],
+      ['normal', 'healthy', undefined],
+      ['stale', 'healthy', 'stale'],
+      ['limited', 'unread', 'rate_limited'],
+    ]);
     const { container } = render(<I18nProvider>{items.map((item) => <CompactQuotaView key={item.auth_index} item={item} nowMS={NOW_MS} />)}</I18nProvider>);
     const failed = within(container.querySelector('[data-quota-body="failed"]') as HTMLElement);
     expect(failed.getByText('Refresh failed · HTTP 483')).toBeTruthy();
@@ -158,6 +164,35 @@ describe('credential quota board', () => {
       NOW_MS,
     );
     expect(board.rows[0]).toMatchObject({ state: 'exhausted', recoverAtMS: NOW_MS + 40 * HOUR_MS });
+  });
+
+  it.each([
+    { readingStatus: 'stale', overrides: { observed_at_ms: NOW_MS - 12 * HOUR_MS }, label: 'Data stale' },
+    { readingStatus: 'refresh_failed', overrides: { last_refresh: { outcome: 'failed', attempted_at_ms: NOW_MS, reason: 'timeout' } }, label: 'Refresh failed · Request timed out' },
+    { readingStatus: 'rate_limited', overrides: { last_refresh: { outcome: 'rate_limited', attempted_at_ms: NOW_MS, retry_at_ms: NOW_MS + 120_000 } }, label: 'Rate limited' },
+  ] satisfies { readingStatus: string; overrides: Partial<QuotaItem>; label: string }[])('keeps exhausted recovery and reading trust separate: $readingStatus', ({ readingStatus, overrides, label }) => {
+    const files = [file('spent')];
+    const items = [quota('spent', [quotaWindow('five_hour', 0, 2), quotaWindow('weekly', 0, 40)], { status: 'exhausted', ...overrides })];
+    const board = buildCredentialQuotaBoard(files, items, NOW_MS);
+    expect(board).toMatchObject({ servingCount: 0, blockedCount: 1 });
+    expect(board.rows[0]).toMatchObject({ state: 'exhausted', recoverAtMS: NOW_MS + 40 * HOUR_MS, readingStatus });
+    const { container } = render(<QuotaSurface files={files} quotas={items} />);
+    const row = screen.getByRole('listitem');
+    expect(row.getAttribute('data-quota-state')).toBe('exhausted');
+    expect(row.textContent).toContain('40h left');
+    expect(within(row).getByText(label)).toBeTruthy();
+    expect(container.querySelector('[data-quota-reading-trusted="false"]')).toBeTruthy();
+  });
+
+  it.each([
+    { outcome: 'failed', label: 'Refresh failed · Request timed out' },
+    { outcome: 'rate_limited', label: 'Rate limited' },
+  ] as const)('shows reading trust in the dashboard before a successful reading: $outcome', ({ outcome, label }) => {
+    const item = quota('unread', [], { last_refresh: { outcome, attempted_at_ms: NOW_MS, reason: 'timeout' } });
+    render(<QuotaSurface files={[file('unread')]} quotas={[item]} />);
+    const row = screen.getByRole('listitem');
+    expect(row.getAttribute('data-quota-state')).toBe('unread');
+    expect(within(row).getByText(label)).toBeTruthy();
   });
 
   it('asks a live refresh only of enabled credentials a provider can be read for', () => {

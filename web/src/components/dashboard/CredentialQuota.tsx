@@ -141,6 +141,7 @@ const CredentialQuotaRowView: React.FC<{ row: CredentialQuotaRow; nowMS: number 
         <span className="quota-row-status" title={row.detail}>
           <status.Icon className="quota-row-status-icon" aria-hidden="true" />
           {t(status.labelKey)}
+          {readingLabel && <span className="quota-reading-warning" title={[readingLabel, row.lastRefresh?.reason_summary].filter(Boolean).join(' · ')}>{readingLabel}</span>}
         </span>
       ) : (
         <span className="quota-row-windows">
