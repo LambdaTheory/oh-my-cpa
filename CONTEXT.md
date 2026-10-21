@@ -8,6 +8,7 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **OAuth contact**: The single configured Feishu `open_id` allowed to supply a six-digit code in the dedicated OAuth management group. Tasks across all providers queue per contact and only one proceeds at a time. Only OTP flows accept code messages. Email OTPs are held in process memory for five minutes, consumed once by an authenticated runner, and never stored in SQLite or ordinary responses.
 - **Reset entitlement**: A provider-reported right to reset specified quota windows, with a remaining count and optional expiry; it is distinct from the quota balance and from a scheduled window reset.
 - **Reset advice**: One read-only conclusion per credential, counting each applicable entitlement once even when it clears several windows. With fresh, valid remaining entitlements and known expiry, any standard quota window at or above 90% used takes priority as `keep_for_emergency`; otherwise, all standard windows must be readable and below that threshold before an entitlement expiring within the configured horizon yields `use_before_expiry`. A known zero balance or fully expired grants yields `no_action`, as does a readable positive balance entirely outside the horizon. Missing or stale key evidence that prevents a decision yields `unknown`. Window readings are evidence for the single conclusion, never additional conclusions.
+- **Claude reset grant reading**: Supplemental collection has independent available, unavailable and failed outcomes. A valid grant list remains observable without redemption eligibility. Missing historical status stays unknown; a successful absent/empty list is not a measured zero balance (ADR 0112).
 - **Reset advice evidence**: A fact describes a directly observed exhausted or expired entitlement balance; a projection is an advisory judgment from the remaining entitlement, expiry and current quota share. Unknown means evidence is missing, stale, invalid or inapplicable and never means a zero balance.
 
 - **Fork build identity**: Immutable source metadata shown separately from the upstream OMC and CPA release observations. A supplied build tag is displayed as-is; otherwise a known source revision yields `dev+<12-character SHA>`. The commit and branch/ref are independent observations; missing metadata is unknown, never an invented branch. `OMCPA_VERSION` remains the display/User-Agent and release-comparison override, not evidence of the source identity. Dokploy fork builds keep that comparison value incomparable (`fork`) even when the separate build tag is stable-looking.
@@ -66,6 +67,7 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **Credential**: Authentication material that CPA can use, such as an OAuth auth file, API key, service account, or runtime-only credential. Oh My CPA references and describes credentials; it does not expose secrets in normal resource responses. Auth-file routing fields may be read and written through an explicit safe projection, and a write is only reported as successful once CPA's runtime entry agrees with it: the fields that live in the downloaded JSON are additionally verified against a server-side projection of it, and the update response carries that projection only when it was read back.
 - **OAuth Management Workspace**: The console's single credential-centred destination at `/oauth-management`. Auth files own collection membership; quota observations join only by one unique exact nonempty `auth_index`, and a missing or duplicate index remains visible as an operational diagnostic rather than selecting a filename, email, provider or positional fallback. Authorization, configuration, model lists and provider-scoped model rules are contextual tasks inside this workspace, while the historical `/oauth`, `/auth-files` and `/quota` URLs remain parameter-safe compatibility redirects.
 - **Display Provider Key**: The canonical provider family used by the workspace's filters and brand resolution. It is presentation identity, not the credential's auth index and not necessarily the vendor's authorization route.
+- **Quota display status**: The latest active refresh attempt is separate from the last successful reading. Disabled credentials, failed attempts and rate-limited attempts take precedence over the retained reading; a retry instant permits another attempt and does not certify recovery. List counts partition the credential inventory with the same status decision used by rows and the dashboard. Successful values retain their original observation time after a failure.
 - **Credential selection**: The workspace includes CPA credentials and Ollama monitoring accounts in one selection, preserving source-specific opaque targets internally. Rows and automation lists show friendly account labels without standalone indexes or index prefixes; missing names use localized account copy. Batch enable/disable controls CPA credential availability or Ollama periodic collection respectively, never Ollama inference routing. Default quota refresh includes enabled supported records from both sources, counts the same planned targets it sends, and explains disabled or unsupported skips. Its report groups succeeded, rate-limited, failed and skipped credentials separately; a rate limit carries its retry time and does not turn successful siblings into failures (ADR 0107).
 - **Authorization Provider ID**: The console's id for an OAuth sign-in provider. It is declared per sign-in provider (for example the Claude display family starts `anthropic`), may come from a plugin's `oauth_provider`, and is resolved without fuzzy matching from the display key. The id CPA's shared login endpoint expects can differ: the management client translates it when it starts a flow (`anthropic` is sent as `provider=claude`), and a plugin's id passes through unchanged.
 - **OAuth Model Alias**: A CPA-owned, provider-scoped mapping from an upstream OAuth/file-backed model ID to a client-visible model ID. It is global to the provider rather than to one credential; Oh My CPA replaces one provider's mapping through an allowlisted facade and verifies CPA's readback before reporting success.
@@ -479,8 +481,11 @@ recorded and at least 95 percent of requests carried request-time pricing.
   adopted by default, and an account that was already disabled is adopted explicitly and
   never reported as disabled by this feature. Adoption requires a controllable CPA
   credential, not a verified provider capability: an adopted provider whose account-level
-  weekly mapping is not verified remains **monitor-only**, with that capability visible
-  and filterable separately from its runtime state in the console. It cannot be disabled
+  weekly mapping is not verified remains **monitor-only**, with one **Monitor only** row
+  status and a capability-based filter. Turning its account setting off adds an explicit
+  switch-off qualifier. The adopted count includes the persisted roster and explicitly
+  counts adopted accounts absent from the live gateway inventory; an unavailable
+  inventory leaves the total unknown. It cannot be disabled
   or re-enabled automatically until its capability is deliberately added to the registry.
   A five-hour window, a model- or
   group-scoped window, a partial reading, an ordinary 429, an authentication failure or a
@@ -909,3 +914,25 @@ and expiry timestamps are display metadata; email OTPs remain ephemeral secrets.
 The independent runner owns OAuth and callback submission. Remote deployments must
 make redirect callback ports reachable from the browser or submit callbacks through
 the runner; OMC never receives callback URLs or tokens in job status reports.
+
+## Reset announcements
+
+A reset announcement is operator-entered external evidence, separate from quota
+snapshots and quota predictions. It records a lowercase provider identifier, source,
+optional expected reset instant, confidence, original public text, and an all/model/credential
+scope with an explicit target for narrower scopes. Registration and creation times are
+server-owned UTC milliseconds. An announcement is active until its expected reset time;
+an untimed announcement remains active. Expiration is derived on read and history remains
+queryable. Invalid input is rejected before insertion, not stored with a rejected status.
+
+Only console sessions register announcements. Source is currently manual; status_rss and
+x_api are reserved ingestion values. Source never implies confidence. Unverified or
+untimed announcements are evidence only. Timed confirmed/probable announcements within
+the advice horizon set reset_advice to use_before_expiry only with a fresh, known positive
+eligible entitlement balance on an enabled, available credential and a known local verdict.
+This takes precedence over local emergency advice; local_evidence preserves that original
+verdict and reset instant, and announcements flag conflicts explicitly. Unknown/zero capacity
+keeps the local verdict with notice_without_local_capacity. Provider matching is exact;
+credential targets match auth indexes internally and model targets require an exact persisted
+model-scope quota window. Announcements never alter quota_prediction or prove redemption
+eligibility (ADRs 0110 and 0111).

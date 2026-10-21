@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough053(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -276,7 +276,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 	}
 
 	if err := database.Migrate(ctx); err != nil {
-		t.Fatalf("migrate schema 45 through 49: %v", err)
+		t.Fatalf("migrate schema 45 through 53: %v", err)
 	}
 
 	upstreamTables := []string{
@@ -287,6 +287,8 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 		"fonts",
 		"font_faces",
 		"channel_model_prices",
+		"reset_announcements",
+		"quota_refresh_attempts",
 	}
 	for _, table := range append(forkTables, upstreamTables...) {
 		var count int
@@ -308,8 +310,9 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 	}
 
 	for table, column := range map[string]string{
-		"quota_snapshots":      "warmup_json",
-		"model_price_versions": "channel",
+		"quota_snapshots":        "warmup_json",
+		"model_price_versions":   "channel",
+		"quota_refresh_attempts": "reason_summary",
 	} {
 		var count int
 		if err := database.SQL.QueryRowContext(ctx,
@@ -329,11 +332,11 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 44)
+	expectedVersions := make([]int, 0, 48)
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 49; version++ {
+	for version := 15; version <= 53; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
@@ -353,7 +356,7 @@ func TestMigration045UpgradesForkSchemaThrough049(t *testing.T) {
 		if err := rows.Scan(&extra); err != nil {
 			t.Fatal(err)
 		}
-		t.Fatalf("unexpected duplicate migration version %d", extra)
+		t.Fatalf("unexpected migration version %d", extra)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
@@ -476,11 +479,31 @@ func TestBackupRestoreSmokeAndFreeSpaceCheck(t *testing.T) {
 	}
 }
 
-func TestMigration049ProviderFlowsShareContactSlot(t *testing.T) {
+func TestMigration053ProviderFlowsShareContactSlot(t *testing.T) {
 	ctx := context.Background()
-	db := openDatabaseAtMigration(t, 48)
+	db := openDatabaseAtMigration(t, 52)
+	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO reset_announcements
+		(id, provider, source, scope, confidence, original_text, registered_at_ms, created_at_ms)
+		VALUES ('synthetic-announcement', 'claude', 'manual', 'all', 'confirmed', 'Synthetic reset notice', 1000, 1000)`); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatal(err)
+	}
+	var preservedCount int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM reset_announcements
+		WHERE id = 'synthetic-announcement' AND original_text = 'Synthetic reset notice'`).Scan(&preservedCount); err != nil {
+		t.Fatal(err)
+	}
+	if preservedCount != 1 {
+		t.Fatalf("announcement count after upgrade = %d, want 1", preservedCount)
+	}
+	var count, distinctCount, maxVersion int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT version), MAX(version) FROM schema_migrations`).Scan(&count, &distinctCount, &maxVersion); err != nil {
+		t.Fatal(err)
+	}
+	if count != 48 || distinctCount != 48 || maxVersion != 53 {
+		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 48/48/53", count, distinctCount, maxVersion)
 	}
 	for i, p := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
 		if _, err := db.SQL.ExecContext(ctx, "INSERT INTO reauth_jobs (id,auth_index,provider,account_label,flow,code_kind,state,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,'pending',?,?)", p, p, p, p, "device_code", "device", i, i); err != nil {

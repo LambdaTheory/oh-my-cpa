@@ -443,3 +443,10 @@
   min-height: 38px;
 }
 
+
+.refresh-detail {
+  color: var(--meta);
+  font-size: var(--text-2xs);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

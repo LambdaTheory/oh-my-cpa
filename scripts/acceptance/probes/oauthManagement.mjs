@@ -477,6 +477,91 @@ export async function oauthManagement({ base, page, check }) {
   check('OAuth priority sorting survives a fresh entry and orders the collection',
     (await page.locator('#oauth-collection-filters').innerText()).includes('Priority (High to Low)')
       && (await page.getByTestId('oauth-credential-record').first().getAttribute('data-auth-index')) === 'auth-02');
+  await checkResetAnnouncementLayout(page, check);
+}
+
+async function checkResetAnnouncementLayout(page, check) {
+  const notices = [];
+  const now = Date.now();
+  const localAdvice = {
+    verdict: 'keep_for_emergency', evidence: 'projection', reasons: ['quota_near_exhaustion'],
+    remaining_resets: 2, earliest_expiry_ms: now + 120 * 3_600_000, used_percent: 95,
+    reset_observed_at_ms: now, quota_observed_at_ms: now,
+    local_evidence: { source: 'local_observation', verdict: 'keep_for_emergency', evidence: 'projection', reasons: ['quota_near_exhaustion'], quota_reset_at_ms: now + 3_600_000 },
+    announcements: [],
+  };
+  const quotaHandler = async route => {
+    const advice = notices.length ? {
+      ...localAdvice, verdict: 'use_before_expiry', reasons: ['announcement_reset_soon', 'announcement_local_conflict'],
+      announcements: notices.map(notice => ({ ...notice, influences_advice: true, has_conflict: true })),
+    } : localAdvice;
+    await route.fulfill({ json: { quotas: quota.map(item => item.auth_index === 'auth-01' ? { ...item, reset_advice: advice } : item), total: quota.length, summary: {} } });
+  };
+  const handler = async (route) => {
+    if (route.request().method() === 'POST') {
+      const input = route.request().postDataJSON();
+      const item = { ...input, id: 'probe-announcement', registered_at_ms: Date.now(), created_at_ms: Date.now(), status: 'active' };
+      notices.push(item);
+      await route.fulfill({ status: 201, json: item });
+    } else { await route.fulfill({ json: { items: notices, total: notices.length } }); }
+  };
+  await page.route('**/management/quota/reset-announcements*', handler);
+  await page.route('**/management/quota', quotaHandler);
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const record = page.getByTestId('oauth-credential-record').filter({ has: page.locator('[data-quota-body="auth-01"]') });
+    await record.getByText('Keep for recovery', { exact: true }).waitFor();
+    await record.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'tmp/reset-advice-before-desktop.png' });
+    const region = page.getByRole('region', { name: 'Active reset announcements' });
+    await region.getByRole('button', { name: 'Register reset announcement' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Register reset announcement' });
+    await dialog.waitFor();
+    await dialog.getByLabel('Provider identifier').fill('codex');
+    const future = new Date(now + 2 * 3_600_000);
+    const localTime = future.toISOString().slice(0, 16);
+    await dialog.locator('input[type="datetime-local"]').fill(localTime);
+    await dialog.getByRole('combobox', { name: 'Confidence' }).click();
+    await page.locator('.ant-select-dropdown:visible').getByText('Confirmed', { exact: true }).click();
+    await dialog.getByLabel('Original announcement').fill('Public announcement for layout verification');
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await settleLayout(page);
+      check('announcement form fits viewport ' + width, await dialog.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= window.innerWidth && element.scrollWidth <= element.clientWidth + 1;
+      }));
+    }
+    await dialog.getByRole('button', { name: 'Register', exact: true }).click();
+    await region.getByText('Public announcement for layout verification').waitFor();
+    await page.locator('.omc-toast').filter({ hasText: 'Announcement registered' }).waitFor({ state: 'hidden' });
+    await region.scrollIntoViewIfNeeded();
+    await settleLayout(page);
+    check('announcement result fits the phone viewport', await region.evaluate((element) => element.scrollWidth <= element.clientWidth + 1));
+    await record.getByText('Use before expiry', { exact: true }).waitFor();
+    check('registering a notice refreshes the row advice without reload', await record.locator('[data-reset-advice="use_before_expiry"]').count() === 1);
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await record.scrollIntoViewIfNeeded();
+      await settleLayout(page);
+      await page.screenshot({ path: 'tmp/reset-advice-after-' + width + '.png' });
+      await record.getByRole('button', { name: /^Details:/ }).click();
+      const detail = page.locator('[data-reset-advice-detail="true"]');
+      await detail.getByText('Conflicting evidence', { exact: true }).waitFor();
+      check('advice retains both sources at width ' + width,
+        await detail.getByRole('region', { name: 'Local observation' }).count() === 1
+        && await detail.getByRole('region', { name: 'Announcement evidence' }).count() === 1);
+      check('advice fits viewport ' + width, await detail.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+      await detail.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: 'tmp/reset-advice-detail-' + width + '.png' });
+      await page.keyboard.press('Escape');
+      await detail.waitFor({ state: 'hidden' });
+    }
+  } finally {
+    await page.unroute('**/management/quota/reset-announcements*', handler);
+    await page.unroute('**/management/quota', quotaHandler);
+  }
 }
 
 
@@ -938,10 +1023,20 @@ async function verifyWorkspaceScale({ base, page, check }) {
     peakBatches = Math.max(peakBatches, activeBatches);
     if (batches.length === 1) await new Promise(resolve => pendingBatches.push(resolve));
     activeBatches -= 1;
+    for (const index of indexes) {
+      const item = scaleQuota.find((entry) => entry.auth_index === index);
+      item.last_success_at_ms = item.observed_at_ms;
+      item.last_refresh = {
+        outcome: index === 'scale-7' ? 'failed' : index === 'scale-13' ? 'rate_limited' : 'success',
+        attempted_at_ms: Date.now(),
+        ...(index === 'scale-7' ? { http_status: 483 } : {}),
+        ...(index === 'scale-13' ? { http_status: 429, retry_at_ms: Date.now() + 120_000 } : {}),
+      };
+    }
     const quotas = indexes
       .filter((index) => index !== 'scale-13')
       .map((index) => ({ ...scaleQuota.find((item) => item.auth_index === index),
-        ...(index === 'scale-7' ? { status: 'error', error: `Fixture upstream failure (refresh ${Math.ceil(batches.length / 3)})` } : {}),
+        ...(index === 'scale-7' ? { status: 'error', error: `HTTP 483: Fixture upstream failure (refresh ${Math.ceil(batches.length / 3)})` } : {}),
       }));
     await route.fulfill({ json: { status: 'ok', quotas, total: indexes.length, results: indexes.map((index) => {
       const quota = quotas.find((item) => item.auth_index === index);
@@ -991,6 +1086,26 @@ async function verifyWorkspaceScale({ base, page, check }) {
         && report.includes('retry at') && !report.includes('rate_limited_backoff')
         && !report.includes('scale-13'), report);
     await page.screenshot({ path: 'tmp/oauth-quota-refresh-report.png' });
+    const failedRow = page.locator('[data-testid="oauth-credential-record"][data-auth-index="scale-7"]');
+    await until(async () => (await failedRow.innerText()).includes('Refresh failed'), { label: 'failed attempt reaches the stored overview' });
+    check('a failed refresh preserves the reading and changes its row and summary',
+      (await failedRow.innerText()).includes('HTTP 483')
+        && (await failedRow.innerText()).includes('Last successful reading')
+        && !(await failedRow.locator('[data-quota-body]').innerText()).includes('Normal')
+        && (await page.locator('[data-quota-summary="refresh_failed"]').innerText()).includes('1')
+        && (await page.locator('[data-quota-summary="rate_limited"]').innerText()).includes('1'));
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await failedRow.scrollIntoViewIfNeeded();
+      await settleLayout(page);
+      const detailFits = await failedRow.locator('[data-quota-body]').evaluate((body) => Array.from(body.querySelectorAll('span')).filter((span) => span.textContent.includes('Last successful reading')).every((span) => span.scrollWidth <= span.clientWidth + 1));
+      check(`last successful reading is fully visible at ${width}px`, detailFits);
+      check(`failed refresh at ${width}px stays within the viewport`, await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({ path: `tmp/quota-refresh-status-${width}.png`, fullPage: true });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await settleLayout(page);
     // Exercise the real copy action without depending on the machine's clipboard permission.
     await page.evaluate(() => Object.defineProperty(navigator, 'clipboard', {
       configurable: true, value: { writeText: async () => {} },
@@ -1035,6 +1150,14 @@ async function verifyWorkspaceScale({ base, page, check }) {
       await page.getByTestId('quota-operation-report').count() === 1 && await page.locator('.omc-toast').count() === 1);
     await page.getByTestId('quota-operation-report').locator('.ant-notification-notice-close').click();
     await page.getByTestId('quota-operation-report').waitFor({ state: 'detached' });
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const summary = page.locator('[data-quota-summary="refresh_failed"]').locator('..');
+      await summary.scrollIntoViewIfNeeded();
+      await settleLayout(page);
+      await summary.screenshot({ path: `tmp/quota-refresh-summary-${width}.png` });
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
     // A hard navigation ends the copy fixture's synthetic authorization before the scale sessions.
     await page.goto(`${base}/oauth-management?page_size=48&density=compact`, { waitUntil: 'domcontentloaded' });
     await page.getByTestId('oauth-credential-record').first().waitFor();

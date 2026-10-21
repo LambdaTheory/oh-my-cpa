@@ -24,6 +24,8 @@ import styles from './QuotaPresentation.module.css';
 import { Meter } from '../../components/common/Meter';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import { claudeResetGrantSummary } from '../../utils/quotaResets';
+import { ResetAdviceTag } from './ResetAdviceView';
+import { quotaRefreshReasonLabel } from '../../utils/quotaStatus';
 
 interface CompactQuotaViewProps {
   item: QuotaItem;
@@ -76,7 +78,8 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
       data-quota-unsupported={!item.capabilities?.refresh_supported ? 'true' : undefined}
     >
       <div className={styles.head}>
-        {quotaStatusTag(item, t)}
+        {quotaStatusTag(item, t, nowMS)}
+        <ResetAdviceTag advice={item.reset_advice} />
         {planText && <span className={styles.plan}>{planText}</span>}
         {item.plan?.subscription_active === false && (
           <span className={styles.plan} data-subscription-inactive="true">{t('quota.subscription_inactive')}</span>
@@ -110,7 +113,15 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
           </span>
         )}
         <span className={styles.observed}>{formatObservedAgo(item.observed_at_ms, nowMS, t)}</span>
+
       </div>
+        {item.last_refresh && item.last_refresh.outcome !== 'success' && (
+          <span className={styles['refresh-detail']}>
+            {quotaRefreshReasonLabel(item.last_refresh, t)} ·
+            {item.last_refresh.retry_at_ms ? `${t('quota.refresh_retry_at', { time: formatShortDateTime(item.last_refresh.retry_at_ms) })} · ` : ''}
+            {t('quota.last_success', { time: item.last_success_at_ms ? formatShortDateTime(item.last_success_at_ms) : t('advice.unknown') })}
+          </span>
+        )}
 
       {cooldownDiagnostic && (
         <div className={`${styles['rec-banner']} ${styles['rec-banner-danger']}`}>

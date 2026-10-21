@@ -520,6 +520,17 @@ rendering hole: the shape promises a full week.
 
 ### Credential quota
 
+Credential rows and the dashboard use the same refresh/freshness vocabulary. A failed or
+rate-limited attempt overrides an older successful reading; the list retains its values and
+shows the last successful reading time, bounded failure reason, safe HTTP status and retry
+instant when available. Unknown reasons include a redacted, limited-length tooltip summary.
+Expired evidence says Data stale. The workspace summary uses disjoint status counts whose
+sum is the credential inventory, including disabled and unread credentials. CPA file problems
+belong to the error count even when their last quota reading was healthy.
+The dashboard retains windows for refresh failures, rate limits and stale readings, labels
+their trust warning above neutral-colored meters, and does not subtract them from serving
+solely for that warning. File unavailability, reauthentication and active cooldown still block.
+
 The panel beside the activity grid answers the one question a dashboard can usefully ask of a
 credential fleet: what can still serve, and what is about to stop. A count of credentials would say
 that something is wrong and stop there — the reader's next question is always which credential, why,

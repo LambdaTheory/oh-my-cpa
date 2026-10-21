@@ -1,4 +1,4 @@
-import { matchesStatusFilter, providerOf, type AuthFileSortKey, type AuthFileStatusFilter } from '../../components/authFiles/authFileLogic';
+import { isAuthFileDisabled, isAuthFileProblem, matchesStatusFilter, providerOf, type AuthFileSortKey, type AuthFileStatusFilter } from '../../components/authFiles/authFileLogic';
 import { getCredentialProviderMetadata } from '../../components/common/providerMetadata';
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { PluginItem } from '../../types/plugin';
@@ -7,6 +7,7 @@ import type { QuotaItem } from '../../types/quota';
 import type { OllamaAccountDTO, OllamaQuotaDTO } from '../../types/ollama';
 import { credentialLabel } from '../../utils/credentialLabel';
 import { hasAvailableQuotaReset } from '../../utils/quotaResets';
+import { resolveQuotaStatus, type QuotaDisplayStatus } from '../../utils/quotaStatus';
 
 export type OAuthWorkspaceDensity = 'compact' | 'expanded';
 export type OAuthWorkspaceQuotaFilter =
@@ -29,6 +30,8 @@ export type OAuthWorkspaceQuotaMatch =
   | 'missing-quota';
 
 export type OAuthWorkspaceQuotaCondition =
+  | 'refresh_failed'
+  | 'rate_limited'
   | 'healthy'
   | 'warning'
   | 'exhausted'
@@ -243,8 +246,10 @@ function conditionFromWindows(item: QuotaItem): OAuthWorkspaceQuotaCondition {
   return 'exhausted';
 }
 
-export function quotaConditionOf(item: QuotaItem | undefined): OAuthWorkspaceQuotaCondition {
+export function quotaConditionOf(item: QuotaItem | undefined, nowMS = Date.now()): OAuthWorkspaceQuotaCondition {
   if (!item) return 'unobserved';
+  const status = resolveQuotaStatus(item, nowMS);
+  if (status === 'refresh_failed' || status === 'rate_limited' || status === 'stale') return status;
   if (item.status === 'loading') return 'loading';
   if (item.active_cooldown?.is_active || item.status === 'cooldown') return 'cooldown';
   if (item.status === 'exhausted') return 'exhausted';
@@ -257,7 +262,8 @@ export function quotaConditionOf(item: QuotaItem | undefined): OAuthWorkspaceQuo
 }
 
 export function isQuotaAttention(condition: OAuthWorkspaceQuotaCondition): boolean {
-  return condition === 'warning'
+  return condition === 'refresh_failed' || condition === 'rate_limited' || condition === 'stale'
+    || condition === 'warning'
     || condition === 'exhausted'
     || condition === 'cooldown'
     || condition === 'error'
@@ -277,6 +283,7 @@ export function buildOAuthWorkspaceProjection(
   choices: OAuthProviderChoice[],
   ollamaAccounts: OllamaAccountDTO[] = [],
   ollamaQuotas: OllamaQuotaDTO[] = [],
+  nowMS = Date.now(),
 ): OAuthWorkspaceProjection {
   const fileNames = countValues(files.map((file) => file.name.trim()).filter(Boolean));
   const fileIndexes = countValues(files.map((file) => file.auth_index ?? '').filter(Boolean));
@@ -317,7 +324,7 @@ export function buildOAuthWorkspaceProjection(
 
     const uniqueFileTarget = nameCount === 1;
     const uniqueIndex = Boolean(authIndex) && indexCount === 1 && (quotaIndexes.get(authIndex ?? '') ?? 0) <= 1;
-    const condition = quota ? quotaConditionOf(quota) : 'unobserved';
+    const condition = quota ? quotaConditionOf(quota, nowMS) : 'unobserved';
     const unsupported = quota ? !quota.capabilities?.refresh_supported : false;
     const displayProvider = canonicalDisplayProviderKey(file, quota);
     const fileBacked = !file.runtime_only;
@@ -383,13 +390,24 @@ export function buildOAuthWorkspaceProjection(
 
   const ollamaRecords: OAuthWorkspaceRecord[] = ollamaAccounts.map((account): OAuthWorkspaceRecord => {
     const quotaSnapshot = ollamaQuotaMap.get(account.id);
-    const quotaItem: QuotaItem | undefined = quotaSnapshot?.quota ?? undefined;
+    let quotaItem: QuotaItem | undefined = quotaSnapshot?.quota ?? undefined;
     const authIndex = `ollama:${account.id}`;
-    const condition = quotaItem ? quotaConditionOf(quotaItem) : 'unobserved';
     const statusNormalized = (account.status ?? '').trim().toLowerCase();
     const isProblem = statusNormalized === 'auth_invalid'
       || statusNormalized === 'transport_error'
       || statusNormalized === 'parse_error';
+    if (isProblem) {
+      const base: QuotaItem = quotaItem ?? {
+        auth_index: authIndex, name: account.label ?? '', provider: 'ollama', type: 'ollama',
+        disabled: !account.enabled, status: 'idle', windows: [], observed_at_ms: 0, quota_exceeded: false,
+        capabilities: { refresh_supported: true, clear_cooldown_supported: false, reset_credit_supported: false },
+        recommendation: { status: 'idle', priority: 'none', action: 'none', reason: '' },
+      };
+      quotaItem = { ...base, last_success_at_ms: account.last_success_at_ms ?? undefined, last_refresh: {
+        outcome: 'failed', attempted_at_ms: account.newest_error_at_ms ?? account.last_observed_at_ms ?? 0,
+      } };
+    }
+    const condition = quotaItem ? quotaConditionOf(quotaItem, nowMS) : 'unobserved';
 
     // Synthesize a minimal ManagementAuthFile projection strictly for table column contracts
     // Never send this object to CPA backend APIs!
@@ -588,6 +606,18 @@ export function workspaceProviderCounts(records: OAuthWorkspaceRecord[]): Record
   const counts: Record<string, number> = { all: records.length };
   for (const record of records) {
     counts[record.displayProvider] = (counts[record.displayProvider] ?? 0) + 1;
+  }
+  return counts;
+}
+
+// Disjoint buckets keep the strip exhaustive, including credentials without readings.
+export function countWorkspaceQuotaStatuses(records: OAuthWorkspaceRecord[], nowMS = Date.now()): Partial<Record<QuotaDisplayStatus, number>> {
+  const counts: Partial<Record<QuotaDisplayStatus, number>> = {};
+  for (const record of records) {
+    const status = isAuthFileDisabled(record.file) ? 'disabled'
+      : isAuthFileProblem(record.file) ? 'error'
+      : record.quota ? resolveQuotaStatus(record.quota, nowMS) : 'idle';
+    counts[status] = (counts[status] ?? 0) + 1;
   }
   return counts;
 }

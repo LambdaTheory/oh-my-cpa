@@ -97,6 +97,7 @@ const FIXED_ROUTES = new Map([
   ['/api/v1/feishu/status', 'feishu-status'],
   ['/api/v1/management/dashboard/predictions', 'dashboard-predictions'],
   ['/api/v1/management/quota', 'quota'],
+  ['/api/v1/management/quota/reset-announcements', 'reset-announcements'],
   ['/api/v1/management/quota/warmup/settings', 'warmup-settings'],
   ['/api/v1/management/quota/warmup/credentials/auth-codex-01', 'warmup-codex'],
   ['/api/v1/management/quota/warmup/credentials/auth-codex-02', 'warmup-codex-secondary'],

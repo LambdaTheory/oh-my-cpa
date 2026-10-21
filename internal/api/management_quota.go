@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/reauth"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -22,6 +24,9 @@ import (
 // embedded normalized quota, so older clients still see the summary they expect.
 type QuotaItemDTO struct {
 	quota.NormalizedQuota
+	LastRefresh      *quotaRefreshAttemptDTO               `json:"last_refresh,omitempty"`
+	LastSuccessAtMS  int64                                 `json:"last_success_at_ms,omitempty"`
+	ResetAdvice      *resetAdviceDTO                       `json:"reset_advice,omitempty"`
 	Quota            *managementQuotaObservation           `json:"quota,omitempty"`
 	ModelQuotas      map[string]managementQuotaObservation `json:"model_quotas,omitempty"`
 	QuotaExceeded    bool                                  `json:"quota_exceeded"`
@@ -41,6 +46,14 @@ func (h *Handler) getQuotaOverview(writer http.ResponseWriter, request *http.Req
 	if err != nil {
 		writeCPAFacadeError(writer, err)
 		return
+	}
+	advice, err := h.consoleResetAdvice(request.Context(), "")
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	for index := range overview.Quotas {
+		overview.Quotas[index].ResetAdvice = advice[overview.Quotas[index].AuthIndex]
 	}
 	writeJSON(writer, http.StatusOK, overview)
 }
@@ -327,10 +340,11 @@ func (h *Handler) loadPriorNormalizedQuota(ctx context.Context, authIndex string
 // normalizedQuotaFromSnapshot rebuilds the prior reading a refresh starts from.
 func normalizedQuotaFromSnapshot(authIndex string, snapshot repository.QuotaSnapshotRecord) *quota.NormalizedQuota {
 	q := &quota.NormalizedQuota{
-		AuthIndex:    authIndex,
-		Provider:     snapshot.Provider,
-		Status:       snapshot.Status,
-		ObservedAtMS: snapshot.ObservedAtMS,
+		AuthIndex:         authIndex,
+		Provider:          snapshot.Provider,
+		Status:            snapshot.Status,
+		ObservedAtMS:      snapshot.ObservedAtMS,
+		ResetGrantsStatus: quota.ResetGrantsStatus(snapshot.ResetGrantsStatus),
 	}
 	if plan := planFromSnapshot(snapshot); plan != nil {
 		q.Plan = plan
@@ -438,17 +452,18 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		}
 	}
 	if err := h.repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{
-		WarmupJSON:       warmupJSON,
-		AuthIndex:        q.AuthIndex,
-		Provider:         q.Provider,
-		Status:           q.Status,
-		PlanType:         planType,
-		PlanTier:         planTier,
-		PlanJSON:         planJSON,
-		WindowsJSON:      winJSON,
-		ResetCreditsJSON: creditsJSON,
-		ResetGrantsJSON:  grantsJSON,
-		ObservedAtMS:     q.ObservedAtMS,
+		WarmupJSON:        warmupJSON,
+		AuthIndex:         q.AuthIndex,
+		Provider:          q.Provider,
+		Status:            q.Status,
+		PlanType:          planType,
+		PlanTier:          planTier,
+		PlanJSON:          planJSON,
+		WindowsJSON:       winJSON,
+		ResetCreditsJSON:  creditsJSON,
+		ResetGrantsJSON:   grantsJSON,
+		ResetGrantsStatus: string(q.ResetGrantsStatus),
+		ObservedAtMS:      q.ObservedAtMS,
 	}); err != nil {
 		return err
 	}
@@ -688,6 +703,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
 			if snapshot, ok := snapshots[authIndex]; ok {
 				normalized.ObservedAtMS = snapshot.ObservedAtMS
+				normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 				// See buildQuotaOverview: an empty reading survives only through the stored status.
 				normalized.Status = snapshot.Status
 				if plan := planFromSnapshot(snapshot); plan != nil {
@@ -726,11 +742,44 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		}
 	}
 
+	advice, err := h.consoleResetAdvice(ctx, authIndex)
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	var lastRefresh *quotaRefreshAttemptDTO
+	var lastSuccessAtMS int64
+	if h.repo != nil {
+		attempts, err := h.repo.GetQuotaRefreshAttempts(ctx, []string{authIndex})
+		if err != nil {
+			writeInternalError(writer, err)
+			return
+		}
+		lastRefresh = projectQuotaRefreshAttempt(attempts[authIndex])
+		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
+			lastSuccessAtMS = snapshots[authIndex].ObservedAtMS
+		}
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"quota":        normalized,
+		"quota":        QuotaItemDTO{NormalizedQuota: normalized, ResetAdvice: advice[authIndex], LastRefresh: lastRefresh, LastSuccessAtMS: lastSuccessAtMS},
 		"history":      history,
 		"model_quotas": projectModelQuotas(targetFile.ModelQuotas),
 	})
+}
+
+func (h *Handler) consoleResetAdvice(ctx context.Context, authIndex string) (map[string]*resetAdviceDTO, error) {
+	result := map[string]*resetAdviceDTO{}
+	if h.repo == nil {
+		return result, nil
+	}
+	advice, err := h.operationsService().ConsoleResetAdvice(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.ResetAdviceInput{AuthIndex: authIndex})
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range advice.Items {
+		result[item.AuthIndex] = projectResetAdvice(item)
+	}
+	return result, nil
 }
 
 type quotaOverviewData struct {
@@ -758,9 +807,14 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 	nowMS := h.now().UnixMilli()
 	var latestSnapshots map[string]repository.QuotaSnapshotRecord
+	var latestAttempts map[string]repository.QuotaRefreshAttempt
 	var activeCooldowns map[string]repository.ActiveCooldownRecord
 
 	if h.repo != nil && len(authIndexes) > 0 {
+		latestAttempts, err = h.repo.GetQuotaRefreshAttempts(ctx, authIndexes)
+		if err != nil {
+			return quotaOverviewData{}, err
+		}
 		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, authIndexes); err == nil {
 			latestSnapshots = snapshots
 		}
@@ -817,6 +871,7 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		if snapshot, ok := latestSnapshots[authIndex]; ok {
 			normalized.ObservedAtMS = snapshot.ObservedAtMS
+			normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 			// The stored status is what the last read produced, and an empty reading is only
 			// knowable from it: without it the evaluation below recomputes the credential as one
 			// nobody has read, and the console asks for a repeat of a read that already happened.
@@ -874,6 +929,8 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		dto := QuotaItemDTO{
 			NormalizedQuota: normalized,
+			LastRefresh:     projectQuotaRefreshAttempt(latestAttempts[authIndex]),
+			LastSuccessAtMS: latestSnapshots[authIndex].ObservedAtMS,
 			Quota:           projectQuota(file.Quota),
 			ModelQuotas:     projectModelQuotas(file.ModelQuotas),
 		}

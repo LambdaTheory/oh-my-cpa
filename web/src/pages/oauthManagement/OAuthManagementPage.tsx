@@ -1,3 +1,4 @@
+import { QUOTA_STATUS_LABELS } from '../../utils/quotaStatus';
 import { ActionMenu } from '../../components/common/ActionMenu';
 import React from 'react';
 import { useBlocker } from 'react-router-dom';
@@ -30,11 +31,6 @@ import { isDemoMode } from '../../types/demoMode';
 import { pluginOAuthLogoFor, pluginOAuthProviderLogos } from '../../types/pluginOAuthProviders';
 import { providerFilterTabs } from '../../types/credentialProviders';
 import type { AuthFileSortKey, AuthFileStatusFilter } from '../../components/authFiles/authFileLogic';
-import {
-  isAuthFileDisabled,
-  isAuthFileHealthy,
-  isAuthFileProblem,
-} from '../../components/authFiles/authFileLogic';
 import { AuthFileDetailDrawer } from '../../components/authFiles/AuthFileDetailDrawer';
 import { BatchActionBar } from '../../components/authFiles/BatchActionBar';
 import { CredentialWarmup, WarmupSettingsDrawer } from '../../components/authFiles/CredentialWarmup';
@@ -47,6 +43,7 @@ import type { OllamaAccountDTO, OllamaAccountWritePayload } from '../../types/ol
 import { ProviderFilterTabs } from '../../components/common/ProviderFilterTabs';
 import { oauthProviderChoices } from '../oauthProviderLogic';
 import { CompactQuotaView } from '../quota/CompactQuotaView';
+import { ResetAnnouncements } from '../quota/ResetAnnouncements';
 import { CredentialQuotaBody } from '../quota/CredentialQuotaBody';
 import { VertexImportModal } from '../../components/authFiles/VertexImportModal';
 import { OAuthConnectPanel } from './OAuthConnectPanel';
@@ -55,6 +52,7 @@ import { useOAuthSessions } from './useOAuthSessions';
 import { useOAuthWorkspaceActions } from './useOAuthWorkspaceActions';
 import {
   buildOAuthWorkspaceProjection,
+  countWorkspaceQuotaStatuses,
   buildQuotaRefreshTargets,
   consumeOneShotIntent,
   filterOAuthWorkspaceRecords,
@@ -173,12 +171,14 @@ export const OAuthManagementPage: React.FC = () => {
       choices,
       ollamaAccountsQuery.data?.accounts ?? [],
       ollamaQuotaQuery.data?.accounts ?? [],
+      visibleNow,
     ),
     [
       choices,
       filesQuery.data?.files,
       ollamaAccountsQuery.data?.accounts,
       ollamaQuotaQuery.data?.accounts,
+      visibleNow,
       quotaQuery.data?.quotas,
     ],
   );
@@ -423,9 +423,7 @@ export const OAuthManagementPage: React.FC = () => {
   }, [ollamaAccountsQuery, ollamaQuotaQuery, pluginsQuery, queryClient]);
 
   const totalCount = records.length;
-  const disabledCount = records.filter((record) => isAuthFileDisabled(record.file)).length;
-  const attentionCount = records.filter((record) => !isAuthFileDisabled(record.file) && (record.isQuotaAttention || isAuthFileProblem(record.file))).length;
-  const healthyCount = records.filter((record) => isAuthFileHealthy(record.file) && !record.isQuotaAttention).length;
+  const statusCounts = countWorkspaceQuotaStatuses(records, visibleNow);
   const knownTotal = filesQuery.isPending ? '—' : totalCount;
 
   const providerTabs = React.useMemo(
@@ -677,29 +675,15 @@ export const OAuthManagementPage: React.FC = () => {
           <span className={styles['summary-total']}>
             {t('af.meta_total', { n: knownTotal })}
           </span>
-          <span className={styles['summary-divider']}>·</span>
-          <span className={styles['summary-healthy']}>
-            <span className={styles['status-dot']} />
-            {t('af.meta_active', { n: filesQuery.isPending ? '—' : healthyCount })}
-          </span>
-          {(filesQuery.isPending || disabledCount > 0) && (
-            <>
+          {Object.entries(statusCounts).map(([status, count]) => (
+            <React.Fragment key={status}>
               <span className={styles['summary-divider']}>·</span>
-              <span className={styles['summary-disabled']}>
+              <span className={styles[status === 'healthy' ? 'summary-healthy' : status === 'disabled' ? 'summary-disabled' : 'summary-attention']} data-quota-summary={status}>
                 <span className={styles['status-dot']} />
-                {t('af.meta_disabled', { n: filesQuery.isPending ? '—' : disabledCount })}
+                {t(QUOTA_STATUS_LABELS[status as keyof typeof QUOTA_STATUS_LABELS])} {count}
               </span>
-            </>
-          )}
-          {(filesQuery.isPending || attentionCount > 0) && (
-            <>
-              <span className={styles['summary-divider']}>·</span>
-              <span className={styles['summary-attention']}>
-                <span className={styles['status-dot']} />
-                {t('omc.quota_filter_attention')} {filesQuery.isPending ? '—' : attentionCount}
-              </span>
-            </>
-          )}
+            </React.Fragment>
+          ))}
         </div>
       </PageHeader>
 
@@ -1029,6 +1013,8 @@ export const OAuthManagementPage: React.FC = () => {
           </div>
         </>
       )}
+
+      <ResetAnnouncements />
 
       <OAuthConnectPanel
         open={isConnectOpen}

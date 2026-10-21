@@ -1,0 +1,5 @@
+.panel { min-width: 0; overflow-wrap: anywhere; }
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.reading { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; display: grid; gap: 6px; }
+.reasons { margin: 8px 0; padding-inline-start: 20px; color: var(--muted); }
+.hint { color: var(--muted); margin-bottom: 0; }

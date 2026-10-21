@@ -101,6 +101,8 @@ const (
 // preferences, credential metadata, configuration reads, quota reads and the
 // in-process discovery sweep.
 var demoPolicy = []demoPolicyRule{
+	{http.MethodGet, "/api/v1/management/quota/reset-announcements", demoAllow, ""},
+	{http.MethodPost, "/api/v1/management/quota/reset-announcements", demoRefuse, "Announcement registration is unavailable in the demo"},
 	{http.MethodGet, "/api/v1/custom-icons", demoAllow, ""},
 	{http.MethodGet, "/api/v1/custom-icons/{id}/content", demoAllow, ""},
 	{http.MethodHead, "/api/v1/custom-icons/{id}/content", demoAllow, ""},

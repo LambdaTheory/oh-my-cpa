@@ -402,6 +402,11 @@
 .quota-row-name { grid-area: name; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quota-row-windows {
   grid-area: reading;
+  min-width: 0;
+}
+.quota-reading-warning { display: block; color: var(--warn); font-size: var(--text-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quota-window-readings[data-quota-reading-trusted="false"] .quota-window-fill { background: var(--muted); }
+.quota-window-readings {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;

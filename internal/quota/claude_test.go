@@ -210,7 +210,10 @@ func TestParseClaudeResetGrants(t *testing.T) {
 		`"clears":["five_hour","seven_day"],"paused":false,"usable_now":true,"use_requires_limit":true},` +
 		`{"id":"grant-2","resets_total":1,"resets_left":0,"ends_at":null,"clears":["future_window"]}` +
 		`]}}`
-	grants := ParseClaudeResetGrants([]byte(raw))
+	grants, status := ParseClaudeResetGrants([]byte(raw))
+	if status != ResetGrantsAvailable {
+		t.Fatalf("status = %s", status)
+	}
 	if len(grants) != 2 {
 		t.Fatalf("grants = %+v, want 2", grants)
 	}
@@ -236,7 +239,7 @@ func TestParseClaudeResetGrantsRejectsMalformedBlock(t *testing.T) {
 		raw  string
 	}{
 		{name: "missing block", raw: `{}`},
-		{name: "missing eligible", raw: `{"cedar_ember":{"grants":[]}}`},
+		{name: "missing grants", raw: `{"cedar_ember":{}}`},
 		{name: "bad id", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"BAD ID!","resets_total":1,"resets_left":1}]}}`},
 		{name: "left exceeds total", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_total":1,"resets_left":2}]}}`},
 		{name: "float count", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_total":1.5,"resets_left":1}]}}`},
@@ -246,8 +249,43 @@ func TestParseClaudeResetGrantsRejectsMalformedBlock(t *testing.T) {
 		{name: "non-boolean flag", raw: `{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_total":1,"resets_left":1,"paused":"no"}]}}`},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			if grants := ParseClaudeResetGrants([]byte(testCase.raw)); grants != nil {
+			if grants, _ := ParseClaudeResetGrants([]byte(testCase.raw)); grants != nil {
 				t.Fatalf("ParseClaudeResetGrants = %+v, want nil", grants)
+			}
+		})
+	}
+}
+
+func TestClaudeResetGrantReadingStates(t *testing.T) {
+	const grant = `{"id":"weekly","resets_total":2,"resets_left":1,"ends_at":"2026-10-22T00:00:00Z","clears":["five_hour","seven_day"]}`
+	for _, tc := range []struct {
+		name, body string
+		status     ResetGrantsStatus
+	}{
+		{"eligible", `{"cedar_ember":{"eligible":true,"grants":[` + grant + `]}}`, ResetGrantsAvailable},
+		{"eligible omitted", `{"cedar_ember":{"grants":[` + grant + `]}}`, ResetGrantsAvailable},
+		{"ineligible", `{"cedar_ember":{"eligible":false,"grants":[` + grant + `]}}`, ResetGrantsAvailable},
+		{"empty grants", `{"cedar_ember":{"grants":[]}}`, ResetGrantsUnavailable},
+		{"absent block", `{"five_hour":{"utilization":30}}`, ResetGrantsUnavailable},
+		{"null block", `{"cedar_ember":null}`, ResetGrantsUnavailable},
+		{"explicit ineligible", `{"cedar_ember":{"eligible":false}}`, ResetGrantsUnavailable},
+		{"missing grants", `{"cedar_ember":{"eligible":true}}`, ResetGrantsFailed},
+		{"invalid grants", `{"cedar_ember":{"eligible":false,"grants":{}}}`, ResetGrantsFailed},
+		{"partial grants", `{"cedar_ember":{"grants":[` + grant + `,{"id":"broken","resets_total":null,"resets_left":null}]}}`, ResetGrantsFailed},
+		{"null response", `null`, ResetGrantsFailed},
+		{"malformed response", `{`, ResetGrantsFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			grants, status := ParseClaudeResetGrants([]byte(tc.body))
+			if status != tc.status {
+				t.Fatalf("status=%s want %s", status, tc.status)
+			}
+			if status == ResetGrantsAvailable {
+				if len(grants) != 1 || grants[0].ResetsLeft != 1 || grants[0].EndsAtMS == nil {
+					t.Fatalf("grants=%+v", grants)
+				}
+			} else if len(grants) != 0 {
+				t.Fatalf("untrusted grants=%+v", grants)
 			}
 		})
 	}

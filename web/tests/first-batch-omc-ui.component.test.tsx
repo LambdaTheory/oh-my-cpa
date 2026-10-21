@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App as AntdApp } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -69,6 +69,115 @@ describe('First Batch OMC UI Component Tests', () => {
   });
 
   describe('Lane A: Account Automation', () => {
+    it.each([
+      ['zh-CN', '未上报 7d 数据', '未上报 7d 数据（不参与自动关）', '账号周限额能力未核实，无法自动关停', '缺少可控凭据', '未知状态'],
+      ['en', 'No 7d evidence', 'No 7d evidence (not auto-disabled)', 'Account weekly capability unverified; automatic disable unavailable', 'No controllable credential', 'Unknown status'],
+    ])('explains missing weekly evidence once per capability in %s', async (language, missing, verifiedMissing, capabilityReason, credentialReason, unknownStatus) => {
+      window.localStorage.setItem('omc-lang', language);
+      const accounts = ['unverified', 'uncontrollable', 'verified'].map(capability => ({
+        auth_index: `fixture-${capability}`, account_label: `${capability} account`, is_adopted: true, is_enabled: true,
+        state: capability === 'verified' ? 'future_state' : 'monitoring',
+        auto_disable_supported: capability !== 'unverified',
+        monitor_reason: capability === 'uncontrollable' ? 'no_controllable_credential' : 'no_weekly_evidence',
+        disabled_by_automation: false, attempt_count: 0, has_weekly_evidence: false, intent_version: 1,
+      }));
+      const response: AccountAutomationListResponse = {
+        settings: { enabled: true, web_enabled: true, source: 'web', master_from_env: false, accounts: 3 },
+        accounts, candidates: [],
+      };
+      vi.mocked(api.getAccountAutomation).mockResolvedValue(response);
+      vi.mocked(api.getAccountAutomationSettings).mockResolvedValue(response.settings);
+      renderWithClient(<AccountAutomationDrawer open onClose={() => {}} />);
+      await screen.findByText('verified account');
+      for (const account of accounts) {
+        const row = screen.getByText(account.account_label).closest('div')!.parentElement!.parentElement!;
+        if (account.auth_index === 'fixture-verified') {
+          expect(within(row).getAllByText(verifiedMissing, { exact: true })).toHaveLength(1);
+          expect(row.querySelector('.status-label')!.textContent).toBe(unknownStatus);
+        } else {
+          expect(within(row).getByText(missing, { exact: true })).toBeDefined();
+          expect(within(row).queryByText(verifiedMissing, { exact: true })).toBeNull();
+          const reason = account.auth_index === 'fixture-unverified' ? capabilityReason : credentialReason;
+          expect(within(row).getAllByText(`· ${reason}`, { exact: true })).toHaveLength(1);
+        }
+        expect(row.textContent).not.toContain('no_weekly_evidence');
+        expect(row.textContent).not.toContain('future_state');
+      }
+    });
+
+    it.each([true, false])('renders one status and the account setting for every capability/adoption combination (enabled=%s)', async (isEnabled) => {
+      const accounts = [true, false].flatMap(isAdopted => ['verified', 'unverified', 'uncontrollable'].map(capability => ({
+        auth_index: `${capability}-${isAdopted}`,
+        account_label: `${capability} ${isAdopted ? 'adopted' : 'unadopted'}`,
+        is_adopted: isAdopted,
+        is_enabled: isEnabled,
+        state: isEnabled ? 'monitoring' : 'idle',
+        auto_disable_supported: capability !== 'unverified',
+        monitor_reason: capability === 'uncontrollable' ? 'no_controllable_credential'
+          : capability === 'unverified' ? 'unverified_account_weekly_capability' : 'switch_off',
+        disabled_by_automation: false,
+        attempt_count: 0,
+        has_weekly_evidence: capability === 'verified',
+        intent_version: 1,
+      })));
+      const response: AccountAutomationListResponse = {
+        settings: { enabled: true, web_enabled: true, source: 'web', master_from_env: false, accounts: accounts.length },
+        accounts,
+        candidates: accounts.map(account => ({
+          auth_index: account.auth_index, disabled: false, controllable: !account.auth_index.startsWith('uncontrollable'),
+          adopted: account.is_adopted, adoptable: !account.auth_index.startsWith('uncontrollable'),
+          auto_disable_supported: account.auto_disable_supported,
+        })),
+      };
+      vi.mocked(api.getAccountAutomation).mockResolvedValue(response);
+      vi.mocked(api.getAccountAutomationSettings).mockResolvedValue(response.settings);
+      vi.mocked(api.putAccountAutomationAccount).mockResolvedValue(accounts[1]);
+      renderWithClient(<AccountAutomationDrawer open onClose={() => {}} />);
+      await screen.findByText(accounts[0].account_label);
+      for (const account of accounts) {
+        const row = screen.getByText(account.account_label).closest('div')!.parentElement!.parentElement!;
+        const statuses = row.querySelectorAll('.status-label');
+        expect(statuses).toHaveLength(1);
+        const isMonitorOnly = !account.auto_disable_supported || account.monitor_reason === 'no_controllable_credential';
+        expect(statuses[0].textContent).toBe(!account.is_adopted ? '未接管'
+          : isMonitorOnly ? (isEnabled ? '只监控' : '只监控 · 开关已关') : (isEnabled ? '监控中' : '空闲'));
+        const control = within(row).getByRole('switch', { name: account.account_label }) as HTMLButtonElement;
+        expect(control.disabled).toBe(!account.is_adopted);
+        expect(control.getAttribute('aria-checked')).toBe(String(isEnabled));
+        expect(within(row).queryAllByText(/账号周限额能力未核实，无法自动关停/)).toHaveLength(account.is_adopted && !account.auto_disable_supported ? 1 : 0);
+        expect(within(row).queryAllByText(/缺少可控凭据/)).toHaveLength(account.is_adopted && account.monitor_reason === 'no_controllable_credential' ? 1 : 0);
+        expect(row.textContent).not.toContain('能力未核实暂监控');
+      }
+      fireEvent.click(screen.getByRole('switch', { name: accounts[1].account_label }));
+      await waitFor(() => expect(api.putAccountAutomationAccount).toHaveBeenCalledWith(accounts[1].auth_index, { enabled: !isEnabled }));
+    });
+
+    it.each([false, true])('explains adopted accounts absent from a successful inventory without guessing on degradation (%s)', async (isDegraded) => {
+      const accounts = Array.from({ length: 13 }, (_, index) => ({
+        auth_index: `fixture-${index}`, account_label: `Account ${index}`, is_adopted: true, is_enabled: true,
+        state: 'idle', auto_disable_supported: index !== 0, disabled_by_automation: false,
+        attempt_count: 0, has_weekly_evidence: false, intent_version: 1,
+      }));
+      const response: AccountAutomationListResponse = {
+        settings: { enabled: true, web_enabled: true, source: 'web', master_from_env: false, accounts: 13 },
+        accounts, candidates_degraded: isDegraded,
+        candidates: isDegraded ? [] : accounts.slice(0, 12).map(account => ({
+          auth_index: account.auth_index, disabled: false, controllable: true, adopted: true, adoptable: true,
+          auto_disable_supported: account.auto_disable_supported,
+        })),
+      };
+      vi.mocked(api.getAccountAutomation).mockResolvedValue(response);
+      vi.mocked(api.getAccountAutomationSettings).mockResolvedValue(response.settings);
+      renderWithClient(<AccountAutomationDrawer open onClose={() => {}} />);
+      await screen.findByText('Account 12');
+      expect(screen.getByText('已接管', { selector: 'div' }).parentElement!.textContent).toBe(isDegraded ? '已接管13' : '已接管13其中 1 个不在网关');
+      expect(screen.getByText('凭证共').parentElement!.textContent).toBe(isDegraded ? '凭证共—' : '凭证共12');
+      expect(screen.getByText(isDegraded ? '已接管 13 / 凭证共 —' : '已接管 13 / 凭证共 12 · 其中 1 个不在网关')).toBeDefined();
+      expect(screen.queryAllByText(/其中 .* 个不在网关/)).toHaveLength(isDegraded ? 0 : 2);
+      const idleMonitor = screen.getByText('Account 0').closest('div')!.parentElement!.parentElement!;
+      expect(idleMonitor.querySelector('.status-label')!.textContent).toBe('只监控');
+    });
+
     it('empty roster with live candidates allows adoption and sends correct payload', async () => {
       const mockResponse: AccountAutomationListResponse = {
         settings: {
@@ -233,7 +342,7 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(screen.getByText('Recovered account')).toBeDefined();
 
       expect(screen.getByText('External account')).toBeDefined();
-      expect(screen.getByText('外部停用')).toBeDefined();
+      expect(screen.getByText(/外部手动停用/)).toBeDefined();
     });
 
     it('identifies canonical missing_reset, opens manual reset entry, validates future time, and posts reset_at_ms', async () => {

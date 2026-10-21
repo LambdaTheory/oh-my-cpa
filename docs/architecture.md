@@ -2133,6 +2133,24 @@ the resulting snapshot is normalized and stored in `quota_snapshots`. Quota obse
 and the fixed credential warmup adapters are the only server-initiated CPA request
 proxies (ADR 0097): there is no user-supplied URL or generic `/api-call` surface.
 
+Migration 051 adds `quota_refresh_attempts`, one latest attempt per credential, independent
+of successful snapshots. Manual, interval and adaptive refresh paths record success, failure
+or rate limiting, the attempt instant, an optional HTTP status code and the effective retry
+instant. Migration 052 adds a bounded failure reason (timeout, network, auth, HTTP, parse,
+or unknown) and a redacted, at most 240-character summary for unknown failures; raw upstream
+error bodies are never stored in this table. Overview and detail DTOs expose
+`last_refresh` and `last_success_at_ms`; passive observations cannot clear a failed active
+attempt. The snapshot success gate and provider backoff are unchanged.
+
+The console leaf module `web/src/utils/quotaStatus.ts` resolves refresh outcomes before
+reading freshness and snapshot status. CPA freshness is one quarter of the shortest reported
+window, bounded to two through four hours: the lower bound accommodates one adaptive idle
+cycle, and the upper bound is two idle cycles. Ollama uses thirty minutes, two collection
+cycles. These display evidence limits do not change automation eligibility or scheduling.
+File-level CPA problems remain excluded from the workspace's normal count. The dashboard
+counts refresh failures, rate limiting and stale readings as data-quality warnings rather
+than service blockers, keeps their windows visible, and marks those readings untrusted.
+
 Beside that refresh path, the rate-limit headers an upstream already publishes on every
 response are read without any probe. `internal/quota/passive.go` parses them, and
 `repository.CommitUsageDecoded` writes the resulting windows into `quota_observations`
@@ -2260,8 +2278,8 @@ attempt is `interval_minutes` old, less a thirty-second slack for the observatio
 stamped after its tick. Due credentials - reset-driven first,
 then oldest reading first, at most sixteen per round and four at a time - go through
 `RefreshCredentialQuota` and `persistNormalizedQuotaSnapshot`, exactly as a manual
-refresh does. Attempts are remembered in process memory because a failed read is not
-persisted, and a round failure is logged when it starts or changes rather than every
+refresh does. Scheduling attempts are remembered in process memory; the latest display outcome is
+persisted separately from successful snapshots, and a round failure is logged when it starts or changes rather than every
 minute. `app.Run` joins the loop before returning, as it does the pipeline. Disabled credentials, providers without a probe, duplicated `auth_index`
 claims and Meta (whose observation is an audited key exchange) are skipped. The
 preference API refuses any document for this key other than
@@ -2291,8 +2309,12 @@ The live candidate projection keeps roster admission separate from action capabi
 can address; `auto_disable_supported` means the provider also has a verified account-level
 weekly mapping. Candidate and roster projections both expose the capability fact. Every
 controllable credential can therefore join the roster, while an unverified provider is
-persisted in `monitoring` with `unverified_account_weekly_capability` and separately
-displayed as monitor-only. The capability registry remains an invariant on
+persisted in `monitoring` with `unverified_account_weekly_capability` and displayed with
+one monitor-only row status, including a switch-off qualifier when its account setting
+is off. A missing controllable credential also displays monitor-only. Each row explains
+its capability limitation once. The roster count keeps historical adopted accounts and
+annotates those absent from the live inventory in both statistics and footer; degraded
+inventory reads leave the total and absence count unknown. The capability registry remains an invariant on
 the decision and recovery paths, so adoption cannot widen automatic disablement or
 enablement. An uncontrollable credential remains outside the roster even if its auth index
 is submitted directly.
@@ -2419,7 +2441,7 @@ demo never opens the connection.
 `internal/reauth` coordinates recovery of explicitly invalid built-in CPA OAuth credentials. The
 shared quota read records the classified signal even when an automatic refresh cannot
 produce a snapshot; `Handler.recordQuotaSignal` observes it through an idempotent service
-seam. Transport and unknown outcomes cannot create a job. Migration 049 adds
+seam. Transport and unknown outcomes cannot create a job. Migration 053 adds
 `reauth_jobs`, with one open episode per auth index and one running job across the fixed
 contact. Pending jobs queue. Failed and expired jobs retain episode ownership until a
 healthy reading closes it, including when that reading arrives during active work.
@@ -2499,7 +2521,7 @@ succeed before a sensitive effect. The table is hidden from operator SQL queries
 | CPA configuration | `cpa_config_backups`, `cpa_config_backup_settings` | Encrypted copies of the stored CPA configuration file, kept before every configuration write (migration 030, ADR 0037; migration 033 adds each copy's `layout` and `reason` and the single-row retention table, ADR 0051). v8 copies are kept to the operator's retention (default 20, 5–100), pre-v8 copies to the latest ten; `cpa_config_backups` is hidden from `database_query` |
 | Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migration 043. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`); `cycle_reset_at_ms` is execution history unless the current state still owns a recovery plan, and confirmed or external enable paths clear the consumed value. `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
 | Ollama monitoring | `ollama_accounts` | Migration 044. One row per operator account: AES-GCM encrypted session cookie, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries the cookie |
-| Credential recovery | `reauth_jobs` | Migration 049. Safe metadata, invalid-cycle ownership, state, deadlines, notification intent, device display metadata and accepted message identity; no email OTP or token. Hidden from operator queries; receipts are retained |
+| Credential recovery | `reauth_jobs` | Migration 053. Safe metadata, invalid-cycle ownership, state, deadlines, notification intent, device display metadata and accepted message identity; no email OTP or token. Hidden from operator queries; receipts are retained |
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
 | Release observation | `release_index`, `release_check_state` | Migrations 024 and 025; `truncated` is added by 025, so a database that applied 024 before it existed still gains the column. `release_index` holds one row per published version (tag, name, publication time, prerelease flag) and is **replaced as a unit per product** by `PublishReleaseSnapshot`, because a feed that stops listing a withdrawn release must stop the console claiming it exists. `release_check_state` holds one row per product — the last attempt and success times, the redacted failure reason, the latest tag, the ETag and the truncation flag — and is written by `RecordReleaseCheckAttempt`/`PublishReleaseSnapshot`/`RecordReleaseCheckFailure`, read by `ListReleases` and `GetReleaseCheckState(ForRepository)`. A release's prose body is **never stored**: it lives in bounded process memory for the life of the process, so an index without notes still names the versions and links to the source (see §10) |
 
@@ -2563,11 +2585,13 @@ fix a defect with a new migration, never by editing `schema_migrations`
 
 The fork occupies migrations 041–045. A schema 45 deployment keeps those tables
 and advances through 046 (credential warmup), 047 (font library), and 048 (channel
-model prices). The migration backup is created and smoke-tested before 046; each
+model prices), then 049 (reset announcements), 050 (reset grant status), 051–052
+(quota refresh outcomes), and 053 (OAuth reauthentication jobs). The migration backup
+is created and smoke-tested before 046; each
 subsequent migration commits separately. A failed migration stops startup, and
 restoring an older executable requires restoring the matching pre-upgrade database
 backup. The repository's synthetic upgrade test checks both sets of tables, a
-pre-existing fork row, and the gap-free 041–048 upgrade sequence without duplicate
+pre-existing fork row, and the gap-free 041–053 upgrade sequence without duplicate
 versions. Versions 010–014 were never part of this repository's migration history.
 
 ## 10. Background loops
@@ -3551,6 +3575,18 @@ and is superseded by ADR 0024, which records the single latest session that repl
 `scripts/test-playground.ts`, and desktop/phone probes cover this flow. Public-demo
 model reads are generated through the real facade; inference is explicitly refused, while one browser-local recorded example demonstrates the flow (ADR 0092).
 
+## Claude reset grant collection
+
+The fixed supplemental Claude usage GET reads `cedar_ember.grants` independently
+of `eligible`, using the OAuth beta and Claude CLI request headers. Migration 050
+persists `reset_grants_status` beside `reset_grants_json`; the existing quota
+response projects `available`, `unavailable` or `failed`. Historical empty status
+is not inferred from an empty array. Successful quota windows survive supplemental
+failure. Fresh advice explains failure and unpublished entitlements separately,
+without treating either as zero or allowing an announcement to repair uncertainty.
+Only normalized grants and the safe enum persist; upstream error details do not.
+ADR 0112 defines the absent, empty and malformed response boundaries.
+
 ## Read-only reset advice
 
 `internal/quota/reset_advice.go` owns the pure credential-level entitlement decision.
@@ -3567,7 +3603,7 @@ bound is independent of the quota window freshness and cannot be renewed by head
 
 The projection allowlists credential labels, provider/window identity, nullable count,
 expiry and highest valid standard used share, separate observation timestamps,
-nullable cooldown state, an empty announcements array, one verdict, evidence and
+nullable cooldown state, matched announcements, separate local_evidence, one verdict, evidence and
 reason codes. Read-only callers receive masked labels and no auth index; filters,
 the 100-row bound, 32 KiB ceiling and omitted count are owned by operations. Startup
 configuration supplies the expiry horizon through the existing operations wiring.
@@ -3858,3 +3894,39 @@ credential state but refuses policy writes and consumption, and never starts the
 
 Warmup round ordering is oldest observation first. Fleets exceeding a round's capacity
 remain queued rather than increasing concurrency or skipping protection.
+
+## Reset announcement evidence
+
+Migration 049 adds reset_announcements without changing quota_snapshots or previous
+migrations. The repository owns input admission, insertion and paginated reads; the
+handwritten DTOs in internal/api/reset_announcements.go expose only the announcement
+fields through GET/POST /management/quota/reset-announcements. These ordinary management
+routes require a console session; no operations capability is registered. The raw
+operator-entered text is excluded from the read-only SQL capability.
+
+An all scope has no target, model scope has only model, and credential scope has only
+auth_index. The table checks this invariant and stores separate registration/creation
+instants. A single read transaction uses one injected reader clock for count, page and
+active/expired status. A nullable expected_reset_at_ms has no expiration; a non-null
+instant expires inclusively at that boundary. No status column or expiration job exists.
+
+The SQL source domain reserves manual/status_rss/x_api; current ingestion validates
+manual only. Later adapters must preserve the same evidence shape and validate their
+own source admission, without inferring confidence from transport. The read-only advice
+decision is tracked separately in ADR 0109 (PR #52); ADR 0110 records this store and its
+source extension boundary. ADR 0111 defines announcement precedence in reset advice.
+Operations reads every active announcement page at the same anchor, matches provider and
+explicit scope, and preserves the original local verdict and reset boundary. Only trusted
+timed notices within the configured horizon can override known positive eligible capacity;
+unknown/zero balance, disabled/unavailable credentials and unknown local advice cannot.
+Unverified, untimed and outside-horizon notices remain evidence only. A different reset
+instant or an overridden local conclusion is explicitly conflicting evidence.
+
+The existing quota overview and detail handlers project this shared calculation through
+internal/api/reset_advice.go into each quota's reset_advice field. The console projection
+keeps the complete roster; Agent/MCP retain their existing row/byte bounds and omitted count.
+Advice never reads CPA. Announcement output excludes original free text and credential
+scope targets, including for read-only MCP. The quota workspace renders row labels and a
+detail Panel with separate local and announcement sections, then invalidates quota and
+announcement queries after registration. No routing, credential-state or redemption write
+is added.

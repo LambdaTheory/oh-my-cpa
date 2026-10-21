@@ -68,6 +68,7 @@ type TableLifecycle struct {
 // whose rows should roll declares a rule and is deleted by the same batched,
 // horizon-publishing engine as everything else; it does not write its own loop.
 var TABLE_LIFECYCLES = map[string]TableLifecycle{
+	"reset_announcements":        {Kind: LifecyclePermanent, Reason: "operator-registered external evidence remains queryable after expiration"},
 	"channel_model_prices":       {Kind: LifecycleReplaced, Reason: "operator prices keyed by the usage channel and upstream model; history lives in model_price_versions"},
 	"credential_warmup_policies": {Kind: LifecyclePermanent, Reason: "operator-approved scheduling policies, bound to instance and exact credential identity"},
 	"credential_warmup_state":    {Kind: LifecycleOwnerBounded, Reason: "one scheduling record per credential; preserved for restart deduplication"},
@@ -128,6 +129,7 @@ var TABLE_LIFECYCLES = map[string]TableLifecycle{
 	"feishu_channel_tracks":         {Kind: LifecycleReplaced, Reason: "one monitor_down track per provider, upserted in place"},
 	"feishu_account_signals":        {Kind: LifecycleReplaced, Reason: "one enum-only collection outcome per credential, upserted in place"},
 	"reauth_jobs":                   {Kind: LifecyclePermanent, Reason: "credential recovery receipts and invalid-cycle deduplication"},
+	"quota_refresh_attempts":        {Kind: LifecycleReplaced, Reason: "latest bounded refresh result per credential, upserted in place"},
 	"feishu_pending_items":          {Kind: LifecycleOwnerBounded, Reason: "one row per ongoing or recently resolved problem, reconciled in place by the module"},
 	"feishu_notifications":          {Kind: LifecycleOwnerBounded, Reason: "the delivery outbox, trimmed by the module's own prune after it is sent or expires"},
 	"usage_aggregation_checkpoints": {Kind: LifecycleReplaced, Reason: "one watermark row"},

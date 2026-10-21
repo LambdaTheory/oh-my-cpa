@@ -227,3 +227,52 @@ func TestResetAdviceCooldownEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeResetAdvicePersistedReadingStates(t *testing.T) {
+	const grant = `{"id":"weekly","resets_total":2,"resets_left":1,"ends_at":"2026-10-22T00:00:00Z","clears":["five_hour"]}`
+	for _, tc := range []struct {
+		name, body, reason string
+		wantCount          bool
+	}{
+		{"eligible", `{"cedar_ember":{"eligible":true,"grants":[` + grant + `]}}`, "reset_expiring_soon", true},
+		{"eligible omitted", `{"cedar_ember":{"grants":[` + grant + `]}}`, "reset_expiring_soon", true},
+		{"ineligible", `{"cedar_ember":{"eligible":false,"grants":[` + grant + `]}}`, "reset_expiring_soon", true},
+		{"not provided", `{"cedar_ember":{"grants":[]}}`, "reset_not_provided", false},
+		{"absent", `{}`, "reset_not_provided", false},
+		{"failed", `{`, "reset_reading_failed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, ctx, now := resetAdviceFixture(t)
+			seedPredictionResources(t, service.Repo, []domain.DiscoveredResource{predictionResource("synthetic-claude", "Synthetic Claude", "claude")})
+			grants, status := quota.ParseClaudeResetGrants([]byte(tc.body))
+			raw, _ := json.Marshal(grants)
+			seedResetAdviceSnapshot(t, service.Repo, "synthetic-claude", "claude", now, "", string(raw))
+			snapshots, err := service.Repo.GetLatestQuotaSnapshots(ctx, []string{"synthetic-claude"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot := snapshots["synthetic-claude"]
+			snapshot.ID = ""
+			snapshot.ResetGrantsStatus = string(status)
+			if err := service.Repo.SaveQuotaSnapshot(ctx, snapshot); err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.ResetAdvice(ctx, ResetAdviceInput{})
+			if err != nil || len(result.Items) != 1 {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			item := result.Items[0]
+			if !slices.Contains(item.Reasons, tc.reason) {
+				t.Fatalf("item=%+v", item)
+			}
+			if tc.wantCount {
+				expiry := time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC).UnixMilli()
+				if item.Verdict != quota.ResetAdviceUseBeforeExpiry || item.RemainingResets == nil || *item.RemainingResets != 1 || item.EarliestExpiryMS == nil || *item.EarliestExpiryMS != expiry {
+					t.Fatalf("item=%+v", item)
+				}
+			} else if item.Verdict != quota.ResetAdviceUnknown || item.RemainingResets != nil {
+				t.Fatalf("item=%+v", item)
+			}
+		})
+	}
+}

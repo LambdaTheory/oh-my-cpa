@@ -34,14 +34,17 @@ Candidate and roster projections expose two independent facts:
   `no_controllable_credential`.
 - `auto_disable_supported` is true only when the provider owns a verified account-level
   weekly capability in `internal/automation`. The roster uses this field for its
-  monitor-only badge, count and filter; the persisted `monitoring` state retains its
+  monitor-only status, count and filter; the persisted `monitoring` state retains its
   ordinary meaning for every provider.
 
 Every adoptable credential may join the roster. When adoption enables an unverified
 provider, its initial persisted plan is `state=monitoring` and
 `monitor_reason=unverified_account_weekly_capability`, so the reason is visible without
-waiting for a background pass. The console labels the runtime state **Monitoring** and
-separately marks only providers without verified capability as **Monitor only**.
+waiting for a background pass. The console renders one **Monitor only** status for
+providers without verified capability or accounts without a controllable credential,
+with a switch-off qualifier when applicable. Verified controllable accounts retain
+ordinary runtime state labels. Issue #44 refines this presentation; persisted states
+and action admission are unchanged.
 
 The service, not only the browser, excludes uncontrollable credentials submitted to the
 adoption endpoint. The action paths retain ADR 0105's verified-capability and identity
@@ -54,7 +57,8 @@ This compatibility rule preserves already-scheduled takeover work without rewrit
 stored history. Any completed plan with an enable timestamp remains inert.
 
 The inventory summary names both scopes: adopted roster rows and live CPA credentials.
-It does not call the adopted-row count a total account count.
+It annotates adopted accounts absent from a successful live inventory in both statistics
+and footer. An unavailable inventory leaves the total unknown and makes no absence claim.
 
 ## Consequences
 

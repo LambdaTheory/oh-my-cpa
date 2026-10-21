@@ -60,6 +60,7 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"error_events":                  {"body"},
 	"feishu_channel_tracks":         nil,
 	"feishu_account_signals":        nil,
+	"quota_refresh_attempts":        nil,
 	"feishu_notifications":          nil,
 	"feishu_pending_items":          nil,
 	"feishu_settings":               nil,
@@ -91,17 +92,18 @@ var QUERY_READABLE_TABLES = map[string][]string{
 
 // QUERY_HIDDEN_TABLES are never readable, with the reason recorded for the next reviewer.
 var QUERY_HIDDEN_TABLES = map[string]string{
-	"reauth_jobs":        "private credential recovery labels and message identities",
-	"custom_icons":       "operator-uploaded artwork is only returned by the authenticated image endpoint",
-	"fonts":              "the font library is read through its own endpoint",
-	"font_faces":         "font files are binary and only returned by the authenticated face endpoint",
-	"agent_documents":    "encrypted agent conversations and pending operations",
-	"cpa_config_backups": "encrypted copies of CPA configuration files, which carry every secret in them",
-	"cpa_instances":      "the encrypted CPA management key",
-	"ui_preferences":     "operator preferences, including the playground's saved conversation",
-	"usage_inboxes":      "raw usage payloads as CPA published them, which can carry client keys",
-	"ollama_accounts":    "the AES-GCM encrypted Ollama session cookie",
-	"feishu_secrets":     "the AES-GCM encrypted Feishu app secret",
+	"reauth_jobs":         "private credential recovery labels and message identities",
+	"reset_announcements": "operator-entered announcement text is available only through the console announcement endpoint",
+	"custom_icons":        "operator-uploaded artwork is only returned by the authenticated image endpoint",
+	"fonts":               "the font library is read through its own endpoint",
+	"font_faces":          "font files are binary and only returned by the authenticated face endpoint",
+	"agent_documents":     "encrypted agent conversations and pending operations",
+	"cpa_config_backups":  "encrypted copies of CPA configuration files, which carry every secret in them",
+	"cpa_instances":       "the encrypted CPA management key",
+	"ui_preferences":      "operator preferences, including the playground's saved conversation",
+	"usage_inboxes":       "raw usage payloads as CPA published them, which can carry client keys",
+	"ollama_accounts":     "the AES-GCM encrypted Ollama session cookie",
+	"feishu_secrets":      "the AES-GCM encrypted Feishu app secret",
 }
 
 const (

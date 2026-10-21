@@ -34,7 +34,8 @@ recording and recovery refresh; rejected recovery refreshes make no quota call.
 Service tests also enforce account-kind admission directly at `reauth.Observe`.
 Demo export pricing timestamps use the fixed reference instant for runtime-stamped
 writes, with regression coverage for slow seeding and unchanged historical versions.
-Migration tests extend the existing upgrade chain through 049; the historical 010–014
+Migration tests extend the existing upgrade chain through 053, including a 052-to-053
+upgrade preserving reset announcements and enforcing the shared OAuth contact slot; the historical 010–014
 gap remains unchanged. No real group, mailbox or browser participates.
 
 Put each claim in the **lowest layer that can make it fail for the reason its name
@@ -892,6 +893,16 @@ For changes here, run affected self-tests, `pnpm verify`, `pnpm check:ui` and
 
 ### Quota reading coverage
 
+`internal/api/quota_refresh_status_test.go` drives success, failure, rate limiting and recovery
+through the real quota service and overview, retaining successful snapshots across failures.
+The credential-quota component suite owns shared row/dashboard status, exhaustive counts,
+HTTP and non-HTTP diagnostics (including tooltip rendering), last success time and freshness
+boundaries. It also owns exclusion of CPA file problems from normal counts and retention of
+serving counts and untrusted windows when scheduling stops updating readings. The Go suite
+checks bounded reason persistence, unknown-summary redaction and successful-attempt cleanup.
+The existing OAuth workspace
+scale probe owns post-refresh overview/report agreement and desktop/phone screenshots.
+
 `internal/quota` owns what each provider's documents mean. That includes the xAI pair
 (a credits document supplying the window with the ledger's figures kept beside it, either
 document usable alone, a pair with no config failing), Kimi's counted limits and ratio
@@ -906,6 +917,16 @@ owns its triage bucket. The rendering of those readings stays with the existing
 
 ### Reset advice coverage
 
+`internal/quota/claude_test.go` owns grant presence, optional/false eligibility,
+whole-block rejection and safe read outcomes. `internal/quota/service_test.go`
+checks the fixed GET query and headers, timeout/non-2xx failure classification and
+preservation of successful quota windows. Snapshot round trips in
+`internal/api/management_quota_test.go` cover outcome persistence and history.
+`internal/operations/reset_advice_test.go` carries parsed synthetic upstream shapes
+through persistence into count, expiry and distinct failure/unpublished reasons.
+`web/tests/reset-advice.component.test.tsx` verifies localized reasons and the
+Claude list/detail count and earliest expiry. Existing Codex regression claims remain.
+
 `internal/quota/reset_advice_test.go` owns expiry-horizon boundaries, emergency
 precedence at 90%, missing/stale/invalid evidence, known-zero and expired balances,
 and Claude grant scope/count aggregation without double-counting shared grants.
@@ -919,7 +940,14 @@ presence, missing snapshots, row/byte bounds and provider filtering, one conclus
 per credential even under a window-kind filter, empty announcement arrays and
 cooldown true/false/null wire evidence. Configuration
 defaults, overrides and invalid durations belong to `internal/config/reset_advice_test.go`.
-There is no new UI or HTTP route; these claims remain in Go tests.
+internal/operations/reset_advice_announcements_test.go owns timed confidence rules,
+expiry/horizon boundaries, provider and explicit scope matching, disabled/zero-capacity
+refusals, emergency override, preserved conflicting readings and Agent/read-only MCP parity.
+web/tests/reset-advice.component.test.tsx owns the three row labels, unknown suppression,
+local reasons, source/confidence and separate conflicting reset times. The oauth-management
+probe registers a synthetic notice, observes advice changing without reload, and captures
+desktop/320px row and detail geometry. The existing quota HTTP routes carry advice through
+the handwritten API projection; no new route is introduced.
 
 ### Quota capacity coverage
 
@@ -1175,9 +1203,17 @@ same provider capability fact remains distinct from runtime state. The automatio
 test proves an unverified controllable credential is persisted for monitoring, an uncontrollable
 credential is omitted even on a direct request, and a weekly 100 causes no CPA write.
 The rendered first-batch test and `omc-account-automation` browser scenario own checkbox,
-Select all, enabled confirmation, capability-based monitor-only badge/count/filtering, the
-ordinary monitoring state label, separate roster/inventory counts, and synthetic
-desktop/phone evidence. Recovery-plan coverage is split by layer:
+Select all, enabled confirmation, capability-based monitor-only status/count/filtering,
+one status beside every account switch, and synthetic desktop/phone evidence. Rendered
+cases cover verified, unverified and uncontrollable credentials across adopted/unadopted
+and enabled/disabled settings, including an idle unverified row. Missing-weekly cases
+in Chinese and English keep the capability explanation singular
+for monitor-only rows and preserve the verified-account no-auto-disable qualifier.
+Unknown runtime states use localized status copy. A 13-adopted/12-live
+regression requires the absent-account explanation in both statistics and footer;
+degraded inventory cannot claim absence. The browser scenario checks phone status/switch
+geometry and captures weekly-data, missing-weekly-data, monitor-only and idle rows.
+Recovery-plan coverage is split by layer:
 repository and automation tests prove confirmed or external enable paths consume the
 cycle instant, historical timestamps cannot execute, and the legacy idle takeover row
 still executes at its reset; API and Agent/MCP projection

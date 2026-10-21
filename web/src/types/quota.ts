@@ -1,4 +1,5 @@
 import { ManagementQuotaObservation } from './managementAuthFile';
+import type { ResetAdvice } from './resetAdvice';
 
 export interface QuotaWindow {
   id: string;
@@ -164,6 +165,9 @@ export interface QuotaCapabilities {
 }
 
 export interface QuotaItem {
+  last_refresh?: { outcome: 'success' | 'failed' | 'rate_limited'; attempted_at_ms: number; http_status?: number; retry_at_ms?: number; reason?: 'timeout' | 'network' | 'auth' | 'http' | 'parse' | 'unknown'; reason_summary?: string };
+  last_success_at_ms?: number;
+  reset_advice?: ResetAdvice;
   auth_index: string;
   name: string;
   type: string;
@@ -175,6 +179,7 @@ export interface QuotaItem {
   windows: QuotaWindow[];
   reset_credits?: CodexResetCreditsInfo;
   reset_grants?: ClaudeResetGrant[];
+  reset_grants_status?: 'available' | 'unavailable' | 'failed';
   active_cooldown?: ActiveCooldown;
   recommendation: QuotaRecommendation;
   capabilities: QuotaCapabilities;
