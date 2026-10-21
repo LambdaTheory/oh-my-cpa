@@ -19,7 +19,6 @@ test("automated fixture submits LOGIN_EMAIL through the production browser flow"
       provider: "claude",
       state: "fixture-state",
       status: "ok",
-      message: "fixture complete",
     },
     submittedEmail: "fixture@example.invalid",
   });
@@ -50,7 +49,7 @@ test("manual fixture lets the operator complete login and captures the callback 
     assert.equal(await page.getByLabel("Email").inputValue(), "");
     await page.getByLabel("Email").fill("fixture@example.invalid");
     await page.getByRole("button", { name: "Continue" }).click();
-    await page.getByLabel("Verification code").fill("fixture-code");
+    await page.getByLabel("Verification code").fill("123456");
     await page.getByRole("button", { name: "Verify" }).click({ noWaitAfter: true });
   }, 20_000), {
     callback: {
@@ -61,7 +60,6 @@ test("manual fixture lets the operator complete login and captures the callback 
       provider: "claude",
       state: "fixture-state",
       status: "ok",
-      message: "fixture complete",
     },
   });
 });

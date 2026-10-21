@@ -5,6 +5,7 @@ import { loadCpaConfig, loadStartConfig } from "./config.js";
 import { runFixtureFlow } from "./fixture.js";
 import { getOAuthStatus, pollOAuthStatus, submitCallbackToCpa, submitCallbackToOmc } from "./http.js";
 import { runLiveFlow } from "./live.js";
+import { getProvider } from "./providers.js";
 
 function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -19,6 +20,7 @@ async function readStdin(): Promise<string> {
 
 async function runSubmit(): Promise<void> {
   const config = loadCpaConfig(process.env);
+  if (getProvider(config.provider).codeKind === "device") throw new Error("device providers do not accept callback submission");
   const redirectUrl = process.argv[3]?.trim() || await readStdin();
   if (!redirectUrl) throw new Error("callback URL is required as stdin or the first argument");
   parseCallbackUrl(redirectUrl);
@@ -41,6 +43,7 @@ async function runStatus(): Promise<void> {
     ? await pollOAuthStatus(config.cpaBaseUrl, config.cpaManagementKey, state, config.timeoutMs)
     : await getOAuthStatus(config.cpaBaseUrl, config.cpaManagementKey, state, config.timeoutMs);
   printJson(status);
+  if (!["ok", "success", "wait", "pending"].includes(status.status)) process.exitCode = 1;
 }
 
 async function main(): Promise<void> {
@@ -50,7 +53,14 @@ async function main(): Promise<void> {
       printJson(await runFixtureFlow());
       return;
     case "start":
-      printJson(await runLiveFlow(loadStartConfig(process.env)));
+      {
+        const controller = new AbortController();
+        const cancel = () => controller.abort(new Error("OAuth run cancelled by operator"));
+        process.once("SIGINT", cancel);
+        process.once("SIGTERM", cancel);
+        try { printJson(await runLiveFlow(loadStartConfig(process.env), { signal: controller.signal })); }
+        finally { process.off("SIGINT", cancel); process.off("SIGTERM", cancel); }
+      }
       return;
     case "submit":
       await runSubmit();

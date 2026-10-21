@@ -1,5 +1,6 @@
 import os from "node:os";
 import path from "node:path";
+import { getProvider } from "./providers.js";
 
 export interface StartConfig {
   cpaBaseUrl: string;
@@ -59,7 +60,7 @@ export function loadStartConfig(environment: NodeJS.ProcessEnv): StartConfig {
   return {
     cpaBaseUrl: requireValue(environment, "CPA_BASE_URL"),
     cpaManagementKey: requireValue(environment, "CPA_MANAGEMENT_KEY"),
-    provider: environment.PROVIDER?.trim().toLowerCase() || "claude",
+    provider: getProvider(environment.PROVIDER || "claude").id,
     isHeadless: parseBoolean(environment.HEADLESS, true, "HEADLESS"),
     isManual: parseBoolean(environment.MANUAL, false, "MANUAL"),
     browserChannel: environment.BROWSER_CHANNEL?.trim() || undefined,
@@ -78,7 +79,7 @@ export function loadCpaConfig(environment: NodeJS.ProcessEnv): Pick<StartConfig,
   return {
     cpaBaseUrl: requireValue(environment, "CPA_BASE_URL"),
     cpaManagementKey: requireValue(environment, "CPA_MANAGEMENT_KEY"),
-    provider: environment.PROVIDER?.trim().toLowerCase() || "claude",
+    provider: getProvider(environment.PROVIDER || "claude").id,
     timeoutMs: parseTimeout(environment.TIMEOUT_MS),
   };
 }

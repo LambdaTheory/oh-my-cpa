@@ -1,4 +1,5 @@
 import type { BrowserContext, Frame, Page, Request } from "playwright";
+import { abortError } from "./wait.js";
 
 export interface OAuthCallback {
   callbackUrl: string;
@@ -30,7 +31,7 @@ export interface CallbackCapture {
   stop: () => void;
 }
 
-export function captureCallback(context: BrowserContext, timeoutMs: number): CallbackCapture {
+export function captureCallback(context: BrowserContext, timeoutMs: number, signal?: AbortSignal): CallbackCapture {
   let isSettled = false;
   let timeout: NodeJS.Timeout | undefined;
   const pageListeners = new Map<Page, { request: (request: Request) => void; frame: (frame: Frame) => void }>();
@@ -43,6 +44,7 @@ export function captureCallback(context: BrowserContext, timeoutMs: number): Cal
   });
 
   const stop = (): void => {
+    signal?.removeEventListener("abort", onAbort);
     if (timeout) {
       clearTimeout(timeout);
       timeout = undefined;
@@ -53,6 +55,12 @@ export function captureCallback(context: BrowserContext, timeoutMs: number): Cal
       page.off("framenavigated", listeners.frame);
     }
     pageListeners.clear();
+  };
+  const onAbort = (): void => {
+    if (isSettled) return;
+    isSettled = true;
+    stop();
+    rejectResult(abortError(signal!));
   };
 
   const inspect = (value: string): void => {
@@ -78,6 +86,7 @@ export function captureCallback(context: BrowserContext, timeoutMs: number): Cal
   };
 
   const onPage = (page: Page): void => attachPage(page);
+  signal?.addEventListener("abort", onAbort, { once: true });
   context.on("page", onPage);
   for (const page of context.pages()) attachPage(page);
 
@@ -87,6 +96,7 @@ export function captureCallback(context: BrowserContext, timeoutMs: number): Cal
     stop();
     rejectResult(new Error(`timed out after ${timeoutMs}ms waiting for an OAuth callback URL`));
   }, timeoutMs);
+  if (signal?.aborted) onAbort();
 
   return { result, stop };
 }

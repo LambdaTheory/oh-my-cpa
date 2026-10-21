@@ -1,4 +1,45 @@
-# Claude OAuth reauthorization runner (Phase 1 spike)
+# OAuth reauthorization runner
+
+## Provider coverage and OMC jobs
+
+| Canonical ID | Alias | Flow / code kind | Behavior |
+| --- | --- | --- | --- |
+| claude | anthropic | redirect_otp / otp | Email and six-digit OTP; callback 54545 |
+| codex | openai | redirect_otp / otp | Email and OTP; CPA owns PKCE; callback 1455 |
+| antigravity | | redirect_browser / none | Human Google login; callback 51121 or CPA status |
+| devin | | redirect_manual_callback / none | No forwarder; tunnel to CPA callback port or separate submit |
+| kimi | | device_code / device | Verification page, user code, expiry and CPA status |
+| kimi-ai | | device_code / device | Separate international Kimi accounts; same device flow |
+| xai | grok | device_code / device | Same device flow |
+| meta | | device_code / device | Same device flow |
+
+Gemini, Vertex, api-keys.* and unknown providers fail before auth-url. Device/browser/manual-callback flows never read CODE_FILE, stdin or the OMC code endpoint. Device flows never submit callbacks.
+
+With OMC_BASE_URL configured, start logs in once and uses the session cookie and same-origin header for paths beneath /api/v1:
+
+1. GET /management/reauth/jobs/next?provider=canonical. A 204 returns idle without starting CPA. Use one worker at a time: next selects the pending job; oauth_started reserves it. This is a one-shot CLI, not a scheduler.
+2. Request CPA auth-url; only Claude/Codex/Antigravity send is_webui=true.
+3. POST /management/reauth/jobs/{id}/status with oauth_started and registry flow. Device reports also contain user_code, verification_url and expires_in (integer 1–86400 seconds).
+4. Automated OTP polls GET /management/reauth/jobs/{id}/code; 204 means wait. Report code_submitted after filling an OMC-consumed code. File/manual codes omit that report because OMC requires its own code to have been consumed.
+5. Submit redirect callbacks through the same OMC session, poll CPA, then report succeeded. OMC independently verifies quota after settling. Failures after reservation report only the allowlisted runner_failed reason.
+
+A transport/5xx outage before claiming warns and preserves standalone file/stdin/manual behavior. Code-endpoint outages warn and permit file/stdin fallback. Authentication, permission and conflict rejections never silently bypass OMC. After reservation, failed callback/status writes fail the run; an unaccepted failure report warns that operator inspection is needed. Failed auth-url/reservation leaves the pending job unclaimed. OMC requires a direct local/private peer in its configured runner CIDRs and rejects forwarding identity headers.
+
+Device flow requires CPA flow=device, a user code and expiry. Queries are removed from verification URLs before display, navigation and reporting; only HTTPS without credentials, fragments, nondefault ports or markup is accepted. Enter the separately displayed code on the page. TIMEOUT_MS bounds the entire run, and device expiry can shorten it.
+
+~~~sh
+PROVIDER=codex BROWSER_CHANNEL=chrome HEADLESS=false LOGIN_EMAIL=operator@example.invalid CODE_FILE=/protected/code pnpm --ignore-workspace start
+PROVIDER=antigravity BROWSER_CHANNEL=chrome HEADLESS=false pnpm --ignore-workspace start
+PROVIDER=kimi BROWSER_CHANNEL=chrome HEADLESS=false pnpm --ignore-workspace start
+PROVIDER=devin BROWSER_CHANNEL=chrome HEADLESS=false pnpm --ignore-workspace start
+PROVIDER=devin pnpm --ignore-workspace submit < /protected/callback-url
+~~~
+
+Devin needs CPA callback reachability/tunneling or a full callback pasted into submit in a second terminal using the same CPA/OMC/provider configuration. Browser/manual-callback start also polls CPA, so separate submission can complete it. A callback HTTP 409 is accepted only after CPA independently confirms completion.
+
+Success output contains provider, state and ok/success; raw upstream messages are omitted because they may echo credentials. Failure, cancellation, expiry, unknown status and timeout exit nonzero. Ctrl+C/SIGTERM or browser closure cancels locally and attempts an OMC failure report; this does not revoke grants or delete CPA pending sessions.
+
+Real acceptance remains outstanding for OTP (Claude or Codex), browser (Antigravity), device (Kimi/xAI/Meta) and manual callback (Devin with reachability). Use disposable accounts, check real page selectors and challenges, confirm CPA completion plus the intended credential, and separately confirm OMC quota verification. No real provider, Feishu or production credentials were used in this adaptation.
 
 This directory is an independent Node.js 20+ / TypeScript / Playwright runner. It proves that a browser can capture CPA's loopback OAuth redirect from navigation events even when `localhost:54545` is unreachable from the container. It does not change or run inside the OMC product.
 
@@ -37,10 +78,10 @@ The fixture starts a local email/code form, submits to `http://localhost:54545/c
 | `USER_AGENT` | no | Optional browser User-Agent override; empty leaves the browser default unchanged |
 | `PROFILE_DIR` | no | persistent Chromium profile; defaults to an OS temporary directory |
 | `LOGIN_EMAIL` | when automated login shows an email field | account email entered into a visible email/username field before the runner clicks Continue, Next, Sign in, 继续, or 下一步; ignored when `MANUAL=true` |
-| `CODE_FILE` | no | automated mode only; path containing the one-time code, polled until it exists and is non-empty or `TIMEOUT_MS` expires; without it, the runner reads stdin |
-| `TIMEOUT_MS` | no | request, browser, callback, and status deadline; defaults to `180000` |
-| `OMC_BASE_URL` | no | OMC base including any sub-path, such as `http://omc:8080/omc`; selects OMC callback submission |
-| `OMC_MANAGEMENT_KEY` | with `OMC_BASE_URL` | used once to establish an OMC session before callback submission |
+| `CODE_FILE` | no | standalone/fallback automated OTP only; file must contain exactly six digits; otherwise read stdin |
+| `TIMEOUT_MS` | no | total start deadline; defaults to `180000`; device expiry may shorten it |
+| `OMC_BASE_URL` | no | OMC base including sub-path, such as `http://omc:8080/omc`; enables job claim and callback submission |
+| `OMC_MANAGEMENT_KEY` | with `OMC_BASE_URL` | establishes one session for job reads, status writes and callback submission |
 
 Keep `PROFILE_DIR` on a protected volume: the browser profile can contain authenticated session state. Do not commit it, include it in support bundles, or share it between unrelated operators.
 
@@ -85,11 +126,11 @@ With a code file:
 LOGIN_EMAIL='operator@example.com' CODE_FILE=/run/secrets/claude-code pnpm start
 ```
 
-The file may be created or populated after the provider displays the code input. The runner polls until it contains a non-empty value, bounded by `TIMEOUT_MS`; stdin behavior is unchanged.
+The file may be created after the provider displays the code input. The runner waits for exactly six digits, bounded by the total deadline. Use a fresh file per attempt and delete it afterward; the runner does not remove supplied files.
 
 If the authorization page already has a login session and does not show an email field, `LOGIN_EMAIL` is not required and the runner continues waiting for the code field or callback. If an email field is visible but `LOGIN_EMAIL` is empty, the runner fails immediately with a configuration error instead of waiting. If the next page requires a password or SSO, the runner stops with `password/SSO required; manual takeover needed`; rerun with `MANUAL=true HEADLESS=false` and complete the provider-controlled flow in the browser.
 
-`start` requests `GET /v8/management/oauth/auth-url?provider=claude&is_webui=true`, opens the returned URL with a persistent Chromium profile, and watches every page for callback requests/navigations. Manual mode leaves all page interaction to the operator; automated mode optionally fills the account email and then fills a visible verification-code input after it appears. The runner then submits the captured URL to CPA (or OMC when configured) and polls CPA status. Its structured output contains the provider, state, terminal status, and non-secret status message; it does not print the callback authorization code.
+For redirect OTP, start requests the canonical provider auth-url and opens it in a persistent browser profile. It watches all pages for callback requests/navigations, validates state, submits to CPA or OMC, and polls status. Manual mode leaves interaction to the operator; automated mode optionally fills email then a six-digit code. Structured output contains provider, state and terminal status without upstream messages or callback authorization codes.
 
 Submit a callback separately. stdin is preferred because callback URLs contain a short-lived authorization code and shell arguments may be retained in process listings or history:
 
@@ -174,5 +215,5 @@ Use only a disposable/non-production Claude account and non-production CPA deplo
 - Password and SSO pages are intentionally not automated. The runner reports them immediately and directs the operator to `MANUAL=true`; it does not attempt to bypass CAPTCHA, 2FA, or other provider controls.
 - Google may still classify a headed system-Chrome session as unsafe or automated based on signals outside the runner's browser launch configuration. Do not add stealth plugins or fingerprint-forging libraries; use manual takeover and follow the provider's supported recovery path.
 - Automating a consumer login can be restricted by provider terms or policy. Complete legal/security review before productizing this spike.
-- In automated mode, `LOGIN_EMAIL` is used only when a visible email/username field appears, and `CODE_FILE` polling begins only after the code field appears. External code delivery, mailbox access, password/SSO automation, retries, scheduling, concurrency control, and Phase 2 OMC jobs are intentionally out of scope.
+- In automated OTP mode, LOGIN_EMAIL is used only for visible email fields, and code retrieval begins after the code input appears. Mailbox access, password/SSO automation, scheduling and concurrent workers remain outside this runner.
 - A persistent profile improves session continuity but is sensitive local state. Restrict filesystem access and avoid concurrent use.

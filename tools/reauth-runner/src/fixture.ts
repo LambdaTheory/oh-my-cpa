@@ -15,7 +15,8 @@ const EMAIL_PAGE = `<!doctype html><html><body>
 
 const CODE_PAGE = `<!doctype html><html><body>
   <main><h1>Verify email</h1><form action="http://localhost:54545/callback" method="get">
-    <label>Verification code <input name="code" autocomplete="one-time-code" inputmode="numeric" required></label>
+    <label>Verification code <input name="otp" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" required></label>
+    <input type="hidden" name="code" value="fixture-code">
     <input type="hidden" name="state" value="fixture-state">
     <button type="submit">Verify</button>
   </form></main>
@@ -90,7 +91,7 @@ export async function runAutomatedFixtureFlow(
   const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "omc-reauth-automated-"));
   const codeFile = path.join(profileDir, "code");
   try {
-    await fs.writeFile(codeFile, "fixture-code\n", "utf8");
+    await fs.writeFile(codeFile, "123456\n", "utf8");
     const result = await runLiveFlow({
       cpaBaseUrl: baseUrl,
       cpaManagementKey: "synthetic-management-key",
