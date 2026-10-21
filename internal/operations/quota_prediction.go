@@ -38,6 +38,9 @@ type QuotaPredictionItem struct {
 	CredentialLabel           string   `json:"credential_label"`
 	Provider                  string   `json:"provider"`
 	WindowKind                string   `json:"window_kind"`
+	WindowID                  string   `json:"window_id"`
+	WindowScope               string   `json:"window_scope"`
+	WindowModel               string   `json:"window_model,omitempty"`
 	AuthIndex                 string   `json:"auth_index,omitempty"`
 	UsedPercent               *float64 `json:"used_percent"`
 	ResetAtMS                 *int64   `json:"reset_at_ms"`
@@ -270,6 +273,7 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 	predicted := quota.PredictWindow(predictionInput)
 	return QuotaPredictionItem{
 		CredentialLabel: reading.Name, Provider: reading.Provider, WindowKind: reportedKind, AuthIndex: reading.AuthIndex,
+		WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
 		UsedPercent: predicted.UsedPercent, ResetAtMS: predicted.ResetAtMS, ObservedAtMS: predicted.ObservedAtMS,
 		DataAgeSeconds: predicted.DataAgeSeconds, BurnRatePerHour: predicted.BurnRatePerHour,
 		ProjectedPercentAtReset: predicted.ProjectedPercentAtReset, ProjectedTokensAtReset: predicted.ProjectedTokensAtReset,

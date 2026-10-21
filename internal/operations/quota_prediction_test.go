@@ -150,6 +150,9 @@ func TestQuotaPredictionJoinsStoredObservationKinds(t *testing.T) {
 				continue
 			}
 			found = true
+			if item.WindowID != test.windowID || item.WindowScope != test.scope || item.WindowModel != test.model {
+				t.Fatalf("%s source window identity = %+v", test.name, item)
+			}
 			if item.WindowKind != test.wantKind || item.Verdict == quota.PredictionVerdictUnknown || item.BurnRatePerHour == nil {
 				t.Fatalf("%s prediction = %+v", test.name, item)
 			}

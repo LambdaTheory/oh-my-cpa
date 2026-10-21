@@ -126,6 +126,7 @@ func (h *Handler) operationsService() *operations.Service {
 			h.pricing.NotifyModelsChanged()
 		}
 	}}
+	service.ResetAdviceExpiryWindow = h.cfg.ResetAdviceExpiryWindow
 	service.AutomationSummary = func(ctx context.Context) (operations.AutomationStatus, error) {
 		if h.automation == nil {
 			return operations.AutomationStatus{Source: "unavailable", Accounts: []operations.AutomationAccountSummary{}}, nil

@@ -128,6 +128,7 @@ func RegisterFeishuRoutes(router chi.Router, api *FeishuAPI) {
 	router.Put("/feishu/settings", api.putSettings)
 	router.Get("/feishu/status", api.getStatus)
 	router.Post("/feishu/test", api.postTest)
+	router.Post("/feishu/prediction-test", api.postPredictionTest)
 }
 
 type feishuSettingsDTO struct {
@@ -164,8 +165,9 @@ type feishuSettingsWriteDTO struct {
 }
 
 type feishuTestResponse struct {
-	Sent  bool   `json:"sent"`
-	Error string `json:"error,omitempty"`
+	Sent   bool   `json:"sent"`
+	Reason string `json:"reason,omitempty"`
+	Error  string `json:"error,omitempty"`
 }
 
 func (f *FeishuAPI) getSettings(writer http.ResponseWriter, request *http.Request) {
@@ -259,6 +261,27 @@ func (f *FeishuAPI) postTest(writer http.ResponseWriter, request *http.Request) 
 		return
 	}
 	f.recordAudit(request, "feishu.test", "feishu", "settings", "success", nil)
+	writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: true})
+}
+
+func (f *FeishuAPI) postPredictionTest(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	if f.prediction == nil {
+		writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: false, Error: "prediction sender is unavailable"})
+		return
+	}
+	sent, err := f.prediction.SendNow(request.Context())
+	if err != nil {
+		f.recordAudit(request, "feishu.prediction.send", "feishu", "prediction", "failure", nil)
+		writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: false, Error: err.Error()})
+		return
+	}
+	if !sent {
+		f.recordAudit(request, "feishu.prediction.send", "feishu", "prediction", "success", map[string]any{"sent": false, "reason": "no_findings"})
+		writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: false, Reason: "no_findings"})
+		return
+	}
+	f.recordAudit(request, "feishu.prediction.send", "feishu", "prediction", "success", map[string]any{"sent": true})
 	writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: true})
 }
 

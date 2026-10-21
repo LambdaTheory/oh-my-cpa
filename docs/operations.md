@@ -187,7 +187,8 @@ The Feishu bot reuses one long connection to answer read-only queries and to sen
 denoised notifications. The app secret is encrypted at rest and never returned by
 the API, a log or a database read. The bot is answered from OMC's stored data and
 never triggers a refresh. Settings and status live under `/api/v1/feishu/settings`,
-`/api/v1/feishu/status` and `/api/v1/feishu/test`; the bot never runs in demo mode.
+`/api/v1/feishu/status`, `/api/v1/feishu/test` and
+`POST /api/v1/feishu/prediction-test`; the bot never runs in demo mode.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -723,6 +724,20 @@ A counted limit that already describes a period wins it, because it carries the
 absolute usage a share cannot, and a pool states no counts of its own. A pool key
 naming no known period keeps its own name as an unclassified window rather than
 being filed under a period it does not describe (ADR 0071).
+
+## Read-only reset advice
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OMCPA_RESET_ADVICE_EXPIRY_WINDOW` | `72h` | Positive Go duration defining how soon a remaining reset entitlement expires for `reset_advice`; invalid, zero or negative values refuse startup |
+
+The horizon affects only the Agent/MCP read-only advice. A fresh quota reading at or
+above 90% used prioritizes retaining a reset for recovery. Entitlement snapshots older
+than two hours yield unknown, even when recent passive headers exist; a current
+window must also have a fresh percentage and an unexpired reset boundary. A shorter
+horizon does not change refresh cadence or provider redemption rules. Restart after
+changing the variable. No upstream refresh or reset redemption occurs when asking
+for advice. See `docs/agent-capabilities.md` and ADR 0109.
 
 ## Automatic quota refresh
 

@@ -1,0 +1,173 @@
+.panel {
+  container-type: inline-size;
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.header h2,
+.group-head h3 {
+  margin: 0;
+  color: var(--fg);
+}
+
+.header h2 {
+  font-size: var(--text-lg);
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.duration {
+  color: var(--meta);
+  font-size: var(--text-xs);
+}
+
+.groups {
+  display: grid;
+  gap: 16px;
+}
+
+.group {
+  min-width: 0;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.group-head h3 {
+  font-size: var(--text-md);
+}
+
+.group ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) auto minmax(0, 0.8fr) minmax(0, 0.8fr) minmax(0, 1.5fr);
+  gap: 10px 14px;
+  align-items: center;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.identity,
+.meter-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.identity {
+  overflow-wrap: anywhere;
+}
+
+.identity span,
+.meter-cell span,
+.reasons > span:first-child {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
+.verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+}
+
+.facts div {
+  min-width: 0;
+}
+
+.facts dt {
+  color: var(--meta);
+  font-size: var(--text-xs);
+}
+
+.facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+}
+
+.reasons {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+@container (max-width: 1050px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .facts {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 700px) {
+  .header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .meter-cell,
+  .facts,
+  .reasons {
+    grid-column: 1 / -1;
+  }
+
+  .facts {
+    grid-template-columns: 1fr;
+  }
+}

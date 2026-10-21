@@ -844,6 +844,20 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 }
 
 func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
+	s.deliverOutboxMatching(ctx, resolved, "")
+}
+
+// deliverOutboxNotification delivers one persisted row without flushing other
+// pending notifications. A manual console action therefore sends exactly the
+// requested prediction card and leaves scheduled or retry work to the service loop.
+func (s *Service) deliverOutboxNotification(ctx context.Context, resolved Resolved, notificationID string) {
+	if notificationID == "" {
+		return
+	}
+	s.deliverOutboxMatching(ctx, resolved, notificationID)
+}
+
+func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, notificationID string) {
 	dispatcher := s.currentDispatcher()
 	if dispatcher == nil || resolved.ChatID == "" {
 		return
@@ -859,7 +873,17 @@ func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
 		s.setLastError(err)
 		return
 	}
-	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, state.Outbox)
+	due := state.Outbox
+	if notificationID != "" {
+		due = nil
+		for _, notification := range state.Outbox {
+			if notification.ID == notificationID {
+				due = append(due, notification)
+				break
+			}
+		}
+	}
+	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, due)
 	s.lockStateTransition()
 	defer s.unlockStateTransition()
 	latest, err := s.store.Load(ctx)

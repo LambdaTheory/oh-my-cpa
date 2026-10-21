@@ -3531,6 +3531,29 @@ and is superseded by ADR 0024, which records the single latest session that repl
 `scripts/test-playground.ts`, and desktop/phone probes cover this flow. Public-demo
 model reads are generated through the real facade; inference is explicitly refused, while one browser-local recorded example demonstrates the flow (ADR 0092).
 
+## Read-only reset advice
+
+`internal/quota/reset_advice.go` owns the pure credential-level entitlement decision.
+`internal/operations/reset_advice.go` reads persisted credential metadata, latest
+quota snapshots, standard passive observations and correlated cooldown records, then registers `reset_advice`
+through the capability registry for both Agent and MCP. The operation preserves
+credentials with missing snapshots as unknown rows, validates count presence before
+decoding stored entitlements, and counts each Claude grant once when `clears`
+intersects the credential's standard windows. Any valid standard window at or
+above 90% takes priority over spending an expiring entitlement in another window;
+without a known emergency, unreadable standard windows block spending advice.
+Expired entries do not contribute remaining resets. A two-hour entitlement freshness
+bound is independent of the quota window freshness and cannot be renewed by headers.
+
+The projection allowlists credential labels, provider/window identity, nullable count,
+expiry and highest valid standard used share, separate observation timestamps,
+nullable cooldown state, an empty announcements array, one verdict, evidence and
+reason codes. Read-only callers receive masked labels and no auth index; filters,
+the 100-row bound, 32 KiB ceiling and omitted count are owned by operations. Startup
+configuration supplies the expiry horizon through the existing operations wiring.
+No Agent/MCP feature-specific adapter, HTTP route, upstream request or persistence
+mutation is introduced. See ADR 0109 and `docs/agent-capabilities.md` for the contract.
+
 ## Read-only quota prediction
 
 `internal/quota/prediction.go` owns deterministic window math. It accepts a normalized
@@ -3546,12 +3569,23 @@ after deterministic sorting by hidden stored identity, and those identities are 
 The internal Feishu projection filters first, prioritises exhaustion findings, and caps the
 card input at 178 rows while carrying an omitted count to the renderer.
 
-`internal/feishu/prediction_digest.go` is the daily prediction component. At configured
-summary minutes the Feishu loop evaluates it before the legacy scheduled summary. A
-`will_exhaust` or `under_used` finding queues one card through the same persisted outbox
-and claims that minute; without a finding, the existing summary path runs unchanged. The
-component shares timezone, chat, quiet hours, sender and retry behavior and remains inert
-when Feishu is not ready. Its footer discloses omitted findings before the renderer's fixed
+`internal/api/management_dashboard_predictions.go` exposes the same stored computation to
+the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler
+uses the operator projection (credential labels and auth indexes are retained), groups rows
+by provider and measures the actual computation duration. It does not refresh quota or call
+CPA. `web/src/components/dashboard/QuotaPrediction.tsx` renders that response as a
+reorderable dashboard panel, refreshes it every five minutes only while the page is visible,
+and keeps explicit empty, unknown and stale states.
+
+`internal/feishu/prediction_digest.go` is the scheduled and operator-triggered prediction
+component. At configured summary minutes the Feishu loop evaluates it before the legacy
+scheduled summary. A `will_exhaust` or `under_used` finding queues one card through the same
+persisted outbox and claims that minute; without a finding, the existing summary path runs
+unchanged. `POST /api/v1/feishu/prediction-test` reads the same stored findings and delivers
+only its newly persisted card. That explicit action does not change `LastSummaryAt`, does
+not claim a scheduled minute and returns `no_findings` without sending when there is nothing
+actionable. The component shares timezone, chat and sender behavior and remains inert when
+Feishu is not ready. Its footer discloses omitted findings before the renderer's fixed
 card-element ceiling can hide them.
 
 ## 15. Where to look next
