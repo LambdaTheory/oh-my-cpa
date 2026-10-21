@@ -886,6 +886,23 @@ owns which copy a credential with no window carries, and `scripts/test-oauth-wor
 owns its triage bucket. The rendering of those readings stays with the existing
 `oauth-management` probe.
 
+### Reset advice coverage
+
+`internal/quota/reset_advice_test.go` owns expiry-horizon boundaries, emergency
+precedence at 90%, missing/stale/invalid evidence, known-zero and expired balances,
+and Claude grant scope/count aggregation without double-counting shared grants.
+It also owns multi-window conflict priority and missing/stale-window spending guards.
+`internal/operations/reset_advice_test.go`
+invokes the shared registry as Agent and read-only MCP principals, checks the exact
+verdict and wire-level identity redaction, rejects read-only auth-index filters, and
+guards against CPA client acquisition, live quota listing and upstream refresh. It
+also covers passive quota replacement without renewing entitlements, persisted count
+presence, missing snapshots, row/byte bounds and provider filtering, one conclusion
+per credential even under a window-kind filter, empty announcement arrays and
+cooldown true/false/null wire evidence. Configuration
+defaults, overrides and invalid durations belong to `internal/config/reset_advice_test.go`.
+There is no new UI or HTTP route; these claims remain in Go tests.
+
 ### Quota capacity coverage
 
 - `internal/quota/capacity_scope_test.go` owns complete family/exact identity matching,

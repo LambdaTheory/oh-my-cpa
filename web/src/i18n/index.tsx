@@ -668,6 +668,8 @@ const DICT: Record<string, [string, string]> = {
   'agent.capability.model_advice': ["模型建议", "Model advice"],
   'agent.capability.model_advice.description': ["按已记录的配额信息排序可用模型；不刷新额度。", "Rank models from recorded quota readings without refreshing them."],
   'agent.capability.quota_prediction': ["额度预测", "Quota prediction"],
+  'agent.capability.reset_advice': ["重置建议", "Reset advice"],
+  'agent.capability.reset_advice.description': ["根据已记录的重置次数、到期时间与额度读数建议到期前使用或留作应急；不刷新额度或领取重置。", "Advise whether to use resets before expiry or keep them for recovery from stored entitlements and quota readings; never refreshes quota or redeems resets."],
   'agent.capability.quota_prediction.description': ["根据已记录的额度观测与使用历史预测重置前的耗尽或闲置风险；不刷新额度。", "Project exhaustion or under-use before reset from recorded quota observations and usage; does not refresh quota."],
   'agent.capability.quota_list.description': [
     "读取各凭据的套餐名称、档位、配额窗口与观测时间；缺失或过期的观测不代表额度为零。",
