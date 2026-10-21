@@ -2436,7 +2436,13 @@ This survives process restarts.
 The registry is the whitelist; aliases normalize to canonical login IDs. Gemini,
 Vertex, unknown/plugin providers and API-key identities are excluded even when their
 quota result reports authentication failure. Exact credential type takes precedence
-over normalized quota family, so `kimi-ai` does not become `kimi`.
+over normalized quota family, so `kimi-ai` does not become `kimi`. CPA's
+`account_type` supplies the account kind: only `oauth` or the empty value used by
+OAuth providers without account information is admitted; `api_key` and every other
+nonempty kind are refused. Auth indexes are opaque, not evidence of OAuth provenance.
+Quota refresh results carry this kind internally through signal recording and job
+admission without adding it to public quota JSON or persisted snapshots. Recovery
+refresh re-reads the credential and rejects non-OAuth kinds before any quota call.
 
 Runner admission persists `oauth_started` and a deadline. The next tick opens
 `waiting_code`, `waiting_browser`, `waiting_callback` or `waiting_device`

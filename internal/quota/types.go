@@ -180,6 +180,9 @@ const (
 
 // NormalizedQuota is the unified DTO representing all quota dimensions for a credential.
 type NormalizedQuota struct {
+	// AccountType carries CPA provenance through refresh admission, never into a
+	// public quota response or a persisted snapshot of an earlier credential.
+	AccountType    string                 `json:"-"`
 	WarmupEvidence *warmup.Observation    `json:"warmup_evidence,omitempty"`
 	AuthIndex      string                 `json:"auth_index"`
 	Name           string                 `json:"name"`

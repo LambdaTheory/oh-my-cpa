@@ -28,6 +28,10 @@ or its final refresh. Feishu tests drive the actual message handler with a fake 
 identity/type/format rejection, no waiting job, provider/flow card copy, device metadata, mention markup and log privacy. API
 tests exercise the mounted sub-path, session/network boundary, DTO allowlist, one-time
 code response and a fake CPA returning authentication failure then healthy quota.
+Account-kind regressions use CPA's opaque 16-character hex index and distinguish
+`api_key`, unknown kinds, `oauth` and empty account types through quota signal
+recording and recovery refresh; rejected recovery refreshes make no quota call.
+Service tests also enforce account-kind admission directly at `reauth.Observe`.
 Demo export pricing timestamps use the fixed reference instant for runtime-stamped
 writes, with regression coverage for slow seeding and unchanged historical versions.
 Migration tests extend the existing upgrade chain through 049; the historical 010–014

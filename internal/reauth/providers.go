@@ -41,9 +41,10 @@ func ProviderFor(id string) (Provider, bool) {
 }
 
 // CredentialProvider preserves CPA's exact account system (including kimi-ai)
-// and refuses explicit non-OAuth credential types even with an OAuth quota family.
-func CredentialProvider(fileType, provider, authIndex string) (Provider, bool) {
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(authIndex)), "api-keys.") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(provider)), "api-keys.") {
+// and uses AccountInfo's account kind, not the opaque auth index, for provenance.
+// CPA leaves account_type empty for OAuth providers without account information.
+func CredentialProvider(fileType, provider, accountType string) (Provider, bool) {
+	if kind := strings.ToLower(strings.TrimSpace(accountType)); kind != "" && kind != "oauth" {
 		return Provider{}, false
 	}
 	if strings.TrimSpace(fileType) != "" {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ func TestQuotaSignalCreatesOnlyOAuthAuthInvalidJobs(t *testing.T) {
 		{"unknown", "", "unknown", "needs_reauth", ""},
 		{"api-keys.claude", "", "key", "needs_reauth", ""},
 		{"claude", "api-keys.claude", "key-type", "needs_reauth", ""},
-		{"claude", "", "api-keys.claude.0", "needs_reauth", ""},
+		{"claude", "", "api-keys.claude.0", "needs_reauth", "claude"},
 	} {
 		for range 2 {
 			h.recordQuotaSignal(context.Background(), &quota.NormalizedQuota{AuthIndex: c.authIndex, Type: c.fileType, Provider: c.provider, Recommendation: quota.QuotaRecommendation{Status: c.status}})
@@ -200,6 +201,77 @@ func TestReauthRefreshUsesCredentialProviderAndCreatesJobOn401(t *testing.T) {
 	}
 }
 
+func TestReauthAccountTypeAdmission(t *testing.T) {
+	for _, accountType := range []string{"api_key", "API_KEY", "service_account", "unknown", "oauth", ""} {
+		for _, path := range []string{"quota_signal", "reauth_refresh"} {
+			t.Run(accountType+"/"+path, func(t *testing.T) {
+				h := testHandler(t, "/omc")
+				ctx := context.Background()
+				const cpaIndex = "0123456789abcdef"
+				var calls atomic.Int32
+				cpa := newFakeCPA(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					switch r.URL.Path {
+					case "/v8/management/credentials":
+						writeJSON(w, 200, map[string]any{"files": []map[string]any{{"id": "synthetic-file", "name": "synthetic-codex.json", "auth_index": cpaIndex, "type": "codex", "provider": "codex", "account_type": accountType}}})
+					case "/v8/management/requests/api-call":
+						calls.Add(1)
+						writeJSON(w, 200, map[string]any{"status_code": 401, "body": map[string]any{"error": "unauthorized"}})
+					default:
+						w.WriteHeader(404)
+					}
+				}))
+				defer cpa.Close()
+				ciphertext, nonce, err := h.cipher.Encrypt([]byte("synthetic-management-key"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := h.repo.UpsertInstance(ctx, domain.CPAInstance{ID: defaultInstanceID(), Name: "Synthetic CPA", BaseURL: cpa.URL, ManagementKeyCiphertext: ciphertext, ManagementKeyNonce: nonce, CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+					t.Fatal(err)
+				}
+				h.reauth = reauth.New(reauth.Options{Repo: h.repo, Enabled: func() bool { return true }})
+				isOAuth := accountType == "oauth" || accountType == ""
+				if path == "quota_signal" {
+					client, err := h.capabilityClient(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					files, err := client.AuthFiles(ctx)
+					if err != nil || len(files.Files) != 1 {
+						t.Fatalf("credentials=%+v err=%v", files, err)
+					}
+					value, err := h.readCredentialQuota(ctx, quota.NewService(client), files.Files[0], nil)
+					if err != nil || classifyQuotaSignal(value) != "auth_invalid" || calls.Load() == 0 {
+						t.Fatalf("quota=%+v calls=%d err=%v", value, calls.Load(), err)
+					}
+					if err := h.persistNormalizedQuotaSnapshot(ctx, value); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					state, err := h.refreshReauthCredential(ctx, cpaIndex)
+					if isOAuth {
+						if err != nil || state != "auth_invalid" || calls.Load() == 0 {
+							t.Fatalf("refresh state=%s calls=%d err=%v", state, calls.Load(), err)
+						}
+					} else if err == nil || state != "unknown" || calls.Load() != 0 {
+						t.Fatalf("non-OAuth refresh state=%s calls=%d err=%v", state, calls.Load(), err)
+					}
+				}
+				var count int
+				if err := h.repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&count); err != nil {
+					t.Fatal(err)
+				}
+				want := 0
+				if isOAuth {
+					want = 1
+				}
+				if count != want {
+					t.Fatalf("jobs=%d want=%d", count, want)
+				}
+			})
+		}
+	}
+}
+
 func TestReauthRunnerProviderFlows(t *testing.T) {
 	for _, provider := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
 		t.Run(provider, func(t *testing.T) {
@@ -207,7 +279,7 @@ func TestReauthRunnerProviderFlows(t *testing.T) {
 			ctx := context.Background()
 			h.cfg.Feishu.ReauthRunnerCIDRs = []string{"127.0.0.0/8"}
 			h.reauth = reauth.New(reauth.Options{Repo: h.repo, Enabled: func() bool { return true }, Notify: func(context.Context, repository.ReauthJob, string) error { return nil }})
-			if err := h.reauth.Observe(ctx, "account", provider, "", "auth_invalid"); err != nil {
+			if err := h.reauth.Observe(ctx, "account", provider, "oauth", "", "auth_invalid"); err != nil {
 				t.Fatal(err)
 			}
 			cookie := httptest.NewRecorder()

@@ -37,7 +37,7 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) start(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	if err := f.service.Observe(ctx, "synthetic-account", "claude", "Claude test account", "auth_invalid"); err != nil {
+	if err := f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "Claude test account", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
 	j, err := f.service.Next(ctx, "claude")
@@ -69,16 +69,38 @@ func (f *fixture) submit(t *testing.T, id string) {
 		t.Fatal(err)
 	}
 }
+func TestObserveRequiresOAuthAccountType(t *testing.T) {
+	for _, accountType := range []string{"api_key", " API_KEY ", "service_account", "unknown", "oauth", " OAUTH ", ""} {
+		t.Run("kind_"+accountType, func(t *testing.T) {
+			f := newFixture(t)
+			if err := f.service.Observe(context.Background(), "0123456789abcdef", "codex", accountType, "Synthetic account", "auth_invalid"); err != nil {
+				t.Fatal(err)
+			}
+			var count int
+			if err := f.repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs`).Scan(&count); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if accountType == "" || strings.EqualFold(strings.TrimSpace(accountType), "oauth") {
+				want = 1
+			}
+			if count != want {
+				t.Fatalf("jobs=%d want=%d", count, want)
+			}
+		})
+	}
+}
+
 func TestInvalidCycleAndSerialAdmission(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	id := f.start(t)
 	for _, state := range []string{"auth_invalid", "transport", "unknown"} {
-		if err := f.service.Observe(ctx, "synthetic-account", "claude", "test", state); err != nil {
+		if err := f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", state); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := f.service.Observe(ctx, "other", "vertex", "test", "auth_invalid"); err != nil {
+	if err := f.service.Observe(ctx, "other", "vertex", "oauth", "test", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -86,7 +108,7 @@ func TestInvalidCycleAndSerialAdmission(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("jobs=%d", count)
 	}
-	if err := f.service.Observe(ctx, "second", "claude", "second", "auth_invalid"); err != nil {
+	if err := f.service.Observe(ctx, "second", "claude", "oauth", "second", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
 	var second string
@@ -97,13 +119,13 @@ func TestInvalidCycleAndSerialAdmission(t *testing.T) {
 	if err := f.service.Report(ctx, id, "failed", "token_exchange_failed", OAuthStart{}); err != nil {
 		t.Fatal(err)
 	}
-	_ = f.service.Observe(ctx, "synthetic-account", "claude", "test", "auth_invalid")
+	_ = f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", "auth_invalid")
 	_ = f.repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs WHERE auth_index='synthetic-account'`).Scan(&count)
 	if count != 1 {
 		t.Fatal("terminal failure recreated same episode")
 	}
-	_ = f.service.Observe(ctx, "synthetic-account", "claude", "test", "healthy")
-	_ = f.service.Observe(ctx, "synthetic-account", "claude", "test", "auth_invalid")
+	_ = f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", "healthy")
+	_ = f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", "auth_invalid")
 	_ = f.repo.SQL().QueryRow(`SELECT COUNT(*) FROM reauth_jobs WHERE auth_index='synthetic-account'`).Scan(&count)
 	if count != 2 {
 		t.Fatal("new episode did not create job")
@@ -129,7 +151,7 @@ func TestHealthyObservationClosesActiveEpisode(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := f.service.Observe(ctx, "synthetic-account", "claude", "test", "healthy"); err != nil {
+				if err := f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", "healthy"); err != nil {
 					t.Fatal(err)
 				}
 				j, err := f.service.Next(ctx, "claude")
@@ -144,7 +166,7 @@ func TestHealthyObservationClosesActiveEpisode(t *testing.T) {
 				} else if err := f.service.Report(ctx, id, "failed", "runner_failed", OAuthStart{}); err != nil {
 					t.Fatal(err)
 				}
-				if err := f.service.Observe(ctx, "synthetic-account", "claude", "test", "auth_invalid"); err != nil {
+				if err := f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", "auth_invalid"); err != nil {
 					t.Fatal(err)
 				}
 				j, err = f.service.Next(ctx, "claude")
@@ -315,7 +337,7 @@ func TestNotificationFailureDoesNotBlockVerification(t *testing.T) {
 			if err := f.service.Tick(ctx); !errors.Is(err, sendErr) {
 				t.Fatalf("outcome receipt was not retried: %v", err)
 			}
-			if err := f.service.Observe(ctx, "second", "claude", "second", "auth_invalid"); err != nil {
+			if err := f.service.Observe(ctx, "second", "claude", "oauth", "second", "auth_invalid"); err != nil {
 				t.Fatal(err)
 			}
 			next, err := f.service.Next(ctx, "claude")
@@ -392,7 +414,7 @@ func TestReauthWaitExpiryAndMessageReplayAcrossJobs(t *testing.T) {
 	if err := f.service.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
-	_ = f.service.Observe(ctx, "synthetic-account", "claude", "test", "healthy")
+	_ = f.service.Observe(ctx, "synthetic-account", "claude", "oauth", "test", "healthy")
 	if err := f.service.Tick(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +517,7 @@ func TestProviderFlowsAndGlobalContactSlot(t *testing.T) {
 		t.Run(c.provider, func(t *testing.T) {
 			f := newFixture(t)
 			ctx := context.Background()
-			if err := f.service.Observe(ctx, "account", c.provider, "", "auth_invalid"); err != nil {
+			if err := f.service.Observe(ctx, "account", c.provider, "oauth", "", "auth_invalid"); err != nil {
 				t.Fatal(err)
 			}
 			p, _ := ProviderFor(c.provider)
@@ -531,7 +553,7 @@ func TestProviderFlowsAndGlobalContactSlot(t *testing.T) {
 			if p.ID == other {
 				other = "antigravity"
 			}
-			if err := f.service.Observe(ctx, "other", other, "", "auth_invalid"); err != nil {
+			if err := f.service.Observe(ctx, "other", other, "oauth", "", "auth_invalid"); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := f.service.Next(ctx, other); err == nil {
@@ -587,7 +609,7 @@ func TestProviderFlowsAndGlobalContactSlot(t *testing.T) {
 func TestDeviceStartValidationAndExpiry(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	if err := f.service.Observe(ctx, "device", "xai", "", "auth_invalid"); err != nil {
+	if err := f.service.Observe(ctx, "device", "xai", "oauth", "", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
 	j, err := f.service.Next(ctx, "xai")
@@ -648,7 +670,7 @@ func TestOTPFlowCanCompleteWithoutEmailChallenge(t *testing.T) {
 func TestBrowserNotificationFailureStillVerifies(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	if err := f.service.Observe(ctx, "browser", "antigravity", "", "auth_invalid"); err != nil {
+	if err := f.service.Observe(ctx, "browser", "antigravity", "oauth", "", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
 	j, err := f.service.Next(ctx, "antigravity")

@@ -34,7 +34,7 @@ func TestOAuthMessageWhitelistAndCards(t *testing.T) {
 	if err := bot.HandleMessage(ctx, valid); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Observe(ctx, "synthetic-auth", "claude", "Synthetic Claude", "auth_invalid"); err != nil {
+	if err := service.Observe(ctx, "synthetic-auth", "claude", "oauth", "Synthetic Claude", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
 	j, err := service.Next(ctx, "claude")

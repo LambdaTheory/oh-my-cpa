@@ -484,8 +484,8 @@ func (h *Handler) recordQuotaSignal(ctx context.Context, q *quota.NormalizedQuot
 	if err := h.repo.SaveFeishuAccountSignal(ctx, signal); err != nil && h.logger != nil {
 		h.logger.Warn("record feishu quota signal", "auth_index", authIndex, "error", err)
 	}
-	if provider, ok := reauth.CredentialProvider(q.Type, q.Provider, authIndex); h.reauth != nil && ok {
-		if err := h.reauth.Observe(ctx, authIndex, provider.ID, q.Name, state); err != nil && h.logger != nil {
+	if provider, ok := reauth.CredentialProvider(q.Type, q.Provider, q.AccountType); h.reauth != nil && ok {
+		if err := h.reauth.Observe(ctx, authIndex, provider.ID, q.AccountType, q.Name, state); err != nil && h.logger != nil {
 			h.logger.Warn("reauth observation failed", "reason", "storage_unavailable")
 		}
 	}

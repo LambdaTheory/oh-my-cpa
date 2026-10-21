@@ -77,8 +77,8 @@ func (s *Service) Enabled() bool {
 	return s != nil && s.opts.Repo != nil && s.opts.Enabled != nil && s.opts.Enabled()
 }
 
-func (s *Service) Observe(ctx context.Context, authIndex, provider, label, state string) error {
-	metadata, isOAuth := CredentialProvider("", provider, authIndex)
+func (s *Service) Observe(ctx context.Context, authIndex, provider, accountType, label, state string) error {
+	metadata, isOAuth := CredentialProvider("", provider, accountType)
 	if !s.Enabled() || !isOAuth || authIndex == "" {
 		return nil
 	}

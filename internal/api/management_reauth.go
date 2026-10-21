@@ -50,7 +50,7 @@ func (h *Handler) refreshReauthCredential(ctx context.Context, authIndex string)
 		return "unknown", sql.ErrNoRows
 	}
 	file := files.Files[found]
-	if _, ok := reauth.CredentialProvider(file.Type, file.Provider, file.AuthIndex); !ok {
+	if _, ok := reauth.CredentialProvider(file.Type, file.Provider, file.AccountType); !ok {
 		return "unknown", errors.New("provider_changed")
 	}
 	q, err := h.readCredentialQuota(ctx, quota.NewService(client), file, h.loadPriorNormalizedQuota(ctx, authIndex))
