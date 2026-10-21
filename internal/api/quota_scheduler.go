@@ -79,6 +79,9 @@ func (h *Handler) readCredentialQuota(ctx context.Context, service *quota.Servic
 		return nil, quotaBackoffError(provider, authIndex, until, h.now())
 	}
 	value, err = service.RefreshCredentialQuota(ctx, file, prior)
+	if value != nil {
+		h.recordQuotaSignal(ctx, value)
+	}
 	if err != nil {
 		if h.recordQuotaRateLimit(authIndex, provider, err) {
 			if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {

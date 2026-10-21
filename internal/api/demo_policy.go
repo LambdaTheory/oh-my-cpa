@@ -276,6 +276,10 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/feishu/settings", demoAllow, ""},
 	{http.MethodGet, "/api/v1/feishu/status", demoAllow, ""},
 	{http.MethodPost, "/api/v1/feishu/test", demoRefuse, "sending a Feishu test message is disabled"},
+	{http.MethodGet, "/api/v1/management/reauth/jobs/next", demoRefuse, "credential recovery is disabled"},
+	{http.MethodGet, "/api/v1/management/reauth/jobs/{id}", demoRefuse, "credential recovery is disabled"},
+	{http.MethodGet, "/api/v1/management/reauth/jobs/{id}/code", demoRefuse, "credential recovery is disabled"},
+	{http.MethodPost, "/api/v1/management/reauth/jobs/{id}/status", demoRefuse, "credential recovery is disabled"},
 	{http.MethodPost, "/api/v1/feishu/prediction-test", demoRefuse, "sending a Feishu prediction message is disabled"},
 
 	// A manual capture pass is answered locally: it reports a pass that found an

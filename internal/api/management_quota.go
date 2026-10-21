@@ -14,6 +14,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/reauth"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/warmup"
@@ -497,6 +498,11 @@ func (h *Handler) recordQuotaSignal(ctx context.Context, q *quota.NormalizedQuot
 	}
 	if err := h.repo.SaveFeishuAccountSignal(ctx, signal); err != nil && h.logger != nil {
 		h.logger.Warn("record feishu quota signal", "auth_index", authIndex, "error", err)
+	}
+	if provider, ok := reauth.CredentialProvider(q.Type, q.Provider, q.AccountType); h.reauth != nil && ok {
+		if err := h.reauth.Observe(ctx, authIndex, provider.ID, q.AccountType, q.Name, state); err != nil && h.logger != nil {
+			h.logger.Warn("reauth observation failed", "reason", "storage_unavailable")
+		}
 	}
 }
 

@@ -318,11 +318,14 @@ type CPAConfig struct {
 // treated as unset, so a compose file that passes a variable through unset cannot
 // pin the feature off.
 type FeishuConfig struct {
-	Enabled       *bool
-	ForceDisabled bool
-	AppID         *string
-	AppSecret     *string
-	ChatID        *string
+	OAuthChatID        string
+	OAuthContactOpenID string
+	ReauthRunnerCIDRs  []string
+	Enabled            *bool
+	ForceDisabled      bool
+	AppID              *string
+	AppSecret          *string
+	ChatID             *string
 }
 
 // OllamaConfig controls the Ollama quota collector, the one loop that scrapes
@@ -912,6 +915,19 @@ func loadFeishuConfig() (FeishuConfig, error) {
 	cfg.AppID = optionalEnvString("OMCPA_FEISHU_APP_ID")
 	cfg.AppSecret = optionalEnvString("OMCPA_FEISHU_APP_SECRET")
 	cfg.ChatID = optionalEnvString("OMCPA_FEISHU_CHAT_ID")
+	cfg.OAuthChatID = strings.TrimSpace(os.Getenv("OMCPA_FEISHU_OAUTH_CHAT_ID"))
+	cfg.OAuthContactOpenID = strings.TrimSpace(os.Getenv("OMCPA_FEISHU_OAUTH_CONTACT_OPEN_ID"))
+	cidrs := strings.TrimSpace(os.Getenv("OMCPA_REAUTH_RUNNER_CIDRS"))
+	if cidrs == "" {
+		cidrs = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7"
+	}
+	for _, entry := range strings.Split(cidrs, ",") {
+		entry = strings.TrimSpace(entry)
+		if _, _, err := net.ParseCIDR(entry); err != nil {
+			return FeishuConfig{}, fmt.Errorf("OMCPA_REAUTH_RUNNER_CIDRS contains an invalid network")
+		}
+		cfg.ReauthRunnerCIDRs = append(cfg.ReauthRunnerCIDRs, entry)
+	}
 	return cfg, nil
 }
 

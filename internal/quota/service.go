@@ -307,6 +307,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 	caps := CapabilitiesForFile(file)
 
 	result := &NormalizedQuota{
+		AccountType:  file.AccountType,
 		AuthIndex:    authIndex,
 		Name:         file.Name,
 		Type:         file.Type,

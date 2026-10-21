@@ -127,14 +127,14 @@ func TestOAuthAuthURLSendsTheLoopbackFlagOnlyWhereItApplies(t *testing.T) {
 	if _, sentAsConsoleID := queries["anthropic"]; sentAsConsoleID {
 		t.Fatal("anthropic must be sent as provider=claude")
 	}
-	for _, provider := range []string{"codex", "claude", "antigravity", "xai", "devin"} {
+	for _, provider := range []string{"codex", "claude", "antigravity"} {
 		if queries[provider] != "true" {
 			t.Fatalf("%s is_webui = %q, want true", provider, queries[provider])
 		}
 	}
 	// Device grants have no redirect for a forwarder to serve, and a plugin
 	// provider declares its own route, so neither asks CPA to open a listener.
-	for _, provider := range []string{"kimi", "meta", "some-plugin"} {
+	for _, provider := range []string{"kimi", "meta", "xai", "devin", "some-plugin"} {
 		if queries[provider] != "" {
 			t.Fatalf("%s is_webui = %q, want it omitted", provider, queries[provider])
 		}
@@ -154,13 +154,13 @@ func TestOAuthProviderRegistryFlagsMatchTheConsoleFlow(t *testing.T) {
 	if byID["devin"].Flow != OAuthFlowRedirect {
 		t.Fatalf("devin flow = %q, want redirect", byID["devin"].Flow)
 	}
-	if !byID["devin"].UsesLoopbackCallback {
-		t.Fatal("devin's redirect lands on CPA's own callback route and needs the forwarder")
+	if byID["devin"].UsesLoopbackCallback {
+		t.Fatal("devin uses CPA's own callback port without a forwarder")
 	}
-	if byID["meta"].Flow != OAuthFlowDevice || byID["kimi"].Flow != OAuthFlowDevice {
+	if byID["meta"].Flow != OAuthFlowDevice || byID["kimi"].Flow != OAuthFlowDevice || byID["xai"].Flow != OAuthFlowDevice {
 		t.Fatal("device-code providers must be declared as device flows")
 	}
-	if byID["meta"].UsesLoopbackCallback || byID["kimi"].UsesLoopbackCallback {
+	if byID["meta"].UsesLoopbackCallback || byID["kimi"].UsesLoopbackCallback || byID["xai"].UsesLoopbackCallback {
 		t.Fatal("a device flow must not request the loopback callback")
 	}
 	// Plugin providers are not in the registry; the lookup has to say so rather

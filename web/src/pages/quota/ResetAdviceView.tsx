@@ -48,4 +48,3 @@ export function ResetAdviceView({ advice, nowMS }: { advice: ResetAdvice; nowMS:
     <p className={styles.hint}>{t('advice.hint')}</p>
   </Panel>;
 }
-

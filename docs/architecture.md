@@ -2436,6 +2436,77 @@ configuration stays loaded but inert, so it never fails startup;
 take precedence over the web settings, and the console shows the effective source. A
 demo never opens the connection.
 
+### OAuth reauthentication jobs
+
+`internal/reauth` coordinates recovery of explicitly invalid built-in CPA OAuth credentials. The
+shared quota read records the classified signal even when an automatic refresh cannot
+produce a snapshot; `Handler.recordQuotaSignal` observes it through an idempotent service
+seam. Transport and unknown outcomes cannot create a job. Migration 053 adds
+`reauth_jobs`, with one open episode per auth index and one running job across the fixed
+contact. Pending jobs queue. Failed and expired jobs retain episode ownership until a
+healthy reading closes it, including when that reading arrives during active work.
+Closing the episode does not release an active job's contact slot before it settles.
+This survives process restarts.
+
+| Recovery flow / code kind | Canonical providers | Contact action and callback boundary |
+| --- | --- | --- |
+| `redirect_otp` / `otp` | `claude` (alias `anthropic`), `codex` | Browser login with CPA forwarder; reply with six digits only if email OTP is requested |
+| `redirect_browser` / `none` | `antigravity` | Complete Google login in the browser; no code message |
+| `redirect_manual_callback` / `none` | `devin` | Callback lands on CPA's own port without a forwarder; remote browsers need a tunnel or manual callback URL submission to the runner |
+| `device_code` / `device` | `kimi`, `kimi-ai`, `xai`, `meta` | Open the verification page and enter its user code before expiry; no email OTP message |
+
+The registry is the whitelist; aliases normalize to canonical login IDs. Gemini,
+Vertex, unknown/plugin providers and API-key identities are excluded even when their
+quota result reports authentication failure. Exact credential type takes precedence
+over normalized quota family, so `kimi-ai` does not become `kimi`. CPA's
+`account_type` supplies the account kind: only `oauth` or the empty value used by
+OAuth providers without account information is admitted; `api_key` and every other
+nonempty kind are refused. Auth indexes are opaque, not evidence of OAuth provenance.
+Quota refresh results carry this kind internally through signal recording and job
+admission without adding it to public quota JSON or persisted snapshots. Recovery
+refresh re-reads the credential and rejects non-OAuth kinds before any quota call.
+
+Runner admission persists `oauth_started` and a deadline. The next tick opens
+`waiting_code`, `waiting_browser`, `waiting_callback` or `waiting_device`
+and sends the corresponding card. OTP delivery proceeds through `code_received`
+and `oauth_submitted`; all flows can report completed OAuth to enter `verifying`.
+An OTP-capable login that completes without an email challenge can also enter verification.
+Device metadata includes `user_code`, `verification_url` and `expires_at_ms`;
+the device expiry controls its waiting deadline. Other waits last ten minutes.
+Pending selection is provider-filtered, but any active provider holds the same unique
+contact slot. No second runner can start until that slot settles. Expiry survives restart.
+
+`internal/feishu/oauth.go` handles only the dedicated group and contact before the usual
+mention filter. Message type, group type, sender, message ID, code format and waiting
+state all gate acceptance. SQLite retains only the accepted message ID for replay
+protection. Email OTPs live in a five-minute process map and are removed on consumption,
+expiry, disable or shutdown. An interrupted unconsumed delivery expires after restart.
+Event handling performs bounded local work; card delivery and quota checks run outside
+the state lock. SDK diagnostic messages are reduced to fixed categories.
+
+The application starts and joins a one-second reauth loop alongside Feishu. Deadlines
+are persisted, so restart does not reset the two-minute settling period or two/four-minute
+verification backoff. At most three checks run before a failure receipt and one final
+refresh. The refresh uses the configured CPA client, re-lists credentials, rejects an
+ambiguous auth index and uses the credential's actual provider quota reader and shared rate-limit
+backoff. A successful runner callback is not proof of credential health. Only a healthy
+quota result produces success; uncertain transport results remain explicitly uncertain.
+The loop sends flow-specific request and outcome cards, plus OTP processing acknowledgements; wait expiry sends none.
+Notification errors retain delivery intent for retry and are reported independently of
+due verification and the final refresh; delivery failures cannot retain the contact slot
+after verification settles.
+
+The four routes under `/api/v1/management/reauth/jobs` are `GET /next?provider=<canonical>`,
+`GET /{id}`, `GET /{id}/code` and `POST /{id}/status`. They inherit the configured base
+path and console session authentication. The runner signs in with the management key.
+An additional configurable private/loopback CIDR check uses the TCP peer and refuses
+forwarding headers; it supports direct Docker sidecar access without trusting a public
+proxy. All responses are no-store. Job DTOs are handwritten metadata allowlists; the
+dedicated one-time code response is restricted to this authenticated runner boundary.
+Status input accepts a fixed vocabulary and safe error codes only, never a callback URL
+or outbound target. Demo routes refuse every recovery operation. Audit admission must
+succeed before a sensitive effect. The table is hidden from operator SQL queries.
+
 ## 9. Storage
 
 | Table group | Tables | Notes |
@@ -2450,6 +2521,7 @@ demo never opens the connection.
 | CPA configuration | `cpa_config_backups`, `cpa_config_backup_settings` | Encrypted copies of the stored CPA configuration file, kept before every configuration write (migration 030, ADR 0037; migration 033 adds each copy's `layout` and `reason` and the single-row retention table, ADR 0051). v8 copies are kept to the operator's retention (default 20, 5–100), pre-v8 copies to the latest ten; `cpa_config_backups` is hidden from `database_query` |
 | Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migration 043. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`); `cycle_reset_at_ms` is execution history unless the current state still owns a recovery plan, and confirmed or external enable paths clear the consumed value. `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
 | Ollama monitoring | `ollama_accounts` | Migration 044. One row per operator account: AES-GCM encrypted session cookie, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries the cookie |
+| Credential recovery | `reauth_jobs` | Migration 053. Safe metadata, invalid-cycle ownership, state, deadlines, notification intent, device display metadata and accepted message identity; no email OTP or token. Hidden from operator queries; receipts are retained |
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
 | Release observation | `release_index`, `release_check_state` | Migrations 024 and 025; `truncated` is added by 025, so a database that applied 024 before it existed still gains the column. `release_index` holds one row per published version (tag, name, publication time, prerelease flag) and is **replaced as a unit per product** by `PublishReleaseSnapshot`, because a feed that stops listing a withdrawn release must stop the console claiming it exists. `release_check_state` holds one row per product — the last attempt and success times, the redacted failure reason, the latest tag, the ETag and the truncation flag — and is written by `RecordReleaseCheckAttempt`/`PublishReleaseSnapshot`/`RecordReleaseCheckFailure`, read by `ListReleases` and `GetReleaseCheckState(ForRepository)`. A release's prose body is **never stored**: it lives in bounded process memory for the life of the process, so an index without notes still names the versions and links to the source (see §10) |
 
@@ -2513,11 +2585,13 @@ fix a defect with a new migration, never by editing `schema_migrations`
 
 The fork occupies migrations 041–045. A schema 45 deployment keeps those tables
 and advances through 046 (credential warmup), 047 (font library), and 048 (channel
-model prices), then 049 (reset announcements). The migration backup is created and smoke-tested before 046; each
+model prices), then 049 (reset announcements), 050 (reset grant status), 051–052
+(quota refresh outcomes), and 053 (OAuth reauthentication jobs). The migration backup
+is created and smoke-tested before 046; each
 subsequent migration commits separately. A failed migration stops startup, and
 restoring an older executable requires restoring the matching pre-upgrade database
 backup. The repository's synthetic upgrade test checks both sets of tables, a
-pre-existing fork row, and the gap-free 041–049 upgrade sequence without duplicate
+pre-existing fork row, and the gap-free 041–053 upgrade sequence without duplicate
 versions. Versions 010–014 were never part of this repository's migration history.
 
 ## 10. Background loops
