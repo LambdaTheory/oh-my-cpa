@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
@@ -21,6 +23,7 @@ import (
 // embedded normalized quota, so older clients still see the summary they expect.
 type QuotaItemDTO struct {
 	quota.NormalizedQuota
+	ResetAdvice      *resetAdviceDTO                       `json:"reset_advice,omitempty"`
 	Quota            *managementQuotaObservation           `json:"quota,omitempty"`
 	ModelQuotas      map[string]managementQuotaObservation `json:"model_quotas,omitempty"`
 	QuotaExceeded    bool                                  `json:"quota_exceeded"`
@@ -40,6 +43,14 @@ func (h *Handler) getQuotaOverview(writer http.ResponseWriter, request *http.Req
 	if err != nil {
 		writeCPAFacadeError(writer, err)
 		return
+	}
+	advice, err := h.consoleResetAdvice(request.Context(), "")
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	for index := range overview.Quotas {
+		overview.Quotas[index].ResetAdvice = advice[overview.Quotas[index].AuthIndex]
 	}
 	writeJSON(writer, http.StatusOK, overview)
 }
@@ -720,11 +731,34 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		}
 	}
 
+	advice, err := h.consoleResetAdvice(ctx, authIndex)
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"quota":        normalized,
+		"quota": struct {
+			quota.NormalizedQuota
+			ResetAdvice *resetAdviceDTO `json:"reset_advice,omitempty"`
+		}{normalized, advice[authIndex]},
 		"history":      history,
 		"model_quotas": projectModelQuotas(targetFile.ModelQuotas),
 	})
+}
+
+func (h *Handler) consoleResetAdvice(ctx context.Context, authIndex string) (map[string]*resetAdviceDTO, error) {
+	result := map[string]*resetAdviceDTO{}
+	if h.repo == nil {
+		return result, nil
+	}
+	advice, err := h.operationsService().ConsoleResetAdvice(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.ResetAdviceInput{AuthIndex: authIndex})
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range advice.Items {
+		result[item.AuthIndex] = projectResetAdvice(item)
+	}
+	return result, nil
 }
 
 type quotaOverviewData struct {

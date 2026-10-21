@@ -902,6 +902,12 @@ queryable. Invalid input is rejected before insertion, not stored with a rejecte
 
 Only console sessions register announcements. Source is currently manual; status_rss and
 x_api are reserved ingestion values. Source never implies confidence. Unverified or
-untimed announcements are evidence only; future advice integration may use timed
-confirmed/probable announcements without treating them as observed quota resets. This
-release does not change quota_prediction or reset_advice decisions (ADR 0110).
+untimed announcements are evidence only. Timed confirmed/probable announcements within
+the advice horizon set reset_advice to use_before_expiry only with a fresh, known positive
+eligible entitlement balance on an enabled, available credential and a known local verdict.
+This takes precedence over local emergency advice; local_evidence preserves that original
+verdict and reset instant, and announcements flag conflicts explicitly. Unknown/zero capacity
+keeps the local verdict with notice_without_local_capacity. Provider matching is exact;
+credential targets match auth indexes internally and model targets require an exact persisted
+model-scope quota window. Announcements never alter quota_prediction or prove redemption
+eligibility (ADRs 0110 and 0111).

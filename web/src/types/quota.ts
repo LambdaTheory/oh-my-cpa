@@ -1,4 +1,5 @@
 import { ManagementQuotaObservation } from './managementAuthFile';
+import type { ResetAdvice } from './resetAdvice';
 
 export interface QuotaWindow {
   id: string;
@@ -164,6 +165,7 @@ export interface QuotaCapabilities {
 }
 
 export interface QuotaItem {
+  reset_advice?: ResetAdvice;
   auth_index: string;
   name: string;
   type: string;

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
@@ -20,21 +21,43 @@ type ResetAdviceInput struct {
 }
 
 type ResetAdviceItem struct {
-	Announcements     []struct{} `json:"announcements"`
-	CooldownActive    *bool      `json:"cooldown_active"`
-	CredentialLabel   string     `json:"credential_label"`
-	Provider          string     `json:"provider"`
-	AuthIndex         string     `json:"auth_index,omitempty"`
-	WindowKind        string     `json:"window_kind"`
-	WindowID          string     `json:"window_id"`
-	RemainingResets   *int       `json:"remaining_resets"`
-	EarliestExpiryMS  *int64     `json:"earliest_expiry_ms"`
-	UsedPercent       *float64   `json:"used_percent"`
-	ResetObservedAtMS int64      `json:"reset_observed_at_ms"`
-	QuotaObservedAtMS int64      `json:"quota_observed_at_ms"`
-	Verdict           string     `json:"verdict"`
-	Evidence          string     `json:"evidence"`
-	Reasons           []string   `json:"reasons"`
+	Announcements     []ResetAdviceAnnouncement `json:"announcements"`
+	LocalEvidence     ResetAdviceLocalEvidence  `json:"local_evidence"`
+	CooldownActive    *bool                     `json:"cooldown_active"`
+	CredentialLabel   string                    `json:"credential_label"`
+	Provider          string                    `json:"provider"`
+	AuthIndex         string                    `json:"auth_index,omitempty"`
+	WindowKind        string                    `json:"window_kind"`
+	WindowID          string                    `json:"window_id"`
+	RemainingResets   *int                      `json:"remaining_resets"`
+	EarliestExpiryMS  *int64                    `json:"earliest_expiry_ms"`
+	UsedPercent       *float64                  `json:"used_percent"`
+	ResetObservedAtMS int64                     `json:"reset_observed_at_ms"`
+	QuotaObservedAtMS int64                     `json:"quota_observed_at_ms"`
+	Verdict           string                    `json:"verdict"`
+	Evidence          string                    `json:"evidence"`
+	Reasons           []string                  `json:"reasons"`
+}
+
+type ResetAdviceLocalEvidence struct {
+	Source         string   `json:"source"`
+	Verdict        string   `json:"verdict"`
+	Evidence       string   `json:"evidence"`
+	Reasons        []string `json:"reasons"`
+	QuotaResetAtMS *int64   `json:"quota_reset_at_ms"`
+}
+
+// Scope targets are used for matching, never copied into read-only output.
+type ResetAdviceAnnouncement struct {
+	ID                string `json:"id"`
+	Source            string `json:"source"`
+	Scope             string `json:"scope"`
+	Model             string `json:"model,omitempty"`
+	Confidence        string `json:"confidence"`
+	ExpectedResetAtMS *int64 `json:"expected_reset_at_ms"`
+	RegisteredAtMS    int64  `json:"registered_at_ms"`
+	InfluencesAdvice  bool   `json:"influences_advice"`
+	HasConflict       bool   `json:"has_conflict"`
 }
 
 type ResetAdviceResult struct {
@@ -48,6 +71,16 @@ func (s *Service) registerResetAdvice(registry *capability.Registry) error {
 }
 
 func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (ResetAdviceResult, error) {
+	return s.resetAdvice(ctx, input, true)
+}
+
+// The console already owns a complete credential roster. Tool envelope limits
+// must not silently remove advice from credentials below its first page.
+func (s *Service) ConsoleResetAdvice(ctx context.Context, input ResetAdviceInput) (ResetAdviceResult, error) {
+	return s.resetAdvice(ctx, input, false)
+}
+
+func (s *Service) resetAdvice(ctx context.Context, input ResetAdviceInput, isBounded bool) (ResetAdviceResult, error) {
 	if input.Provider != "" && !quotaObservationToken.MatchString(input.Provider) {
 		return ResetAdviceResult{}, invalidParameters{detail: "provider must be a lowercase identifier"}
 	}
@@ -84,6 +117,18 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		return ResetAdviceResult{}, err
 	}
 	result := ResetAdviceResult{GeneratedAtMS: capability.AnchorMS(ctx), Items: []ResetAdviceItem{}}
+	announcements := []repository.ResetAnnouncement{}
+	for offset := 0; ; {
+		page, total, err := s.Repo.ListResetAnnouncements(ctx, repository.ResetAnnouncementFilter{Status: "active", Limit: 100, Offset: offset}, result.GeneratedAtMS)
+		if err != nil {
+			return ResetAdviceResult{}, err
+		}
+		announcements = append(announcements, page...)
+		offset += len(page)
+		if offset >= total {
+			break
+		}
+	}
 	cooldowns, err := s.Repo.BatchCorrelatedCooldowns(ctx, indexes, result.GeneratedAtMS)
 	if err != nil {
 		return ResetAdviceResult{}, err
@@ -136,7 +181,9 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		item := ResetAdviceItem{CredentialLabel: safeLabel(entry.Name), Provider: provider, AuthIndex: entry.AuthIndex, WindowKind: predictionWindowKind(advice.Window), WindowID: advice.Window.ID,
 			RemainingResets: advice.RemainingResets, EarliestExpiryMS: advice.EarliestExpiryMS, UsedPercent: advice.UsedPercent,
 			ResetObservedAtMS: snapshot.ObservedAtMS, QuotaObservedAtMS: observedAtMS, Verdict: advice.Verdict, Evidence: advice.Evidence, Reasons: advice.Reasons,
-			Announcements: []struct{}{}}
+			Announcements: []ResetAdviceAnnouncement{},
+			LocalEvidence: ResetAdviceLocalEvidence{Source: "local_observation", Verdict: advice.Verdict, Evidence: advice.Evidence, Reasons: advice.Reasons, QuotaResetAtMS: advice.Window.ResetAtMS}}
+		applyResetAnnouncements(&item, announcements, windows, entry, result.GeneratedAtMS, s.ResetAdviceExpiryWindow)
 		if cooldown, exists := cooldowns[entry.AuthIndex]; exists {
 			item.CooldownActive = &cooldown.IsActive
 		}
@@ -152,7 +199,7 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		}
 		return a.WindowID < b.WindowID
 	})
-	if len(result.Items) > limit {
+	if isBounded && len(result.Items) > limit {
 		result.Omitted = len(result.Items) - limit
 		result.Items = result.Items[:limit]
 	}
@@ -164,6 +211,9 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		}
 	}
 	for {
+		if !isBounded {
+			return result, nil
+		}
 		encoded, err := json.Marshal(result)
 		if err != nil {
 			return ResetAdviceResult{}, err
@@ -174,6 +224,70 @@ func (s *Service) ResetAdvice(ctx context.Context, input ResetAdviceInput) (Rese
 		result.Items = result.Items[:len(result.Items)-1]
 		result.Omitted++
 	}
+}
+
+func applyResetAnnouncements(item *ResetAdviceItem, announcements []repository.ResetAnnouncement, windows []quota.QuotaWindow, credential repository.FeishuCredentialMetadata, nowMS int64, horizon time.Duration) {
+	if horizon == 0 {
+		horizon = quota.DefaultResetAdviceExpiryWindow
+	}
+	for _, announcement := range announcements {
+		if announcement.Provider != item.Provider {
+			continue
+		}
+		switch announcement.Scope {
+		case "credential":
+			if announcement.AuthIndex != credential.AuthIndex {
+				continue
+			}
+		case "model":
+			// Only an exact persisted model window proves applicability offline.
+			hasModel := false
+			for _, window := range windows {
+				if window.Scope == "model" && window.Model == announcement.Model {
+					hasModel = true
+					break
+				}
+			}
+			if !hasModel {
+				continue
+			}
+		}
+		evidence := ResetAdviceAnnouncement{ID: announcement.ID, Source: announcement.Source, Scope: announcement.Scope, Model: announcement.Model, Confidence: announcement.Confidence, ExpectedResetAtMS: announcement.ExpectedResetAtMS, RegisteredAtMS: announcement.RegisteredAtMS}
+		isTrusted := announcement.Confidence == "confirmed" || announcement.Confidence == "probable"
+		isInWindow := announcement.ExpectedResetAtMS != nil && *announcement.ExpectedResetAtMS > nowMS && *announcement.ExpectedResetAtMS-nowMS <= horizon.Milliseconds()
+		if isTrusted && isInWindow {
+			hasCapacity := !credential.Disabled && !credential.Unavailable && item.RemainingResets != nil && *item.RemainingResets > 0 && item.LocalEvidence.Verdict != quota.ResetAdviceUnknown
+			if hasCapacity {
+				evidence.InfluencesAdvice = true
+				evidence.HasConflict = item.LocalEvidence.Verdict != quota.ResetAdviceUseBeforeExpiry || item.LocalEvidence.QuotaResetAtMS != nil && *item.LocalEvidence.QuotaResetAtMS != *announcement.ExpectedResetAtMS
+				item.Verdict, item.Evidence = quota.ResetAdviceUseBeforeExpiry, "projection"
+				item.Reasons = appendUniqueReason(item.Reasons, "announcement_reset_soon")
+			} else {
+				item.Reasons = appendUniqueReason(item.Reasons, "notice_without_local_capacity")
+			}
+		}
+		if !evidence.InfluencesAdvice {
+			item.Reasons = appendUniqueReason(item.Reasons, "announcement_evidence_only")
+		}
+		// A different reset instant remains conflicting evidence even when the
+		// confidence or balance is insufficient to change the advice.
+		if announcement.ExpectedResetAtMS != nil && item.LocalEvidence.QuotaResetAtMS != nil && *announcement.ExpectedResetAtMS != *item.LocalEvidence.QuotaResetAtMS {
+			evidence.HasConflict = true
+		}
+		if evidence.HasConflict {
+			item.Reasons = appendUniqueReason(item.Reasons, "announcement_local_conflict")
+		}
+		item.Announcements = append(item.Announcements, evidence)
+	}
+}
+
+func appendUniqueReason(reasons []string, reason string) []string {
+	for _, existing := range reasons {
+		if existing == reason {
+			return reasons
+		}
+	}
+	return append(reasons, reason)
 }
 
 func decodeResetAdviceEntitlements(snapshot repository.QuotaSnapshotRecord, input *quota.ResetAdviceInput) {

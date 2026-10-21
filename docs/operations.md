@@ -670,7 +670,7 @@ being filed under a period it does not describe (ADR 0071).
 | --- | --- | --- |
 | `OMCPA_RESET_ADVICE_EXPIRY_WINDOW` | `72h` | Positive Go duration defining how soon a remaining reset entitlement expires for `reset_advice`; invalid, zero or negative values refuse startup |
 
-The horizon affects only the Agent/MCP read-only advice. A fresh quota reading at or
+The horizon affects the shared console/Agent/MCP read-only advice and announcement window. A fresh quota reading at or
 above 90% used prioritizes retaining a reset for recovery. Entitlement snapshots older
 than two hours yield unknown, even when recent passive headers exist; a current
 window must also have a fresh percentage and an unexpired reset boundary. A shorter
@@ -838,7 +838,7 @@ Unicode characters). Model scope requires a model identifier; credential scope r
 its auth index. The optional expected reset time uses the displayed OMC timezone and
 must be in the future. Exclude credentials, keys and tokens from announcement text.
 
-Successful registration refreshes the list. The list shows source, confidence, scope
+Successful registration refreshes the announcement list and credential advice. The list shows source, confidence, scope
 and expected reset time; expired entries leave the active view but remain in SQLite
 and in API history. No automatic collector or background expiration task runs.
 Unverified and untimed entries remain evidence, not confirmation of a quota reset.
@@ -855,3 +855,14 @@ rejection action or rejected row: invalid writes return 400 invalid_reset_announ
 
 The routes never call CPA and are not Agent/MCP capabilities. The public demonstration
 permits the empty list read and refuses registration. SQLite backups include the records.
+
+### Reading reset advice in the quota workspace
+
+Credential rows show Use before expiry, Keep for recovery or No action needed; unknown
+results do not receive a certain label. Details retain the local verdict and observations
+beside each matching announcement, its source, confidence, expected reset and conflict flag.
+A timed confirmed/probable notice within the configured horizon overrides local emergency
+advice only when a usable positive entitlement balance is known. Unknown or zero balance
+and disabled/unavailable credentials retain their local advice. Unverified and untimed
+notices are evidence only. Model notices require an exact persisted model-window match.
+The projected advice never authorizes redemption and makes no CPA write (ADR 0111).

@@ -482,6 +482,21 @@ export async function oauthManagement({ base, page, check }) {
 
 async function checkResetAnnouncementLayout(page, check) {
   const notices = [];
+  const now = Date.now();
+  const localAdvice = {
+    verdict: 'keep_for_emergency', evidence: 'projection', reasons: ['quota_near_exhaustion'],
+    remaining_resets: 2, earliest_expiry_ms: now + 120 * 3_600_000, used_percent: 95,
+    reset_observed_at_ms: now, quota_observed_at_ms: now,
+    local_evidence: { source: 'local_observation', verdict: 'keep_for_emergency', evidence: 'projection', reasons: ['quota_near_exhaustion'], quota_reset_at_ms: now + 3_600_000 },
+    announcements: [],
+  };
+  const quotaHandler = async route => {
+    const advice = notices.length ? {
+      ...localAdvice, verdict: 'use_before_expiry', reasons: ['announcement_reset_soon', 'announcement_local_conflict'],
+      announcements: notices.map(notice => ({ ...notice, influences_advice: true, has_conflict: true })),
+    } : localAdvice;
+    await route.fulfill({ json: { quotas: quota.map(item => item.auth_index === 'auth-01' ? { ...item, reset_advice: advice } : item), total: quota.length, summary: {} } });
+  };
   const handler = async (route) => {
     if (route.request().method() === 'POST') {
       const input = route.request().postDataJSON();
@@ -491,12 +506,22 @@ async function checkResetAnnouncementLayout(page, check) {
     } else { await route.fulfill({ json: { items: notices, total: notices.length } }); }
   };
   await page.route('**/management/quota/reset-announcements*', handler);
+  await page.route('**/management/quota', quotaHandler);
   try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const record = page.getByTestId('oauth-credential-record').filter({ has: page.locator('[data-quota-body="auth-01"]') });
+    await record.getByText('Keep for recovery', { exact: true }).waitFor();
+    await record.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: 'tmp/reset-advice-before-desktop.png' });
     const region = page.getByRole('region', { name: 'Active reset announcements' });
     await region.getByRole('button', { name: 'Register reset announcement' }).click();
     const dialog = page.getByRole('dialog', { name: 'Register reset announcement' });
     await dialog.waitFor();
     await dialog.getByLabel('Provider identifier').fill('codex');
+    const future = new Date(now + 2 * 3_600_000);
+    const localTime = future.toISOString().slice(0, 16);
+    await dialog.locator('input[type="datetime-local"]').fill(localTime);
     await dialog.getByRole('combobox', { name: 'Confidence' }).click();
     await page.locator('.ant-select-dropdown:visible').getByText('Confirmed', { exact: true }).click();
     await dialog.getByLabel('Original announcement').fill('Public announcement for layout verification');
@@ -510,10 +535,33 @@ async function checkResetAnnouncementLayout(page, check) {
     }
     await dialog.getByRole('button', { name: 'Register', exact: true }).click();
     await region.getByText('Public announcement for layout verification').waitFor();
+    await page.locator('.omc-toast').filter({ hasText: 'Announcement registered' }).waitFor({ state: 'hidden' });
     await region.scrollIntoViewIfNeeded();
     await settleLayout(page);
     check('announcement result fits the phone viewport', await region.evaluate((element) => element.scrollWidth <= element.clientWidth + 1));
-  } finally { await page.unroute('**/management/quota/reset-announcements*', handler); }
+    await record.getByText('Use before expiry', { exact: true }).waitFor();
+    check('registering a notice refreshes the row advice without reload', await record.locator('[data-reset-advice="use_before_expiry"]').count() === 1);
+    for (const width of [1440, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await record.scrollIntoViewIfNeeded();
+      await settleLayout(page);
+      await page.screenshot({ path: 'tmp/reset-advice-after-' + width + '.png' });
+      await record.getByRole('button', { name: /^Details:/ }).click();
+      const detail = page.locator('[data-reset-advice-detail="true"]');
+      await detail.getByText('Conflicting evidence', { exact: true }).waitFor();
+      check('advice retains both sources at width ' + width,
+        await detail.getByRole('region', { name: 'Local observation' }).count() === 1
+        && await detail.getByRole('region', { name: 'Announcement evidence' }).count() === 1);
+      check('advice fits viewport ' + width, await detail.evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+      await detail.scrollIntoViewIfNeeded();
+      await page.screenshot({ path: 'tmp/reset-advice-detail-' + width + '.png' });
+      await page.keyboard.press('Escape');
+      await detail.waitFor({ state: 'hidden' });
+    }
+  } finally {
+    await page.unroute('**/management/quota/reset-announcements*', handler);
+    await page.unroute('**/management/quota', quotaHandler);
+  }
 }
 
 
