@@ -2133,7 +2133,7 @@ the resulting snapshot is normalized and stored in `quota_snapshots`. Quota obse
 and the fixed credential warmup adapters are the only server-initiated CPA request
 proxies (ADR 0097): there is no user-supplied URL or generic `/api-call` surface.
 
-Migration 050 adds `quota_refresh_attempts`, one latest attempt per credential, independent
+Migration 051 adds `quota_refresh_attempts`, one latest attempt per credential, independent
 of successful snapshots. Manual, interval and adaptive refresh paths record success, failure
 or rate limiting, the attempt instant, an optional HTTP status code and the effective retry
 instant. Upstream error bodies are never stored in this table. Overview and detail DTOs expose
@@ -3495,6 +3495,18 @@ listed neighbouring requests as if they were this one. ADR
 and is superseded by ADR 0024, which records the single latest session that replaced it. Gateway unit tests, facade tests,
 `scripts/test-playground.ts`, and desktop/phone probes cover this flow. Public-demo
 model reads are generated through the real facade; inference is explicitly refused, while one browser-local recorded example demonstrates the flow (ADR 0092).
+
+## Claude reset grant collection
+
+The fixed supplemental Claude usage GET reads `cedar_ember.grants` independently
+of `eligible`, using the OAuth beta and Claude CLI request headers. Migration 050
+persists `reset_grants_status` beside `reset_grants_json`; the existing quota
+response projects `available`, `unavailable` or `failed`. Historical empty status
+is not inferred from an empty array. Successful quota windows survive supplemental
+failure. Fresh advice explains failure and unpublished entitlements separately,
+without treating either as zero or allowing an announcement to repair uncertainty.
+Only normalized grants and the safe enum persist; upstream error details do not.
+ADR 0112 defines the absent, empty and malformed response boundaries.
 
 ## Read-only reset advice
 

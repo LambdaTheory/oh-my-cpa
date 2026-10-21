@@ -487,3 +487,26 @@ func TestQuotaOverviewAdvertisesPluginRefresh(t *testing.T) {
 			overview.Quotas[0].Capabilities)
 	}
 }
+
+func TestQuotaSnapshotRoundTripsGrantReadOutcomes(t *testing.T) {
+	for _, status := range []quota.ResetGrantsStatus{quota.ResetGrantsAvailable, quota.ResetGrantsUnavailable, quota.ResetGrantsFailed} {
+		t.Run(string(status), func(t *testing.T) {
+			handler := capacityTestHandler(t)
+			q := &quota.NormalizedQuota{AuthIndex: "synthetic-claude", Provider: "claude", Status: "healthy", ObservedAtMS: time.Now().UnixMilli(), ResetGrantsStatus: status}
+			if status == quota.ResetGrantsAvailable {
+				q.ResetGrants = []quota.ClaudeResetGrant{{ID: "weekly", ResetsTotal: 2, ResetsLeft: 1}}
+			}
+			if err := handler.persistNormalizedQuotaSnapshot(context.Background(), q); err != nil {
+				t.Fatal(err)
+			}
+			restored := handler.loadPriorNormalizedQuota(context.Background(), q.AuthIndex)
+			if restored == nil || restored.ResetGrantsStatus != status || len(restored.ResetGrants) != len(q.ResetGrants) {
+				t.Fatalf("restored=%+v", restored)
+			}
+			history, err := handler.repo.GetQuotaSnapshotHistory(context.Background(), q.AuthIndex, 10)
+			if err != nil || len(history) != 1 || history[0].ResetGrantsStatus != string(status) {
+				t.Fatalf("history=%+v err=%v", history, err)
+			}
+		})
+	}
+}

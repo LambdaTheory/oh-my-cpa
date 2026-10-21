@@ -107,19 +107,37 @@ var claudeResetGrantWindows = map[string]bool{
 
 var claudeResetGrantIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
 
+// ResetGrantsStatus describes the supplemental read independently of quota health.
+// Empty is reserved for snapshots collected before the status was recorded.
+type ResetGrantsStatus string
+
+const (
+	ResetGrantsAvailable   ResetGrantsStatus = "available"
+	ResetGrantsUnavailable ResetGrantsStatus = "unavailable"
+	ResetGrantsFailed      ResetGrantsStatus = "failed"
+)
+
 // ParseClaudeResetGrants parses the `cedar_ember` block of the Claude usage
-// response. It returns nil for a missing or malformed block: one malformed
-// grant, a duplicate id or a bad timestamp rejects the whole block, because a
-// half-parsed entitlement display is worse than none.
-func ParseClaudeResetGrants(raw []byte) []ClaudeResetGrant {
+// response independently of redemption eligibility. A malformed grant rejects
+// the whole reading rather than publishing a partial entitlement balance.
+func ParseClaudeResetGrants(raw []byte) ([]ClaudeResetGrant, ResetGrantsStatus) {
 	var body struct {
 		CedarEmber *struct {
 			Eligible *bool             `json:"eligible"`
 			Grants   []json.RawMessage `json:"grants"`
 		} `json:"cedar_ember"`
 	}
-	if json.Unmarshal(raw, &body) != nil || body.CedarEmber == nil || body.CedarEmber.Eligible == nil {
-		return nil
+	if json.Unmarshal(raw, &body) != nil || strings.TrimSpace(string(raw)) == "null" {
+		return nil, ResetGrantsFailed
+	}
+	if body.CedarEmber == nil {
+		return nil, ResetGrantsUnavailable
+	}
+	if body.CedarEmber.Grants == nil {
+		if body.CedarEmber.Eligible != nil && !*body.CedarEmber.Eligible {
+			return nil, ResetGrantsUnavailable
+		}
+		return nil, ResetGrantsFailed
 	}
 	grants := make([]ClaudeResetGrant, 0, len(body.CedarEmber.Grants))
 	seen := make(map[string]bool, len(body.CedarEmber.Grants))
@@ -134,16 +152,16 @@ func ParseClaudeResetGrants(raw []byte) []ClaudeResetGrant {
 		}
 		var flagMaps map[string]json.RawMessage
 		if json.Unmarshal(rawGrantJSON, &rawGrant) != nil || json.Unmarshal(rawGrantJSON, &flagMaps) != nil {
-			return nil
+			return nil, ResetGrantsFailed
 		}
 		if !claudeResetGrantIDPattern.MatchString(rawGrant.ID) || seen[rawGrant.ID] {
-			return nil
+			return nil, ResetGrantsFailed
 		}
 		seen[rawGrant.ID] = true
 		total, okTotal := grantCount(rawGrant.ResetsTotal)
 		left, okLeft := grantCount(rawGrant.ResetsLeft)
 		if !okTotal || !okLeft || left > total {
-			return nil
+			return nil, ResetGrantsFailed
 		}
 		// Usability flags default to the refusing side and must be booleans
 		// when present; the display never offers a grant for spending.
@@ -151,7 +169,7 @@ func ParseClaudeResetGrants(raw []byte) []ClaudeResetGrant {
 			if rawFlag, present := flagMaps[key]; present {
 				var flag bool
 				if json.Unmarshal(rawFlag, &flag) != nil {
-					return nil
+					return nil, ResetGrantsFailed
 				}
 			}
 		}
@@ -159,7 +177,7 @@ func ParseClaudeResetGrants(raw []byte) []ClaudeResetGrant {
 		if rawGrant.EndsAt != nil {
 			parsed, ok := parseGrantInstant(*rawGrant.EndsAt)
 			if !ok {
-				return nil
+				return nil, ResetGrantsFailed
 			}
 			endsAtMS = &parsed
 		}
@@ -178,7 +196,10 @@ func ParseClaudeResetGrants(raw []byte) []ClaudeResetGrant {
 			Clears:      clears,
 		})
 	}
-	return grants
+	if len(grants) == 0 {
+		return grants, ResetGrantsUnavailable
+	}
+	return grants, ResetGrantsAvailable
 }
 
 // grantCount accepts an integer count of zero or more; floats, strings and
@@ -187,7 +208,7 @@ func ParseClaudeResetGrants(raw []byte) []ClaudeResetGrant {
 // Go leaves implementation-defined.
 func grantCount(raw json.RawMessage) (int, bool) {
 	var value float64
-	if json.Unmarshal(raw, &value) != nil || value < 0 || value > 1e6 || value != math.Trunc(value) {
+	if len(raw) == 0 || string(raw) == "null" || json.Unmarshal(raw, &value) != nil || value < 0 || value > 1e6 || value != math.Trunc(value) {
 		return 0, false
 	}
 	return int(value), true

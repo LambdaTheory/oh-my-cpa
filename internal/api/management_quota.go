@@ -339,10 +339,11 @@ func (h *Handler) loadPriorNormalizedQuota(ctx context.Context, authIndex string
 // normalizedQuotaFromSnapshot rebuilds the prior reading a refresh starts from.
 func normalizedQuotaFromSnapshot(authIndex string, snapshot repository.QuotaSnapshotRecord) *quota.NormalizedQuota {
 	q := &quota.NormalizedQuota{
-		AuthIndex:    authIndex,
-		Provider:     snapshot.Provider,
-		Status:       snapshot.Status,
-		ObservedAtMS: snapshot.ObservedAtMS,
+		AuthIndex:         authIndex,
+		Provider:          snapshot.Provider,
+		Status:            snapshot.Status,
+		ObservedAtMS:      snapshot.ObservedAtMS,
+		ResetGrantsStatus: quota.ResetGrantsStatus(snapshot.ResetGrantsStatus),
 	}
 	if plan := planFromSnapshot(snapshot); plan != nil {
 		q.Plan = plan
@@ -450,17 +451,18 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		}
 	}
 	if err := h.repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{
-		WarmupJSON:       warmupJSON,
-		AuthIndex:        q.AuthIndex,
-		Provider:         q.Provider,
-		Status:           q.Status,
-		PlanType:         planType,
-		PlanTier:         planTier,
-		PlanJSON:         planJSON,
-		WindowsJSON:      winJSON,
-		ResetCreditsJSON: creditsJSON,
-		ResetGrantsJSON:  grantsJSON,
-		ObservedAtMS:     q.ObservedAtMS,
+		WarmupJSON:        warmupJSON,
+		AuthIndex:         q.AuthIndex,
+		Provider:          q.Provider,
+		Status:            q.Status,
+		PlanType:          planType,
+		PlanTier:          planTier,
+		PlanJSON:          planJSON,
+		WindowsJSON:       winJSON,
+		ResetCreditsJSON:  creditsJSON,
+		ResetGrantsJSON:   grantsJSON,
+		ResetGrantsStatus: string(q.ResetGrantsStatus),
+		ObservedAtMS:      q.ObservedAtMS,
 	}); err != nil {
 		return err
 	}
@@ -695,6 +697,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
 			if snapshot, ok := snapshots[authIndex]; ok {
 				normalized.ObservedAtMS = snapshot.ObservedAtMS
+				normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 				// See buildQuotaOverview: an empty reading survives only through the stored status.
 				normalized.Status = snapshot.Status
 				if plan := planFromSnapshot(snapshot); plan != nil {
@@ -862,6 +865,7 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		if snapshot, ok := latestSnapshots[authIndex]; ok {
 			normalized.ObservedAtMS = snapshot.ObservedAtMS
+			normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
 			// The stored status is what the last read produced, and an empty reading is only
 			// knowable from it: without it the evaluation below recomputes the credential as one
 			// nobody has read, and the console asks for a repeat of a read that already happened.

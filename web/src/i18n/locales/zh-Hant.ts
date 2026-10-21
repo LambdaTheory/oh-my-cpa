@@ -43,6 +43,8 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "advice.reason.quota_boundary_unknown": "配額週期邊界未知",
   "advice.reason.quota_cycle_expired": "已觀測配額週期已結束",
   "advice.reason.reset_scope_unknown": "重置權益適用範圍未知",
+  "advice.reason.reset_not_provided": "上游未提供重置權益",
+  "advice.reason.reset_reading_failed": "重置權益讀取失敗",
   "advice.reason.reset_reading_missing": "缺少重置權益讀數",
   "advice.reason.reset_reading_invalid": "重置權益讀數無效",
   "advice.reason.reset_details_incomplete": "重置權益明細不完整",

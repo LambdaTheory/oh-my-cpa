@@ -13,19 +13,20 @@ import (
 
 // QuotaSnapshotRecord represents a persisted normalized quota state for a credential.
 type QuotaSnapshotRecord struct {
-	WarmupJSON       string `json:"warmup_json,omitempty"`
-	ID               string `json:"id"`
-	AuthIndex        string `json:"auth_index"`
-	Provider         string `json:"provider"`
-	Status           string `json:"status"`
-	PlanType         string `json:"plan_type"`
-	PlanTier         string `json:"plan_tier"`
-	PlanJSON         string `json:"plan_json,omitempty"`
-	WindowsJSON      string `json:"windows_json"`
-	ResetCreditsJSON string `json:"reset_credits_json,omitempty"`
-	ResetGrantsJSON  string `json:"reset_grants_json,omitempty"`
-	ObservedAtMS     int64  `json:"observed_at_ms"`
-	CreatedAtMS      int64  `json:"created_at_ms"`
+	WarmupJSON        string `json:"warmup_json,omitempty"`
+	ID                string `json:"id"`
+	AuthIndex         string `json:"auth_index"`
+	Provider          string `json:"provider"`
+	Status            string `json:"status"`
+	PlanType          string `json:"plan_type"`
+	PlanTier          string `json:"plan_tier"`
+	PlanJSON          string `json:"plan_json,omitempty"`
+	WindowsJSON       string `json:"windows_json"`
+	ResetCreditsJSON  string `json:"reset_credits_json,omitempty"`
+	ResetGrantsStatus string `json:"reset_grants_status,omitempty"`
+	ResetGrantsJSON   string `json:"reset_grants_json,omitempty"`
+	ObservedAtMS      int64  `json:"observed_at_ms"`
+	CreatedAtMS       int64  `json:"created_at_ms"`
 }
 
 // ActiveCooldownRecord captures correlated error/cooldown state for an auth index.
@@ -63,8 +64,8 @@ func (r *Repository) SaveQuotaSnapshot(ctx context.Context, snapshot QuotaSnapsh
 	query := `
 		INSERT INTO quota_snapshots (
 			id, auth_index, provider, status, plan_type, plan_tier, plan_json,
-			windows_json, reset_credits_json, reset_grants_json, warmup_json, observed_at_ms, created_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			windows_json, reset_credits_json, reset_grants_json, reset_grants_status, warmup_json, observed_at_ms, created_at_ms
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 	_, err := r.SQL().ExecContext(ctx, query,
 		snapshot.ID,
@@ -77,6 +78,7 @@ func (r *Repository) SaveQuotaSnapshot(ctx context.Context, snapshot QuotaSnapsh
 		snapshot.WindowsJSON,
 		snapshot.ResetCreditsJSON,
 		snapshot.ResetGrantsJSON,
+		snapshot.ResetGrantsStatus,
 		snapshot.WarmupJSON,
 		snapshot.ObservedAtMS,
 		snapshot.CreatedAtMS,
@@ -137,7 +139,7 @@ func (r *Repository) GetLatestQuotaSnapshots(ctx context.Context, authIndexes []
 
 	query := fmt.Sprintf(`
 		SELECT id, auth_index, provider, status, plan_type, plan_tier,
-		       windows_json, reset_credits_json, reset_grants_json, plan_json, warmup_json, observed_at_ms, created_at_ms
+		       windows_json, reset_credits_json, reset_grants_json, reset_grants_status, plan_json, warmup_json, observed_at_ms, created_at_ms
 		FROM (
 			SELECT *, ROW_NUMBER() OVER(PARTITION BY auth_index ORDER BY observed_at_ms DESC, created_at_ms DESC, rowid DESC) as rn
 			FROM quota_snapshots
@@ -176,6 +178,7 @@ func scanQuotaSnapshot(rows *sql.Rows) (QuotaSnapshotRecord, error) {
 		&record.WindowsJSON,
 		&resetCredits,
 		&resetGrants,
+		&record.ResetGrantsStatus,
 		&planJSON,
 		&warmupJSON,
 		&record.ObservedAtMS,
@@ -208,7 +211,7 @@ func (r *Repository) GetQuotaSnapshotHistory(ctx context.Context, authIndex stri
 
 	query := `
 		SELECT id, auth_index, provider, status, plan_type, plan_tier,
-		       windows_json, reset_credits_json, reset_grants_json, plan_json, warmup_json, observed_at_ms, created_at_ms
+		       windows_json, reset_credits_json, reset_grants_json, reset_grants_status, plan_json, warmup_json, observed_at_ms, created_at_ms
 		FROM quota_snapshots
 		WHERE auth_index = ?
 		ORDER BY observed_at_ms DESC, created_at_ms DESC, rowid DESC

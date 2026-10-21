@@ -48,6 +48,8 @@ const DICT: Record<string, [string, string]> = {
   'advice.reason.quota_boundary_unknown': ["配额周期边界未知", "The quota cycle boundary is unknown"],
   'advice.reason.quota_cycle_expired': ["已观测配额周期已结束", "The observed quota cycle has ended"],
   'advice.reason.reset_scope_unknown': ["重置权益适用范围未知", "Reset entitlement scope is unknown"],
+  'advice.reason.reset_not_provided': ["上游未提供重置权益", "The upstream did not provide reset entitlements"],
+  'advice.reason.reset_reading_failed': ["重置权益读取失败", "Reset entitlement reading failed"],
   'advice.reason.reset_reading_missing': ["缺少重置权益读数", "The reset entitlement reading is missing"],
   'advice.reason.reset_reading_invalid': ["重置权益读数无效", "The reset entitlement reading is invalid"],
   'advice.reason.reset_details_incomplete': ["重置权益明细不完整", "Reset entitlement details are incomplete"],

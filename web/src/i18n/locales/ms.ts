@@ -43,6 +43,8 @@ export const MS: Readonly<Record<string, string>> = {
   "advice.reason.quota_boundary_unknown": "Sempadan kitaran kuota tidak diketahui",
   "advice.reason.quota_cycle_expired": "Kitaran kuota yang diperhatikan telah tamat",
   "advice.reason.reset_scope_unknown": "Skop kelayakan tetapan semula tidak diketahui",
+  "advice.reason.reset_not_provided": "Penyedia huluan tidak memberikan kelayakan tetapan semula",
+  "advice.reason.reset_reading_failed": "Bacaan kelayakan tetapan semula gagal",
   "advice.reason.reset_reading_missing": "Bacaan kelayakan tetapan semula tiada",
   "advice.reason.reset_reading_invalid": "Bacaan kelayakan tetapan semula tidak sah",
   "advice.reason.reset_details_incomplete": "Butiran kelayakan tetapan semula tidak lengkap",

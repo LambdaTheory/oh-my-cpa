@@ -894,6 +894,16 @@ owns its triage bucket. The rendering of those readings stays with the existing
 
 ### Reset advice coverage
 
+`internal/quota/claude_test.go` owns grant presence, optional/false eligibility,
+whole-block rejection and safe read outcomes. `internal/quota/service_test.go`
+checks the fixed GET query and headers, timeout/non-2xx failure classification and
+preservation of successful quota windows. Snapshot round trips in
+`internal/api/management_quota_test.go` cover outcome persistence and history.
+`internal/operations/reset_advice_test.go` carries parsed synthetic upstream shapes
+through persistence into count, expiry and distinct failure/unpublished reasons.
+`web/tests/reset-advice.component.test.tsx` verifies localized reasons and the
+Claude list/detail count and earliest expiry. Existing Codex regression claims remain.
+
 `internal/quota/reset_advice_test.go` owns expiry-horizon boundaries, emergency
 precedence at 90%, missing/stale/invalid evidence, known-zero and expired balances,
 and Claude grant scope/count aggregation without double-counting shared grants.

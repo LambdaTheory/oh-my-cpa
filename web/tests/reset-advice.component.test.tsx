@@ -62,3 +62,30 @@ describe('reset advice in credential quota', () => {
 
 
 
+
+describe('Claude entitlement read outcomes', () => {
+  it.each([
+    ['reset_reading_failed', 'Reset entitlement reading failed'],
+    ['reset_not_provided', 'The upstream did not provide reset entitlements'],
+  ])('explains %s without inventing a zero balance', (reason, copy) => {
+    const advice: ResetAdvice = { ...ADVICE, verdict: 'unknown', evidence: 'unknown', reasons: [reason], remaining_resets: null, earliest_expiry_ms: null, announcements: [], local_evidence: { ...ADVICE.local_evidence, verdict: 'unknown', evidence: 'unknown', reasons: [reason] } };
+    render(<I18nProvider><CredentialQuotaBody item={{ ...QUOTA, provider: 'claude', reset_advice: advice }} nowMS={NOW} isDemo={false} /></I18nProvider>);
+    expect(within(screen.getByRole('region', { name: 'Local observation' })).getByText(copy)).toBeTruthy();
+    expect(screen.getByText('Remaining resets: Unknown')).toBeTruthy();
+    expect(screen.queryByText('The reset entitlement reading is missing')).toBeNull();
+  });
+
+  it('shows a Claude count and earliest expiry alongside its advice', () => {
+    const advice: ResetAdvice = { ...ADVICE, remaining_resets: 2, earliest_expiry_ms: NOW + 48 * 3_600_000, announcements: [], reasons: ['reset_expiring_soon'], local_evidence: { ...ADVICE.local_evidence, verdict: 'use_before_expiry', reasons: ['reset_expiring_soon'] } };
+    const item: QuotaItem = { ...QUOTA, provider: 'claude', type: 'claude', reset_grants_status: 'available', reset_grants: [{ id: 'synthetic-weekly', resets_total: 3, resets_left: 2, ends_at_ms: advice.earliest_expiry_ms!, clears: ['five_hour'] }], reset_advice: advice };
+    const { unmount } = render(<I18nProvider><CompactQuotaView item={item} nowMS={NOW} /></I18nProvider>);
+    const badge = document.querySelector('[data-reset-grants]');
+    expect(badge?.textContent).toContain('Available 2');
+    expect(badge?.textContent).toContain('Earliest: 2d left');
+    expect(screen.getByText('Use before expiry')).toBeTruthy();
+    unmount();
+    render(<I18nProvider><CredentialQuotaBody item={item} nowMS={NOW} isDemo={false} /></I18nProvider>);
+    expect(screen.getByText('Remaining resets: 2')).toBeTruthy();
+    expect(screen.getByText(/Earliest local entitlement expiry:/).textContent).toContain('2d');
+  });
+});
