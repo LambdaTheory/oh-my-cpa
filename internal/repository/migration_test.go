@@ -475,3 +475,30 @@ func TestBackupRestoreSmokeAndFreeSpaceCheck(t *testing.T) {
 		t.Fatalf("expected at most 2 retained backups, got %d", encFiles)
 	}
 }
+
+func TestMigration049ProviderFlowsShareContactSlot(t *testing.T) {
+	ctx := context.Background()
+	db := openDatabaseAtMigration(t, 48)
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for i, p := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
+		if _, err := db.SQL.ExecContext(ctx, "INSERT INTO reauth_jobs (id,auth_index,provider,account_label,flow,code_kind,state,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,'pending',?,?)", p, p, p, p, "device_code", "device", i, i); err != nil {
+			t.Fatalf("provider %s: %v", p, err)
+		}
+	}
+	for _, state := range []string{"oauth_started", "waiting_code", "waiting_browser", "waiting_callback", "waiting_device", "code_received", "oauth_submitted", "verifying"} {
+		if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state=? WHERE id='claude'", state); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='waiting_device' WHERE id='kimi'"); err == nil {
+			t.Fatalf("contact index admitted concurrent %s and device", state)
+		}
+	}
+	if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='succeeded' WHERE id='claude'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='waiting_device' WHERE id='kimi'"); err != nil {
+		t.Fatal(err)
+	}
+}

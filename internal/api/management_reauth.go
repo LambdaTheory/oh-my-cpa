@@ -50,7 +50,7 @@ func (h *Handler) refreshReauthCredential(ctx context.Context, authIndex string)
 		return "unknown", sql.ErrNoRows
 	}
 	file := files.Files[found]
-	if quota.DetectProvider(file.Type, file.Provider) != "claude" {
+	if _, ok := reauth.CredentialProvider(file.Type, file.Provider, file.AuthIndex); !ok {
 		return "unknown", errors.New("provider_changed")
 	}
 	q, err := h.readCredentialQuota(ctx, quota.NewService(client), file, h.loadPriorNormalizedQuota(ctx, authIndex))
@@ -64,19 +64,24 @@ func (h *Handler) refreshReauthCredential(ctx context.Context, authIndex string)
 }
 
 type reauthJobDTO struct {
-	ID           string `json:"id"`
-	AuthIndex    string `json:"auth_index"`
-	Provider     string `json:"provider"`
-	AccountLabel string `json:"account_label"`
-	State        string `json:"state"`
-	Attempts     int    `json:"attempts"`
-	CreatedAtMS  int64  `json:"created_at_ms"`
-	UpdatedAtMS  int64  `json:"updated_at_ms"`
-	LastError    string `json:"last_error"`
+	Flow            string `json:"flow"`
+	CodeKind        string `json:"code_kind"`
+	UserCode        string `json:"user_code,omitempty"`
+	VerificationURL string `json:"verification_url,omitempty"`
+	ExpiresAtMS     int64  `json:"expires_at_ms,omitempty"`
+	ID              string `json:"id"`
+	AuthIndex       string `json:"auth_index"`
+	Provider        string `json:"provider"`
+	AccountLabel    string `json:"account_label"`
+	State           string `json:"state"`
+	Attempts        int    `json:"attempts"`
+	CreatedAtMS     int64  `json:"created_at_ms"`
+	UpdatedAtMS     int64  `json:"updated_at_ms"`
+	LastError       string `json:"last_error"`
 }
 
 func reauthDTO(j repository.ReauthJob) reauthJobDTO {
-	return reauthJobDTO{ID: j.ID, AuthIndex: j.AuthIndex, Provider: j.Provider, AccountLabel: j.AccountLabel, State: j.State, Attempts: j.Attempts, CreatedAtMS: j.CreatedAtMS, UpdatedAtMS: j.UpdatedAtMS, LastError: j.LastError}
+	return reauthJobDTO{Flow: j.Flow, CodeKind: j.CodeKind, UserCode: j.UserCode, VerificationURL: j.VerificationURL, ExpiresAtMS: j.ExpiresAtMS, ID: j.ID, AuthIndex: j.AuthIndex, Provider: j.Provider, AccountLabel: j.AccountLabel, State: j.State, Attempts: j.Attempts, CreatedAtMS: j.CreatedAtMS, UpdatedAtMS: j.UpdatedAtMS, LastError: j.LastError}
 }
 func (h *Handler) registerReauthRoutes(router chi.Router) {
 	router.Route("/management/reauth/jobs", func(r chi.Router) {
@@ -134,11 +139,12 @@ func writeReauthError(w http.ResponseWriter, err error) {
 	}
 }
 func (h *Handler) nextReauthJob(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("provider") != "claude" {
+	provider, ok := reauth.ProviderFor(r.URL.Query().Get("provider"))
+	if !ok {
 		writeError(w, 400, "unsupported_provider")
 		return
 	}
-	j, err := h.reauth.Next(r.Context())
+	j, err := h.reauth.Next(r.Context(), provider.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -173,6 +179,7 @@ func (h *Handler) takeReauthCode(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Handler) reportReauthStatus(w http.ResponseWriter, r *http.Request) {
 	var input struct {
+		reauth.OAuthStart
 		Status    string `json:"status"`
 		LastError string `json:"last_error"`
 	}
@@ -183,7 +190,7 @@ func (h *Handler) reportReauthStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, "invalid_parameters")
 		return
 	}
-	if err := h.reauth.Report(r.Context(), chi.URLParam(r, "id"), input.Status, input.LastError); err != nil {
+	if err := h.reauth.Report(r.Context(), chi.URLParam(r, "id"), input.Status, input.LastError, input.OAuthStart); err != nil {
 		writeReauthError(w, err)
 		return
 	}

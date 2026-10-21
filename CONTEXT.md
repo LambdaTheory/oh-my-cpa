@@ -4,8 +4,8 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 
 ## Terms
 
-- **Reauth job**: A durable Claude credential recovery task for one explicit `auth_invalid` episode. Transport failures never create one. A terminal failure or expiry still owns the episode until a healthy quota reading closes it; repeated invalid readings cannot enqueue another task. OMC coordinates the task and verifies recovery; an independent runner performs OAuth.
-- **OAuth contact**: The single configured Feishu `open_id` allowed to supply a six-digit code in the dedicated OAuth management group. Tasks queue per contact and only one proceeds at a time. Codes are held in process memory for five minutes, consumed once by an authenticated runner, and never stored in SQLite or ordinary responses.
+- **Reauth job**: A durable built-in CPA OAuth credential recovery task for one explicit `auth_invalid` episode. Transport failures never create one. A terminal failure or expiry still owns the episode until a healthy quota reading closes it; repeated invalid readings cannot enqueue another task. OMC coordinates the task and verifies recovery; an independent runner performs OAuth.
+- **OAuth contact**: The single configured Feishu `open_id` allowed to supply a six-digit code in the dedicated OAuth management group. Tasks across all providers queue per contact and only one proceeds at a time. Only OTP flows accept code messages. Email OTPs are held in process memory for five minutes, consumed once by an authenticated runner, and never stored in SQLite or ordinary responses.
 - **Reset entitlement**: A provider-reported right to reset specified quota windows, with a remaining count and optional expiry; it is distinct from the quota balance and from a scheduled window reset.
 - **Reset advice**: One read-only conclusion per credential, counting each applicable entitlement once even when it clears several windows. With fresh, valid remaining entitlements and known expiry, any standard quota window at or above 90% used takes priority as `keep_for_emergency`; otherwise, all standard windows must be readable and below that threshold before an entitlement expiring within the configured horizon yields `use_before_expiry`. A known zero balance or fully expired grants yields `no_action`, as does a readable positive balance entirely outside the horizon. Missing or stale key evidence that prevents a decision yields `unknown`. Window readings are evidence for the single conclusion, never additional conclusions.
 - **Reset advice evidence**: A fact describes a directly observed exhausted or expired entitlement balance; a projection is an advisory judgment from the remaining entitlement, expiry and current quota share. Unknown means evidence is missing, stale, invalid or inapplicable and never means a zero balance.
@@ -888,3 +888,24 @@ with normally distributed daily variation, quieter weekends and a small set of i
 - Early quota resets invalidate the prior cycle after observation. Redeeming a Codex reset
   credit retains its independent success even if cooldown clearing, refresh or warmup fails.
   Claude reset grants remain display-only.
+
+## OAuth credential recovery flows
+
+Recovery uses the built-in `internal/cpa/management.OAuthProviders` registry as an
+allowlist and stores the canonical login provider ID. Exact credential type wins over
+the normalized quota family, preserving the separate Kimi International account system.
+Gemini, Vertex, unknown providers and `api-keys.*` identities never create jobs or
+recovery cards, even after `auth_invalid`; they require key replacement.
+
+| Recovery flow / code kind | Canonical providers | Contact action and callback boundary |
+| --- | --- | --- |
+| `redirect_otp` / `otp` | `claude` (alias `anthropic`), `codex` | Browser login with CPA forwarder; reply with six digits only if email OTP is requested |
+| `redirect_browser` / `none` | `antigravity` | Complete Google login in the browser; no code message |
+| `redirect_manual_callback` / `none` | `devin` | Callback lands on CPA's own port without a forwarder; remote browsers need a tunnel or manual callback URL submission to the runner |
+| `device_code` / `device` | `kimi`, `kimi-ai`, `xai`, `meta` | Open the verification page and enter its user code before expiry; no email OTP message |
+
+The card follows the flow, not the quota family. Device user codes, verification pages
+and expiry timestamps are display metadata; email OTPs remain ephemeral secrets.
+The independent runner owns OAuth and callback submission. Remote deployments must
+make redirect callback ports reachable from the browser or submit callbacks through
+the runner; OMC never receives callback URLs or tokens in job status reports.

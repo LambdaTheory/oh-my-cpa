@@ -6,8 +6,10 @@ import (
 	"errors"
 )
 
-// ReauthJob contains only safe task metadata. Codes never enter SQLite.
+// ReauthJob contains only safe task metadata. Email OTPs never enter SQLite; device user codes are display metadata.
 type ReauthJob struct {
+	Flow, CodeKind, UserCode, VerificationURL    string
+	ExpiresAtMS                                  int64
 	ID, AuthIndex, Provider, AccountLabel, State string
 	Attempts                                     int
 	CreatedAtMS, UpdatedAtMS                     int64
@@ -17,16 +19,16 @@ type ReauthJob struct {
 	CodeConsumed                                 bool
 }
 
-const REAUTH_COLUMNS = `id, auth_index, provider, account_label, state, attempts, created_at_ms, updated_at_ms, last_error, cycle_closed_at_ms, next_attempt_at_ms, notification, message_id, code_consumed`
+const REAUTH_COLUMNS = `id, auth_index, provider, account_label, state, attempts, created_at_ms, updated_at_ms, last_error, cycle_closed_at_ms, next_attempt_at_ms, notification, message_id, code_consumed, flow, code_kind, user_code, verification_url, expires_at_ms`
 
 func scanReauthJob(row interface{ Scan(...any) error }) (ReauthJob, error) {
 	var j ReauthJob
-	err := row.Scan(&j.ID, &j.AuthIndex, &j.Provider, &j.AccountLabel, &j.State, &j.Attempts, &j.CreatedAtMS, &j.UpdatedAtMS, &j.LastError, &j.CycleClosedAtMS, &j.NextAttemptAtMS, &j.Notification, &j.MessageID, &j.CodeConsumed)
+	err := row.Scan(&j.ID, &j.AuthIndex, &j.Provider, &j.AccountLabel, &j.State, &j.Attempts, &j.CreatedAtMS, &j.UpdatedAtMS, &j.LastError, &j.CycleClosedAtMS, &j.NextAttemptAtMS, &j.Notification, &j.MessageID, &j.CodeConsumed, &j.Flow, &j.CodeKind, &j.UserCode, &j.VerificationURL, &j.ExpiresAtMS)
 	return j, err
 }
 
 func (r *Repository) CreateReauthJob(ctx context.Context, j ReauthJob) error {
-	_, err := r.SQL().ExecContext(ctx, `INSERT INTO reauth_jobs (`+REAUTH_COLUMNS+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, j.ID, j.AuthIndex, j.Provider, j.AccountLabel, j.State, j.Attempts, j.CreatedAtMS, j.UpdatedAtMS, j.LastError, j.CycleClosedAtMS, j.NextAttemptAtMS, j.Notification, j.MessageID, j.CodeConsumed)
+	_, err := r.SQL().ExecContext(ctx, `INSERT INTO reauth_jobs (`+REAUTH_COLUMNS+`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING`, j.ID, j.AuthIndex, j.Provider, j.AccountLabel, j.State, j.Attempts, j.CreatedAtMS, j.UpdatedAtMS, j.LastError, j.CycleClosedAtMS, j.NextAttemptAtMS, j.Notification, j.MessageID, j.CodeConsumed, j.Flow, j.CodeKind, j.UserCode, j.VerificationURL, j.ExpiresAtMS)
 	return err
 }
 
@@ -34,8 +36,8 @@ func (r *Repository) GetReauthJob(ctx context.Context, id string) (ReauthJob, er
 	return scanReauthJob(r.SQL().QueryRowContext(ctx, `SELECT `+REAUTH_COLUMNS+` FROM reauth_jobs WHERE id=?`, id))
 }
 
-func (r *Repository) NextReauthJob(ctx context.Context) (ReauthJob, error) {
-	return scanReauthJob(r.SQL().QueryRowContext(ctx, `SELECT `+REAUTH_COLUMNS+` FROM reauth_jobs WHERE state NOT IN ('succeeded','failed','expired') ORDER BY CASE WHEN state='pending' THEN 1 ELSE 0 END, created_at_ms,id LIMIT 1`))
+func (r *Repository) NextReauthJob(ctx context.Context, provider string) (ReauthJob, error) {
+	return scanReauthJob(r.SQL().QueryRowContext(ctx, `SELECT `+REAUTH_COLUMNS+` FROM reauth_jobs WHERE state NOT IN ('succeeded','failed','expired') AND (?='' OR provider=?) AND (state<>'pending' OR NOT EXISTS (SELECT 1 FROM reauth_jobs WHERE state NOT IN ('pending','succeeded','failed','expired'))) ORDER BY CASE WHEN state='pending' THEN 1 ELSE 0 END, created_at_ms,id LIMIT 1`, provider, provider))
 }
 
 func (r *Repository) ListReauthWork(ctx context.Context) ([]ReauthJob, error) {
@@ -57,7 +59,7 @@ func (r *Repository) ListReauthWork(ctx context.Context) ([]ReauthJob, error) {
 
 // SaveReauthJob refuses stale transitions rather than replaying a consumed code.
 func (r *Repository) SaveReauthJob(ctx context.Context, j ReauthJob, previous string) error {
-	result, err := r.SQL().ExecContext(ctx, `UPDATE reauth_jobs SET state=?,attempts=?,updated_at_ms=?,last_error=?,next_attempt_at_ms=?,notification=?,message_id=?,code_consumed=? WHERE id=? AND state=?`, j.State, j.Attempts, j.UpdatedAtMS, j.LastError, j.NextAttemptAtMS, j.Notification, j.MessageID, j.CodeConsumed, j.ID, previous)
+	result, err := r.SQL().ExecContext(ctx, `UPDATE reauth_jobs SET state=?,attempts=?,updated_at_ms=?,last_error=?,next_attempt_at_ms=?,notification=?,message_id=?,code_consumed=?,user_code=?,verification_url=?,expires_at_ms=? WHERE id=? AND state=?`, j.State, j.Attempts, j.UpdatedAtMS, j.LastError, j.NextAttemptAtMS, j.Notification, j.MessageID, j.CodeConsumed, j.UserCode, j.VerificationURL, j.ExpiresAtMS, j.ID, previous)
 	if err != nil {
 		return err
 	}

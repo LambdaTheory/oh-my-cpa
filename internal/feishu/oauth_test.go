@@ -37,11 +37,11 @@ func TestOAuthMessageWhitelistAndCards(t *testing.T) {
 	if err := service.Observe(ctx, "synthetic-auth", "claude", "Synthetic Claude", "auth_invalid"); err != nil {
 		t.Fatal(err)
 	}
-	j, err := service.Next(ctx)
+	j, err := service.Next(ctx, "claude")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Report(ctx, j.ID, "oauth_started", ""); err != nil {
+	if err := service.Report(ctx, j.ID, "oauth_started", "", reauth.OAuthStart{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Tick(ctx); err != nil {
@@ -119,5 +119,31 @@ func TestOAuthConfigurationWithoutAlertGroup(t *testing.T) {
 	bot.ConfigureOAuth("oc_oauth", "", nil)
 	if bot.OAuthReady() {
 		t.Fatal("missing contact enabled OAuth")
+	}
+}
+
+func TestOAuthCardsFollowProviderFlow(t *testing.T) {
+	for _, c := range []struct{ provider, want string }{
+		{"codex", "6 位验证码"}, {"antigravity", "请在浏览器完成 Google 登录"},
+		{"devin", "手工粘贴"}, {"kimi", "ABCD-1234"}, {"kimi-ai", "ABCD-1234"}, {"xai", "ABCD-1234"}, {"meta", "ABCD-1234"},
+	} {
+		t.Run(c.provider, func(t *testing.T) {
+			p, ok := reauth.ProviderFor(c.provider)
+			if !ok {
+				t.Fatal(c.provider)
+			}
+			j := repository.ReauthJob{Provider: p.ID, Flow: p.Flow, CodeKind: p.CodeKind, AccountLabel: "Synthetic account", UserCode: "ABCD-1234", VerificationURL: "https://verify.example.test/device", ExpiresAtMS: 1792454400000}
+			card := OAuthCard(j, "request", "ou_contact")
+			body, _ := json.Marshal(card)
+			if !strings.Contains(string(body), c.want) || !strings.Contains(string(body), p.Name) {
+				t.Fatalf("card=%s", body)
+			}
+			if p.CodeKind != "otp" && strings.Contains(string(body), "6 位") {
+				t.Fatalf("non-OTP card requests email code: %s", body)
+			}
+			if p.CodeKind == "device" && (!strings.Contains(string(body), j.VerificationURL) || !strings.Contains(string(body), "2026-10-20T00:00:00Z")) {
+				t.Fatalf("device instructions missing: %s", body)
+			}
+		})
 	}
 }

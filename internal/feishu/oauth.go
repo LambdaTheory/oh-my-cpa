@@ -5,7 +5,9 @@ import (
 	"errors"
 	"html"
 	"regexp"
+	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/reauth"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
@@ -57,10 +59,21 @@ func (s *Service) SendOAuthCard(ctx context.Context, j repository.ReauthJob, kin
 	return sender.SendCard(ctx, chatID, OAuthCard(j, kind, contactID))
 }
 func OAuthCard(j repository.ReauthJob, kind, contactID string) map[string]any {
-	title, text, color := "Claude 重授权", "", "blue"
+	provider, _ := reauth.ProviderFor(j.Provider)
+	title, text, color := provider.Name+" 重授权", "", "blue"
 	switch kind {
 	case "request":
-		text = `<at id_type="open_id" id="` + html.EscapeString(contactID) + `">接码人</at> 请直接发送 6 位验证码。`
+		mention := `<at id_type="open_id" id="` + html.EscapeString(contactID) + `">接码人</at> `
+		switch j.Flow {
+		case "redirect_otp":
+			text = mention + "请直接发送 " + provider.Name + " 登录邮件中的 6 位验证码。"
+		case "redirect_browser":
+			text = mention + "请在浏览器完成 Google 登录，完成后由登录程序确认。"
+		case "redirect_manual_callback":
+			text = mention + "请在浏览器完成登录。回调需可达 CPA 自身端口；远端部署请建立隧道，或将完整 callback URL 手工粘贴到登录程序。"
+		case "device_code":
+			text = mention + "请打开验证页面并输入设备码：**" + html.EscapeString(j.UserCode) + "**\n验证页面：" + html.EscapeString(j.VerificationURL) + "\n过期时间：" + time.UnixMilli(j.ExpiresAtMS).UTC().Format(time.RFC3339)
+		}
 	case "processing":
 		text = "已收到验证码，正在处理重授权。"
 	case "succeeded":

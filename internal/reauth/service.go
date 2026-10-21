@@ -78,7 +78,8 @@ func (s *Service) Enabled() bool {
 }
 
 func (s *Service) Observe(ctx context.Context, authIndex, provider, label, state string) error {
-	if !s.Enabled() || provider != "claude" || authIndex == "" {
+	metadata, isOAuth := CredentialProvider("", provider, authIndex)
+	if !s.Enabled() || !isOAuth || authIndex == "" {
 		return nil
 	}
 	s.mu.Lock()
@@ -92,18 +93,18 @@ func (s *Service) Observe(ctx context.Context, authIndex, provider, label, state
 	}
 	label = security.RedactText(strings.TrimSpace(label))
 	if label == "" {
-		label = "Claude account"
+		label = metadata.Name + " account"
 	}
 	if len(label) > 256 {
 		label = label[:256]
 	}
-	return s.opts.Repo.CreateReauthJob(ctx, repository.ReauthJob{ID: uuid.NewString(), AuthIndex: authIndex, Provider: provider, AccountLabel: label, State: "pending", CreatedAtMS: now, UpdatedAtMS: now})
+	return s.opts.Repo.CreateReauthJob(ctx, repository.ReauthJob{ID: uuid.NewString(), AuthIndex: authIndex, Provider: metadata.ID, Flow: metadata.Flow, CodeKind: metadata.CodeKind, AccountLabel: label, State: "pending", CreatedAtMS: now, UpdatedAtMS: now})
 }
-func (s *Service) Next(ctx context.Context) (repository.ReauthJob, error) {
+func (s *Service) Next(ctx context.Context, provider string) (repository.ReauthJob, error) {
 	if !s.Enabled() {
 		return repository.ReauthJob{}, ErrDisabled
 	}
-	return s.opts.Repo.NextReauthJob(ctx)
+	return s.opts.Repo.NextReauthJob(ctx, provider)
 }
 func (s *Service) Get(ctx context.Context, id string) (repository.ReauthJob, error) {
 	if !s.Enabled() {
@@ -126,7 +127,7 @@ func SafeFailure(reason string) bool {
 	}
 	return false
 }
-func (s *Service) Report(ctx context.Context, id, status, reason string) error {
+func (s *Service) Report(ctx context.Context, id, status, reason string, start OAuthStart) error {
 	if !s.Enabled() {
 		return ErrDisabled
 	}
@@ -137,15 +138,28 @@ func (s *Service) Report(ctx context.Context, id, status, reason string) error {
 		return err
 	}
 	previous := j.State
-	if (j.State == "waiting_code" || j.State == "code_received" || j.State == "oauth_submitted") && s.opts.Now().UnixMilli() >= j.NextAttemptAtMS {
+	if status != "oauth_started" && start != (OAuthStart{}) {
+		return ErrConflict
+	}
+	if (j.State == "oauth_started" || j.State == "waiting_browser" || j.State == "waiting_callback" || j.State == "waiting_device" || j.State == "waiting_code" || j.State == "code_received" || j.State == "oauth_submitted") && s.opts.Now().UnixMilli() >= j.NextAttemptAtMS {
 		return ErrConflict
 	}
 	switch status {
 	case "oauth_started":
-		if j.State == "oauth_started" || j.State == "waiting_code" {
+		metadata, ok := ProviderFor(j.Provider)
+		if !ok || !validOAuthStart(metadata, start) {
+			return ErrConflict
+		}
+		if j.State == "oauth_started" || j.State == "waiting_code" || j.State == "waiting_browser" || j.State == "waiting_callback" || j.State == "waiting_device" {
+			if j.UserCode != start.UserCode || j.VerificationURL != start.VerificationURL {
+				return ErrConflict
+			}
 			return nil
 		}
-		next, err := s.opts.Repo.NextReauthJob(ctx)
+		next, err := s.opts.Repo.NextReauthJob(ctx, j.Provider)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConflict
+		}
 		if err != nil {
 			return err
 		}
@@ -153,11 +167,17 @@ func (s *Service) Report(ctx context.Context, id, status, reason string) error {
 			return ErrConflict
 		}
 		j.State = "oauth_started"
+		j.NextAttemptAtMS = s.opts.Now().Add(WAIT_TTL).UnixMilli()
+		if j.CodeKind == "device" {
+			j.UserCode, j.VerificationURL = start.UserCode, start.VerificationURL
+			j.ExpiresAtMS = s.opts.Now().Add(time.Duration(start.ExpiresIn) * time.Second).UnixMilli()
+			j.NextAttemptAtMS = j.ExpiresAtMS
+		}
 	case "code_submitted":
 		if j.State == "oauth_submitted" {
 			return nil
 		}
-		if j.State != "code_received" || !j.CodeConsumed {
+		if j.CodeKind != "otp" || j.State != "code_received" || !j.CodeConsumed {
 			return ErrConflict
 		}
 		j.State = "oauth_submitted"
@@ -166,7 +186,7 @@ func (s *Service) Report(ctx context.Context, id, status, reason string) error {
 		if j.State == "verifying" || j.State == "succeeded" {
 			return nil
 		}
-		if j.State != "oauth_submitted" {
+		if j.State != "oauth_submitted" && j.State != "oauth_started" && j.State != "waiting_code" && j.State != "waiting_browser" && j.State != "waiting_callback" && j.State != "waiting_device" {
 			return ErrConflict
 		}
 		j.State = "verifying"
@@ -209,14 +229,14 @@ func (s *Service) AcceptCode(ctx context.Context, messageID, text string) error 
 		return err
 	}
 	defer s.mu.Unlock()
-	j, err := s.opts.Repo.NextReauthJob(ctx)
+	j, err := s.opts.Repo.NextReauthJob(ctx, "")
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if j.State != "waiting_code" || s.opts.Now().UnixMilli() >= j.NextAttemptAtMS {
+	if j.CodeKind != "otp" || j.State != "waiting_code" || s.opts.Now().UnixMilli() >= j.NextAttemptAtMS {
 		return nil
 	}
 	used, err := s.opts.Repo.ReauthMessageUsed(ctx, messageID)
@@ -250,7 +270,7 @@ func (s *Service) TakeCode(ctx context.Context, id string) (string, error) {
 		return "", err
 	}
 	code, ok := s.codes[id]
-	if j.State != "code_received" || j.CodeConsumed {
+	if j.CodeKind != "otp" || j.State != "code_received" || j.CodeConsumed {
 		return "", nil
 	}
 	if !ok || !s.opts.Now().Before(code.expires) {
@@ -331,10 +351,22 @@ func (s *Service) step(ctx context.Context, id string) (stepErr error) {
 	now := s.opts.Now()
 	switch j.State {
 	case "oauth_started":
-		j.State = "waiting_code"
+		if now.UnixMilli() >= j.NextAttemptAtMS {
+			j.State, j.LastError, j.Notification, j.NextAttemptAtMS = "expired", "code_expired", "", 0
+			break
+		}
+		switch j.Flow {
+		case "redirect_otp":
+			j.State = "waiting_code"
+		case "redirect_browser":
+			j.State = "waiting_browser"
+		case "redirect_manual_callback":
+			j.State = "waiting_callback"
+		case "device_code":
+			j.State = "waiting_device"
+		}
 		j.Notification = "request"
-		j.NextAttemptAtMS = now.Add(WAIT_TTL).UnixMilli()
-	case "waiting_code", "code_received", "oauth_submitted":
+	case "waiting_code", "waiting_browser", "waiting_callback", "waiting_device", "code_received", "oauth_submitted":
 		_, hasCode := s.codes[id]
 		if now.UnixMilli() >= j.NextAttemptAtMS || (j.State == "code_received" && !j.CodeConsumed && !hasCode) {
 			j.State = "expired"
