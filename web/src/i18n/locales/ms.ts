@@ -2671,6 +2671,8 @@ export const MS: Readonly<Record<string, string>> = {
   "quota.reset_expiry_title_zoned": "Tamat kredit set semula ({zone})",
   "quota.reset_grants_title_zoned": "Geran set semula Claude ({zone})",
   "quota.reset_grant_remaining": "Baki {left}/{total}",
+  "quota.reset_grant_available_hint": "Set semula Claude yang tersedia pada akaun kredensial ini",
+  "quota.reset_grant_earliest_expiry": "Paling awal: {time}",
   "quota.mins_later": "min",
   "quota.later": "kemudian",
   "quota.col_windows": "Gunakan Windows",

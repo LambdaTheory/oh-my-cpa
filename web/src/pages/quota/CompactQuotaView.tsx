@@ -3,7 +3,10 @@ import { ThunderboltOutlined } from '../../components/icons';
 import { useT } from '../../i18n';
 import type { QuotaItem } from '../../types/quota';
 import {
+  formatCountdown,
   formatObservedAgo,
+  formatShortDateTime,
+  formatTimeWithCountdown,
   quotaEmptyStateKey,
   quotaRemainingPercent,
   quotaRemainingText,
@@ -20,6 +23,7 @@ import { useTokenDisplayStyle } from '../../types/tokenDisplayContext';
 import styles from './QuotaPresentation.module.css';
 import { Meter } from '../../components/common/Meter';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
+import { claudeResetGrantSummary } from '../../utils/quotaResets';
 
 interface CompactQuotaViewProps {
   item: QuotaItem;
@@ -33,7 +37,8 @@ interface CompactQuotaViewProps {
  * with a density switch. The row carries the credential's own model family - the first
  * group the provider reports, the one named after the credential - as its five-hour and
  * weekly windows, side by side, each with its share, its bar and when it resets, plus how
- * many banked reset credits the account holds as a reading.
+ * many banked reset credits (Codex) or unspent reset grants (Claude) the account holds as a
+ * reading, the grants with the soonest expiry beside their count.
  *
  * It carries no control of its own. Spending a reset credit is irreversible, so it belongs
  * to the Drawer's Quota tab, where the credit expiries it consumes are on screen beside the
@@ -52,6 +57,7 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   const planText = item.plan?.plan_label;
   const cooldownDiagnostic = compactCooldownDiagnostic(item);
   const availableCredits = item.reset_credits?.available_count ?? 0;
+  const grantSummary = claudeResetGrantSummary(item);
   const credits = verifiedQuotaCredits(item);
   const hasCreditBalance = Boolean(
     credits?.unlimited
@@ -87,6 +93,20 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
         {availableCredits > 0 && (
           <span className={styles.credit} title={t('omc.quota_credit_available_hint')}>
             <ThunderboltOutlined /> {t('omc.quota_credit_available', { n: availableCredits })}
+          </span>
+        )}
+        {grantSummary && (
+          <span
+            className={styles.credit}
+            data-reset-grants="true"
+            title={grantSummary.earliestEndsAtMS
+              ? `${t('quota.reset_grant_available_hint')} · ${t('quota.reset_grant_earliest_expiry', { time: formatTimeWithCountdown(grantSummary.earliestEndsAtMS, nowMS, t) })}`
+              : t('quota.reset_grant_available_hint')}
+          >
+            <ThunderboltOutlined /> {t('omc.quota_credit_available', { n: grantSummary.resetsLeft })}
+            {grantSummary.earliestEndsAtMS && ` · ${t('quota.reset_grant_earliest_expiry', {
+              time: formatCountdown(grantSummary.earliestEndsAtMS, nowMS, t) ?? formatShortDateTime(grantSummary.earliestEndsAtMS),
+            })}`}
           </span>
         )}
         <span className={styles.observed}>{formatObservedAgo(item.observed_at_ms, nowMS, t)}</span>
