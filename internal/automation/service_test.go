@@ -603,3 +603,161 @@ func TestServiceDoesNotExecuteARecoveryPlanForAChangedProvider(t *testing.T) {
 		t.Fatalf("reason = %q, want %q", account.MonitorReason, ReasonIdentityMismatch)
 	}
 }
+
+func TestServicePauseResumesOriginalRecovery(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1000000000000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{{AuthIndex: "idx-1", Name: "synthetic.json", Provider: "codex", Controllable: true}}
+	service := newTestService(repo, clock, writer, &credentials)
+	if _, err := service.Adopt(ctx, []string{"idx-1"}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	reset := clock.Now().Add(time.Hour).UnixMilli()
+	insertWeekly(t, repo, "idx-1", "codex", 100, clock.Now().UnixMilli(), reset)
+	service.RunOnce(ctx)
+	credentials[0].Disabled = true
+	if _, err := service.SetAccountSwitch(ctx, "idx-1", false); err != nil {
+		t.Fatal(err)
+	}
+	clock.Set(time.UnixMilli(reset))
+	service.RunOnce(ctx)
+	if len(writer.snapshot()) != 1 {
+		t.Fatal("paused plan executed")
+	}
+	account, err := service.SetAccountSwitch(ctx, "idx-1", true)
+	if err != nil || account.State != StateWaiting || account.CycleResetAtMS == nil {
+		t.Fatalf("resume: %+v %v", account, err)
+	}
+	service.RunOnce(ctx)
+	calls := writer.snapshot()
+	if len(calls) != 2 || calls[1].disabled {
+		t.Fatalf("original recovery must enable: %+v", calls)
+	}
+}
+
+func TestServiceUnadoptPreservesGatewayAndPreventsPendingWork(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1000000000000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{{AuthIndex: "idx-1", Name: "synthetic.json", Provider: "codex", Controllable: true, Disabled: true}}
+	service := newTestService(repo, clock, writer, &credentials)
+	if _, err := service.Adopt(ctx, []string{"idx-1"}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SetManualReset(ctx, "idx-1", clock.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := service.Unadopt(ctx, "idx-1")
+	if err != nil || removed.RemovedAtMS == nil {
+		t.Fatalf("unadopt: %+v %v", removed, err)
+	}
+	service.RunOnce(ctx)
+	if len(writer.snapshot()) != 0 || !credentials[0].Disabled {
+		t.Fatal("removal changed gateway state")
+	}
+	if _, err := service.SetAccountSwitch(ctx, "idx-1", true); !errors.Is(err, ErrAccountNotFound) {
+		t.Fatalf("removed mutation: %v", err)
+	}
+	if count, err := service.UnadoptMany(ctx, []string{"idx-1", "idx-1", "absent"}); err != nil || count != 0 {
+		t.Fatalf("idempotent batch: %d %v", count, err)
+	}
+}
+
+func TestServiceSyncRequiresConsecutiveCompleteInventories(t *testing.T) {
+	ctx := context.Background()
+	for _, interruption := range []string{"failure", "degraded", "reappearance", "intent", "restart"} {
+		t.Run(interruption, func(t *testing.T) {
+			repo := automationRepo(t)
+			clock := &testClock{now: time.UnixMilli(1000000000000)}
+			writer := &fakeWriter{}
+			credentials := []Credential{{AuthIndex: "idx-1", Name: "synthetic.json", Provider: "codex", Controllable: true}}
+			service := newTestService(repo, clock, writer, &credentials)
+			if _, err := service.Adopt(ctx, []string{"idx-1"}, true, ""); err != nil {
+				t.Fatal(err)
+			}
+			credentials = nil
+			service.RunOnce(ctx)
+			account, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+			if account.RemovedAtMS != nil {
+				t.Fatal("first absence removed roster")
+			}
+			switch interruption {
+			case "failure", "degraded":
+				original := service.Credentials
+				service.Credentials = func(context.Context) ([]Credential, error) { return nil, errors.New("synthetic inventory unavailable") }
+				service.RunOnce(ctx)
+				service.Credentials = original
+			case "reappearance":
+				credentials = []Credential{{AuthIndex: "idx-1", Name: "synthetic.json", Provider: "codex", Controllable: true}}
+				service.RunOnce(ctx)
+				credentials = nil
+			case "intent":
+				if _, err := service.SetAccountSwitch(ctx, "idx-1", false); err != nil {
+					t.Fatal(err)
+				}
+			case "restart":
+				service = newTestService(repo, clock, writer, &credentials)
+			}
+			service.RunOnce(ctx)
+			account, _, _ = repo.GetAutomationAccount(ctx, "idx-1")
+			if account.RemovedAtMS != nil {
+				t.Fatal("interrupted observations counted as consecutive")
+			}
+			service.RunOnce(ctx)
+			account, _, _ = repo.GetAutomationAccount(ctx, "idx-1")
+			if account.RemovedAtMS == nil || account.IsAdopted {
+				t.Fatalf("second confirmed absence: %+v", account)
+			}
+			events, err := repo.ListAuditEvents(ctx, 10)
+			if err != nil || len(events) != 1 || events[0].Action != "account_automation.auto_remove" {
+				t.Fatalf("auto-remove audit: %+v %v", events, err)
+			}
+			if len(writer.snapshot()) != 0 {
+				t.Fatal("cleanup changed gateway status")
+			}
+			credentials = []Credential{{AuthIndex: "idx-1", Name: "synthetic.json", Provider: "codex", Controllable: true}}
+			service.RunOnce(ctx)
+			listed, _ := service.ListAccounts(ctx)
+			if len(listed) != 0 {
+				t.Fatal("reappearing credentials must require explicit adoption")
+			}
+		})
+	}
+}
+
+func TestServiceSyncPreservesPendingPlans(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1000000000000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{}
+	service := newTestService(repo, clock, writer, &credentials)
+	cases := []struct{ id, assignments string }{
+		{"retry", "next_attempt_at_ms = 2000"},
+		{"disabled", "state = 'disabled'"},
+		{"waiting", "state = 'waiting'"},
+		{"cycle", "cycle_reset_at_ms = 2000"},
+		{"manual", "manual_reset_at_ms = 2000, manual_reset_consumed = 0"},
+	}
+	for _, tc := range cases {
+		if err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: tc.id}, []repository.AutomationAccount{{AuthIndex: tc.id}}, true, clock.Now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.SQL().ExecContext(ctx, "UPDATE account_automation_accounts SET "+tc.assignments+" WHERE auth_index = ?", tc.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		service.RunOnce(ctx)
+	}
+	accounts, err := service.ListAccounts(ctx)
+	if err != nil || len(accounts) != len(cases) {
+		t.Fatalf("pending roster: %+v %v", accounts, err)
+	}
+	if len(writer.snapshot()) != 0 {
+		t.Fatal("missing credentials must never receive writes")
+	}
+}

@@ -261,7 +261,7 @@ func TestAccountAutomationCandidateSeparatesAdoptionFromAutoDisable(t *testing.T
 	if candidate := byIndex["idx-unverified"]; !candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != "" {
 		t.Fatalf("an unverified controllable provider must be adoptable for monitoring only: %+v", candidate)
 	}
-	if candidate := byIndex["idx-uncontrollable"]; candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != automation.ReasonNoCredential {
+	if candidate := byIndex["idx-uncontrollable"]; candidate.Adoptable || candidate.AutoDisableSupported || candidate.AdoptionBlockedReason != automation.ReasonCredentialMissingName {
 		t.Fatalf("an uncontrollable provider must stay blocked with its reason: %+v", candidate)
 	}
 
@@ -382,5 +382,118 @@ func assertRecoveryProjection(t *testing.T, accounts []accountAutomationAccountD
 	}
 	if account := byIndex["recovered"]; account.RecoveryAtMS != nil || account.RecoveryStatus != "" {
 		t.Fatalf("recovered projection must omit history: %+v", account)
+	}
+}
+
+func TestAccountAutomationOptionsAndRemovalContract(t *testing.T) {
+	ctx := context.Background()
+	var handlerRef *Handler
+	gatewayWrites := 0
+	client, base, repo := startDashboardTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			gatewayWrites++
+		}
+		if strings.HasPrefix(r.URL.Path, "/v8/management/credentials") {
+			_, _ = w.Write([]byte(`{"files":[{"auth_index":"synthetic-a","name":"synthetic-a.json","provider":"codex","disabled":true},{"auth_index":"synthetic-b","name":"synthetic-b.json","provider":"claude"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}, func(h *Handler) { h.SetAutomation(h.BuildAutomationService()); handlerRef = h })
+	send := func(method, path, body string, want int) []byte {
+		t.Helper()
+		req, err := http.NewRequest(method, base+"/omc/api/v1/account-automation"+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		payload, _ := io.ReadAll(response.Body)
+		if response.StatusCode != want {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, response.StatusCode, payload)
+		}
+		return payload
+	}
+	send(http.MethodPost, "/adopt", `{"auth_indexes":["synthetic-a","synthetic-b"]}`, http.StatusOK)
+	account, _, err := repo.GetAutomationAccount(ctx, "synthetic-a")
+	if err != nil || !account.IsEnabled {
+		t.Fatalf("adoption must default on: %+v %v", account, err)
+	}
+	payload := send(http.MethodPut, "/accounts/synthetic-a", `{"burn_credit":true}`, http.StatusOK)
+	var dto accountAutomationAccountDTO
+	if err := json.Unmarshal(payload, &dto); err != nil {
+		t.Fatal(err)
+	}
+	if !dto.BurnCredit || !dto.IsEnabled || dto.Removed {
+		t.Fatalf("Credit-only patch: %+v", dto)
+	}
+	payload = send(http.MethodPut, "/accounts/synthetic-a", `{"enabled":false,"burn_credit":false}`, http.StatusOK)
+	if err := json.Unmarshal(payload, &dto); err != nil {
+		t.Fatal(err)
+	}
+	if dto.BurnCredit || dto.IsEnabled {
+		t.Fatalf("combined patch: %+v", dto)
+	}
+	send(http.MethodPut, "/accounts/synthetic-a", `{}`, http.StatusBadRequest)
+	send(http.MethodPut, "/accounts/synthetic-a", `{"burn_credit":"yes"}`, http.StatusBadRequest)
+	send(http.MethodPut, "/accounts/absent", `{"burn_credit":true}`, http.StatusNotFound)
+	// Legacy persisted reasons remain readable without manufacturing new legacy values.
+	if _, err := repo.SQL().ExecContext(ctx, `UPDATE account_automation_accounts SET monitor_reason = 'no_controllable_credential' WHERE auth_index = 'synthetic-a'`); err != nil {
+		t.Fatal(err)
+	}
+	_, payload = getJSON(t, client, base+"/omc/api/v1/account-automation")
+	if !strings.Contains(string(payload), "no_controllable_credential") {
+		t.Fatal("legacy reason must remain readable")
+	}
+	status, err := handlerRef.operationsService().AutomationSummary(ctx)
+	if err != nil || len(status.Accounts) != 2 {
+		t.Fatalf("read-only summary: %+v %v", status, err)
+	}
+	payload = send(http.MethodPost, "/accounts/synthetic-a/unadopt", "", http.StatusOK)
+	if err := json.Unmarshal(payload, &dto); err != nil {
+		t.Fatal(err)
+	}
+	if !dto.Removed || dto.IsAdopted {
+		t.Fatalf("single removal DTO: %+v", dto)
+	}
+	send(http.MethodPost, "/accounts/synthetic-a/unadopt", "", http.StatusNotFound)
+	send(http.MethodPost, "/unadopt", `{"auth_indexes":[]}`, http.StatusBadRequest)
+	payload = send(http.MethodPost, "/unadopt", `{"auth_indexes":["synthetic-b","synthetic-b","absent"]}`, http.StatusOK)
+	if string(bytes.TrimSpace(payload)) != `{"removed":1}` {
+		t.Fatalf("batch removal: %s", payload)
+	}
+	_, payload = getJSON(t, client, base+"/omc/api/v1/account-automation")
+	var list accountAutomationListResponse
+	if err := json.Unmarshal(payload, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Accounts) != 0 || list.Settings.Accounts != 0 || len(list.Candidates) != 2 || list.Candidates[0].Adopted || list.Candidates[1].Adopted {
+		t.Fatalf("removed roster: %+v", list)
+	}
+	if gatewayWrites != 0 {
+		t.Fatalf("roster writes must never change credential state: %d", gatewayWrites)
+	}
+}
+
+func TestAutomationIncompleteInventoryIsDegraded(t *testing.T) {
+	for _, body := range []string{`{}`, `{"files":null}`, `{"files":[{"name":"synthetic.json"}]}`} {
+		t.Run(body, func(t *testing.T) {
+			client, base, _ := startDashboardTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}, func(h *Handler) { h.SetAutomation(h.BuildAutomationService()) })
+			response, payload := getJSON(t, client, base+"/omc/api/v1/account-automation")
+			var list accountAutomationListResponse
+			if err := json.Unmarshal(payload, &list); err != nil {
+				t.Fatal(err)
+			}
+			if response.StatusCode != http.StatusOK || !list.CandidatesDegraded {
+				t.Fatalf("partial inventory must be degraded: %s", payload)
+			}
+		})
 	}
 }

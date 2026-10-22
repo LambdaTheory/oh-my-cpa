@@ -225,7 +225,7 @@ func TestMigration004SanitizesHistoricalData(t *testing.T) {
 	_ = db2.Close()
 }
 
-func TestMigration045UpgradesForkSchemaThrough053(t *testing.T) {
+func TestMigration045UpgradesForkSchemaThrough054(t *testing.T) {
 	ctx := context.Background()
 	database := openDatabaseAtMigration(t, 45)
 
@@ -332,11 +332,11 @@ func TestMigration045UpgradesForkSchemaThrough053(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 48)
+	expectedVersions := make([]int, 0, 49)
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 53; version++ {
+	for version := 15; version <= 54; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
@@ -502,8 +502,8 @@ func TestMigration053ProviderFlowsShareContactSlot(t *testing.T) {
 	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT version), MAX(version) FROM schema_migrations`).Scan(&count, &distinctCount, &maxVersion); err != nil {
 		t.Fatal(err)
 	}
-	if count != 48 || distinctCount != 48 || maxVersion != 53 {
-		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 48/48/53", count, distinctCount, maxVersion)
+	if count != 49 || distinctCount != 49 || maxVersion != 54 {
+		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 49/49/54", count, distinctCount, maxVersion)
 	}
 	for i, p := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
 		if _, err := db.SQL.ExecContext(ctx, "INSERT INTO reauth_jobs (id,auth_index,provider,account_label,flow,code_kind,state,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,'pending',?,?)", p, p, p, p, "device_code", "device", i, i); err != nil {
@@ -523,5 +523,26 @@ func TestMigration053ProviderFlowsShareContactSlot(t *testing.T) {
 	}
 	if _, err := db.SQL.ExecContext(ctx, "UPDATE reauth_jobs SET state='waiting_device' WHERE id='kimi'"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMigration054PreservesAutomationRoster(t *testing.T) {
+	ctx := context.Background()
+	db := openDatabaseAtMigration(t, 53)
+	if _, err := db.SQL.ExecContext(ctx, `INSERT INTO account_automation_accounts (auth_index, is_adopted, cycle_reset_at_ms, cycle_key) VALUES ('synthetic', 1, 2000, 'synthetic-cycle')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var credit int
+	var removed *int64
+	var reset int64
+	var cycle string
+	if err := db.SQL.QueryRowContext(ctx, `SELECT burn_credit, removed_at_ms, cycle_reset_at_ms, cycle_key FROM account_automation_accounts WHERE auth_index = 'synthetic'`).Scan(&credit, &removed, &reset, &cycle); err != nil {
+		t.Fatal(err)
+	}
+	if credit != 0 || removed != nil || reset != 2000 || cycle != "synthetic-cycle" {
+		t.Fatalf("migration changed roster: credit=%d removed=%v reset=%d cycle=%s", credit, removed, reset, cycle)
 	}
 }

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -42,6 +43,8 @@ type accountAutomationAccountDTO struct {
 	AccountLabel         string   `json:"account_label,omitempty"`
 	IsAdopted            bool     `json:"is_adopted"`
 	IsEnabled            bool     `json:"is_enabled"`
+	BurnCredit           bool     `json:"burn_credit"`
+	Removed              bool     `json:"removed"`
 	State                string   `json:"state"`
 	MonitorReason        string   `json:"monitor_reason,omitempty"`
 	AutoDisableSupported bool     `json:"auto_disable_supported"`
@@ -159,11 +162,14 @@ func (h *Handler) automationCredentials(ctx context.Context) ([]automation.Crede
 	if err != nil {
 		return nil, err
 	}
+	if files.Files == nil {
+		return nil, fmt.Errorf("credential list unavailable: missing files array")
+	}
 	credentials := make([]automation.Credential, 0, len(files.Files))
 	for _, file := range files.Files {
 		authIndex := strings.TrimSpace(file.AuthIndex)
 		if authIndex == "" {
-			continue
+			return nil, fmt.Errorf("credential list unavailable: missing auth index")
 		}
 		label := strings.TrimSpace(file.Email)
 		if label == "" {
@@ -272,7 +278,7 @@ func automationCandidateDTOs(credentials []automation.Credential, adopted map[st
 			AutoDisableSupported: automation.ProviderHasVerifiedWeeklyCapability(credential.Provider),
 		}
 		if !credential.Controllable {
-			candidate.AdoptionBlockedReason = automation.ReasonNoCredential
+			candidate.AdoptionBlockedReason = automation.ReasonCredentialMissingName
 		}
 		result = append(result, candidate)
 	}
@@ -308,6 +314,8 @@ func (h *Handler) automationAccountDTOs(ctx context.Context, roster []repository
 			AccountLabel:         account.AccountLabel,
 			IsAdopted:            account.IsAdopted,
 			IsEnabled:            account.IsEnabled,
+			BurnCredit:           account.BurnCredit,
+			Removed:              account.RemovedAtMS != nil,
 			State:                account.State,
 			MonitorReason:        account.MonitorReason,
 			AutoDisableSupported: automation.ProviderHasVerifiedWeeklyCapability(account.Provider),
@@ -367,20 +375,21 @@ func (h *Handler) putAccountAutomationAccount(writer http.ResponseWriter, reques
 		return
 	}
 	var payload struct {
-		Enabled *bool `json:"enabled"`
+		Enabled    *bool `json:"enabled"`
+		BurnCredit *bool `json:"burn_credit"`
 	}
 	if err := decodeManagementJSON(writer, request, accountAutomationRequestLimit, &payload); err != nil {
 		return
 	}
-	if payload.Enabled == nil {
-		writeError(writer, http.StatusBadRequest, "enabled is required")
+	if payload.Enabled == nil && payload.BurnCredit == nil {
+		writeError(writer, http.StatusBadRequest, "enabled or burn_credit is required")
 		return
 	}
 	if h.automation == nil {
 		writeError(writer, http.StatusServiceUnavailable, "account automation is unavailable")
 		return
 	}
-	updated, err := h.automation.SetAccountSwitch(request.Context(), authIndex, *payload.Enabled)
+	updated, err := h.automation.SetAccountOptions(request.Context(), authIndex, payload.Enabled, payload.BurnCredit)
 	if err != nil {
 		h.writeAccountAutomationError(writer, err)
 		return
@@ -391,7 +400,7 @@ func (h *Handler) putAccountAutomationAccount(writer http.ResponseWriter, reques
 func (h *Handler) postAccountAutomationAdopt(writer http.ResponseWriter, request *http.Request) {
 	var payload struct {
 		AuthIndexes []string `json:"auth_indexes"`
-		Enable      bool     `json:"enable"`
+		Enable      *bool    `json:"enable"`
 		Note        string   `json:"note"`
 	}
 	if err := decodeManagementJSON(writer, request, accountAutomationRequestLimit, &payload); err != nil {
@@ -413,7 +422,8 @@ func (h *Handler) postAccountAutomationAdopt(writer http.ResponseWriter, request
 		writeError(writer, http.StatusServiceUnavailable, "account automation is unavailable")
 		return
 	}
-	adopted, err := h.automation.Adopt(request.Context(), payload.AuthIndexes, payload.Enable, note)
+	shouldEnable := payload.Enable == nil || *payload.Enable
+	adopted, err := h.automation.Adopt(request.Context(), payload.AuthIndexes, shouldEnable, note)
 	if err != nil {
 		h.writeAccountAutomationError(writer, err)
 		return

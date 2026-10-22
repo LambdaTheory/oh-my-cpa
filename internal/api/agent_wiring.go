@@ -158,6 +158,8 @@ func (h *Handler) operationsService() *operations.Service {
 				State:                account.State,
 				MonitorReason:        account.MonitorReason,
 				IsEnabled:            account.IsEnabled,
+				BurnCredit:           account.BurnCredit,
+				Removed:              account.RemovedAtMS != nil,
 				DisabledByAutomation: account.IsDisabledByAutomation(),
 			}
 			if recovery, ok := automation.RecoveryDue(account, h.now()); ok {
