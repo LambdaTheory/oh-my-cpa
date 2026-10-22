@@ -21,7 +21,12 @@ const (
 	// the footer's omitted-count disclosure.
 	quotaPredictionFindingsLimit = 178
 	quotaPredictionByteLimit     = 32 * 1024
-	quotaPredictionHistoryLimit  = 5000
+	// The cap counts five-minute buckets, not raw observations, so a busy
+	// weekly window (about 2,016 buckets) never becomes incomplete history.
+	quotaPredictionBucketLimit = 5000
+
+	quotaPredictionResetTolerancePercent = 1.0
+	quotaPredictionResetToleranceMS      = 1000
 )
 
 type QuotaPredictionInput struct {
@@ -54,6 +59,9 @@ type QuotaPredictionItem struct {
 	Verdict                   string   `json:"verdict"`
 	Evidence                  string   `json:"evidence"`
 	Reasons                   []string `json:"reasons"`
+	SampleCount               int      `json:"sample_count"`
+	CoverageSeconds           *int64   `json:"coverage_seconds"`
+	MaxGapSeconds             *int64   `json:"max_gap_seconds"`
 }
 
 type QuotaPredictionResult struct {
@@ -243,6 +251,50 @@ func predictionFindingRank(item QuotaPredictionItem) int {
 
 func floatPointer(value float64) *float64 { return &value }
 
+// predictionObservationsFromBuckets uses the newest reading of each bucket as
+// the fitted sample. The bucket containing the current reading is represented by
+// that reading inside PredictWindow, so the same five-minute slot cannot
+// contribute twice when the snapshot and the stored observation differ.
+func predictionObservationsFromBuckets(buckets []repository.QuotaObservationBucket, observedAtMS int64) []quota.PredictionObservation {
+	observations := make([]quota.PredictionObservation, 0, len(buckets)+1)
+	currentBucketStart := (observedAtMS / quota.PredictionBucketMS) * quota.PredictionBucketMS
+	for index, bucket := range buckets {
+		if index == len(buckets)-1 && bucket.StartMS == currentBucketStart {
+			continue
+		}
+		observations = append(observations, quota.PredictionObservation{
+			ObservedAtMS: bucket.LastObservedAtMS,
+			UsedPercent:  bucket.LastUsedPercent,
+			ResetAtMS:    bucket.LastResetAtMS,
+			Source:       bucket.LastSource,
+		})
+	}
+	return observations
+}
+
+// predictionBucketsHaveReset compares adjacent buckets. The bucket minimum
+// catches a drop between two readings that comparing only the last reading of
+// each bucket would hide.
+func predictionBucketsHaveReset(buckets []repository.QuotaObservationBucket) bool {
+	for index := 1; index < len(buckets); index++ {
+		previous, current := buckets[index-1], buckets[index]
+		if previous.LastUsedPercent > current.MinUsedPercent+quotaPredictionResetTolerancePercent {
+			return true
+		}
+		if previous.LastResetAtMS != nil && current.MinResetAtMS != nil &&
+			float64(*previous.LastResetAtMS)-float64(*current.MinResetAtMS) > float64(quotaPredictionResetToleranceMS) {
+			return true
+		}
+	}
+	for _, bucket := range buckets {
+		if bucket.MinResetAtMS != nil && bucket.MaxResetAtMS != nil &&
+			float64(*bucket.MaxResetAtMS)-float64(*bucket.MinResetAtMS) > float64(quotaPredictionResetToleranceMS) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window quota.QuotaWindow, reportedKind, storedKind string, nowMS int64) QuotaPredictionItem {
 	observedAtMS := reading.ObservedAtMS
 	if window.ObservedAtMS != nil {
@@ -251,18 +303,14 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 	predictionInput := quota.PredictionInput{Window: window, ObservedAtMS: observedAtMS, Status: reading.Status, NowMS: nowMS}
 	fromMS, toMS, boundaryReason := quota.WindowCycleRange(window, observedAtMS, nowMS)
 	if boundaryReason == "" {
-		rows, hasMore, err := s.Repo.ListQuotaObservations(ctx, repository.QuotaObservationFilter{
+		buckets, hasMore, err := s.Repo.ListQuotaObservationBuckets(ctx, repository.QuotaObservationBucketFilter{
 			AuthIndex: reading.AuthIndex, Provider: reading.Provider, WindowKind: storedKind,
-			FromMS: fromMS, ToMS: toMS,
-		}, quotaPredictionHistoryLimit)
+			Scope: window.Scope, Model: window.Model, FromMS: fromMS, ToMS: toMS,
+		}, quotaPredictionBucketLimit)
 		if err == nil && !hasMore {
-			for _, row := range rows {
-				if row.Scope != window.Scope || row.Model != window.Model {
-					continue
-				}
-				predictionInput.Observations = append(predictionInput.Observations, quota.PredictionObservation{
-					ObservedAtMS: row.ObservedAtMS, UsedPercent: row.UsedPercent, ResetAtMS: row.ResetAtMS, Source: row.Source,
-				})
+			predictionInput.Observations = predictionObservationsFromBuckets(buckets, observedAtMS)
+			if predictionBucketsHaveReset(buckets) {
+				predictionInput.Window.HasMidCycleReset = true
 			}
 		} else {
 			predictionInput.Window.HasIncompleteHistory = true
@@ -279,6 +327,7 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 		ProjectedPercentAtReset: predicted.ProjectedPercentAtReset, ProjectedTokensAtReset: predicted.ProjectedTokensAtReset,
 		ProjectedCostNanosAtReset: predicted.ProjectedCostNanosAtReset, ExhaustionETAMS: predicted.ExhaustionETAMS,
 		Verdict: predicted.Verdict, Evidence: predicted.Evidence, Reasons: predicted.Reasons,
+		SampleCount: predicted.SampleCount, CoverageSeconds: predicted.CoverageSeconds, MaxGapSeconds: predicted.MaxGapSeconds,
 	}
 }
 

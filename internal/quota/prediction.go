@@ -9,6 +9,19 @@ import (
 const (
 	predictionMinimumFreshWindow = 2 * time.Hour
 	predictionMaximumFreshWindow = 24 * time.Hour
+
+	// PredictionBucketMS is the observation sample width used before the
+	// history limit is applied. Seven days therefore produce roughly 2,016
+	// buckets rather than one row per request.
+	PredictionBucketMS int64 = 5 * 60 * 1000
+
+	// PredictionMinimumEvidenceMS is the floor for both the covered span and
+	// the largest permitted silence between samples.
+	PredictionMinimumEvidenceMS int64 = 30 * 60 * 1000
+	// predictionMinimumCoverageDivisor turns a cycle length into the minimum
+	// covered span (one twentieth, or five percent). A weekly window therefore
+	// needs more than a single half-hour burst.
+	predictionMinimumCoverageDivisor int64 = 20
 )
 
 const (
@@ -21,13 +34,19 @@ const (
 	PredictionEvidenceProjection = "projection"
 	PredictionEvidenceUnknown    = "unknown"
 
-	PredictionReasonBoundaryUnknown          = "boundary_unknown"
-	PredictionReasonCycleExpired             = "cycle_expired"
-	PredictionReasonReadingStale             = "stale_reading"
-	PredictionReasonReadingError             = "reading_error"
-	PredictionReasonIncompleteHistory        = "incomplete_history"
-	PredictionReasonResetMidCycle            = "mid_cycle_reset"
+	PredictionReasonBoundaryUnknown   = "boundary_unknown"
+	PredictionReasonCycleExpired      = "cycle_expired"
+	PredictionReasonReadingStale      = "stale_reading"
+	PredictionReasonReadingError      = "reading_error"
+	PredictionReasonIncompleteHistory = "incomplete_history"
+	PredictionReasonResetMidCycle     = "mid_cycle_reset"
+	// PredictionReasonInsufficientObservations is retained for consumers that
+	// stored the old reason code; the current path emits the bucket-specific
+	// codes below instead.
 	PredictionReasonInsufficientObservations = "fewer_than_two_observations"
+	PredictionReasonFewerThanThreeBuckets    = "fewer_than_three_buckets"
+	PredictionReasonInsufficientCoverage     = "insufficient_coverage"
+	PredictionReasonObservationGap           = "observation_gap"
 	PredictionReasonCycleTooEarly            = "cycle_too_early"
 	PredictionReasonNoPositiveTrend          = "no_positive_trend"
 	PredictionReasonLowUsage                 = "used_percent_below_five"
@@ -70,6 +89,11 @@ type WindowPrediction struct {
 	Verdict                   string
 	Evidence                  string
 	Reasons                   []string
+	// Quality evidence describes the sample the projection rests on. It is
+	// deliberately additive: omissions stay null rather than becoming zero.
+	SampleCount     int
+	CoverageSeconds *int64
+	MaxGapSeconds   *int64
 }
 
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
@@ -121,6 +145,15 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.Reasons = append(result.Reasons, PredictionReasonBoundaryUnknown)
 		return result
 	}
+	// The current reading itself is the proof of exhaustion. This fact outranks
+	// incomplete or reset history, which describe older samples rather than the
+	// fresh reading that has already reached the ceiling.
+	if *input.Window.UsedPercent >= 100 {
+		result.Verdict = PredictionVerdictWillExhaust
+		result.Evidence = PredictionEvidenceFact
+		result.ExhaustionETAMS = &result.ObservedAtMS
+		return result
+	}
 	if input.Window.HasIncompleteHistory {
 		result.Reasons = append(result.Reasons, PredictionReasonIncompleteHistory)
 		return result
@@ -130,19 +163,18 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.Reasons = append(result.Reasons, PredictionReasonInvalidObservation)
 		return result
 	}
+	points := predictionPoints(observations, input.Window.ResetAtMS)
+	coverageMS, maxGapMS, evidenceSafe := applyPredictionEvidence(&result, points)
+	if !evidenceSafe {
+		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		return result
+	}
 	if input.Window.HasMidCycleReset || predictionHasReset(observations) {
 		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
 		return result
 	}
-	if *input.Window.UsedPercent >= 100 {
-		result.Verdict = PredictionVerdictWillExhaust
-		result.Evidence = PredictionEvidenceFact
-		result.ExhaustionETAMS = &result.ObservedAtMS
-		return result
-	}
-	points := predictionPoints(observations, input.Window.ResetAtMS)
-	if len(points) < 2 {
-		result.Reasons = append(result.Reasons, PredictionReasonInsufficientObservations)
+	if reason, failed := predictionMinimumEvidence(input.Window, len(points), coverageMS, maxGapMS); failed {
+		result.Reasons = append(result.Reasons, reason)
 		return result
 	}
 	rate, ok := predictionSlope(points)
@@ -247,6 +279,68 @@ func predictionHasReset(points []PredictionObservation) bool {
 		previous = point
 	}
 	return false
+}
+
+// applyPredictionEvidence records the span and largest silence of the fitted
+// sample. Both figures stay null unless the sample has at least two points,
+// because a single reading cannot describe an interval.
+func applyPredictionEvidence(result *WindowPrediction, points []PredictionObservation) (coverageMS, maxGapMS int64, ok bool) {
+	result.SampleCount = len(points)
+	if len(points) < 2 {
+		return 0, 0, true
+	}
+	coverageMS, ok = subtractInt64(points[len(points)-1].ObservedAtMS, points[0].ObservedAtMS)
+	if !ok {
+		return 0, 0, false
+	}
+	coverageSeconds := coverageMS / 1000
+	result.CoverageSeconds = &coverageSeconds
+	for index := 1; index < len(points); index++ {
+		gapMS, safe := subtractInt64(points[index].ObservedAtMS, points[index-1].ObservedAtMS)
+		if !safe {
+			return 0, 0, false
+		}
+		if gapMS > maxGapMS {
+			maxGapMS = gapMS
+		}
+	}
+	maxGapSeconds := maxGapMS / 1000
+	result.MaxGapSeconds = &maxGapSeconds
+	return coverageMS, maxGapMS, true
+}
+
+// predictionMinimumEvidence rejects samples that are too short, cover too
+// little of a long cycle, or hide a long silence inside otherwise sufficient
+// coverage. The half-coverage gap ceiling prevents one dense burst from
+// standing in for a whole window.
+func predictionMinimumEvidence(window QuotaWindow, pointCount int, coverageMS, maxGapMS int64) (string, bool) {
+	if pointCount < 3 {
+		return PredictionReasonFewerThanThreeBuckets, true
+	}
+	if window.PeriodHours == nil || !isFinite(*window.PeriodHours) || *window.PeriodHours <= 0 {
+		return PredictionReasonArithmeticUnsafe, true
+	}
+	periodMSFloat := *window.PeriodHours * float64(time.Hour/time.Millisecond)
+	if !isFinite(periodMSFloat) || periodMSFloat <= 0 || periodMSFloat >= float64(math.MaxInt64) {
+		return PredictionReasonArithmeticUnsafe, true
+	}
+	minimumCoverageMS := PredictionMinimumEvidenceMS
+	// Five percent is computed as an integer division so a large period cannot
+	// overflow or lose precision on the way to the comparison.
+	if periodCoverageMS := int64(periodMSFloat) / predictionMinimumCoverageDivisor; periodCoverageMS > minimumCoverageMS {
+		minimumCoverageMS = periodCoverageMS
+	}
+	if coverageMS < minimumCoverageMS {
+		return PredictionReasonInsufficientCoverage, true
+	}
+	maxGapLimitMS := PredictionMinimumEvidenceMS
+	if halfCoverageMS := coverageMS / 2; halfCoverageMS > maxGapLimitMS {
+		maxGapLimitMS = halfCoverageMS
+	}
+	if maxGapMS > maxGapLimitMS {
+		return PredictionReasonObservationGap, true
+	}
+	return "", false
 }
 
 func predictionSlope(points []PredictionObservation) (float64, bool) {
@@ -426,6 +520,16 @@ func roundedInt64(value float64) (int64, bool) {
 		return 0, false
 	}
 	return int64(rounded), true
+}
+
+func subtractInt64(high, low int64) (int64, bool) {
+	if low < 0 && high > math.MaxInt64+low {
+		return 0, false
+	}
+	if low > 0 && high < math.MinInt64+low {
+		return 0, false
+	}
+	return high - low, true
 }
 
 func addInt64(first, second int64) (int64, bool) {

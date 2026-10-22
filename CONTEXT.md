@@ -372,10 +372,18 @@ current reset boundary. It is not capacity, an upstream guarantee or a routing i
 Its verdicts are **will exhaust**, **under-used**, **on track** and **unknown**.
 
 Prediction evidence has three tiers. **Fact** is a directly observed current reading at
-or above exhaustion. **Projection** is arithmetic
-from at least two passive or active observations in the same cycle. **Unknown** means the
-required boundary, freshness, history, trend or usage evidence is absent or invalid.
-Unknown values remain missing with a reason and are never written as zero.
+or above exhaustion; a fresh, valid 100 percent reading is a fact even when older history
+is incomplete or crossed a reset, because the current reading itself is the proof.
+**Projection** is arithmetic from at least three five-minute buckets of passive or active
+observations in the same cycle. Buckets are read by the complete window identity and each
+bucket contributes its newest real reading; empty buckets are not filled. A projection
+also requires coverage of at least `max(30 minutes, 5% of the cycle)` and no adjacent gap
+larger than `max(30 minutes, coverage / 2)`. **Unknown** means the required boundary,
+freshness, history, trend or usage evidence is absent or invalid. Unknown values remain
+missing with a reason and are never written as zero. `sample_count`, `coverage_seconds`
+and `max_gap_seconds` describe the fitted sample; the two interval fields stay null below
+two points. Reset detection compares adjacent buckets, and a detected reset makes the
+window unknown instead of fitting across it.
 
 Freshness follows the window rather than a fixed fifteen-minute sample: the accepted age
 is at least the two-hour idle refresh cadence, grows to one quarter of the quota window,

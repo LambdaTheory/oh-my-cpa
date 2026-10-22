@@ -128,9 +128,13 @@ func TestQuotaPredictionJoinsStoredObservationKinds(t *testing.T) {
 	resources := make([]domain.DiscoveredResource, 0, len(tests))
 	for _, test := range tests {
 		resources = append(resources, predictionResource(test.authIndex, test.name, test.provider))
-		first, current := 10.0, 60.0
+		first, middle, later, current := 10.0, 30.0, 45.0, 60.0
 		window := quota.QuotaWindow{ID: test.windowID, Scope: test.scope, Model: test.model, UsedPercent: &first, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
 		seedPredictionObservation(t, repo, test.authIndex, test.provider, start.Add(time.Hour).UnixMilli(), window)
+		window.UsedPercent = &middle
+		seedPredictionObservation(t, repo, test.authIndex, test.provider, start.Add(3*time.Hour).UnixMilli(), window)
+		window.UsedPercent = &later
+		seedPredictionObservation(t, repo, test.authIndex, test.provider, start.Add(4*time.Hour+30*time.Minute).UnixMilli(), window)
 		window.UsedPercent = &current
 		seedPredictionObservation(t, repo, test.authIndex, test.provider, observed.UnixMilli(), window)
 		seedPredictionSnapshot(t, repo, test.authIndex, test.provider, observed.UnixMilli(), []quota.QuotaWindow{window})
@@ -159,6 +163,220 @@ func TestQuotaPredictionJoinsStoredObservationKinds(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("missing %s", test.name)
+		}
+	}
+}
+
+func TestQuotaPredictionBucketsBeforeHistoryLimit(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-bulk.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(9 * time.Hour)
+	reset, period, used := start.Add(10*time.Hour).UnixMilli(), 10.0, 60.0
+	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("bulk", "bulk@example.com", "codex")})
+	seedPredictionSnapshot(t, repo, "bulk", "codex", observed.UnixMilli(), []quota.QuotaWindow{window})
+	seedRawPredictionObservations(t, repo, "bulk", "codex", "weekly", "standard", "", start.UnixMilli(), observed.UnixMilli(), &reset, 6000)
+
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %+v", result.Items)
+	}
+	item := result.Items[0]
+	if slices.Contains(item.Reasons, quota.PredictionReasonIncompleteHistory) {
+		t.Fatalf("6000 raw rows were treated as incomplete history: %+v", item)
+	}
+	if item.SampleCount <= 3 || item.CoverageSeconds == nil || item.MaxGapSeconds == nil {
+		t.Fatalf("bucket evidence missing: %+v", item)
+	}
+	if item.Verdict == quota.PredictionVerdictUnknown {
+		t.Fatalf("sampled history still unknown: %+v", item)
+	}
+}
+
+func TestQuotaPredictionFiltersCompleteWindowIdentity(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-identity.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(6 * time.Hour)
+	reset, period := start.Add(10*time.Hour).UnixMilli(), 10.0
+	firstUsed, secondUsed := 40.0, 90.0
+	windows := []quota.QuotaWindow{
+		{ID: "seven_day_sonnet", Kind: "model_scoped", Scope: "model", Model: "claude-a", UsedPercent: &firstUsed, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"},
+		{ID: "seven_day_sonnet", Kind: "model_scoped", Scope: "model", Model: "claude-b", UsedPercent: &secondUsed, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"},
+	}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("shared", "shared@example.com", "claude")})
+	seedPredictionSnapshot(t, repo, "shared", "claude", observed.UnixMilli(), windows)
+	for index, used := range []float64{10, 20, 30} {
+		window := windows[0]
+		window.UsedPercent = &used
+		seedPredictionObservation(t, repo, "shared", "claude", start.Add(time.Duration(index*2+1)*time.Hour).UnixMilli(), window)
+	}
+	for minute := 60; minute <= 300; minute += 5 {
+		used := 50.0 + float64(minute)/20
+		window := windows[1]
+		window.UsedPercent = &used
+		seedPredictionObservation(t, repo, "shared", "claude", start.Add(time.Duration(minute)*time.Minute).UnixMilli(), window)
+	}
+
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("items = %+v", result.Items)
+	}
+	for _, item := range result.Items {
+		switch item.WindowModel {
+		case "claude-a":
+			if item.SampleCount != 4 {
+				t.Fatalf("claude-a mixed another model into its buckets: %+v", item)
+			}
+		case "claude-b":
+			if item.SampleCount <= 4 {
+				t.Fatalf("claude-b sample was unexpectedly small: %+v", item)
+			}
+		default:
+			t.Fatalf("unexpected window identity: %+v", item)
+		}
+	}
+}
+
+func TestQuotaPredictionDetectsBucketReset(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-bucket-reset.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(6 * time.Hour)
+	reset, period, current := start.Add(10*time.Hour).UnixMilli(), 10.0, 35.0
+	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &current, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("reset", "reset@example.com", "codex")})
+	for _, observation := range []struct {
+		at   time.Duration
+		used float64
+	}{
+		{time.Hour, 50},
+		{time.Hour + 5*time.Minute, 10},
+		{3 * time.Hour, 20},
+		{5 * time.Hour, 30},
+	} {
+		stored := window
+		stored.UsedPercent = &observation.used
+		seedPredictionObservation(t, repo, "reset", "codex", start.Add(observation.at).UnixMilli(), stored)
+	}
+	seedPredictionSnapshot(t, repo, "reset", "codex", observed.UnixMilli(), []quota.QuotaWindow{window})
+
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || !slices.Contains(result.Items[0].Reasons, quota.PredictionReasonResetMidCycle) {
+		t.Fatalf("bucket reset was not detected: %+v", result.Items)
+	}
+}
+
+func TestPredictionBucketsHaveResetConditions(t *testing.T) {
+	reset := func(value int64) *int64 { return &value }
+	buckets := func(mutate func(*repository.QuotaObservationBucket)) []repository.QuotaObservationBucket {
+		first := repository.QuotaObservationBucket{StartMS: 0, MinUsedPercent: 50, LastUsedPercent: 50, LastResetAtMS: reset(10_000)}
+		second := repository.QuotaObservationBucket{
+			StartMS: 300_000, MinUsedPercent: 55, LastUsedPercent: 60,
+			LastResetAtMS: reset(10_000), MinResetAtMS: reset(10_000), MaxResetAtMS: reset(10_000),
+		}
+		mutate(&second)
+		return []repository.QuotaObservationBucket{first, second}
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*repository.QuotaObservationBucket)
+		want   bool
+	}{
+		{"used drop", func(bucket *repository.QuotaObservationBucket) { bucket.MinUsedPercent = 40 }, true},
+		{"reset moved earlier", func(bucket *repository.QuotaObservationBucket) { bucket.MinResetAtMS = reset(8_000) }, true},
+		{"reset spread within bucket", func(bucket *repository.QuotaObservationBucket) { bucket.MaxResetAtMS = reset(12_001) }, true},
+		{"within tolerance", func(bucket *repository.QuotaObservationBucket) {
+			bucket.MinUsedPercent = 49
+			bucket.MinResetAtMS = reset(9_500)
+		}, false},
+	} {
+		if got := predictionBucketsHaveReset(buckets(test.mutate)); got != test.want {
+			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
+		}
+	}
+}
+
+func TestQuotaPredictionQualityFieldsSerializeNulls(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-quality.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(6 * time.Hour)
+	reset, period := start.Add(10*time.Hour).UnixMilli(), 10.0
+	projected, full := 40.0, 100.0
+	projectionWindow := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &projected, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	factWindow := quota.QuotaWindow{ID: "five_hour", Kind: "five_hour", Scope: "standard", UsedPercent: &full, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	resources := []domain.DiscoveredResource{
+		predictionResource("projected", "projected@example.com", "codex"),
+		predictionResource("fact", "fact@example.com", "codex"),
+	}
+	seedPredictionResources(t, repo, resources)
+	seedPredictionSnapshot(t, repo, "projected", "codex", observed.UnixMilli(), []quota.QuotaWindow{projectionWindow})
+	seedPredictionSnapshot(t, repo, "fact", "codex", observed.UnixMilli(), []quota.QuotaWindow{factWindow})
+	for index, used := range []float64{10, 20, 30} {
+		window := projectionWindow
+		window.UsedPercent = &used
+		seedPredictionObservation(t, repo, "projected", "codex", start.Add(time.Duration(index*2+1)*time.Hour).UnixMilli(), window)
+	}
+
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("items = %+v", result.Items)
+	}
+	for _, item := range result.Items {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			t.Fatal(err)
+		}
+		coverage, coveragePresent := fields["coverage_seconds"]
+		maximumGap, maximumGapPresent := fields["max_gap_seconds"]
+		if !coveragePresent || !maximumGapPresent {
+			t.Fatalf("quality keys missing: %s", encoded)
+		}
+		switch item.AuthIndex {
+		case "projected":
+			if string(fields["sample_count"]) != "4" || string(coverage) != "18000" || string(maximumGap) != "7200" {
+				t.Fatalf("projection quality fields = %s", encoded)
+			}
+		case "fact":
+			if item.Evidence != quota.PredictionEvidenceFact || string(fields["sample_count"]) != "0" || string(coverage) != "null" || string(maximumGap) != "null" {
+				t.Fatalf("fact quality fields = %s", encoded)
+			}
+		default:
+			t.Fatalf("unexpected item = %s", encoded)
 		}
 	}
 }
@@ -282,21 +500,23 @@ func TestQuotaPredictionFindingsArePrioritizedAndCapped(t *testing.T) {
 	reset, period := now.Add(4*time.Hour).UnixMilli(), 10.0
 	first := 10.0
 	firstWindows := make([]quota.QuotaWindow, 0, 181)
+	middleWindows := make([]quota.QuotaWindow, 0, 181)
 	currentWindows := make([]quota.QuotaWindow, 0, 181)
 	for index := 0; index < 181; index++ {
 		id := fmt.Sprintf("custom-%03d", index)
-		current := 70.0
+		middle, current := 40.0, 70.0
 		if index < 3 {
-			current = 20
+			middle, current = 15, 20
 		}
 		firstWindows = append(firstWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &first, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
+		middleWindows = append(middleWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &middle, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
 		currentWindows = append(currentWindows, quota.QuotaWindow{ID: id, Scope: "standard", UsedPercent: &current, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"})
 	}
 	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("many", "many@example.com", "custom")})
 	for _, observation := range []struct {
 		at      int64
 		windows []quota.QuotaWindow
-	}{{now.Add(-5 * time.Hour).UnixMilli(), firstWindows}, {now.UnixMilli(), currentWindows}} {
+	}{{now.Add(-5 * time.Hour).UnixMilli(), firstWindows}, {now.Add(-150 * time.Minute).UnixMilli(), middleWindows}, {now.UnixMilli(), currentWindows}} {
 		if _, err := repo.RecordActiveQuotaObservations(context.Background(), &quota.NormalizedQuota{AuthIndex: "many", Provider: "custom", Status: "healthy", ObservedAtMS: observation.at, Windows: observation.windows}); err != nil {
 			t.Fatal(err)
 		}
@@ -350,6 +570,46 @@ func seedPredictionObservation(t *testing.T, repo *repository.Repository, authIn
 	t.Helper()
 	value := &quota.NormalizedQuota{AuthIndex: authIndex, Provider: provider, Status: "healthy", ObservedAtMS: observedAtMS, Windows: []quota.QuotaWindow{window}}
 	if _, err := repo.RecordActiveQuotaObservations(context.Background(), value); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedRawPredictionObservations writes a dense timeline in one transaction so a
+// test can prove that a high raw row count is bucketed before the history limit.
+func seedRawPredictionObservations(t *testing.T, repo *repository.Repository, authIndex, provider, windowKind, scope, model string, fromMS, toMS int64, resetAtMS *int64, count int) {
+	t.Helper()
+	if count < 2 {
+		t.Fatal("dense observation seed needs at least two rows")
+	}
+	tx, err := repo.SQL().Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	statement, err := tx.Prepare(`INSERT INTO quota_observations (
+		auth_index, provider, window_kind, scope, model, window_minutes, used_percent,
+		reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer statement.Close()
+	spanMS := toMS - fromMS
+	for index := 0; index < count; index++ {
+		observedAtMS := fromMS + int64(index)*spanMS/int64(count-1)
+		usedPercent := 5 + 55*float64(index)/float64(count-1)
+		var resetValue any
+		if resetAtMS != nil {
+			resetValue = *resetAtMS
+		}
+		if _, err := statement.Exec(authIndex, provider, windowKind, scope, model, 600,
+			usedPercent, resetValue, "healthy", observedAtMS,
+			fmt.Sprintf("raw:%s:%s:%s:%s:%06d", authIndex, windowKind, scope, model, index),
+			0, quota.ObservationSourceActive); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 }

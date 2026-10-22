@@ -577,12 +577,19 @@ Each item includes the source window identity (`window_id`, `window_scope` and o
 additive fields distinguish model/group windows without changing the tool name or filters.
 Each item states the current used percentage, reset and observation times, data age,
 burn rate, projected used percentage at reset, optional projected tokens and cost,
-optional exhaustion ETA, verdict, evidence tier and reason codes. Verdicts are
-`will_exhaust`, `under_used`, `on_track` and `unknown`; evidence is `fact`, `projection`
-or `unknown`. Boundary, stale/error reading, incomplete history, mid-cycle reset, fewer
-than two current-cycle observations, early-cycle non-positive trend, invalid percentages,
-unsafe arithmetic and unavailable usage are explicit reasons. A missing number is never
-serialized as a fabricated zero; model/group usage that cannot be assigned safely reports
+optional exhaustion ETA, verdict, evidence tier, reason codes and sample quality.
+Verdicts are `will_exhaust`, `under_used`, `on_track` and `unknown`; evidence is `fact`,
+`projection` or `unknown`. Boundary, stale/error reading, incomplete history, mid-cycle
+reset, `fewer_than_three_buckets`, `insufficient_coverage`, `observation_gap`, early-cycle
+non-positive trend, invalid percentages, unsafe arithmetic and unavailable usage are
+explicit reasons. `sample_count` counts the deduplicated five-minute buckets that
+participate in the fit, including the current reading; `coverage_seconds` and
+`max_gap_seconds` stay null below two points. A fresh, valid 100 percent reading returns
+`will_exhaust`/`fact` even when history is incomplete or a reset was detected; stale or
+error status, a missing or invalid percentage, and an unknown or expired boundary still
+prevent that fact. `fewer_than_two_observations` remains a legacy reason code but the
+current path emits the bucket-specific reasons. A missing number is never serialized as
+a fabricated zero; model/group usage that cannot be assigned safely reports
 `scope_unknown`. Freshness is window-aware: at least the two-hour idle
 refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
 
@@ -594,6 +601,16 @@ items by provider, and adds prediction-call duration `duration_ms`. The existing
 window identity fields described above. The five-minute foreground refresh and the manual dashboard refresh
 therefore recompute only from stored evidence and never probe CPA.
 
+The tool reads current-cycle history as fixed five-minute buckets filtered in SQL by the
+complete window identity (`auth_index`, `provider`, `window_kind`, `scope` and `model`).
+Each bucket contributes its newest real reading; empty buckets are not filled. The 5,000
+cap counts buckets rather than raw rows, so a seven-day window (about 2,016 buckets) is not
+treated as incomplete because it stored many readings. Overflow still marks
+`incomplete_history`. Reset detection compares adjacent bucket minima and last readings;
+a drop or moved reset makes the window unknown rather than fitting across it. A projection
+requires at least three buckets, coverage of at least `max(30 minutes, 5% of the cycle)`,
+and no adjacent gap larger than `max(30 minutes, coverage / 2)`.
+
 The tool assembles its roster and current readings only from persisted safe credential
 metadata and quota snapshots, then reads passive and active observations without refreshing
 quota or calling the CPA management gateway. Standard windows
@@ -603,7 +620,7 @@ and cost projections require at least five percent used, recorded traffic and a 
 request share of at least 95 percent. Otherwise both fields are omitted with a reason such
 as `used_percent_below_five`, `no_traffic`, `no_price` or
 `insufficient_priced_usage`. This is not the capacity API and returns no capacity field.
-See ADR 0098.
+See ADR 0098 for the capability boundary and ADR 0113 for bucketed evidence.
 
 ### Reset advice
 

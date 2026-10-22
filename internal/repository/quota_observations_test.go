@@ -183,6 +183,62 @@ func TestListQuotaObservationsReportsOverflow(t *testing.T) {
 	}
 }
 
+func TestListQuotaObservationBucketsAggregatesCompleteIdentity(t *testing.T) {
+	repo := usageTestRepository(t)
+	ctx := context.Background()
+	base := (int64(1_700_000_000_000) / quota.PredictionBucketMS) * quota.PredictionBucketMS
+	insert := func(authIndex, provider, kind, scope, model, eventKey string, observedAtMS int64, usedPercent float64, resetAtMS any, source string) {
+		t.Helper()
+		if _, err := repo.SQL().Exec(`INSERT INTO quota_observations (
+			auth_index, provider, window_kind, scope, model, window_minutes, used_percent,
+			reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source
+		) VALUES (?, ?, ?, ?, ?, 10080, ?, ?, '', ?, ?, 0, ?)`,
+			authIndex, provider, kind, scope, model, usedPercent, resetAtMS, observedAtMS, eventKey, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert("c-1", "codex", "weekly", "standard", "", "a", base, 10, int64(5000), quota.ObservationSourcePassive)
+	insert("c-1", "codex", "weekly", "standard", "", "b", base+60_000, 5, int64(8000), quota.ObservationSourceActive)
+	insert("c-1", "codex", "weekly", "standard", "", "c", base+120_000, 20, int64(5000), quota.ObservationSourcePassive)
+	insert("c-1", "codex", "weekly", "standard", "", "d", base+300_000, 30, int64(9000), quota.ObservationSourceActive)
+	// Same credential and kind, different complete identities: none may leak in.
+	insert("c-1", "codex", "weekly", "model", "m-1", "m1", base+60_000, 99, int64(1000), quota.ObservationSourceActive)
+	insert("c-1", "claude", "weekly", "standard", "", "p1", base+60_000, 88, int64(1000), quota.ObservationSourceActive)
+	insert("c-1", "codex", "five_hour", "standard", "", "k1", base+60_000, 77, int64(1000), quota.ObservationSourceActive)
+
+	buckets, hasMore, err := repo.ListQuotaObservationBuckets(ctx, QuotaObservationBucketFilter{
+		AuthIndex: "c-1", Provider: "codex", WindowKind: "weekly", Scope: "standard", Model: "",
+		FromMS: base, ToMS: base + 300_000,
+	}, 10)
+	if err != nil || hasMore {
+		t.Fatalf("bucket read: hasMore=%v err=%v", hasMore, err)
+	}
+	if len(buckets) != 2 {
+		t.Fatalf("buckets = %+v", buckets)
+	}
+	first, second := buckets[0], buckets[1]
+	if first.StartMS != base || first.RowCount != 3 || first.MinUsedPercent != 5 || first.LastUsedPercent != 20 ||
+		first.LastObservedAtMS != base+120_000 || first.LastSource != quota.ObservationSourcePassive ||
+		first.LastResetAtMS == nil || *first.LastResetAtMS != 5000 ||
+		first.MinResetAtMS == nil || *first.MinResetAtMS != 5000 ||
+		first.MaxResetAtMS == nil || *first.MaxResetAtMS != 8000 {
+		t.Fatalf("first bucket = %+v", first)
+	}
+	if second.StartMS != base+300_000 || second.RowCount != 1 || second.LastUsedPercent != 30 ||
+		second.MinResetAtMS == nil || *second.MinResetAtMS != 9000 ||
+		second.MaxResetAtMS == nil || *second.MaxResetAtMS != 9000 {
+		t.Fatalf("second bucket = %+v", second)
+	}
+
+	limited, hasMore, err := repo.ListQuotaObservationBuckets(ctx, QuotaObservationBucketFilter{
+		AuthIndex: "c-1", Provider: "codex", WindowKind: "weekly", Scope: "standard", Model: "",
+		FromMS: base, ToMS: base + 300_000,
+	}, 1)
+	if err != nil || !hasMore || len(limited) != 1 || limited[0].StartMS != base {
+		t.Fatalf("limited buckets = %+v hasMore=%v err=%v", limited, hasMore, err)
+	}
+}
+
 func TestRecordActiveQuotaObservationsWritesTheTimeline(t *testing.T) {
 	repo := usageTestRepository(t)
 	ctx := context.Background()
