@@ -320,6 +320,43 @@ func TestPredictWindowFactTakesPriorityOverHistory(t *testing.T) {
 	if got.Evidence == PredictionEvidenceFact || !slices.Contains(got.Reasons, PredictionReasonCycleExpired) {
 		t.Fatalf("expired boundary prediction = %+v", got)
 	}
+
+	staleAge := PredictWindow(PredictionInput{Window: full, ObservedAtMS: observed.UnixMilli(), NowMS: observed.Add(25 * time.Hour).UnixMilli()})
+	if staleAge.Evidence == PredictionEvidenceFact || !slices.Contains(staleAge.Reasons, PredictionReasonReadingStale) {
+		t.Fatalf("stale-age 100%% prediction = %+v", staleAge)
+	}
+}
+
+func TestPredictWindowMinimumEvidenceBoundaries(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	window, reset := predictionWindow(start, 20)
+	observed := start.Add(6 * time.Hour)
+
+	// Coverage exactly at the 30-minute floor and both gaps inside the limit.
+	exactCoverage := PredictWindow(PredictionInput{
+		Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(),
+		Observations: []PredictionObservation{
+			{ObservedAtMS: observed.Add(-30 * time.Minute).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset},
+			{ObservedAtMS: observed.Add(-15 * time.Minute).UnixMilli(), UsedPercent: 15, ResetAtMS: &reset},
+		},
+	})
+	if slices.Contains(exactCoverage.Reasons, PredictionReasonInsufficientCoverage) ||
+		slices.Contains(exactCoverage.Reasons, PredictionReasonObservationGap) ||
+		exactCoverage.Verdict == PredictionVerdictUnknown {
+		t.Fatalf("exact coverage floor was rejected: %+v", exactCoverage)
+	}
+
+	// A one-hour span with a 30-minute maximum gap is exactly the ceiling.
+	gapCeiling := PredictWindow(PredictionInput{
+		Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(),
+		Observations: []PredictionObservation{
+			{ObservedAtMS: observed.Add(-time.Hour).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset},
+			{ObservedAtMS: observed.Add(-30 * time.Minute).UnixMilli(), UsedPercent: 15, ResetAtMS: &reset},
+		},
+	})
+	if slices.Contains(gapCeiling.Reasons, PredictionReasonObservationGap) || gapCeiling.Verdict == PredictionVerdictUnknown {
+		t.Fatalf("exact gap ceiling was rejected: %+v", gapCeiling)
+	}
 }
 
 func TestPredictWindowReportsEvidenceQuality(t *testing.T) {

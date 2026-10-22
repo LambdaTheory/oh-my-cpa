@@ -180,7 +180,32 @@ func TestQuotaPredictionBucketsBeforeHistoryLimit(t *testing.T) {
 	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
 	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("bulk", "bulk@example.com", "codex")})
 	seedPredictionSnapshot(t, repo, "bulk", "codex", observed.UnixMilli(), []quota.QuotaWindow{window})
-	seedRawPredictionObservations(t, repo, "bulk", "codex", "weekly", "standard", "", start.UnixMilli(), observed.UnixMilli(), &reset, 6000)
+
+	// One hundred and eight non-current buckets, each with a sample reading at
+	// second ten. Filler rows keep the raw count above 5,000 inside the first
+	// bucket, and a sentinel at second twenty of the last non-current bucket
+	// moves the final sample past the five-thousandth raw row.
+	const nonCurrentBuckets = 108
+	rows := make([]seededQuotaObservation, 0, 5001+nonCurrentBuckets+1)
+	for index := 0; index < 5001; index++ {
+		rows = append(rows, seededQuotaObservation{
+			ObservedAtMS: start.UnixMilli() + int64(index), UsedPercent: 5,
+			ResetAtMS: &reset, Source: quota.ObservationSourceActive, EventKey: fmt.Sprintf("filler-%04d", index),
+		})
+	}
+	for index := 0; index < nonCurrentBuckets; index++ {
+		percent := 5 + 55*float64(index)/float64(nonCurrentBuckets-1)
+		rows = append(rows, seededQuotaObservation{
+			ObservedAtMS: start.UnixMilli() + int64(index)*quota.PredictionBucketMS + 10_000,
+			UsedPercent:  percent, ResetAtMS: &reset, Source: quota.ObservationSourceActive,
+			EventKey: fmt.Sprintf("bucket-%03d", index),
+		})
+	}
+	rows = append(rows, seededQuotaObservation{
+		ObservedAtMS: start.UnixMilli() + int64(nonCurrentBuckets-1)*quota.PredictionBucketMS + 20_000,
+		UsedPercent:  59.5, ResetAtMS: &reset, Source: quota.ObservationSourceActive, EventKey: "tail-sentinel",
+	})
+	seedQuotaObservationRows(t, repo, "bulk", "codex", "weekly", "standard", "", rows)
 
 	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
 	if err != nil {
@@ -191,10 +216,24 @@ func TestQuotaPredictionBucketsBeforeHistoryLimit(t *testing.T) {
 	}
 	item := result.Items[0]
 	if slices.Contains(item.Reasons, quota.PredictionReasonIncompleteHistory) {
-		t.Fatalf("6000 raw rows were treated as incomplete history: %+v", item)
+		t.Fatalf("5110 raw rows were treated as incomplete history: %+v", item)
 	}
-	if item.SampleCount <= 3 || item.CoverageSeconds == nil || item.MaxGapSeconds == nil {
-		t.Fatalf("bucket evidence missing: %+v", item)
+	if item.SampleCount != 109 {
+		t.Fatalf("sample count = %d, want 109 (108 non-current buckets plus current): %+v", item.SampleCount, item)
+	}
+	if item.CoverageSeconds == nil || *item.CoverageSeconds != int64((9*time.Hour-10*time.Second)/time.Second) {
+		coverage := int64(-1)
+		if item.CoverageSeconds != nil {
+			coverage = *item.CoverageSeconds
+		}
+		t.Fatalf("coverage = %ds, want 32390s from the first sample to the current reading: %+v", coverage, item)
+	}
+	if item.MaxGapSeconds == nil || *item.MaxGapSeconds != 310 {
+		maximumGap := int64(-1)
+		if item.MaxGapSeconds != nil {
+			maximumGap = *item.MaxGapSeconds
+		}
+		t.Fatalf("max gap = %ds, want 310s with the tail sentinel: %+v", maximumGap, item)
 	}
 	if item.Verdict == quota.PredictionVerdictUnknown {
 		t.Fatalf("sampled history still unknown: %+v", item)
@@ -286,6 +325,100 @@ func TestQuotaPredictionDetectsBucketReset(t *testing.T) {
 	}
 	if len(result.Items) != 1 || !slices.Contains(result.Items[0].Reasons, quota.PredictionReasonResetMidCycle) {
 		t.Fatalf("bucket reset was not detected: %+v", result.Items)
+	}
+}
+
+func TestQuotaPredictionDetectsInBucketReset(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-in-bucket-reset.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(6 * time.Hour)
+	reset, period, current := start.Add(10*time.Hour).UnixMilli(), 10.0, 50.0
+	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &current, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("in-bucket", "in-bucket@example.com", "codex")})
+	seedQuotaObservationRows(t, repo, "in-bucket", "codex", "weekly", "standard", "", []seededQuotaObservation{
+		{ObservedAtMS: start.Add(time.Hour).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset, EventKey: "in-1"},
+		{ObservedAtMS: start.Add(time.Hour + time.Minute).UnixMilli(), UsedPercent: 80, ResetAtMS: &reset, EventKey: "in-2"},
+		{ObservedAtMS: start.Add(time.Hour + 2*time.Minute).UnixMilli(), UsedPercent: 20, ResetAtMS: &reset, EventKey: "in-3"},
+		{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 30, ResetAtMS: &reset, EventKey: "in-4"},
+		{ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(), UsedPercent: 50, ResetAtMS: &reset, EventKey: "in-5"},
+	})
+	seedPredictionSnapshot(t, repo, "in-bucket", "codex", observed.UnixMilli(), []quota.QuotaWindow{window})
+
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || !slices.Contains(result.Items[0].Reasons, quota.PredictionReasonResetMidCycle) {
+		t.Fatalf("within-bucket reset was not detected: %+v", result.Items)
+	}
+}
+
+func TestQuotaPredictionDetectsCurrentSnapshotReset(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-current-reset.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(6 * time.Hour)
+	reset, period, current := start.Add(10*time.Hour).UnixMilli(), 10.0, 20.0
+	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &current, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("snapshot-reset", "snapshot-reset@example.com", "codex")})
+	seedQuotaObservationRows(t, repo, "snapshot-reset", "codex", "weekly", "standard", "", []seededQuotaObservation{
+		{ObservedAtMS: start.Add(time.Hour).UnixMilli(), UsedPercent: 5, ResetAtMS: &reset, EventKey: "cur-1"},
+		{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 7, ResetAtMS: &reset, EventKey: "cur-2"},
+		{ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(), UsedPercent: 9, ResetAtMS: &reset, EventKey: "cur-3"},
+		{ObservedAtMS: start.Add(5*time.Hour + 55*time.Minute).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset, EventKey: "cur-4"},
+		{ObservedAtMS: observed.UnixMilli(), UsedPercent: 80, ResetAtMS: &reset, EventKey: "cur-5"},
+	})
+	seedPredictionSnapshot(t, repo, "snapshot-reset", "codex", observed.UnixMilli(), []quota.QuotaWindow{window})
+
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), observed.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 {
+		t.Fatalf("items = %+v", result.Items)
+	}
+	item := result.Items[0]
+	if !slices.Contains(item.Reasons, quota.PredictionReasonResetMidCycle) {
+		t.Fatalf("current snapshot reset was not detected: %+v", item)
+	}
+	if item.SampleCount != 5 {
+		t.Fatalf("current bucket replacement duplicated a sample: %+v", item)
+	}
+}
+
+func TestPredictionCurrentReadingHasResetConditions(t *testing.T) {
+	reset := func(value int64) *int64 { return &value }
+	buckets := []repository.QuotaObservationBucket{{
+		StartMS: 300_000, MinUsedPercent: 40, LastUsedPercent: 50,
+		LastResetAtMS: reset(10_000), MinResetAtMS: reset(10_000), MaxResetAtMS: reset(10_000),
+	}}
+	for _, test := range []struct {
+		name   string
+		window quota.QuotaWindow
+		want   bool
+	}{
+		{"drop from bucket last", quota.QuotaWindow{UsedPercent: floatPointer(40), ResetAtMS: reset(10_000)}, true},
+		{"reset moved earlier", quota.QuotaWindow{UsedPercent: floatPointer(50), ResetAtMS: reset(8_000)}, true},
+		{"exact tolerance", quota.QuotaWindow{UsedPercent: floatPointer(49), ResetAtMS: reset(9_000)}, false},
+		{"no current bucket", quota.QuotaWindow{UsedPercent: floatPointer(40), ResetAtMS: reset(10_000)}, false},
+		{"no current reading", quota.QuotaWindow{ResetAtMS: reset(10_000)}, false},
+	} {
+		observedAtMS := int64(300_000)
+		if test.name == "no current bucket" {
+			observedAtMS = 600_000
+		}
+		if got := predictionCurrentReadingHasReset(buckets, test.window, observedAtMS); got != test.want {
+			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
+		}
 	}
 }
 
@@ -574,13 +707,19 @@ func seedPredictionObservation(t *testing.T, repo *repository.Repository, authIn
 	}
 }
 
-// seedRawPredictionObservations writes a dense timeline in one transaction so a
-// test can prove that a high raw row count is bucketed before the history limit.
-func seedRawPredictionObservations(t *testing.T, repo *repository.Repository, authIndex, provider, windowKind, scope, model string, fromMS, toMS int64, resetAtMS *int64, count int) {
+type seededQuotaObservation struct {
+	ObservedAtMS int64
+	UsedPercent  float64
+	ResetAtMS    *int64
+	Source       string
+	EventKey     string
+}
+
+// seedQuotaObservationRows writes an explicit timeline in one transaction so a
+// test can place readings at exact bucket boundaries without the writer's
+// heartbeat dedup changing the fixture.
+func seedQuotaObservationRows(t *testing.T, repo *repository.Repository, authIndex, provider, windowKind, scope, model string, rows []seededQuotaObservation) {
 	t.Helper()
-	if count < 2 {
-		t.Fatal("dense observation seed needs at least two rows")
-	}
 	tx, err := repo.SQL().Begin()
 	if err != nil {
 		t.Fatal(err)
@@ -594,18 +733,17 @@ func seedRawPredictionObservations(t *testing.T, repo *repository.Repository, au
 		t.Fatal(err)
 	}
 	defer statement.Close()
-	spanMS := toMS - fromMS
-	for index := 0; index < count; index++ {
-		observedAtMS := fromMS + int64(index)*spanMS/int64(count-1)
-		usedPercent := 5 + 55*float64(index)/float64(count-1)
+	for _, row := range rows {
 		var resetValue any
-		if resetAtMS != nil {
-			resetValue = *resetAtMS
+		if row.ResetAtMS != nil {
+			resetValue = *row.ResetAtMS
+		}
+		source := row.Source
+		if source == "" {
+			source = quota.ObservationSourceActive
 		}
 		if _, err := statement.Exec(authIndex, provider, windowKind, scope, model, 600,
-			usedPercent, resetValue, "healthy", observedAtMS,
-			fmt.Sprintf("raw:%s:%s:%s:%s:%06d", authIndex, windowKind, scope, model, index),
-			0, quota.ObservationSourceActive); err != nil {
+			row.UsedPercent, resetValue, "healthy", row.ObservedAtMS, row.EventKey, 0, source); err != nil {
 			t.Fatal(err)
 		}
 	}

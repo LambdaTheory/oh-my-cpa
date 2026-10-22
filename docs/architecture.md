@@ -3622,8 +3622,10 @@ fresh valid 100 percent reading as `will_exhaust`/`fact` before consulting histo
 rejects stale, incomplete or reset history. A projection needs at least three points,
 coverage of `max(30 minutes, 5% of the cycle)` and no adjacent gap above
 `max(30 minutes, coverage / 2)`. `sample_count`, `coverage_seconds` and `max_gap_seconds`
-describe that sample; the interval fields stay null below two points and missing numbers
-remain null reasoned evidence.
+describe that sample; the interval fields stay null below two points, a zero sample count
+means the sample was not evaluated because an earlier return settled the result, and
+missing numbers remain null reasoned evidence. The pure layer still runs its
+`predictionHasReset` cross-point check.
 
 `internal/operations/quota_prediction.go` owns capability validation, filters, identity
 projection and the 100-row/32-KiB bounds. It assembles inputs only from persisted safe
@@ -3634,7 +3636,11 @@ and `usage_events`; it never calls the CPA management gateway. History comes fro
 buckets in SQL before applying a 5,000-bucket cap. That cap admits a full seven-day window
 (about 2,016 buckets) without treating request volume as incomplete history. Empty buckets
 are not synthesized, and overflow marks `incomplete_history` for the operations layer.
-Operations compares adjacent bucket minima and last readings to set `HasMidCycleReset`.
+The bucket query also preserves an ordered within-bucket reset flag before the min/last
+summary can erase a recovered spike, and reduces same-instant rows to the active-over-passive
+effective reading. Operations combines that flag with adjacent bucket minima and last
+readings, and compares the current snapshot with the bucket it replaces, to set
+`HasMidCycleReset`.
 Read-only MCP masking happens after deterministic sorting by hidden stored identity, and
 those identities are not returned. The internal Feishu projection filters first, prioritises
 exhaustion findings, and caps the card input at 178 rows while carrying an omitted count to

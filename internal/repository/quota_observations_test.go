@@ -198,7 +198,7 @@ func TestListQuotaObservationBucketsAggregatesCompleteIdentity(t *testing.T) {
 		}
 	}
 	insert("c-1", "codex", "weekly", "standard", "", "a", base, 10, int64(5000), quota.ObservationSourcePassive)
-	insert("c-1", "codex", "weekly", "standard", "", "b", base+60_000, 5, int64(8000), quota.ObservationSourceActive)
+	insert("c-1", "codex", "weekly", "standard", "", "b", base+60_000, 15, int64(8000), quota.ObservationSourceActive)
 	insert("c-1", "codex", "weekly", "standard", "", "c", base+120_000, 20, int64(5000), quota.ObservationSourcePassive)
 	insert("c-1", "codex", "weekly", "standard", "", "d", base+300_000, 30, int64(9000), quota.ObservationSourceActive)
 	// Same credential and kind, different complete identities: none may leak in.
@@ -217,7 +217,7 @@ func TestListQuotaObservationBucketsAggregatesCompleteIdentity(t *testing.T) {
 		t.Fatalf("buckets = %+v", buckets)
 	}
 	first, second := buckets[0], buckets[1]
-	if first.StartMS != base || first.RowCount != 3 || first.MinUsedPercent != 5 || first.LastUsedPercent != 20 ||
+	if first.StartMS != base || first.RowCount != 3 || first.MinUsedPercent != 10 || first.LastUsedPercent != 20 ||
 		first.LastObservedAtMS != base+120_000 || first.LastSource != quota.ObservationSourcePassive ||
 		first.LastResetAtMS == nil || *first.LastResetAtMS != 5000 ||
 		first.MinResetAtMS == nil || *first.MinResetAtMS != 5000 ||
@@ -236,6 +236,71 @@ func TestListQuotaObservationBucketsAggregatesCompleteIdentity(t *testing.T) {
 	}, 1)
 	if err != nil || !hasMore || len(limited) != 1 || limited[0].StartMS != base {
 		t.Fatalf("limited buckets = %+v hasMore=%v err=%v", limited, hasMore, err)
+	}
+}
+
+func TestListQuotaObservationBucketsPreservesOrderedResetEvidence(t *testing.T) {
+	repo := usageTestRepository(t)
+	ctx := context.Background()
+	base := (int64(1_700_000_000_000) / quota.PredictionBucketMS) * quota.PredictionBucketMS
+	insert := func(eventKey string, observedAtMS int64, usedPercent float64, resetAtMS any, source string) {
+		t.Helper()
+		if _, err := repo.SQL().Exec(`INSERT INTO quota_observations (
+			auth_index, provider, window_kind, scope, model, window_minutes, used_percent,
+			reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source
+		) VALUES ('c-1', 'codex', 'weekly', 'standard', '', 10080, ?, ?, '', ?, ?, 0, ?)`,
+			usedPercent, resetAtMS, observedAtMS, eventKey, source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A reset that recovers inside the bucket: 10 -> 80 -> 20.
+	insert("drop-1", base, 10, int64(5000), quota.ObservationSourceActive)
+	insert("drop-2", base+60_000, 80, int64(5000), quota.ObservationSourceActive)
+	insert("drop-3", base+120_000, 20, int64(5000), quota.ObservationSourceActive)
+	// A reset instant moving earlier by more than one second.
+	insert("moved-1", base+300_000, 30, int64(5000), quota.ObservationSourceActive)
+	insert("moved-2", base+360_000, 40, int64(3999), quota.ObservationSourceActive)
+	// A normal monotonic rise.
+	insert("rise-1", base+600_000, 50, int64(5000), quota.ObservationSourceActive)
+	insert("rise-2", base+660_000, 60, int64(5000), quota.ObservationSourceActive)
+	// All-null reset evidence is not a reset.
+	insert("null-1", base+900_000, 10, nil, quota.ObservationSourcePassive)
+	insert("null-2", base+960_000, 20, nil, quota.ObservationSourcePassive)
+	// Same instant, same source: the newest id wins, so neither value is
+	// compared against the other.
+	insert("tie-1", base+1_200_000+1000, 10, int64(5000), quota.ObservationSourceActive)
+	insert("tie-2", base+1_200_000+1000, 20, int64(5000), quota.ObservationSourceActive)
+	// Same instant, different sources: active wins over passive.
+	insert("source-1", base+1_500_000+1000, 80, int64(5000), quota.ObservationSourcePassive)
+	insert("source-2", base+1_500_000+1000, 20, int64(5000), quota.ObservationSourceActive)
+	// Exact tolerances: one point and one second are not enough.
+	insert("edge-1", base+1_800_000, 50, int64(5000), quota.ObservationSourceActive)
+	insert("edge-2", base+1_860_000, 49, int64(5000), quota.ObservationSourceActive)
+	insert("edge-3", base+1_920_000, 49, int64(4000), quota.ObservationSourceActive)
+
+	buckets, hasMore, err := repo.ListQuotaObservationBuckets(ctx, QuotaObservationBucketFilter{
+		AuthIndex: "c-1", Provider: "codex", WindowKind: "weekly", Scope: "standard", Model: "",
+		FromMS: base, ToMS: base + 1_920_000,
+	}, 20)
+	if err != nil || hasMore {
+		t.Fatalf("bucket read: hasMore=%v err=%v", hasMore, err)
+	}
+	if len(buckets) != 7 {
+		t.Fatalf("buckets = %+v", buckets)
+	}
+	for index, want := range []bool{true, true, false, false, false, false, false} {
+		if buckets[index].ResetDetected != want {
+			t.Fatalf("bucket %d ResetDetected = %v, want %v (%+v)", index, buckets[index].ResetDetected, want, buckets[index])
+		}
+	}
+	if buckets[0].MinUsedPercent != 10 || buckets[0].LastUsedPercent != 20 || buckets[0].RowCount != 3 {
+		t.Fatalf("recovering bucket summary = %+v", buckets[0])
+	}
+	if buckets[4].RowCount != 2 || buckets[4].LastUsedPercent != 20 {
+		t.Fatalf("same-instant tie bucket = %+v", buckets[4])
+	}
+	if buckets[5].RowCount != 2 || buckets[5].LastUsedPercent != 20 || buckets[5].LastSource != quota.ObservationSourceActive {
+		t.Fatalf("same-instant source bucket = %+v", buckets[5])
 	}
 }
 

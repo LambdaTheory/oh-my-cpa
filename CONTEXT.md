@@ -382,8 +382,11 @@ larger than `max(30 minutes, coverage / 2)`. **Unknown** means the required boun
 freshness, history, trend or usage evidence is absent or invalid. Unknown values remain
 missing with a reason and are never written as zero. `sample_count`, `coverage_seconds`
 and `max_gap_seconds` describe the fitted sample; the two interval fields stay null below
-two points. Reset detection compares adjacent buckets, and a detected reset makes the
-window unknown instead of fitting across it.
+two points, and `sample_count` zero means the sample was not evaluated because a fact or an
+earlier validation return settled the result, not that no history exists. Reset detection
+compares ordered readings inside a bucket, adjacent buckets, the current snapshot against
+the bucket it replaces, and the pure calculation layer's cross-point check; a detected
+reset makes the window unknown instead of fitting across it.
 
 Freshness follows the window rather than a fixed fifteen-minute sample: the accepted age
 is at least the two-hour idle refresh cadence, grows to one quarter of the quota window,

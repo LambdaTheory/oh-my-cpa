@@ -583,8 +583,10 @@ Verdicts are `will_exhaust`, `under_used`, `on_track` and `unknown`; evidence is
 reset, `fewer_than_three_buckets`, `insufficient_coverage`, `observation_gap`, early-cycle
 non-positive trend, invalid percentages, unsafe arithmetic and unavailable usage are
 explicit reasons. `sample_count` counts the deduplicated five-minute buckets that
-participate in the fit, including the current reading; `coverage_seconds` and
-`max_gap_seconds` stay null below two points. A fresh, valid 100 percent reading returns
+participate in the fit, including the current reading; a zero means the sample was not
+evaluated because a fact or an earlier validation return settled the result, not that no
+history exists. `coverage_seconds` and `max_gap_seconds` stay null below two points. A
+fresh, valid 100 percent reading returns
 `will_exhaust`/`fact` even when history is incomplete or a reset was detected; stale or
 error status, a missing or invalid percentage, and an unknown or expired boundary still
 prevent that fact. `fewer_than_two_observations` remains a legacy reason code but the
@@ -606,10 +608,12 @@ complete window identity (`auth_index`, `provider`, `window_kind`, `scope` and `
 Each bucket contributes its newest real reading; empty buckets are not filled. The 5,000
 cap counts buckets rather than raw rows, so a seven-day window (about 2,016 buckets) is not
 treated as incomplete because it stored many readings. Overflow still marks
-`incomplete_history`. Reset detection compares adjacent bucket minima and last readings;
-a drop or moved reset makes the window unknown rather than fitting across it. A projection
-requires at least three buckets, coverage of at least `max(30 minutes, 5% of the cycle)`,
-and no adjacent gap larger than `max(30 minutes, coverage / 2)`.
+`incomplete_history`. Reset detection compares ordered readings inside a bucket, adjacent
+bucket minima and last readings, and the current snapshot against the bucket it replaces;
+a drop or moved reset makes the window unknown rather than fitting across it. The pure
+calculation layer also keeps its cross-point reset check. A projection requires at least
+three buckets, coverage of at least `max(30 minutes, 5% of the cycle)`, and no adjacent gap
+larger than `max(30 minutes, coverage / 2)`.
 
 The tool assembles its roster and current readings only from persisted safe credential
 metadata and quota snapshots, then reads passive and active observations without refreshing
