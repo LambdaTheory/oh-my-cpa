@@ -58,6 +58,37 @@ type QuotaObservationFilter struct {
 	ToMS   int64
 }
 
+// QuotaObservationBucketFilter names one complete window identity. Scope and
+// model are part of the filter because a credential can expose several windows
+// under the same kind.
+type QuotaObservationBucketFilter struct {
+	AuthIndex  string
+	Provider   string
+	WindowKind string
+	Scope      string
+	Model      string
+	// FromMS and ToMS are inclusive bounds on observed_at_ms.
+	FromMS int64
+	ToMS   int64
+}
+
+// QuotaObservationBucket is one fixed-width sample of a window's history.
+// Last* describes the newest real reading in the bucket, while Min/Max carry
+// the reset evidence that a single reading cannot express. ResetDetected keeps
+// the ordered within-bucket drop that a min/last summary would erase.
+type QuotaObservationBucket struct {
+	StartMS          int64
+	RowCount         int
+	MinUsedPercent   float64
+	LastUsedPercent  float64
+	LastObservedAtMS int64
+	LastSource       string
+	LastResetAtMS    *int64
+	MinResetAtMS     *int64
+	MaxResetAtMS     *int64
+	ResetDetected    bool
+}
+
 // quotaObservationInsert is one row the writer may store. It carries the full
 // identity of a window (kind, scope, model) so the passive and active sources
 // deduplicate against the same key.
@@ -333,6 +364,117 @@ func (r *Repository) ListQuotaObservations(ctx context.Context, filter QuotaObse
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, fmt.Errorf("iterate quota observations: %w", err)
+	}
+	hasMore := len(result) > limit
+	if hasMore {
+		result = result[:limit]
+	}
+	return result, hasMore, nil
+}
+
+// ListQuotaObservationBuckets aggregates one complete window identity into
+// fixed-width samples before the caller's limit is applied. Filtering and
+// aggregation both happen in SQL: applying a row limit first would turn a busy
+// window into an artificial incomplete-history verdict.
+//
+// Empty buckets are not synthesized. Buckets are ordered oldest first, and the
+// extra row read beyond limit reports overflow the same way ListQuotaObservations
+// does.
+func (r *Repository) ListQuotaObservationBuckets(ctx context.Context, filter QuotaObservationBucketFilter, limit int) ([]QuotaObservationBucket, bool, error) {
+	if r == nil || r.SQL() == nil {
+		return nil, false, errors.New("repository is not initialized")
+	}
+	if limit <= 0 {
+		return nil, false, errors.New("limit must be positive")
+	}
+	// Same-instant rows are first reduced to the effective reading in the same
+	// order the prediction collapse uses (active over passive, then newest id).
+	// The ordered LAG then preserves a within-bucket drop that a min/last summary
+	// would hide, without inventing a reset out of two sources at one instant.
+	rows, err := r.SQL().QueryContext(ctx, `
+		WITH filtered AS (
+			SELECT id, used_percent, reset_at_ms, observed_at_ms, source,
+			       (observed_at_ms / ?) * ? AS bucket_start_ms,
+			       CASE source WHEN 'passive' THEN 1 WHEN 'active' THEN 2 ELSE 0 END AS source_priority
+			FROM quota_observations
+			WHERE auth_index = ? AND provider = ? AND window_kind = ? AND scope = ? AND model = ?
+			  AND observed_at_ms >= ? AND observed_at_ms <= ?
+		), effective AS (
+			SELECT *,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY observed_at_ms
+			           ORDER BY source_priority DESC, id DESC
+			       ) AS instant_rank,
+			       COUNT(1) OVER (PARTITION BY bucket_start_ms) AS bucket_row_count
+			FROM filtered
+		), ordered AS (
+			SELECT bucket_start_ms, used_percent, reset_at_ms, observed_at_ms, source, bucket_row_count,
+			       LAG(used_percent) OVER (
+			           PARTITION BY bucket_start_ms
+			           ORDER BY observed_at_ms ASC, id ASC
+			       ) AS previous_used_percent,
+			       LAG(reset_at_ms) OVER (
+			           PARTITION BY bucket_start_ms
+			           ORDER BY observed_at_ms ASC, id ASC
+			       ) AS previous_reset_at_ms,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY bucket_start_ms
+			           ORDER BY observed_at_ms DESC, id DESC
+			       ) AS last_rank
+			FROM effective
+			WHERE instant_rank = 1
+		)
+		SELECT bucket_start_ms,
+		       MAX(bucket_row_count),
+		       MIN(used_percent),
+		       MIN(reset_at_ms),
+		       MAX(reset_at_ms),
+		       MAX(CASE WHEN last_rank = 1 THEN used_percent END),
+		       MAX(CASE WHEN last_rank = 1 THEN observed_at_ms END),
+		       MAX(CASE WHEN last_rank = 1 THEN source END),
+		       MAX(CASE WHEN last_rank = 1 THEN reset_at_ms END),
+		       MAX(CASE WHEN previous_used_percent > used_percent + 1.0
+		                 OR (previous_reset_at_ms IS NOT NULL AND reset_at_ms IS NOT NULL
+		                     AND previous_reset_at_ms - reset_at_ms > 1000)
+		                THEN 1 ELSE 0 END)
+		FROM ordered
+		GROUP BY bucket_start_ms
+		ORDER BY bucket_start_ms ASC
+		LIMIT ?`,
+		quota.PredictionBucketMS, quota.PredictionBucketMS,
+		filter.AuthIndex, filter.Provider, filter.WindowKind, filter.Scope, filter.Model,
+		filter.FromMS, filter.ToMS, limit+1)
+	if err != nil {
+		return nil, false, fmt.Errorf("list quota observation buckets: %w", err)
+	}
+	defer rows.Close()
+	result := []QuotaObservationBucket{}
+	for rows.Next() {
+		var bucket QuotaObservationBucket
+		var minReset, maxReset, lastReset sql.NullInt64
+		var resetDetected int
+		if err := rows.Scan(&bucket.StartMS, &bucket.RowCount, &bucket.MinUsedPercent,
+			&minReset, &maxReset, &bucket.LastUsedPercent, &bucket.LastObservedAtMS,
+			&bucket.LastSource, &lastReset, &resetDetected); err != nil {
+			return nil, false, fmt.Errorf("scan quota observation bucket: %w", err)
+		}
+		if minReset.Valid {
+			value := minReset.Int64
+			bucket.MinResetAtMS = &value
+		}
+		if maxReset.Valid {
+			value := maxReset.Int64
+			bucket.MaxResetAtMS = &value
+		}
+		if lastReset.Valid {
+			value := lastReset.Int64
+			bucket.LastResetAtMS = &value
+		}
+		bucket.ResetDetected = resetDetected != 0
+		result = append(result, bucket)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, fmt.Errorf("iterate quota observation buckets: %w", err)
 	}
 	hasMore := len(result) > limit
 	if hasMore {

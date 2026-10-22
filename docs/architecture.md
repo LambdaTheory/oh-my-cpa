@@ -3615,18 +3615,36 @@ mutation is introduced. See ADR 0109 and `docs/agent-capabilities.md` for the co
 
 ## Read-only quota prediction
 
-`internal/quota/prediction.go` owns deterministic window math. It accepts a normalized
-current window, current-cycle passive and active observations, and usage joined for the
-same half-open cycle. It derives boundaries through `WindowCycleRange`, rejects stale,
-incomplete or reset history, and keeps missing projections as null reasoned evidence.
+`internal/quota/prediction.go` owns deterministic window math. It accepts the newest
+reading of each current-cycle five-minute bucket plus the current reading and usage joined
+for the same half-open cycle. It derives boundaries through `WindowCycleRange`, returns a
+fresh valid 100 percent reading as `will_exhaust`/`fact` before consulting history, and then
+rejects stale, incomplete or reset history. A projection needs at least three points,
+coverage of `max(30 minutes, 5% of the cycle)` and no adjacent gap above
+`max(30 minutes, coverage / 2)`. `sample_count`, `coverage_seconds` and `max_gap_seconds`
+describe that sample; the interval fields stay null below two points, a zero sample count
+means the sample was not evaluated because an earlier return settled the result, and
+missing numbers remain null reasoned evidence. The pure layer still runs its
+`predictionHasReset` cross-point check.
 
 `internal/operations/quota_prediction.go` owns capability validation, filters, identity
 projection and the 100-row/32-KiB bounds. It assembles inputs only from persisted safe
 credential metadata, the newest quota snapshots, passive and active `quota_observations`,
-and `usage_events`; it never calls the CPA management gateway. Read-only MCP masking happens
-after deterministic sorting by hidden stored identity, and those identities are not returned.
-The internal Feishu projection filters first, prioritises exhaustion findings, and caps the
-card input at 178 rows while carrying an omitted count to the renderer.
+and `usage_events`; it never calls the CPA management gateway. History comes from
+`internal/repository/quota_observations.go`, which filters the complete identity
+(`auth_index`, `provider`, `window_kind`, `scope`, `model`) and aggregates five-minute
+buckets in SQL before applying a 5,000-bucket cap. That cap admits a full seven-day window
+(about 2,016 buckets) without treating request volume as incomplete history. Empty buckets
+are not synthesized, and overflow marks `incomplete_history` for the operations layer.
+The bucket query also preserves an ordered within-bucket reset flag before the min/last
+summary can erase a recovered spike, and reduces same-instant rows to the active-over-passive
+effective reading. Operations combines that flag with adjacent bucket minima and last
+readings, and compares the current snapshot with the bucket it replaces, to set
+`HasMidCycleReset`.
+Read-only MCP masking happens after deterministic sorting by hidden stored identity, and
+those identities are not returned. The internal Feishu projection filters first, prioritises
+exhaustion findings, and caps the card input at 178 rows while carrying an omitted count to
+the renderer.
 
 `internal/api/management_dashboard_predictions.go` exposes the same stored computation to
 the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler

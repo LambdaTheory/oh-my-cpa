@@ -44,9 +44,13 @@ func TestQuotaPredictionUsesOnlyStoredEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	reset := now.Add(4 * time.Hour).UnixMilli()
-	period, first, current := 10.0, 10.0, 60.0
+	period, first, middle, current := 10.0, 10.0, 35.0, 60.0
 	window := quota.QuotaWindow{ID: "seven_day", Scope: "standard", UsedPercent: &first, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
 	if _, err := handler.repo.RecordActiveQuotaObservations(context.Background(), &quota.NormalizedQuota{AuthIndex: "stored", Provider: "claude", Status: "healthy", ObservedAtMS: now.Add(-5 * time.Hour).UnixMilli(), Windows: []quota.QuotaWindow{window}}); err != nil {
+		t.Fatal(err)
+	}
+	window.UsedPercent = &middle
+	if _, err := handler.repo.RecordActiveQuotaObservations(context.Background(), &quota.NormalizedQuota{AuthIndex: "stored", Provider: "claude", Status: "healthy", ObservedAtMS: now.Add(-150 * time.Minute).UnixMilli(), Windows: []quota.QuotaWindow{window}}); err != nil {
 		t.Fatal(err)
 	}
 	window.UsedPercent = &current
