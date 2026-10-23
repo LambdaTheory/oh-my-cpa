@@ -103,6 +103,8 @@ export const RETIRED_REFERENCES = [
  * allowlist cannot quietly absorb a genuine stale reference.
  */
 export const EXPECTED_ABSENT_PATHS = [
+  { path: 'deploy/prebuilt', reason: 'the dedicated Git deployment branch, not a filesystem directory (ADR 0115)' },
+  { path: 'deploy/prebuilt-manifest.json', reason: 'generated only by isolated prebuilt preparation, absent from development branches (ADR 0115)' },
   { path: '.env', reason: "the operator's dotenv file is created from .env.example and gitignored, so it never exists in a fresh clone" },
   { path: 'deploy/.env', reason: "the Compose environment file the installation guide has the operator create; it holds secrets and is gitignored" },
   { path: 'cpa/', reason: 'the CLIProxyAPI directory is user-supplied and gitignored' },

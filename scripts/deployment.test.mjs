@@ -82,3 +82,28 @@ test('Dokploy source build keeps fork tags out of upstream release comparisons',
   assert.equal(service.environment.OMCPA_VERSION, undefined);
   assert.ok(!JSON.stringify(document).includes('docker.sock'));
 });
+
+test('Dokploy prebuilt entry inherits runtime security and has a Go-only reachable graph', () => {
+  const source = readDeployment('dokploy/compose.yml');
+  const prebuilt = readDeployment('dokploy/compose.prebuilt.yml');
+  assert.deepEqual(prebuilt.services.omc.extends, { file: 'compose.yml', service: 'omc' });
+  assert.deepEqual(prebuilt.services.omc.build, { context: '../..', dockerfile: 'Dockerfile.prebuilt' });
+  assert.deepEqual(prebuilt.volumes, source.volumes);
+  assert.deepEqual(prebuilt.networks, source.networks);
+  assert.deepEqual(Object.keys(prebuilt.services.omc).sort(), ['build', 'extends']);
+  const normal = fs.readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+  const dockerfile = fs.readFileSync(new URL('../Dockerfile.prebuilt', import.meta.url), 'utf8');
+  const bases = [...dockerfile.matchAll(/^FROM (?:--platform=\S+ )?(\S+)/gm)].map(match => match[1]);
+  assert.deepEqual(bases, ['golang:1.27.1-alpine', 'alpine:3.21', 'alpine:3.21']);
+  const copiedStages = [...dockerfile.matchAll(/--from=(\S+)/g)].map(match => match[1]);
+  assert.ok(copiedStages.every(stage => ['runtime-data', 'server'].includes(stage)));
+  assert.ok(!/\b(node|pnpm|vite)\b/i.test(dockerfile));
+  assert.ok(dockerfile.indexOf('go run ./scripts/prebuilt-verify') < dockerfile.indexOf('go mod download'));
+  assert.match(dockerfile, /CGO_ENABLED=0 GOOS=\$TARGETOS GOARCH=\$TARGETARCH go build/);
+  assert.equal(dockerfile.slice(dockerfile.indexOf('# Certificates,')).trim(), normal.slice(normal.indexOf('# Certificates,')).replace('ARG VERSION=v0.1.0-dev', 'ARG VERSION=fork').trim());
+  assert.match(normal, /COPY --from=web \/src\/web\/dist\//);
+  const ignore = fs.readFileSync(new URL('../Dockerfile.prebuilt.dockerignore', import.meta.url), 'utf8');
+  assert.ok(ignore.includes('!internal/**'));
+  assert.ok(!ignore.includes('**/dist'));
+  assert.ok(!ignore.includes('!.git/'));
+});

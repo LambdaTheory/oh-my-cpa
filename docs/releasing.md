@@ -135,6 +135,35 @@ so stable-looking fork tags cannot be compared as upstream OMC releases. Runtime
 `OMCPA_VERSION` never rewrites embedded source identity. Upstream publication,
 image naming and update-feed selection are unchanged.
 
+## Fork prebuilt deployment branch
+
+The Mac-prebuilt path is independent of upstream release publication and needs no
+image registry. From an approved immutable source SHA, run
+`node scripts/prebuilt-web.mjs prepare <source-sha> <new-directory> [fork-tag]`.
+This clones into an isolated directory, installs locked dependencies, builds and
+syncs the SPA, and records `deploy/prebuilt-manifest.json`. Run
+`node scripts/prebuilt-web.mjs verify <directory>` before image acceptance.
+The Docker entrypoint is `Dockerfile.prebuilt`; its Go verifier fails on absent,
+stale, changed or unexpected assets before compiling the target-platform binary.
+
+After acceptance, `node scripts/prebuilt-web.mjs publish <directory>` validates
+again and advances only `origin` on `LambdaTheory/oh-my-cpa`, at `deploy/prebuilt`.
+The manifest's source revision is embedded as `BuildRevision`, the optional tag as
+`BuildTag`, and `BuildVersion` stays `fork`. Detached input leaves `BuildRef` unknown.
+The generated commit is not the source revision and is never hashed into its own
+manifest. Source and asset inventories have per-file SHA-256 values and sorted
+aggregate hashes, with frontend inputs separately identified.
+
+Publication uses a private index with tracked allowlisted source and intentional
+generated files only. The first commit parents the source; each subsequent commit
+parents the last deployment and the selected source. Sources must advance by
+ancestry. A tip that changed since preparation, has unknown edits, or diverges is
+refused; an ordinary push also rejects races. No force push, branch deletion or
+caller checkout mutation is supported. Canonical-origin mismatch remediation and
+the exact Dokploy branch/Compose selection are in `docs/install.md`.
+Development branches retain ADR 0033's generated-output exclusion; ADR 0115 records
+the deployment-only exception and its trust boundary.
+
 ## Prepare and publish
 
 Version-specific changes and upgrade notes are kept under `docs/releases/`; see

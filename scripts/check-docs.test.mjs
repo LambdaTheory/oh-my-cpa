@@ -70,6 +70,10 @@ test('allows generated icon assets absent from a fresh clone', (t) => {
 });
 
 test('an absent-file exception does not cover sibling paths', (t) => {
+  const prebuilt = fixture(t, 'Branch `deploy/prebuilt` carries `deploy/prebuilt-manifest.json`.');
+  assert.deepEqual(checkDocument({ file: 'checked.md' }, { projectRoot: prebuilt }), []);
+  const missingPrebuilt = fixture(t, 'See `deploy/prebuilt-other.json`.');
+  assert.deepEqual(kinds(checkDocument({ file: 'checked.md' }, { projectRoot: missingPrebuilt })), ['missing-path']);
   // .env is legitimately missing from a fresh clone, but .env.example is
   // committed - a rule that exempts it would silently retire a real reference.
   const dotenv = fixture(t, 'Copy `.env` before starting the server.');

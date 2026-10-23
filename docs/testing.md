@@ -17,6 +17,24 @@ a map, not a mandate — they record which layer owns which claim today and why 
 placed there. When a better owner exists, move the claim and update the map in the same
 change; keep the claim's strength, not its address. Nothing in the map is frozen.
 
+## Prebuilt deployment verification
+
+`scripts/prebuilt-web.test.mjs` owns immutable-revision preparation, caller
+checkout/index preservation, canonical-origin restrictions, source inventories,
+whitelisted publication, normal deployment history, source regression and remote
+races using temporary repositories and a bare local remote. The normal self-test
+discovery includes it. `scripts/prebuilt-verify/main_test.go` owns missing/stale/
+modified/unexpected manifests and assets, local public resources, provider artwork
+and relative HTML/CSS references plus the emitted Rollup dependency graph. `scripts/deployment.test.mjs`
+protects the Go-only prebuilt graph and inherited runtime/Compose contracts while
+retaining ordinary source-build assertions. No browser claim moved to those tests.
+
+Build-chain changes require `pnpm verify:full`. Before first publication, prepare
+the reviewed immutable SHA on the Mac, build `Dockerfile.prebuilt` for the Linux
+target and smoke-test `/omc/`, lazy assets, fonts, provider artwork and source
+identity with synthetic settings. Static reference checks cannot certify every
+dynamic JavaScript loading path; actual built-browser acceptance remains required.
+
 ## 1. Where a new test belongs
 
 Authentication evidence classification lives in `internal/authfailure`; quota fetcher
