@@ -26,6 +26,20 @@ test('display precedence preserves pause, capability, error and recovery ahead o
   assert.equal(automationRowReasonKey(projectAutomationAccount(account({ auto_disable_supported: false, monitor_reason: 'no_weekly_evidence' }))), 'automation.reason_capability_short');
 });
 
+test('identity mismatch retains its specific reason without an execution error', () => {
+  const row = projectAutomationAccount(account({ state: 'monitoring', monitor_reason: 'evidence_identity_mismatch' }));
+  assert.equal(row.state, 'error');
+  assert.equal(automationRowReasonKey(row), 'automation.reason_evidence_identity_mismatch');
+});
+
+test('a pending retry independently projects an error from monitoring', () => {
+  const row = projectAutomationAccount(account({ state: 'monitoring', next_attempt_at_ms: 2000 }));
+  assert.equal(row.hasBackoff, true);
+  assert.equal(row.state, 'error');
+  assert.equal(matchesAutomationFacet(row, 'error'), true);
+  assert.equal(automationRowReasonKey(row), 'automation.reason_retry_count');
+});
+
 test('statistics and facets share roster facts, retained plans overlap explicitly and tombstones stay absent', () => {
   const accounts = [account(), account({ is_enabled: false, disabled_by_automation: true, recovery_status: 'scheduled', recovery_at_ms: 1000 }),
     account({ state: 'error', next_attempt_at_ms: 2000, recovery_status: 'overdue', recovery_at_ms: 1000 }),

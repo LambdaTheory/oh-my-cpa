@@ -85,6 +85,32 @@ it.each(['en', 'zh-CN'])('keeps active recovery distinct from historical timesta
   expect(row('Monitor').textContent).not.toMatch(/not auto-disabled|不参与自动关/);
 });
 
+it.each(['en', 'zh-CN'])('explains identity mismatch without pointing to empty error details (%s)', async lang => {
+  localStorage.setItem('omc-lang', lang);
+  mount(snapshot([account('Mismatched evidence', { state: 'monitoring', monitor_reason: 'evidence_identity_mismatch', last_error: '' })]));
+  await screen.findByText('Mismatched evidence');
+  const card = row('Mismatched evidence');
+  expect(card.querySelector('.status-label')?.textContent).toBe(lang === 'en' ? 'Error' : '异常');
+  expect(card.textContent).toContain(lang === 'en' ? 'Identity mismatch, auto-action paused' : '凭据与观测身份不一致，暂停自动操作');
+  expect(card.textContent).not.toMatch(/see details|查看详情/);
+});
+
+it('uses friendly roster and adoption labels for prefixed and standalone auth indexes', async () => {
+  const accounts = [
+    account('prefixed', { auth_index: 'aaaaaaaaaaaaaaaa', account_label: 'aaaaaaaaaaaaaaaa: Friendly Claude', name: 'aaaaaaaaaaaaaaaa' }),
+    account('standalone', { auth_index: 'bbbbbbbbbbbbbbbb', account_label: 'bbbbbbbbbbbbbbbb', name: 'Friendly Codex' }),
+  ];
+  const data = snapshot(accounts);
+  data.candidates = data.candidates.map(candidate => ({ ...candidate, adopted: false }));
+  mount(data);
+  await screen.findByRole('article', { name: 'Friendly Claude' });
+  expect(row('Friendly Codex')).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'Batch Operations' }));
+  expect(screen.getByRole('checkbox', { name: 'Friendly Claude' })).toBeDefined();
+  expect(screen.getByRole('checkbox', { name: 'Friendly Codex' })).toBeDefined();
+  for (const account of accounts) expect(document.body.textContent).not.toContain(account.auth_index);
+});
+
 it('Credit sends only burn_credit, retains recovery, and locks repeated mutation until refreshed', async () => {
   let data = snapshot([account('Recovering', { state: 'disabled', disabled_by_automation: true, recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' })]);
   mount(data);

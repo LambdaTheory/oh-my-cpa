@@ -116,7 +116,7 @@ function automationListBody(state) {
         {
           auth_index: VERIFIED_CLAUDE,
           provider: 'claude',
-          name: 'Claude A',
+          name: VERIFIED_CLAUDE,
           account_label: `${VERIFIED_CLAUDE}: a@example.test`,
           is_adopted: true,
           is_enabled: true,
@@ -186,7 +186,7 @@ function automationListBody(state) {
       ]
       : [],
     candidates: [
-      candidate(VERIFIED_CLAUDE, { provider: 'claude', name: 'Claude A', label: `${VERIFIED_CLAUDE}: a@example.test`, disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
+      candidate(VERIFIED_CLAUDE, { provider: 'claude', name: VERIFIED_CLAUDE, label: `${VERIFIED_CLAUDE}: a@example.test`, disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
       candidate(VERIFIED_CODEX, { provider: 'codex', name: 'codex-credential-with-a-very-long-descriptive-file-name-for-layout.json', label: 'b@example.test', disabled: true, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
       candidate(MONITOR_ONLY_UNVERIFIED, { provider: 'antigravity', name: 'Unverified C', label: 'c@example.test', disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: false }),
       candidate(BLOCKED_UNCONTROLLABLE, { provider: 'antigravity', name: '', label: 'runtime-only@example.test', disabled: false, controllable: false, adopted: false, adoptable: false, autoDisableSupported: false, reason: 'no_controllable_credential' }),
@@ -255,6 +255,14 @@ export async function accountAutomation({ base, page, check }) {
   Object.assign(automationState, { phase: 'first', adopt: null, cancel: null, manualReset: null, patches: {}, removed: [] });
   await gotoConsole(page, base, '/oauth-management', '.oauth-management-page');
   const drawer = await openAutomationDrawer(page);
+  const checkStatAlignment = async (surface, label) => {
+    const stats = await surface.getByTestId('automation-stats').locator(':scope > div').evaluateAll(elements => elements.map(element => {
+      const label = element.querySelector('span');
+      const value = element.querySelector('strong');
+      return { top: element.getBoundingClientRect().top, valueTop: value.getBoundingClientRect().top, labelHeight: label.getBoundingClientRect().height, lineHeight: parseFloat(getComputedStyle(label).lineHeight) };
+    }));
+    check(label + ' statistic labels stay on one line with aligned values', stats.length === 6 && stats.every(stat => stat.labelHeight <= stat.lineHeight + 1 && stats.filter(other => Math.abs(other.top - stat.top) < 1).every(other => Math.abs(other.valueTop - stat.valueTop) < 1)), JSON.stringify(stats));
+  };
   const batch = drawer.getByRole('button', { name: 'Batch Operations', exact: true });
   await until(() => batch.isEnabled(), { label: 'live inventory ready' });
   await batch.click();
@@ -263,6 +271,7 @@ export async function accountAutomation({ base, page, check }) {
   check('first adoption starts empty with immediate automation enabled', await submit.isDisabled() && await dialog.getByRole('checkbox', { name: /immediately/ }).isChecked());
   check('uncontrollable credentials cannot be selected', await dialog.getByRole('checkbox', { name: 'runtime-only@example.test', exact: true }).isDisabled());
   check('monitor-only adoption names its capability limit', (await dialog.innerText()).includes('Capability unverified; monitor-only after adoption'));
+  check('adoption labels hide standalone and prefixed internal indexes', !(await dialog.innerText()).includes(VERIFIED_CLAUDE) && await dialog.getByRole('checkbox', { name: 'a@example.test', exact: true }).count() === 1);
   await dialog.getByRole('button', { name: 'Select all', exact: true }).click();
   await dialog.getByRole('textbox').fill('Synthetic browser batch');
   await page.screenshot({ path: 'tmp/issue-69/batch-adopt-desktop-en.png' });
@@ -273,6 +282,7 @@ export async function accountAutomation({ base, page, check }) {
   await until(async () => await cards.count() === 4, { label: 'refreshed roster' });
   const card = label => drawer.getByRole('article', { name: label, exact: true });
   const longName = 'b-with-a-very-long-account-name-for-ellipsis@example.test';
+  check('the managed roster retains friendly account labels without internal indexes', await card('a@example.test').count() === 1 && !(await cards.allTextContents()).join('').includes(VERIFIED_CLAUDE));
   check('cleanup is silent and footer only reports roster and inventory totals', (await drawer.innerText()).includes('Adopted 4 / Gateway 4 credentials') && !(await drawer.innerText()).includes('absent from gateway'));
   check('every account has exactly one status', await cards.evaluateAll(elements => elements.every(element => element.querySelectorAll('.status-label').length === 1)));
   check('monitor-only reason is singular', (await card('c@example.test').innerText()).includes('Capability unverified'));
@@ -290,6 +300,7 @@ export async function accountAutomation({ base, page, check }) {
   await until(async () => await drawer.getByTestId('automation-identity').locator('img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0)), { label: 'local provider artwork loaded' });
   check('provider artwork uses bundled Codex Claude and Antigravity SVGs', ['codex', 'claude', 'antigravity'].every(provider => logos.some(logo => logo.source.toLowerCase().includes(provider + '-color.svg'))), JSON.stringify(logos));
   await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'feedback clear for capture' });
+  await checkStatAlignment(drawer, 'Desktop EN');
   await page.screenshot({ path: 'tmp/issue-69/automation-desktop-en.png' });
   await card('a@example.test').getByRole('button', { name: 'Credit exemption for a@example.test', exact: true }).click();
   await until(async () => await card('a@example.test').getByRole('button', { name: 'Credit exemption for a@example.test', exact: true }).getAttribute('aria-pressed') === 'true', { label: 'Credit patch refetched' });
@@ -322,6 +333,9 @@ export async function accountAutomation({ base, page, check }) {
   await page.screenshot({ path: 'tmp/issue-69/automation-mobile-details-en.png' });
   await card('a@example.test').getByRole('button', { name: 'Details', exact: true }).click();
   await card(longName).getByRole('button', { name: 'Details', exact: true }).click();
+  await drawer.locator('.ant-drawer-body').evaluate(element => { element.scrollTop = 0; });
+  await settleLayout(page);
+  await checkStatAlignment(drawer, 'Phone EN');
   await page.screenshot({ path: 'tmp/issue-69/automation-mobile-en.png' });
   await batch.scrollIntoViewIfNeeded(); await batch.click();
   await dialog.locator('.ant-segmented-item').filter({ hasText: 'Unadopt' }).click();
@@ -331,6 +345,16 @@ export async function accountAutomation({ base, page, check }) {
   await dialog.getByRole('button', { name: 'Confirm Unadopt', exact: true }).click();
   await until(async () => await cards.count() === 3, { label: 'batch unadopt refresh' });
   check('unadopt removed only the selected membership', automationState.removed.length === 1 && automationState.removed[0] === 'historical-idle');
+  await drawer.locator('.ant-drawer-close').click();
+  await drawer.waitFor({ state: 'hidden' });
+  const more = page.locator('.terminal-page-head .terminal-page-actions').getByRole('button', { name: 'More', exact: true });
+  await more.waitFor({ state: 'visible' });
+  await more.click();
+  const automationEntry = page.getByTestId('oauth-management-automation-open-mobile');
+  check('account automation and Ollama management remain reachable from the phone toolbar', await automationEntry.isVisible() && await page.getByTestId('oauth-management-ollama-open-mobile').isVisible());
+  await automationEntry.click();
+  await drawer.waitFor({ state: 'visible' });
+  check('the phone automation entry opens the managed roster', await card('a@example.test').isVisible());
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.evaluate(() => localStorage.setItem('omc-lang', 'zh-CN'));
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -339,9 +363,11 @@ export async function accountAutomation({ base, page, check }) {
   const chinese = page.locator('.ant-drawer-open').filter({ hasText: '账号自动管理' });
   await chinese.getByRole('article', { name: 'a@example.test', exact: true }).waitFor({ state: 'visible' });
   await settleLayout(page);
+  await checkStatAlignment(chinese, 'Desktop ZH');
   await page.screenshot({ path: 'tmp/issue-69/automation-desktop-zh.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
+  await checkStatAlignment(chinese, 'Phone ZH');
   await page.screenshot({ path: 'tmp/issue-69/automation-mobile-zh.png' });
 }
 

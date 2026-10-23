@@ -3948,7 +3948,7 @@ const DICT: Record<string, [string, string]> = {
   'automation.adoption_summary': ['已接管 {adopted} / 网关共 {total} 凭据', 'Adopted {adopted} / Gateway {total} credentials'],
   'automation.stat_monitoring': ['监控中', 'Monitoring'],
   'automation.stat_monitor_only': ['只监控', 'Monitor only'],
-  'automation.stat_disabled': ['已自动停用', 'Disabled by automation'],
+  'automation.stat_disabled': ['已自动停用', 'Auto-disabled'],
   'automation.stat_waiting': ['等待恢复', 'Waiting recovery'],
   'automation.stat_error': ['重试避退', 'Backoff error'],
   'automation.btn_adopt': ['批量接管账号', 'Adopt Accounts'],

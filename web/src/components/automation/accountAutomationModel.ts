@@ -76,7 +76,10 @@ export function automationRowReasonKey(row: AutomationRow) {
   if (row.isMonitorOnly) return automationReasonKey(
     ['credential_not_found', 'credential_missing_name', 'no_controllable_credential'].includes(row.reason ?? '')
       ? row.reason : 'unverified_account_weekly_capability');
-  if (row.hasError) return row.hasBackoff ? 'automation.reason_retry_count' : 'automation.reason_action_failed';
+  if (row.hasError) {
+    if (row.reason === 'evidence_identity_mismatch') return automationReasonKey(row.reason);
+    return row.hasBackoff ? 'automation.reason_retry_count' : 'automation.reason_action_failed';
+  }
   if (row.hasRecovery) return row.account.recovery_status === 'overdue' ? 'automation.recovery_overdue' : 'automation.recovery_at';
   if (row.state === 'credit') return 'automation.reason_credit';
   if (row.state === 'disabled') return 'automation.reason_exhausted';
