@@ -1384,3 +1384,13 @@ version comparison at 320px in the longest catalog. Signing is covered by
 by `scripts/release-plan.test.mjs`; `scripts/deployment.test.mjs` holds the Compose
 service to its boundary (the socket and nothing else). Real container replacement is
 exercised only by `scripts/docker-smoke.mjs`, described above.
+
+Account-automation lifecycle coverage (ADR 0114) stays below the browser layer:
+policy tests own paused recovery projection, Credit disable exemption/recovery, and
+separate absent/missing-name reasons; repository tests own migration 054 defaults and
+plan preservation, tombstone filtering/re-adoption, and audit-failure rollback. Service
+tests own pause/resume execution, unadopt without a gateway write, two complete consecutive
+absence observations, counter reset on degraded reads/reappearance/restart/intent change,
+and pending-plan/retry exclusions. API tests own default-on adoption, enabled/burn_credit
+patches, single/batch unadopt response and error contracts, legacy reasons, and incomplete
+inventory degradation. The read-only capability remains a summary, with no new write tool.

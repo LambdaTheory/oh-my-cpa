@@ -385,6 +385,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Put("/account-automation/settings", h.putAccountAutomationSettings)
 				v1.Put("/account-automation/accounts/{authIndex}", h.putAccountAutomationAccount)
 				v1.Post("/account-automation/adopt", h.postAccountAutomationAdopt)
+				v1.Post("/account-automation/unadopt", h.postAccountAutomationUnadoptMany)
+				v1.Post("/account-automation/accounts/{authIndex}/unadopt", h.postAccountAutomationUnadopt)
 				v1.Post("/account-automation/accounts/{authIndex}/cancel", h.postAccountAutomationCancel)
 				v1.Post("/account-automation/accounts/{authIndex}/manual-reset", h.postAccountAutomationManualReset)
 				// Ollama quota monitoring (lane B) and Feishu notifications (lane C).

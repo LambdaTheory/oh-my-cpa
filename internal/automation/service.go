@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,8 @@ type Service struct {
 	// Now is injectable so tests drive a virtual clock instead of sleeping.
 	Now func() time.Time
 
+	runMu   sync.Mutex
+	missing map[string]missingCredential
 	locksMu sync.Mutex
 	locks   map[string]*sync.Mutex
 }
@@ -159,7 +162,7 @@ func (s *Service) WithAccount(ctx context.Context, authIndex string, fn func(ctx
 	if err != nil {
 		return err
 	}
-	if !found {
+	if !found || !account.IsAdopted || account.RemovedAtMS != nil {
 		return ErrAccountNotFound
 	}
 	return fn(ctx, account)
@@ -270,6 +273,16 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 		SelectedJSON:  string(selectedJSON),
 		Note:          strings.TrimSpace(note),
 	}
+	sort.Strings(adoptedIndexes)
+	releases := make([]func(), 0, len(adoptedIndexes))
+	for _, authIndex := range adoptedIndexes {
+		releases = append(releases, s.lockAccount(authIndex))
+	}
+	defer func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}()
 	if err := s.Repo.AdoptAutomationAccounts(ctx, batch, selected, enable, nowMS); err != nil {
 		return 0, err
 	}
@@ -327,11 +340,16 @@ func (s *Service) planAdoptionRecovery(ctx context.Context, selected []repositor
 }
 
 // SetAccountSwitch turns one account's auto-management on or off. Turning it off
-// clears a pending enable or retry.
+// pauses a pending enable or retry without consuming its recovery plan.
 func (s *Service) SetAccountSwitch(ctx context.Context, authIndex string, enabled bool) (repository.AutomationAccount, error) {
+	return s.SetAccountOptions(ctx, authIndex, &enabled, nil)
+}
+
+// SetAccountOptions updates the switch and Credit exception under one intent lock.
+func (s *Service) SetAccountOptions(ctx context.Context, authIndex string, enabled, burnCredit *bool) (repository.AutomationAccount, error) {
 	var updated repository.AutomationAccount
 	err := s.WithAccount(ctx, authIndex, func(ctx context.Context, account repository.AutomationAccount) error {
-		next, err := s.Repo.SetAutomationSwitch(ctx, account.AuthIndex, enabled, account.IntentVersion, s.now().UnixMilli())
+		next, err := s.Repo.SetAutomationOptions(ctx, account.AuthIndex, enabled, burnCredit, account.IntentVersion, s.now().UnixMilli())
 		if err != nil {
 			return err
 		}
@@ -341,11 +359,11 @@ func (s *Service) SetAccountSwitch(ctx context.Context, authIndex string, enable
 	if err != nil {
 		return repository.AutomationAccount{}, err
 	}
-	s.audit(ctx, "account_automation.switch", "success", updated.AuthIndex, map[string]any{"enabled": enabled})
+	s.audit(ctx, "account_automation.switch", "success", updated.AuthIndex, map[string]any{"enabled": enabled, "burn_credit": burnCredit})
 	return updated, nil
 }
 
-// CancelAccount cancels a pending enable or retry by turning the account switch
+// CancelAccount pauses a pending enable or retry by turning the account switch
 // off. It never re-enables a credential OMC disabled.
 func (s *Service) CancelAccount(ctx context.Context, authIndex string) (repository.AutomationAccount, error) {
 	updated, err := s.SetAccountSwitch(ctx, authIndex, false)
@@ -392,12 +410,11 @@ func (s *Service) RunOnce(ctx context.Context) {
 	if s == nil || s.Repo == nil || s.Credentials == nil || s.SetDisabled == nil {
 		return
 	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
 	settings, err := s.Repo.GetAutomationSettings(ctx)
 	if err != nil {
 		s.logger().Warn("account automation: settings read failed", "error", err)
-		return
-	}
-	if !s.masterEnabled(settings.WebEnabled) {
 		return
 	}
 	accounts, err := s.Repo.ListAutomationAccounts(ctx)
@@ -406,10 +423,12 @@ func (s *Service) RunOnce(ctx context.Context) {
 		return
 	}
 	if len(accounts) == 0 {
+		s.missing = nil
 		return
 	}
 	credentials, err := s.Credentials(ctx)
 	if err != nil {
+		s.missing = nil
 		s.logger().Warn("account automation: credential list failed", "error", err)
 		return
 	}
@@ -418,6 +437,10 @@ func (s *Service) RunOnce(ctx context.Context) {
 	for _, credential := range credentials {
 		byIndex[credential.AuthIndex] = credential
 		indexes = append(indexes, credential.AuthIndex)
+	}
+	s.syncRoster(ctx, accounts, byIndex)
+	if !s.masterEnabled(settings.WebEnabled) {
+		return
 	}
 	weekly, err := s.Repo.LatestStandardWeeklyWindows(ctx, indexes)
 	if err != nil {
@@ -440,7 +463,7 @@ func (s *Service) runAccount(ctx context.Context, account repository.AutomationA
 	// Re-read under the lock: an operator may have changed the intent since the
 	// roster was listed, and the version guard below must compare like with like.
 	fresh, found, err := s.Repo.GetAutomationAccount(ctx, account.AuthIndex)
-	if err != nil || !found {
+	if err != nil || !found || !fresh.IsAdopted || fresh.RemovedAtMS != nil {
 		return
 	}
 	var evidencePtr *repository.AutomationWeeklyWindow

@@ -2311,16 +2311,16 @@ weekly mapping. Candidate and roster projections both expose the capability fact
 controllable credential can therefore join the roster, while an unverified provider is
 persisted in `monitoring` with `unverified_account_weekly_capability` and displayed with
 one monitor-only row status, including a switch-off qualifier when its account setting
-is off. A missing controllable credential also displays monitor-only. Each row explains
-its capability limitation once. The roster count keeps historical adopted accounts and
-annotates those absent from the live inventory in both statistics and footer; degraded
-inventory reads leave the total and absence count unknown. The capability registry remains an invariant on
+is off. Missing credentials report credential_not_found; credentials still present but
+without a CPA name report credential_missing_name. The older no_controllable_credential
+value remains readable for stored history. The active roster excludes removed_at_ms
+rows, and its count uses the same predicate. A degraded inventory makes no absence claim.
+The capability registry remains an invariant on
 the decision and recovery paths, so adoption cannot widen automatic disablement or
 enablement. An uncontrollable credential remains outside the roster even if its auth index
 is submitted directly.
 
-Evidence is a standard-scope window whose stated period is a real seven days (168h ±
-1h) - not the slot it arrived in. A Codex five-hour primary, a Claude model-scoped
+Evidence is a standard-scope window whose stated period is exactly seven days (10080 minutes) - not the slot it arrived in. A Codex five-hour primary, a Claude model-scoped
 `seven_day_sonnet`, a partial reading, a missing or already-passed reset, a reading
 older than `OMCPA_ACCOUNT_AUTOMATION_MAX_EVIDENCE_AGE`, a reading at or below the
 account's watermark, and a cycle already closed all yield no disable. A five-hour
@@ -2343,8 +2343,30 @@ per-account mutation runs under a keyed lock and is guarded by `intent_version`,
 operator action (adopting, switching, cancelling, setting a recovery time) bumps, and
 the loop re-reads the row inside the lock immediately before the CPA write. A cancel
 that has returned therefore cannot be followed by the loop enabling the credential, and
-turning an account off clears its pending enable or retry rather than silently
-re-enabling.
+turning an account off pauses execution while retaining its cycle/manual resets,
+cycle key, evidence watermark and retry schedule. RecoveryDue continues projecting a
+paused recovery, but Decide refuses writes until the switch resumes. Resuming a saved
+plan returns to waiting; a credential already live ends the old plan instead.
+
+Migration 054 adds burn_credit (default false) and removed_at_ms (nullable). Credit
+suppresses only the disable decision and does not change recovery or provider admission.
+PUT /account-automation/accounts/{authIndex} accepts enabled and/or burn_credit in one
+locked intent update. Adoption defaults to enabled when enable is omitted.
+
+Single-account POST /account-automation/accounts/{authIndex}/unadopt and batch
+POST /account-automation/unadopt remove roster membership without any CPA status write.
+The repository writes the tombstone and account_automation.unadopt audit in one
+transaction; audit failure rolls back the removal. Re-adoption clears the tombstone and
+starts a new plan while preserving the same row identity for audit association.
+
+RunOnce compares active roster rows with a complete successful Credentials inventory.
+Two consecutive missing observations under the same intent version trigger a tombstone
+and account_automation.auto_remove audit in one transaction. Inventory failure or an
+incomplete files array resets the process-local counters; a restart, reappearance or
+new operator intent also requires two fresh confirmations. Rows with next_attempt_at_ms,
+state disabled/waiting, any cycle_reset_at_ms, or an unconsumed manual reset are protected.
+Cleanup runs before quota decisions, so missing credentials cannot receive status writes.
+See ADR 0114.
 
 The master switch, `OMCPA_ACCOUNT_AUTOMATION_ENABLED`, is tri-state: unset leaves the
 console's web switch in force (default off), an explicit `false` is an emergency off the
@@ -2548,7 +2570,7 @@ transient codes and pending notifications, and preserves every job and historica
 | Agent | `agent_documents` | Encrypted latest Agent session, capability operations and attached images (migrations 026 and 036). Sessions retain whole history until reset or explicit replacement, with no session size cap; images follow their references and are deleted only after a reset is persisted. Terminal operations are retained 7 days and purged lazily during Agent requests |
 | Operations | `audit_events`, `ui_preferences`, `quota_snapshots`, `schema_migrations` | Audit has no update or delete path — only `RecordAuditEvent` writes and read queries (`ListAuditEvents`, `QueryAuditEvents`) exist, and export itself is audited; the schema carries no enforcement trigger, so the guarantee lives in the repository API. Migration 027 adds `idx_audit_events_request_action`, which the trail's attempt folding looks up |
 | CPA configuration | `cpa_config_backups`, `cpa_config_backup_settings` | Encrypted copies of the stored CPA configuration file, kept before every configuration write (migration 030, ADR 0037; migration 033 adds each copy's `layout` and `reason` and the single-row retention table, ADR 0051). v8 copies are kept to the operator's retention (default 20, 5–100), pre-v8 copies to the latest ten; `cpa_config_backups` is hidden from `database_query` |
-| Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migration 043. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`); `cycle_reset_at_ms` is execution history unless the current state still owns a recovery plan, and confirmed or external enable paths clear the consumed value. `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
+| Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migrations 043 and 054. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`, plus burn_credit and the removed_at_ms tombstone); active lists exclude tombstones and pause preserves recovery/retry state. `cycle_reset_at_ms` is execution history unless the current state still owns a recovery plan, and confirmed or external enable paths clear the consumed value. `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
 | Ollama monitoring | `ollama_accounts` | Migration 044. One row per operator account: AES-GCM encrypted session cookie, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries the cookie |
 | Credential recovery | `reauth_jobs` | Migration 053. Safe metadata, invalid-cycle ownership, state, deadlines, notification intent, device display metadata and accepted message identity; no email OTP or token. Hidden from operator queries; receipts are retained |
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
@@ -3644,18 +3666,36 @@ mutation is introduced. See ADR 0109 and `docs/agent-capabilities.md` for the co
 
 ## Read-only quota prediction
 
-`internal/quota/prediction.go` owns deterministic window math. It accepts a normalized
-current window, current-cycle passive and active observations, and usage joined for the
-same half-open cycle. It derives boundaries through `WindowCycleRange`, rejects stale,
-incomplete or reset history, and keeps missing projections as null reasoned evidence.
+`internal/quota/prediction.go` owns deterministic window math. It accepts the newest
+reading of each current-cycle five-minute bucket plus the current reading and usage joined
+for the same half-open cycle. It derives boundaries through `WindowCycleRange`, returns a
+fresh valid 100 percent reading as `will_exhaust`/`fact` before consulting history, and then
+rejects stale, incomplete or reset history. A projection needs at least three points,
+coverage of `max(30 minutes, 5% of the cycle)` and no adjacent gap above
+`max(30 minutes, coverage / 2)`. `sample_count`, `coverage_seconds` and `max_gap_seconds`
+describe that sample; the interval fields stay null below two points, a zero sample count
+means the sample was not evaluated because an earlier return settled the result, and
+missing numbers remain null reasoned evidence. The pure layer still runs its
+`predictionHasReset` cross-point check.
 
 `internal/operations/quota_prediction.go` owns capability validation, filters, identity
 projection and the 100-row/32-KiB bounds. It assembles inputs only from persisted safe
 credential metadata, the newest quota snapshots, passive and active `quota_observations`,
-and `usage_events`; it never calls the CPA management gateway. Read-only MCP masking happens
-after deterministic sorting by hidden stored identity, and those identities are not returned.
-The internal Feishu projection filters first, prioritises exhaustion findings, and caps the
-card input at 178 rows while carrying an omitted count to the renderer.
+and `usage_events`; it never calls the CPA management gateway. History comes from
+`internal/repository/quota_observations.go`, which filters the complete identity
+(`auth_index`, `provider`, `window_kind`, `scope`, `model`) and aggregates five-minute
+buckets in SQL before applying a 5,000-bucket cap. That cap admits a full seven-day window
+(about 2,016 buckets) without treating request volume as incomplete history. Empty buckets
+are not synthesized, and overflow marks `incomplete_history` for the operations layer.
+The bucket query also preserves an ordered within-bucket reset flag before the min/last
+summary can erase a recovered spike, and reduces same-instant rows to the active-over-passive
+effective reading. Operations combines that flag with adjacent bucket minima and last
+readings, and compares the current snapshot with the bucket it replaces, to set
+`HasMidCycleReset`.
+Read-only MCP masking happens after deterministic sorting by hidden stored identity, and
+those identities are not returned. The internal Feishu projection filters first, prioritises
+exhaustion findings, and caps the card input at 178 rows while carrying an omitted count to
+the renderer.
 
 `internal/api/management_dashboard_predictions.go` exposes the same stored computation to
 the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler

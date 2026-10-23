@@ -30,18 +30,20 @@ const (
 // Monitor reasons. They are stored on the account so the console can say why an
 // account is not under automatic control instead of showing a bare "off".
 const (
-	ReasonNotAdopted          = "not_adopted"
-	ReasonSwitchOff           = "switch_off"
-	ReasonNoCredential        = "no_controllable_credential"
-	ReasonNoWeeklyEvidence    = "no_weekly_evidence"
-	ReasonNotExhausted        = "not_exhausted"
-	ReasonMissingReset        = "missing_reset"
-	ReasonExpiredReset        = "expired_reset"
-	ReasonStaleEvidence       = "stale_evidence"
-	ReasonBackoff             = "backoff"
-	ReasonRecoveryScheduled   = "recovery_scheduled"
-	ReasonExternallyDisabled  = "externally_disabled"
-	ReasonExternallyReEnabled = "externally_re_enabled"
+	ReasonNotAdopted            = "not_adopted"
+	ReasonSwitchOff             = "switch_off"
+	ReasonCredentialNotFound    = "credential_not_found"
+	ReasonCredentialMissingName = "credential_missing_name"
+	ReasonNoCredential          = "no_controllable_credential"
+	ReasonNoWeeklyEvidence      = "no_weekly_evidence"
+	ReasonNotExhausted          = "not_exhausted"
+	ReasonMissingReset          = "missing_reset"
+	ReasonExpiredReset          = "expired_reset"
+	ReasonStaleEvidence         = "stale_evidence"
+	ReasonBackoff               = "backoff"
+	ReasonRecoveryScheduled     = "recovery_scheduled"
+	ReasonExternallyDisabled    = "externally_disabled"
+	ReasonExternallyReEnabled   = "externally_re_enabled"
 	// ReasonUnverifiedCapability names a provider whose account-level weekly window
 	// OMC has not verified. Such a provider is not acted on - neither disabled from a
 	// weekly reading nor enabled from a saved plan or a hand-filled recovery time -
@@ -150,17 +152,17 @@ func CycleKey(window repository.AutomationWeeklyWindow) string {
 // the same decision, which is what makes the state machine testable with a
 // virtual clock.
 func Decide(account repository.AutomationAccount, evidence *repository.AutomationWeeklyWindow, credential CredentialState, now time.Time, cfg PolicyConfig) Decision {
-	if !account.IsAdopted {
+	if !account.IsAdopted || account.RemovedAtMS != nil {
 		return Decision{Kind: DecisionNone, State: StateIdle, Reason: ReasonNotAdopted}
 	}
-	if !credential.Exists || !credential.Controllable {
-		return Decision{Kind: DecisionMonitor, State: StateMonitoring, Reason: ReasonNoCredential}
-	}
 	if !account.IsEnabled {
-		// The account switch is off. Any pending enable or retry is cancelled; a
-		// credential OMC already disabled is left as it is, because switching off
-		// is not an instruction to re-enable.
 		return Decision{Kind: DecisionNone, State: StateIdle, Reason: ReasonSwitchOff}
+	}
+	if !credential.Exists {
+		return Decision{Kind: DecisionMonitor, State: credentialUnavailableState(account), Reason: ReasonCredentialNotFound}
+	}
+	if !credential.Controllable {
+		return Decision{Kind: DecisionMonitor, State: credentialUnavailableState(account), Reason: ReasonCredentialMissingName}
 	}
 	if credential.Disabled {
 		if reason, ok := admitRecoveryIdentity(account, credential.Provider); !ok {
@@ -170,10 +172,19 @@ func Decide(account repository.AutomationAccount, evidence *repository.Automatio
 	}
 	// The credential is live. If OMC had disabled it, the operator (or CPA) turned
 	// it back on outside this feature: drop the plan without inferring intent.
-	if account.IsDisabledByAutomation() {
+	if account.IsDisabledByAutomation() || hasPendingRecoveryState(account) {
 		return Decision{Kind: DecisionMonitor, State: StateIdle, Reason: ReasonExternallyReEnabled}
 	}
 	return decideDisable(account, evidence, credential, now, cfg)
+}
+
+// Keep the recovery phase while the gateway cannot address a credential. A later
+// successful inventory can resume the same plan without admitting new evidence.
+func credentialUnavailableState(account repository.AutomationAccount) string {
+	if hasPendingRecoveryState(account) {
+		return StateWaiting
+	}
+	return StateMonitoring
 }
 
 // decideRecovery plans the direct enable at the recorded absolute reset time. No
@@ -206,6 +217,9 @@ func decideRecovery(account repository.AutomationAccount, now time.Time) Decisio
 func decideDisable(account repository.AutomationAccount, evidence *repository.AutomationWeeklyWindow, credential CredentialState, now time.Time, cfg PolicyConfig) Decision {
 	monitor := func(reason string) Decision {
 		return Decision{Kind: DecisionMonitor, State: StateMonitoring, Reason: reason}
+	}
+	if account.BurnCredit {
+		return monitor("")
 	}
 	if pending := account.NextAttemptAtMS; pending != nil && now.UnixMilli() < *pending {
 		return Decision{Kind: DecisionNone, State: StateError, Reason: ReasonBackoff}
@@ -310,11 +324,11 @@ func AdoptionRecovery(account repository.AutomationAccount, evidence *repository
 
 // RecoveryDue returns an active recovery plan and its relation to now. A live
 // operator override (manual_reset_at_ms, not yet consumed) takes precedence over
-// the cycle reset recorded at disable time. State is part of the contract, with one
-// compatibility case for takeover plans created before adoption persisted a waiting
+// the cycle reset recorded at disable time. Pausing retains a visible plan. State
+// is part of the contract, with one compatibility case for takeover plans created before adoption persisted a waiting
 // state. Other timestamps on idle or ordinarily monitored rows are history.
 func RecoveryDue(account repository.AutomationAccount, now time.Time) (RecoverySchedule, bool) {
-	if !account.IsAdopted || !account.IsEnabled || !hasPendingRecoveryState(account) {
+	if !account.IsAdopted || account.RemovedAtMS != nil || !hasPendingRecoveryState(account) {
 		return RecoverySchedule{}, false
 	}
 	dueMS, ok := recoveryAtMS(account)
@@ -339,6 +353,10 @@ func recoveryAtMS(account repository.AutomationAccount) (int64, bool) {
 }
 
 func hasPendingRecoveryState(account repository.AutomationAccount) bool {
+	if account.State == StateIdle && account.MonitorReason == ReasonSwitchOff {
+		_, hasReset := recoveryAtMS(account)
+		return hasReset && (account.IsDisabledByAutomation() || hasLegacyTakeoverRecovery(account) || (account.ManualResetAtMS != nil && !account.ManualResetConsumed))
+	}
 	switch account.State {
 	case StateDisabled, StateWaiting:
 		return true

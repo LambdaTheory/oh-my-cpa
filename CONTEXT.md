@@ -372,10 +372,21 @@ current reset boundary. It is not capacity, an upstream guarantee or a routing i
 Its verdicts are **will exhaust**, **under-used**, **on track** and **unknown**.
 
 Prediction evidence has three tiers. **Fact** is a directly observed current reading at
-or above exhaustion. **Projection** is arithmetic
-from at least two passive or active observations in the same cycle. **Unknown** means the
-required boundary, freshness, history, trend or usage evidence is absent or invalid.
-Unknown values remain missing with a reason and are never written as zero.
+or above exhaustion; a fresh, valid 100 percent reading is a fact even when older history
+is incomplete or crossed a reset, because the current reading itself is the proof.
+**Projection** is arithmetic from at least three five-minute buckets of passive or active
+observations in the same cycle. Buckets are read by the complete window identity and each
+bucket contributes its newest real reading; empty buckets are not filled. A projection
+also requires coverage of at least `max(30 minutes, 5% of the cycle)` and no adjacent gap
+larger than `max(30 minutes, coverage / 2)`. **Unknown** means the required boundary,
+freshness, history, trend or usage evidence is absent or invalid. Unknown values remain
+missing with a reason and are never written as zero. `sample_count`, `coverage_seconds`
+and `max_gap_seconds` describe the fitted sample; the two interval fields stay null below
+two points, and `sample_count` zero means the sample was not evaluated because a fact or an
+earlier validation return settled the result, not that no history exists. Reset detection
+compares ordered readings inside a bucket, adjacent buckets, the current snapshot against
+the bucket it replaces, and the pure calculation layer's cross-point check; a detected
+reset makes the window unknown instead of fitting across it.
 
 Freshness follows the window rather than a fixed fifteen-minute sample: the accepted age
 is at least the two-hour idle refresh cadence, grows to one quarter of the quota window,
@@ -473,36 +484,29 @@ recorded and at least 95 percent of requests carried request-time pricing.
   with `rate_limited_backoff` and a retry time instead of probing the upstream. It is held
   in memory only, so a restart clears it. Both background modes and credential warmup's
   consuming requests share the same park (ADR 0104).
-- **Account Auto-Management**: OMC's control of one credential's `disabled` state from
-  account-level evidence (ADR 0105). It disables only on a **new** standard weekly (7d)
-  reading that states 100% used with its reset still in the future, and enables directly
-  at that recorded reset without a pre-enable probe. The roster is opt-in: a credential is
-  under control only once an operator adopts it, a credential discovered later is not
-  adopted by default, and an account that was already disabled is adopted explicitly and
-  never reported as disabled by this feature. Adoption requires a controllable CPA
-  credential, not a verified provider capability: an adopted provider whose account-level
-  weekly mapping is not verified remains **monitor-only**, with one **Monitor only** row
-  status and a capability-based filter. Turning its account setting off adds an explicit
-  switch-off qualifier. The adopted count includes the persisted roster and explicitly
-  counts adopted accounts absent from the live gateway inventory; an unavailable
-  inventory leaves the total unknown. It cannot be disabled
-  or re-enabled automatically until its capability is deliberately added to the registry.
-  A five-hour window, a model- or
-  group-scoped window, a partial reading, an ordinary 429, an authentication failure or a
-  collection failure never disables. A reading whose reset is missing or already past
-  produces no disable; the console shows the recovery time is missing, and the operator
-  may hand-fill a **one-time absolute recovery time**, consumed by the enable it
-  schedules. A disable stores the reading's `observed_at` and the cycle's reset as an
-  evidence watermark, so a later pass needs strictly newer evidence in a different cycle
-  and a closed cycle cannot re-close. A failed enable persists its retry schedule and is
-  complete only once CPA confirms it. A **Recovery Plan** is active only while the
-  credential is still disabled and awaiting that enable: a future instant is scheduled,
-  a passed instant is overdue retry work, and a completed or abandoned plan has no current
-  recovery instant. The process master switch,
-  `OMCPA_ACCOUNT_AUTOMATION_ENABLED`, defaults off, and an explicit `false` is an
-  out-of-band emergency off the console cannot override; the console shows which source
-  is in effect. An external `disabled` change is never read as intent: a credential that is
-  live again while OMC had disabled it has its plan cleared without being re-closed.
+- **Account Auto-Management**: OMC's control of one credential's disabled state from
+  verified account-level weekly evidence (ADR 0105, ADR 0108 and ADR 0114). A new
+  standard seven-day reading at exactly 100% with a future reset can disable an adopted,
+  enabled credential; recovery directly enables it at the recorded reset without a probe.
+  Adoption defaults to enabled. Providers without a verified weekly capability remain
+  monitor-only; adoption does not grant action capability. The per-account switch pauses
+  execution while retaining cycle/manual resets, evidence watermarks and retry schedules.
+  Resuming continues the saved recovery if the credential is still disabled. A per-account
+  **Credit exception** (burn_credit) suppresses automatic disable only, while recovery
+  remains eligible under the same identity and provider checks. **Unadopt** removes roster
+  membership without changing the gateway's enabled/disabled state. Removed rows retain a
+  removed_at_ms tombstone and audit history; only explicit adoption restores membership.
+  Background inventory synchronization removes an absent account after two consecutive
+  complete successful reads, unless it has a pending recovery or retry. A degraded read
+  resets the absence count. The active roster and its count exclude tombstones.
+  credential_not_found means absent from the gateway, while credential_missing_name means
+  present but not addressable by CPA's status patch; no_controllable_credential is readable
+  historical data only. An unconsumed manual reset takes precedence over a cycle reset;
+  a passed recovery instant is overdue work even while paused, and a completed plan has
+  no current recovery instant. The process master switch OMCPA_ACCOUNT_AUTOMATION_ENABLED
+  defaults off; explicit false is an emergency off the console cannot override.
+  An externally enabled credential ends the pending recovery without re-closing the
+  account from its old evidence. The read-only MCP summary cannot mutate any of this state.
 - **Ollama Account**: One Ollama Cloud account OMC monitors outside CPA's control
   chain. Ollama publishes no quota API, so a reading is a scrape of the fixed
   `https://ollama.com/settings` page with the account's session cookie, which is

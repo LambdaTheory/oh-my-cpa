@@ -20,6 +20,9 @@ export interface QuotaPredictionItem {
   verdict: QuotaPredictionVerdict;
   evidence: string;
   reasons: string[];
+  sample_count?: number;
+  coverage_seconds?: number | null;
+  max_gap_seconds?: number | null;
 }
 
 export interface QuotaPredictionProvider {

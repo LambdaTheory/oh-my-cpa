@@ -10,6 +10,53 @@ import (
 
 func ptrInt64(value int64) *int64 { return &value }
 
+func TestPausedRecoveryAndCredit(t *testing.T) {
+	now := time.UnixMilli(1_000_000_000_000)
+	account := adoptedAccount()
+	account.BurnCredit = true
+	evidence := weekly(100, now.UnixMilli(), now.Add(time.Hour).UnixMilli())
+	if decision := Decide(account, &evidence, liveCredential(), now, DefaultPolicyConfig()); decision.Kind == DecisionDisable || decision.State != StateMonitoring {
+		t.Fatalf("Credit must keep monitoring: %+v", decision)
+	}
+	account.State = StateWaiting
+	account.CycleResetAtMS = ptrInt64(now.UnixMilli())
+	account.LastDisableAtMS = ptrInt64(now.Add(-time.Hour).UnixMilli())
+	account.IsEnabled = false
+	account.MonitorReason = ReasonSwitchOff
+	if _, ok := RecoveryDue(account, now); !ok {
+		t.Fatal("paused plan must remain visible")
+	}
+	credential := liveCredential()
+	credential.Disabled = true
+	if decision := Decide(account, nil, credential, now, DefaultPolicyConfig()); decision.Kind != DecisionNone || decision.Reason != ReasonSwitchOff {
+		t.Fatalf("pause must prevent writes: %+v", decision)
+	}
+	account.IsEnabled = true
+	if decision := Decide(account, nil, credential, now, DefaultPolicyConfig()); decision.Kind != DecisionEnable {
+		t.Fatalf("Credit must preserve due recovery after resume: %+v", decision)
+	}
+	account.ManualResetAtMS = ptrInt64(now.Add(time.Hour).UnixMilli())
+	if due, ok := RecoveryDue(account, now); !ok || due.AtMS != *account.ManualResetAtMS {
+		t.Fatalf("manual precedence: %+v/%v", due, ok)
+	}
+}
+
+func TestUnavailableCredentialReasons(t *testing.T) {
+	now := time.UnixMilli(1_000_000_000_000)
+	for _, tc := range []struct {
+		credential CredentialState
+		reason     string
+	}{
+		{CredentialState{}, ReasonCredentialNotFound},
+		{CredentialState{Exists: true}, ReasonCredentialMissingName},
+	} {
+		decision := Decide(adoptedAccount(), nil, tc.credential, now, DefaultPolicyConfig())
+		if decision.Kind != DecisionMonitor || decision.Reason != tc.reason {
+			t.Fatalf("unavailable credential: %+v", decision)
+		}
+	}
+}
+
 func adoptedAccount() repository.AutomationAccount {
 	return repository.AutomationAccount{
 		AuthIndex: "idx-1",
@@ -115,7 +162,7 @@ func TestDecideNeverDisablesWithoutExplicitWeeklyEvidence(t *testing.T) {
 			evidence: windowPtr(weekly(100, fresh, futureReset)),
 			cred:     CredentialState{},
 			wantKind: DecisionMonitor,
-			want:     ReasonNoCredential,
+			want:     ReasonCredentialNotFound,
 		},
 		{
 			name:     "switch off does nothing",

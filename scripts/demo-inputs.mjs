@@ -11,6 +11,11 @@
  */
 export const INPUTS = [
   'internal/api/demo_export_test.go',
+  'internal/api/account_automation.go',
+  'internal/automation/policy.go',
+  'internal/repository/account_automation.go',
+  'internal/operations/account_automation.go',
+  'migrations/054_account_automation_burn_credit.sql',
   'internal/api/management_system.go',
   'internal/demo/fixture.go',
   'internal/demo/seed.go',
