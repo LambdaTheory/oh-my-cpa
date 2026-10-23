@@ -1,0 +1,1 @@
+function n(e){const t=(e??"").trim();if(!t)return!1;let r;try{r=new URL(t)}catch{return!1}return r.protocol!=="http:"&&r.protocol!=="https:"?!1:r.hostname!==""}function o(e){const t=(e??"").trim();return n(t)?t:void 0}export{n as i,o as s};

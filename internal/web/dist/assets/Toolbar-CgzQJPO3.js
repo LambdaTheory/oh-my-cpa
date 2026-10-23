@@ -1,0 +1,1 @@
+import{j as s}from"./vendor-react-CHZ4pBjd.js";import{b9 as t}from"./vendor-antd-D-N-2BYl.js";function c({variant:l="plain",end:r,className:o,children:a,...i}){return s.jsxs("div",{...i,className:t("toolbar",l==="ruled"&&"is-ruled",o),children:[a,r!=null&&r!==!1&&s.jsx("div",{className:"toolbar-end",children:r})]})}export{c as T};

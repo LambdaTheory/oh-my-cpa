@@ -1,0 +1,1 @@
+const e="••••••••";function t(i){const r=(i||"").trim();if(!r)return"";const n=Array.from(r);return n.length>=20?n.slice(0,8).join("")+e+n.slice(-4).join(""):n.length>=12?n.slice(0,4).join("")+e+n.slice(-2).join(""):e}export{t as m};

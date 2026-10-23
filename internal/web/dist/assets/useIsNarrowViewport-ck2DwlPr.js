@@ -1,0 +1,1 @@
+import{b as n}from"./vendor-react-CHZ4pBjd.js";const r="(max-width: 900px)";function s(){return typeof window<"u"&&window.matchMedia(r).matches}function i(){const[a,o]=n.useState(s);return n.useEffect(()=>{const e=window.matchMedia(r),t=()=>o(e.matches);return e.addEventListener("change",t),t(),()=>e.removeEventListener("change",t)},[]),a}export{r as N,i as u};

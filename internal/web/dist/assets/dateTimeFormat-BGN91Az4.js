@@ -1,0 +1,1 @@
+const e=new Map,c=32;function f(t,n){const r=JSON.stringify([t,Object.entries(n).sort(([a],[i])=>a.localeCompare(i))]),o=e.get(r);if(o)return o;const s=new Intl.DateTimeFormat(t,n);if(e.size>=c){const a=e.keys().next().value;a!==void 0&&e.delete(a)}return e.set(r,s),s}function m(t,n,r){return f(n,{...r,timeZone:"UTC"}).format(new Date(`${t}T00:00:00Z`))}export{m as f,f as g};
