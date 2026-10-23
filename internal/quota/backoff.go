@@ -3,6 +3,7 @@ package quota
 import (
 	"context"
 	"errors"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +18,7 @@ import (
 // It implements capability.DetailedError through FailureDetail, so the error's
 // code (rate_limited_backoff) and its detail survive the capability envelope.
 type RateLimitError struct {
+	Evidence      *authfailure.Evidence
 	Provider      string
 	AuthIndex     string
 	RetryAfter    time.Duration
@@ -24,6 +26,12 @@ type RateLimitError struct {
 }
 
 func (e *RateLimitError) Error() string { return "rate_limited_backoff" }
+func (e *RateLimitError) Unwrap() error {
+	if e.Evidence == nil {
+		return nil
+	}
+	return e.Evidence
+}
 
 // IsRateLimited lets bounded consuming adapters preserve this refusal without
 // importing quota and turning it into an uncertain transport failure.

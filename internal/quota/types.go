@@ -1,6 +1,9 @@
 package quota
 
-import "github.com/oh-my-cpa/oh-my-cpa/internal/warmup"
+import (
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/warmup"
+)
 
 // QuotaWindow represents a normalized quota usage window (e.g. 5-hour rolling, weekly, model-specific).
 type QuotaWindow struct {
@@ -150,6 +153,15 @@ type ActiveCooldown struct {
 	CorrelatedAtMS    *int64 `json:"correlated_at_ms,omitempty"`
 }
 
+// CredentialCooldown retains model scope independently of account authentication.
+type CredentialCooldown struct {
+	Scope      string `json:"scope"`
+	ModelKey   string `json:"model_key,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	HTTPStatus int    `json:"http_status,omitempty"`
+	RetryAtMS  int64  `json:"retry_at_ms,omitempty"`
+}
+
 // QuotaRecommendation represents intelligent, actionable status and guidance.
 type QuotaRecommendation struct {
 	Status   string `json:"status"`   // "healthy", "warning", "exhausted", "cooldown", "needs_reauth", "credits_available", "idle", "unpublished"
@@ -180,6 +192,12 @@ const (
 
 // NormalizedQuota is the unified DTO representing all quota dimensions for a credential.
 type NormalizedQuota struct {
+	Cooldowns            []CredentialCooldown  `json:"cooldowns,omitempty"`
+	Failure              *authfailure.Evidence `json:"-"`
+	HasAuthenticatedRead bool                  `json:"-"`
+	// Historical acceptance orders CPA status on reload; it cannot satisfy the
+	// verifier's requirement for a new authenticated read.
+	LastAuthenticatedReadAtMS int64 `json:"-"`
 	// AccountType carries CPA provenance through refresh admission, never into a
 	// public quota response or a persisted snapshot of an earlier credential.
 	AccountType    string                 `json:"-"`

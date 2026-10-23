@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/warmup"
@@ -226,40 +227,21 @@ func (s *Service) SafeApiCall(ctx context.Context, authIndex, method, targetURL 
 
 	resp, err := s.client.ApiCall(ctx, req)
 	if err != nil {
-		return resp, err
+		var httpErr *management.HTTPError
+		if errors.As(err, &httpErr) {
+			return resp, authfailure.Parse(authfailure.ControlPlane, targetURL, httpErr.StatusCode, []byte(httpErr.Body))
+		}
+		return resp, &authfailure.Evidence{Source: authfailure.Transport, Endpoint: targetURL, Message: err.Error()}
 	}
 	// A 429 is not a generic failure: it names how long the credential must not
 	// be probed again. It is turned into a typed error here so every caller can
 	// park the credential instead of retrying into the same refusal.
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return resp, NewRateLimitError("", authIndex, resp.Header)
+		rateErr := NewRateLimitError("", authIndex, resp.Header)
+		rateErr.Evidence = failureEvidence(responseFailure(targetURL, resp))
+		return resp, rateErr
 	}
-	return resp, nil
-}
-
-// sanitizeError keeps the operator-facing text short. CPA error bodies are not a
-// stable contract, so the JSON `message` is preferred and the bare status is the
-// fallback.
-func sanitizeError(statusCode int, rawBody []byte) string {
-	if statusCode == 0 {
-		return "request failed"
-	}
-	bodyStr := string(rawBody)
-	if strings.Contains(bodyStr, "message") {
-		var errObj struct {
-			Message string `json:"message"`
-			Error   any    `json:"error"`
-		}
-		if err := json.Unmarshal(rawBody, &errObj); err == nil {
-			if errObj.Message != "" {
-				return fmt.Sprintf("HTTP %d: %s", statusCode, errObj.Message)
-			}
-			if msgStr, ok := errObj.Error.(string); ok && msgStr != "" {
-				return fmt.Sprintf("HTTP %d: %s", statusCode, msgStr)
-			}
-		}
-	}
-	return fmt.Sprintf("HTTP %d", statusCode)
+	return resp, responseFailure(targetURL, resp)
 }
 
 func resolveAntigravityProjectID(file management.AuthFile) string {
@@ -318,6 +300,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 	}
 
 	if prior != nil {
+		result.LastAuthenticatedReadAtMS = prior.LastAuthenticatedReadAtMS
 		result.RawSignals = prior.RawSignals
 		result.ActiveCooldown = prior.ActiveCooldown
 		result.Plan = prior.Plan
@@ -433,6 +416,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 		// credential into the request: an upstream that echoes its input would
 		// otherwise put that token in a stored and displayed reading.
 		result.Error = security.RedactText(fetchErr.Error())
+		result.Failure = failureEvidence(fetchErr)
 		if prior != nil && len(prior.Windows) > 0 {
 			result.Status = "stale"
 			result.ObservedAtMS = prior.ObservedAtMS
@@ -450,6 +434,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 			if rateErr.AuthIndex == "" {
 				rateErr.AuthIndex = authIndex
 			}
+			ApplyCredentialStatus(result, file, nowMS)
 			EvaluateStatusAndRecommendation(result, nowMS)
 			return result, rateErr
 		}
@@ -461,8 +446,11 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 	}
 
 	if fetchErr == nil {
+		result.HasAuthenticatedRead = true
+		result.LastAuthenticatedReadAtMS = nowMS
 		result.WarmupEvidence = s.warmupEvidence
 	}
+	ApplyCredentialStatus(result, file, nowMS)
 	EvaluateStatusAndRecommendation(result, nowMS)
 	return result, nil
 }
@@ -488,9 +476,6 @@ func (s *Service) fetchCodexQuota(ctx context.Context, file management.AuthFile,
 	normBody, err := resp.NormalizedBody()
 	if err != nil {
 		return nil, nil, nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, nil, nil, errors.New(sanitizeError(resp.StatusCode, normBody))
 	}
 
 	observation := warmup.ParseObservation("codex", normBody, nowMS)
@@ -638,9 +623,6 @@ func (s *Service) fetchClaudeQuota(ctx context.Context, file management.AuthFile
 	if err != nil {
 		return plan, nil, nil, err
 	}
-	if usageResp.StatusCode < 200 || usageResp.StatusCode >= 300 {
-		return plan, nil, nil, errors.New(sanitizeError(usageResp.StatusCode, normUsage))
-	}
 
 	observation := warmup.ParseObservation("claude", normUsage, nowMS)
 	s.warmupEvidence = &observation
@@ -705,18 +687,18 @@ func (s *Service) fetchAntigravityQuota(ctx context.Context, file management.Aut
 	for _, targetURL := range urls {
 		resp, err := s.SafeApiCall(ctx, file.AuthIndex, "POST", targetURL, headers, reqData)
 		if err != nil {
-			lastErr = err
+			lastErr = preferFailure(lastErr, err)
+			if rateLimitFrom(err) != nil || failureEvidence(err).NeedsReauth() {
+				return nil, err
+			}
 			continue
 		}
 		normBody, bErr := resp.NormalizedBody()
 		if bErr != nil {
-			lastErr = bErr
+			lastErr = preferFailure(lastErr, bErr)
 			continue
 		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return ParseAntigravityUsage(normBody, nowMS, 0)
-		}
-		lastErr = errors.New(sanitizeError(resp.StatusCode, normBody))
+		return ParseAntigravityUsage(normBody, nowMS, 0)
 	}
 
 	if lastErr != nil {
@@ -754,9 +736,6 @@ func (s *Service) fetchKimiQuota(ctx context.Context, file management.AuthFile, 
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, errors.New(sanitizeError(resp.StatusCode, normBody))
-	}
 
 	return ParseKimiUsage(normBody, nowMS)
 }
@@ -770,6 +749,9 @@ func (s *Service) fetchKimiQuota(ctx context.Context, file management.AuthFile, 
 // arrived from the subscription endpoints, which is what made the empty reading look like a
 // missing one rather than a read that found nothing.
 func (s *Service) fetchXaiQuota(ctx context.Context, file management.AuthFile, nowMS int64) (*QuotaPlan, []QuotaWindow, error) {
+	if strings.EqualFold(file.AccountType, "api_key") {
+		return s.fetchXaiPaidQuota(ctx, file)
+	}
 	headers := management.WithQuotaCredential(map[string]string{
 		"x-xai-token-auth":      "xai-grok-cli",
 		"x-grok-client-version": XaiGrokClientVersion,
@@ -796,39 +778,28 @@ func (s *Service) fetchXaiQuota(ctx context.Context, file management.AuthFile, n
 		return plan, windows, nil
 	}
 
-	paidHeaders := management.WithQuotaCredential(map[string]string{
-		"Accept": "application/json",
-	})
-	meResp, meErr := s.SafeApiCall(ctx, file.AuthIndex, "GET", XaiApiMeURL, paidHeaders, "")
-	if meErr == nil && meResp.StatusCode == 200 {
-		plan := &QuotaPlan{
-			PlanType:  "paid",
-			PlanLabel: "xAI API Paid",
-			Tier:      "standard",
-		}
-		return plan, []QuotaWindow{}, nil
+	paidPlan, paidWindows, meErr := s.fetchXaiPaidQuota(ctx, file)
+	if meErr == nil {
+		return paidPlan, paidWindows, nil
 	}
 
-	// Neither document carried a plan and the paid probe did not recognise the credential either,
-	// so the reason to report is whichever read actually failed. A billing read that answered is
-	// not that reason, which is why the status test comes before the transport one.
-	if rateErr := rateLimitFrom(err); rateErr != nil {
-		return nil, nil, rateErr
+	// Billing documents and /me accept different credential audiences.
+	if failure := preferFailure(creditsErr, err); failure != nil {
+		return nil, nil, failure
 	}
-	if rateErr := rateLimitFrom(creditsErr); rateErr != nil {
-		return nil, nil, rateErr
+	if meErr != nil {
+		return nil, nil, meErr
 	}
-	if resp.StatusCode != 0 && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
-		normBody, _ := resp.NormalizedBody()
-		return nil, nil, errors.New(sanitizeError(resp.StatusCode, normBody))
-	}
+	return nil, nil, errors.New("xAI quota fetch failed")
+}
+
+func (s *Service) fetchXaiPaidQuota(ctx context.Context, file management.AuthFile) (*QuotaPlan, []QuotaWindow, error) {
+	headers := management.WithQuotaCredential(map[string]string{"Accept": "application/json"})
+	_, err := s.SafeApiCall(ctx, file.AuthIndex, "GET", XaiApiMeURL, headers, "")
 	if err != nil {
 		return nil, nil, err
 	}
-	if creditsErr != nil {
-		return nil, nil, creditsErr
-	}
-	return nil, nil, errors.New("xAI quota fetch failed")
+	return &QuotaPlan{PlanType: "paid", PlanLabel: "xAI API Paid", Tier: "standard"}, []QuotaWindow{}, nil
 }
 
 // fetchDevinQuota reads a Devin credential's seat status.
@@ -853,9 +824,6 @@ func (s *Service) fetchDevinQuota(ctx context.Context, file management.AuthFile,
 	normBody, err := resp.NormalizedBody()
 	if err != nil {
 		return nil, nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, nil, errors.New(sanitizeError(resp.StatusCode, normBody))
 	}
 	return ParseDevinSeatStatus(normBody, nowMS)
 }
@@ -890,9 +858,6 @@ func (s *Service) RedeemCodexCredit(ctx context.Context, file management.AuthFil
 	normBody, err := resp.NormalizedBody()
 	if err != nil {
 		return err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errors.New(sanitizeError(resp.StatusCode, normBody))
 	}
 	// A 2xx alone does not spend a credit: only an explicit confirmation does.
 	// Anything else is an unknown outcome, so the operator refreshes and decides

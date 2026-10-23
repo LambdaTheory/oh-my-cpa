@@ -60,6 +60,12 @@ func (h *Handler) refreshReauthCredential(ctx context.Context, authIndex string)
 	if err := h.persistNormalizedQuotaSnapshot(ctx, q); err != nil {
 		return "unknown", err
 	}
+	if q == nil || !q.HasAuthenticatedRead {
+		if classifyQuotaSignal(q) == repository.FeishuSignalAuthInvalid {
+			return repository.FeishuSignalAuthInvalid, nil
+		}
+		return repository.FeishuSignalUnknown, nil
+	}
 	return classifyQuotaSignal(q), nil
 }
 
@@ -90,7 +96,26 @@ func (h *Handler) registerReauthRoutes(router chi.Router) {
 		r.Get("/{id}", h.getReauthJob)
 		r.Get("/{id}/code", h.takeReauthCode)
 		r.Post("/{id}/status", h.reportReauthStatus)
+		r.Post("/{id}/dismiss", h.dismissReauthJob)
 	})
+}
+
+func (h *Handler) dismissReauthJob(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ConfirmedMisclassification bool `json:"confirmed_misclassification"`
+	}
+	if !readAgentInput(w, r, &input) {
+		return
+	}
+	if !input.ConfirmedMisclassification {
+		writeError(w, 400, "confirmation_required")
+		return
+	}
+	if err := h.reauth.Dismiss(r.Context(), chi.URLParam(r, "id")); err != nil {
+		writeReauthError(w, err)
+		return
+	}
+	h.getReauthJob(w, r)
 }
 func (h *Handler) requireReauthRunner(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

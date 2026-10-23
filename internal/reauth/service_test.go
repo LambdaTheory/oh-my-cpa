@@ -91,6 +91,69 @@ func TestObserveRequiresOAuthAccountType(t *testing.T) {
 	}
 }
 
+func TestDismissMisclassifiedEpisodeReleasesSlotWithAudit(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id := f.start(t)
+	if err := f.repo.SaveFeishuAccountSignal(ctx, repository.FeishuAccountSignal{AuthIndex: "synthetic-account", State: repository.FeishuSignalAuthInvalid, ObservedAt: f.now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Observe(ctx, "next-account", "codex", "oauth", "Next account", "auth_invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Dismiss(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	job, err := f.service.Get(ctx, id)
+	if err != nil || job.State != "failed" || job.CycleClosedAtMS == 0 || job.LastError != "misclassified_auth_failure" {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	next, err := f.service.Next(ctx, "codex")
+	if err != nil || next.AuthIndex != "next-account" {
+		t.Fatal("slot not released")
+	}
+	signals, err := f.repo.GetFeishuAccountSignals(ctx, []string{"synthetic-account"})
+	if err != nil || signals["synthetic-account"].State != "unknown" {
+		t.Fatal("false positive retained")
+	}
+	events, err := f.repo.ListAuditEvents(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Action == "reauth.dismiss_misclassified" && event.TargetID == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("missing audit")
+	}
+	count := len(f.cards)
+	if err := f.service.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.cards) != count {
+		t.Fatal("dismissal sent card")
+	}
+}
+
+func TestDismissRefusesWhenAuditCannotBeWritten(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	id := f.start(t)
+	if _, err := f.repo.SQL().Exec(`CREATE TRIGGER reject_dismiss_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(FAIL, 'audit unavailable'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.service.Dismiss(ctx, id); err == nil {
+		t.Fatal("dismissed without audit")
+	}
+	job, err := f.service.Get(ctx, id)
+	if err != nil || job.State == "failed" || job.CycleClosedAtMS != 0 {
+		t.Fatal("job changed without audit")
+	}
+}
+
 func TestInvalidCycleAndSerialAdmission(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()

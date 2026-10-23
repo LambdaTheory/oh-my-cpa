@@ -25,6 +25,9 @@ func TestQuotaRefreshReasonsPersistWithoutRawErrors(t *testing.T) {
 		{"network", nil, "dial tcp: connection refused", "network"},
 		{"parse", nil, "invalid codex payload: unexpected end of JSON input", "parse"},
 		{"auth", nil, "HTTP 401", "auth"},
+		{"forbidden", nil, "HTTP 403 Forbidden", "http"},
+		{"management", nil, "CPA returned HTTP 401", "http"},
+		{"expired", nil, "OAuth access token has expired", "auth"},
 		{"http", nil, "HTTP 483", "http"},
 		{"unknown", errors.New("provider rejected request token=synthetic-sensitive-value " + strings.Repeat("detail ", 60)), "", "unknown"},
 	} {

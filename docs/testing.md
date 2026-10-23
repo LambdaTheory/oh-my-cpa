@@ -19,6 +19,13 @@ change; keep the claim's strength, not its address. Nothing in the map is frozen
 
 ## 1. Where a new test belongs
 
+Authentication evidence classification lives in `internal/authfailure`; quota fetcher
+tests cover nested envelopes, endpoint attribution, typed backoff, empty payloads and
+independent cooldown scope. `internal/api/auth_classification_test.go` exercises the
+manual, batch, scheduler and verifier seams, checking job counts, reload projections
+and the stored-only Feishu report. Reauth tests cover audited per-job dismissal,
+slot release, retained history and refusal when audit admission fails.
+
 OAuth reauthentication is covered without external services: `internal/reauth` uses
 an injected clock and temporary SQLite databases for transitions, episode deduplication,
 cross-provider serialization, flow-specific waiting states, device expiry, OTP consumption, restart loss, audit refusal and verification

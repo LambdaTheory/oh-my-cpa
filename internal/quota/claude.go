@@ -236,6 +236,20 @@ func grantLabel(value string) string {
 	return cleaned
 }
 
+// Recognition follows the parser's observations, so adding a supported window
+// cannot accidentally prevent that window from proving credential acceptance.
+func isRecognizedClaudeUsage(raw []byte) bool {
+	windows, extraUsage, err := ParseClaudeUsage(raw, 0)
+	if err != nil {
+		return false
+	}
+	if len(windows) > 0 || extraUsage != nil || len(ParseClaudeBalances(raw)) > 0 {
+		return true
+	}
+	var payload RawClaudeUsagePayload
+	return json.Unmarshal(raw, &payload) == nil && payload.Limits != nil && len(payload.Limits) == 0
+}
+
 // ParseClaudeUsage parses the Claude usage JSON and builds windows and extra usage.
 func ParseClaudeUsage(raw []byte, nowMS int64) ([]QuotaWindow, *QuotaExtraUsage, error) {
 	var payload RawClaudeUsagePayload

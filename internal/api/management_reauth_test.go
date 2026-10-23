@@ -93,6 +93,18 @@ func TestReauthRoutesAuthenticationNetworkAndCodeBoundary(t *testing.T) {
 			t.Fatalf("status %s: %s", status, res.Body.String())
 		}
 	}
+	res = call("POST", "/"+j.ID+"/dismiss", `{"confirmed_misclassification":false}`, "127.0.0.1:4321", true, "")
+	if res.Code != 400 {
+		t.Fatal("dismissal accepted without confirmation")
+	}
+	res = call("POST", "/"+j.ID+"/dismiss", `{"confirmed_misclassification":true}`, "8.8.8.8:4321", true, "")
+	if res.Code != 403 {
+		t.Fatal("dismissal escaped network boundary")
+	}
+	res = call("POST", "/"+j.ID+"/dismiss", `{"confirmed_misclassification":true}`, "127.0.0.1:4321", true, "")
+	if res.Code != 200 || !strings.Contains(res.Body.String(), "misclassified_auth_failure") {
+		t.Fatalf("dismissal failed: %s", res.Body.String())
+	}
 }
 
 func TestQuotaSignalCreatesOnlyOAuthAuthInvalidJobs(t *testing.T) {

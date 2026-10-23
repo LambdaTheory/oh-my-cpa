@@ -20,6 +20,23 @@ func (caller *recordingCaller) ApiCall(_ context.Context, request management.Api
 	caller.request = request
 	return caller.response, caller.err
 }
+
+func TestWarmupForbiddenRequiresTokenEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"error":{"code":"payment_required"}}`, false},
+		{`{"error":"forbidden"}`, false},
+		{`{"error":{"code":"invalid_token"}}`, true},
+	} {
+		caller := &recordingCaller{response: management.ApiCallResponse{StatusCode: 403, Body: json.RawMessage(tc.body)}}
+		result := Send(context.Background(), caller, management.AuthFile{AuthIndex: "synthetic"}, "claude", "synthetic-model")
+		if (result.Reason == "needs_reauth") != tc.want {
+			t.Fatalf("result=%+v", result)
+		}
+	}
+}
 func TestAdaptersFixedTargetAndCompletion(t *testing.T) {
 	for _, provider := range []string{"codex", "claude"} {
 		t.Run(provider, func(t *testing.T) {

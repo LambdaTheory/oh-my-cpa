@@ -87,3 +87,28 @@ func (r *Repository) ReauthMessageUsed(ctx context.Context, id string) (bool, er
 	}
 	return exists == 1, err
 }
+
+// DismissReauthJob preserves the job and its audit history while retiring the
+// explicitly reviewed episode and its false-positive signal atomically.
+func (r *Repository) DismissReauthJob(ctx context.Context, j ReauthJob, nowMS int64) error {
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE reauth_jobs SET state='failed', last_error='misclassified_auth_failure', cycle_closed_at_ms=?, updated_at_ms=?, next_attempt_at_ms=0, notification='', user_code='', verification_url='', expires_at_ms=0 WHERE id=? AND state=? AND cycle_closed_at_ms=0`, nowMS, nowMS, j.ID, j.State)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("reauth transition conflict")
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE feishu_account_signals SET state='unknown', observed_at_ms=?, updated_at_ms=? WHERE auth_index=? AND state='auth_invalid'`, nowMS, nowMS, j.AuthIndex); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

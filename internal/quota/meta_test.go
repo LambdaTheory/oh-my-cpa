@@ -19,6 +19,24 @@ func (client *metaQuotaClient) DownloadAuthFile(ctx context.Context, name string
 	return client.download(ctx, name)
 }
 
+func TestMetaRateLimitRetainsTypedBackoff(t *testing.T) {
+	client := &metaQuotaClient{download: func(context.Context, string) ([]byte, management.ResponseMeta, error) {
+		return []byte(`{"dca_token":"dca:synthetic-quota"}`), management.ResponseMeta{}, nil
+	}}
+	client.apiCallFunc = func(context.Context, management.ApiCallRequest) (management.ApiCallResponse, error) {
+		return management.ApiCallResponse{StatusCode: 429, Header: map[string][]string{"Retry-After": {"90"}}, Body: json.RawMessage(`{"error":{"message":"synthetic-private-key"}}`)}, nil
+	}
+	q, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{Type: "meta", Name: "synthetic.json", AuthIndex: "synthetic"}, nil)
+	var rate *RateLimitError
+	if !errors.As(err, &rate) || rate.RetryAfter.Seconds() != 90 || q.Recommendation.Status == "needs_reauth" {
+		t.Fatalf("lost rate limit: %v", err)
+	}
+	encoded, _ := json.Marshal(q)
+	if strings.Contains(string(encoded), "synthetic-private-key") {
+		t.Fatal("secret escaped")
+	}
+}
+
 func TestParseMetaQuotaProjectsOnlyQuotaFields(t *testing.T) {
 	raw := []byte(`{"api_key":"synthetic-llm-key","email":"private@example.invalid","subs_tier_name":"Muse Pro","is_subs_active":false,"subs_usage":{"tier":"ignored","window":{"used_percent":"25","window_duration_mins":300,"resets_at":1800000000},"weekly":{"used_percent":80,"resets_at":1800100000}}}`)
 	plan, windows, err := ParseMetaUsage(raw, 1700000000000)

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -30,7 +31,13 @@ var QUOTA_HTTP_STATUS = regexp.MustCompile(`\bHTTP ([45][0-9]{2})\b`)
 // Non-rate-limit provider errors reach this layer as normalized text. Only the
 // transport and parser vocabulary we emit is classified; other text stays unknown.
 func quotaRefreshReason(err error, message string, status int) string {
-	if status == 401 || status == 403 {
+	evidence := authfailure.FromText(message)
+	var typed *authfailure.Evidence
+	if errors.As(err, &typed) {
+		evidence = typed
+		message = typed.Message
+	}
+	if evidence.NeedsReauth() {
 		return "auth"
 	}
 	if status >= 400 && status <= 599 {
@@ -80,6 +87,9 @@ func (h *Handler) recordQuotaRefreshAttempt(ctx context.Context, file management
 			reason = refreshErr.Error()
 		} else if value != nil {
 			reason = value.Error
+			if value.Failure != nil {
+				refreshErr = value.Failure
+			}
 		}
 		if match := QUOTA_HTTP_STATUS.FindStringSubmatch(reason); len(match) == 2 {
 			attempt.HTTPStatus, _ = strconv.Atoi(match[1])

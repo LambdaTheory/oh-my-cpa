@@ -75,6 +75,23 @@ beforeEach(() => {
 });
 
 describe('credential quota board', () => {
+  it('renders payment cooldown and account reauthentication independently after reload', () => {
+    const payment = quota('synthetic', [], {
+      provider: 'antigravity', status: 'cooldown', error: 'HTTP 403',
+      active_cooldown: { is_active: true, reason: 'payment_required', recover_at_ms: NOW_MS + HOUR_MS },
+      recommendation: { status: 'cooldown', priority: 'high', action: 'clear_cooldown', reason: 'payment_required' },
+      last_refresh: { outcome: 'failed', attempted_at_ms: NOW_MS, http_status: 403, reason: 'http' },
+    });
+    const entry = file('synthetic', { type: 'antigravity', status: 'active' });
+    expect(buildCredentialQuotaBoard([entry], [payment], NOW_MS).rows[0].state).toBe('cooldown');
+    const { rerender } = render(<I18nProvider><CredentialQuotaBody item={payment} nowMS={NOW_MS} isDemo={false} /></I18nProvider>);
+    expect(screen.queryByText('Reauthenticate')).toBeNull();
+    const rejected = { ...payment, status: 'error' as const, recommendation: { status: 'needs_reauth' as const, priority: 'critical' as const, action: 'reauth' as const, reason: 'authentication failed' } };
+    expect(buildCredentialQuotaBoard([entry], [rejected], NOW_MS).rows[0].state).toBe('reauth');
+    rerender(<I18nProvider><CredentialQuotaBody item={rejected} nowMS={NOW_MS} isDemo={false} /></I18nProvider>);
+    expect(screen.getByText('Reauthenticate')).toBeTruthy();
+  });
+
   it.each([{ unavailable: true }, { status: 'error' }])('excludes CPA file problems from normal counts: %j', (problem) => {
     const entry = file('unavailable', problem);
     const item = quota(entry.name, [quotaWindow('five_hour', 80, 3)]);
