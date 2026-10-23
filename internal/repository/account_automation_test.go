@@ -258,3 +258,74 @@ func TestLatestStandardWeeklyWindowsAcceptsClaudeSevenDay(t *testing.T) {
 		t.Fatalf("a model-scoped seven-day window must not count: %+v", windows["sonnet"])
 	}
 }
+
+func TestAutomationPauseCreditAndTombstone(t *testing.T) {
+	repo, _ := testRepository(t)
+	ctx := context.Background()
+	now := int64(1000000000000)
+	reset := now + 3600000
+	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "pause", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "synthetic", State: AutomationStateWaiting, CycleResetAtMS: &reset, CycleKey: "synthetic-cycle", DisableObservedAtMS: &now}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	credit := true
+	account, err := repo.SetAutomationOptions(ctx, "synthetic", nil, &credit, 1, now)
+	if err != nil || !account.BurnCredit {
+		t.Fatalf("Credit: %+v %v", account, err)
+	}
+	account, err = repo.SetAutomationManualReset(ctx, "synthetic", reset+1, account.IntentVersion, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err = repo.SetAutomationSwitch(ctx, "synthetic", false, account.IntentVersion, now)
+	if err != nil || account.IsEnabled || account.CycleResetAtMS == nil || account.ManualResetConsumed || account.ManualResetAtMS == nil || account.CycleKey != "synthetic-cycle" || account.DisableObservedAtMS == nil {
+		t.Fatalf("pause: %+v %v", account, err)
+	}
+	account, err = repo.SetAutomationSwitch(ctx, "synthetic", true, account.IntentVersion, now)
+	if err != nil || account.State != AutomationStateWaiting {
+		t.Fatalf("resume: %+v %v", account, err)
+	}
+	account, err = repo.RemoveAutomationAccount(ctx, "synthetic", account.IntentVersion, now, false)
+	if err != nil || account.RemovedAtMS == nil || account.IsAdopted {
+		t.Fatalf("tombstone: %+v %v", account, err)
+	}
+	listed, err := repo.ListAutomationAccounts(ctx)
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("active roster: %+v %v", listed, err)
+	}
+	if count, err := repo.CountAutomationAccounts(ctx); err != nil || count != 0 {
+		t.Fatalf("active count: %d %v", count, err)
+	}
+	stored, found, err := repo.GetAutomationAccount(ctx, "synthetic")
+	if err != nil || !found || stored.RemovedAtMS == nil {
+		t.Fatalf("preserved row: %+v %v", stored, err)
+	}
+	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "readopt", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "synthetic", State: AutomationStateMonitoring}}, true, now); err != nil {
+		t.Fatal(err)
+	}
+	stored, _, _ = repo.GetAutomationAccount(ctx, "synthetic")
+	if stored.RemovedAtMS != nil || !stored.IsAdopted || !stored.IsEnabled || stored.ManualResetAtMS != nil || stored.CycleResetAtMS != nil || stored.State != AutomationStateMonitoring {
+		t.Fatalf("fresh adoption: %+v", stored)
+	}
+	events, err := repo.ListAuditEvents(ctx, 10)
+	if err != nil || len(events) != 1 || events[0].Action != "account_automation.unadopt" {
+		t.Fatalf("removal audit: %+v %v", events, err)
+	}
+}
+
+func TestAutomationRemovalFailsClosedWithoutAudit(t *testing.T) {
+	repo, _ := testRepository(t)
+	ctx := context.Background()
+	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: 1000}, []AutomationAccount{{AuthIndex: "synthetic"}}, true, 1000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SQL().ExecContext(ctx, `CREATE TRIGGER reject_automation_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RemoveAutomationAccount(ctx, "synthetic", 1, 1001, true); err == nil {
+		t.Fatal("audit failure must reject removal")
+	}
+	account, _, _ := repo.GetAutomationAccount(ctx, "synthetic")
+	if !account.IsAdopted || account.RemovedAtMS != nil || account.IntentVersion != 1 {
+		t.Fatalf("rollback: %+v", account)
+	}
+}

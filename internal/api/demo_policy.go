@@ -253,6 +253,8 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/account-automation/settings", demoAllow, ""},
 	{http.MethodPut, "/api/v1/account-automation/accounts/{authIndex}", demoAllow, ""},
 	{http.MethodPost, "/api/v1/account-automation/adopt", demoAllow, ""},
+	{http.MethodPost, "/api/v1/account-automation/unadopt", demoAllow, ""},
+	{http.MethodPost, "/api/v1/account-automation/accounts/{authIndex}/unadopt", demoAllow, ""},
 	{http.MethodPost, "/api/v1/account-automation/accounts/{authIndex}/cancel", demoAllow, ""},
 	{http.MethodPost, "/api/v1/account-automation/accounts/{authIndex}/manual-reset", demoAllow, ""},
 

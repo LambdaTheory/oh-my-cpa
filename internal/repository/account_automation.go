@@ -40,6 +40,8 @@ type AutomationAccount struct {
 	AccountLabel  string
 	IsAdopted     bool
 	IsEnabled     bool
+	BurnCredit    bool
+	RemovedAtMS   *int64
 	AdoptBatchID  string
 	AdoptedAtMS   *int64
 	State         string
@@ -49,8 +51,8 @@ type AutomationAccount struct {
 	DisableObservedAtMS *int64
 	CycleResetAtMS      *int64
 	CycleKey            string
-	// ManualResetAtMS is the operator's one-time absolute recovery time, used
-	// only while ManualResetConsumed is false and no cycle reset is known.
+	// ManualResetAtMS is the operator's one-time absolute recovery time. An
+	// unconsumed manual reset takes precedence over a recorded cycle reset.
 	ManualResetAtMS     *int64
 	ManualResetConsumed bool
 	NextAttemptAtMS     *int64
@@ -122,7 +124,7 @@ const (
 	// evidence accepts either spelling so a row that predates that fold, or one written
 	// by another path, still counts as the same seven-day window.
 	automationSevenDayKind   = "seven_day"
-	automationAccountColumns = `auth_index, provider, name, account_label, is_adopted, is_enabled, adopt_batch_id, adopted_at_ms, state, monitor_reason, disable_observed_at_ms, cycle_reset_at_ms, cycle_key, manual_reset_at_ms, manual_reset_consumed, next_attempt_at_ms, attempt_count, last_attempt_at_ms, last_error, last_error_at_ms, last_disable_at_ms, last_enable_at_ms, intent_version, created_at_ms, updated_at_ms`
+	automationAccountColumns = `auth_index, provider, name, account_label, is_adopted, is_enabled, adopt_batch_id, adopted_at_ms, state, monitor_reason, disable_observed_at_ms, cycle_reset_at_ms, cycle_key, manual_reset_at_ms, manual_reset_consumed, next_attempt_at_ms, attempt_count, last_attempt_at_ms, last_error, last_error_at_ms, last_disable_at_ms, last_enable_at_ms, intent_version, created_at_ms, updated_at_ms, burn_credit, removed_at_ms`
 )
 
 type automationAccountScanner interface {
@@ -131,20 +133,22 @@ type automationAccountScanner interface {
 
 func scanAutomationAccount(scanner automationAccountScanner) (AutomationAccount, error) {
 	var account AutomationAccount
-	var adoptedAt, disableObserved, cycleReset, manualReset, nextAttempt, lastAttempt, lastErrorAt, lastDisable, lastEnable sql.NullInt64
-	var isAdopted, isEnabled, manualConsumed int
+	var adoptedAt, disableObserved, cycleReset, manualReset, nextAttempt, lastAttempt, lastErrorAt, lastDisable, lastEnable, removedAt sql.NullInt64
+	var isAdopted, isEnabled, manualConsumed, burnCredit int
 	if err := scanner.Scan(
 		&account.AuthIndex, &account.Provider, &account.Name, &account.AccountLabel,
 		&isAdopted, &isEnabled, &account.AdoptBatchID, &adoptedAt,
 		&account.State, &account.MonitorReason, &disableObserved, &cycleReset, &account.CycleKey,
 		&manualReset, &manualConsumed, &nextAttempt, &account.AttemptCount, &lastAttempt,
 		&account.LastError, &lastErrorAt, &lastDisable, &lastEnable,
-		&account.IntentVersion, &account.CreatedAtMS, &account.UpdatedAtMS,
+		&account.IntentVersion, &account.CreatedAtMS, &account.UpdatedAtMS, &burnCredit, &removedAt,
 	); err != nil {
 		return AutomationAccount{}, err
 	}
 	account.IsAdopted = isAdopted != 0
 	account.IsEnabled = isEnabled != 0
+	account.BurnCredit = burnCredit != 0
+	account.RemovedAtMS = nullInt64Ptr(removedAt)
 	account.ManualResetConsumed = manualConsumed != 0
 	account.AdoptedAtMS = nullInt64Ptr(adoptedAt)
 	account.DisableObservedAtMS = nullInt64Ptr(disableObserved)
@@ -203,14 +207,14 @@ func (r *Repository) SetAutomationWebEnabled(ctx context.Context, enabled bool, 
 	return nil
 }
 
-// ListAutomationAccounts returns every adopted or previously adopted account,
+// ListAutomationAccounts returns the active roster,
 // oldest first. The console shows the roster and the plan from one read.
 func (r *Repository) ListAutomationAccounts(ctx context.Context) ([]AutomationAccount, error) {
 	if r == nil || r.SQL() == nil {
 		return nil, errors.New("repository is not initialized")
 	}
 	rows, err := r.SQL().QueryContext(ctx, `
-		SELECT `+automationAccountColumns+` FROM account_automation_accounts
+		SELECT `+automationAccountColumns+` FROM account_automation_accounts WHERE removed_at_ms IS NULL
 		ORDER BY created_at_ms ASC, auth_index ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list account automation accounts: %w", err)
@@ -287,6 +291,9 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 				name = excluded.name,
 				account_label = excluded.account_label,
 				is_adopted = 1,
+				removed_at_ms = NULL,
+				state = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.state ELSE excluded.state END,
+				monitor_reason = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.monitor_reason ELSE excluded.monitor_reason END,
 				adopt_batch_id = CASE WHEN account_automation_accounts.is_adopted = 1
 					THEN account_automation_accounts.adopt_batch_id ELSE excluded.adopt_batch_id END,
 				adopted_at_ms = COALESCE(account_automation_accounts.adopted_at_ms, excluded.adopted_at_ms),
@@ -302,6 +309,15 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 					THEN account_automation_accounts.cycle_key ELSE excluded.cycle_key END,
 				disable_observed_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1
 					THEN account_automation_accounts.disable_observed_at_ms ELSE excluded.disable_observed_at_ms END,
+				manual_reset_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.manual_reset_at_ms ELSE NULL END,
+				next_attempt_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.next_attempt_at_ms ELSE NULL END,
+				last_attempt_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_attempt_at_ms ELSE NULL END,
+				last_error_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_error_at_ms ELSE NULL END,
+				last_disable_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_disable_at_ms ELSE NULL END,
+				last_enable_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_enable_at_ms ELSE NULL END,
+				manual_reset_consumed = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.manual_reset_consumed ELSE 0 END,
+				attempt_count = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.attempt_count ELSE 0 END,
+				last_error = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_error ELSE '' END,
 				intent_version = CASE WHEN account_automation_accounts.is_adopted = 1
 					THEN account_automation_accounts.intent_version ELSE account_automation_accounts.intent_version + 1 END,
 				updated_at_ms = excluded.updated_at_ms`,
@@ -318,26 +334,38 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 	return nil
 }
 
-// SetAutomationSwitch turns one account's auto-management on or off. Turning it
-// off clears the plan (a pending enable/retry is cancelled) without touching a
-// credential OMC already disabled, so switching off never silently re-enables.
+// SetAutomationSwitch pauses execution without consuming the recovery plan.
 func (r *Repository) SetAutomationSwitch(ctx context.Context, authIndex string, enabled bool, expectedVersion int64, nowMS int64) (AutomationAccount, error) {
-	state := AutomationStateIdle
-	reason := ""
-	if !enabled {
-		reason = "switch_off"
+	return r.SetAutomationOptions(ctx, authIndex, &enabled, nil, expectedVersion, nowMS)
+}
+
+// SetAutomationOptions applies one operator intent atomically. Paused plans retain
+// their retry schedule and evidence watermark, so resuming cannot create new evidence.
+func (r *Repository) SetAutomationOptions(ctx context.Context, authIndex string, enabled, burnCredit *bool, expectedVersion int64, nowMS int64) (AutomationAccount, error) {
+	assignments := "intent_version = intent_version + 1, updated_at_ms = ?"
+	args := []any{nowMS}
+	if enabled != nil {
+		assignments += `, is_enabled = ?,
+            state = CASE
+                WHEN ? = 0 AND state IN ('disabled', 'waiting') THEN state
+                WHEN ? = 0 THEN 'idle'
+                WHEN (cycle_reset_at_ms IS NOT NULL OR (manual_reset_at_ms IS NOT NULL AND manual_reset_consumed = 0))
+                    AND (state IN ('disabled', 'waiting')
+                        OR last_disable_at_ms > COALESCE(last_enable_at_ms, 0)
+                        OR (monitor_reason = 'switch_off' AND
+                            ((manual_reset_at_ms IS NOT NULL AND manual_reset_consumed = 0)
+                                OR (disable_observed_at_ms IS NOT NULL AND cycle_key != ''
+                                    AND last_disable_at_ms IS NULL AND last_enable_at_ms IS NULL))))
+                    THEN 'waiting'
+                ELSE 'idle' END,
+            monitor_reason = CASE WHEN ? = 0 THEN 'switch_off' ELSE '' END`
+		args = append(args, boolToInt(*enabled), boolToInt(*enabled), boolToInt(*enabled), boolToInt(*enabled))
 	}
-	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
-		is_enabled = ?,
-		state = ?,
-		monitor_reason = ?,
-		next_attempt_at_ms = NULL,
-		attempt_count = 0,
-		last_error = '',
-		last_error_at_ms = NULL,
-		intent_version = intent_version + 1,
-		updated_at_ms = ?`,
-		boolToInt(enabled), state, reason, nowMS)
+	if burnCredit != nil {
+		assignments += ", burn_credit = ?"
+		args = append(args, boolToInt(*burnCredit))
+	}
+	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, assignments, args...)
 }
 
 // SetAutomationManualReset records the operator's one-time absolute recovery
@@ -422,7 +450,7 @@ func (r *Repository) RecordAutomationFailure(ctx context.Context, authIndex stri
 }
 
 // RecordAutomationReset clears a plan the process no longer owns: an account
-// whose live credential is enabled again, or a switch that was turned off. The
+// whose live credential is enabled again. The
 // evidence watermark is deliberately kept, so the closed cycle cannot re-close.
 func (r *Repository) RecordAutomationReset(ctx context.Context, authIndex string, expectedVersion int64, nowMS int64, state, reason string) (AutomationAccount, error) {
 	return r.writeAutomationAccount(ctx, authIndex, expectedVersion, nowMS, `
@@ -458,7 +486,7 @@ func (r *Repository) writeAutomationAccount(ctx context.Context, authIndex strin
 	arguments := append([]any{}, args...)
 	arguments = append(arguments, authIndex, expectedVersion)
 	result, err := r.SQL().ExecContext(ctx, `UPDATE account_automation_accounts SET `+assignments+`
-		WHERE auth_index = ? AND intent_version = ?`, arguments...)
+		WHERE auth_index = ? AND intent_version = ? AND removed_at_ms IS NULL`, arguments...)
 	if err != nil {
 		return AutomationAccount{}, fmt.Errorf("update account automation account %s: %w", authIndex, err)
 	}
@@ -546,7 +574,7 @@ func (r *Repository) CountAutomationAccounts(ctx context.Context) (int64, error)
 		return 0, errors.New("repository is not initialized")
 	}
 	var count int64
-	if err := r.SQL().QueryRowContext(ctx, `SELECT COUNT(1) FROM account_automation_accounts`).Scan(&count); err != nil {
+	if err := r.SQL().QueryRowContext(ctx, `SELECT COUNT(1) FROM account_automation_accounts WHERE removed_at_ms IS NULL`).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count account automation accounts: %w", err)
 	}
 	return count, nil
