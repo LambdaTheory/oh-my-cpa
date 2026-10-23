@@ -34,6 +34,12 @@ the reviewed immutable SHA on the Mac, build `Dockerfile.prebuilt` for the Linux
 target and smoke-test `/omc/`, lazy assets, fonts, provider artwork and source
 identity with synthetic settings. Static reference checks cannot certify every
 dynamic JavaScript loading path; actual built-browser acceptance remains required.
+For a targeted built YAML worker diagnosis, `pnpm verify:browser --scenario config-yaml-format`
+uses the same compiled Go binary, fake CPA, authenticated browser context, network
+guards and cleanup as the default full catalog. It inserts synthetic YAML, checks the
+native formatter's distinct flow spacing, and reports only the synthetic marker,
+worker-asset status and error-toast presence when formatting fails. The selector
+does not replace `pnpm verify:browser` or certify the other release claims.
 
 ## 1. Where a new test belongs
 
