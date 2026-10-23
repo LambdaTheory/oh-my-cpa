@@ -83,6 +83,9 @@ import type {
   AccountAutomationAdoptPayload,
   AccountAutomationAdoptResponse,
   AccountAutomationManualResetPayload,
+  AccountAutomationPatch,
+  AccountAutomationUnadoptPayload,
+  AccountAutomationUnadoptResponse,
 } from '../types/accountAutomation';
 import type {
   OllamaAccountDTO,
@@ -1322,7 +1325,7 @@ export const api = {
     });
   },
 
-  async putAccountAutomationAccount(authIndex: string, payload: { enabled: boolean }): Promise<AccountAutomationAccountDTO> {
+  async putAccountAutomationAccount(authIndex: string, payload: AccountAutomationPatch): Promise<AccountAutomationAccountDTO> {
     return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}`, {
       method: 'PUT',
       body: JSON.stringify(payload),
@@ -1339,6 +1342,19 @@ export const api = {
   async postAccountAutomationCancel(authIndex: string): Promise<AccountAutomationAccountDTO> {
     return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}/cancel`, {
       method: 'POST',
+    });
+  },
+
+  async postAccountAutomationUnadopt(authIndex: string): Promise<AccountAutomationAccountDTO> {
+    return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}/unadopt`, {
+      method: 'POST',
+    });
+  },
+
+  async postAccountAutomationUnadoptMany(payload: AccountAutomationUnadoptPayload): Promise<AccountAutomationUnadoptResponse> {
+    return request<AccountAutomationUnadoptResponse>('/account-automation/unadopt', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   },
 

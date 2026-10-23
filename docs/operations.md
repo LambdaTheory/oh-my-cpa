@@ -159,13 +159,28 @@ switch, the one-time recovery time and the web switch all live in the console un
 `/api/v1/account-automation` and in `account_automation_*` (migration 043).
 
 All controllable CPA credentials can be adopted. A provider whose account-level weekly
-capability is not verified receives a separate **monitor-only** badge and can be filtered
+capability is not verified receives a **monitor-only** state and can be filtered
 by that capability; `monitoring` remains the runtime health state for verified and
 unverified providers alike. A monitor-only credential is never automatically disabled or
 re-enabled. Credentials that CPA
 does not expose as controllable cannot be adopted and retain an explicit reason in the
 candidate list. The console reports the two inventory scopes separately as adopted
 accounts and total live credentials (ADR 0108).
+
+The drawer presents account/credential, one state/reason, and actions in aligned columns;
+phones stack those groups. Details disclose weekly evidence, resets, action history,
+errors, retry cancellation, manual recovery and the account audit link. The Credit
+control exempts automatic disable only and retains recovery. Batch Operations offers
+adoption (with the immediate-enable choice and note) and unadoption. Unadoption removes
+only roster membership, leaving the gateway credential's current enabled/disabled state.
+Background removal is silent. The footer shows adopted and gateway totals only.
+
+Summary counts share the same active-roster projection as the filters: monitor-only is
+a capability/controllability fact, auto-disabled uses the backend ownership flag, waiting
+means an active scheduled or overdue recovery, and backoff means a next retry instant.
+These counts can overlap and include retained paused plans. Gateway totals are unknown
+when inventory is degraded, and adoption is unavailable until a complete read succeeds.
+
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
