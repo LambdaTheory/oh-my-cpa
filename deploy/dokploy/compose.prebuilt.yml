@@ -1,0 +1,17 @@
+# Select branch deploy/prebuilt and this Compose path in Dokploy.
+# Runtime settings and storage remain owned by the source deployment contract.
+services:
+  omc:
+    extends:
+      file: compose.yml
+      service: omc
+    build:
+      context: ../..
+      dockerfile: Dockerfile.prebuilt
+
+volumes:
+  omc-data:
+
+networks:
+  dokploy-network:
+    external: true

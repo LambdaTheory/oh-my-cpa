@@ -72,6 +72,28 @@ the secret's confinement to the release job as workflow invariants.
 `docs/releasing.md` records the maintainer workflow
 and ADR 0056 the publication ordering and immutable version identity.
 
+### Fork prebuilt deployment (ADR 0115)
+
+`scripts/prebuilt-web.mjs` prepares a complete SPA from an immutable source SHA in
+an isolated clone. The deployment-only manifest binds source and asset inventories
+with per-file and aggregate SHA-256 hashes. A separate publisher reconstructs
+allowlisted source from Git, verifies the prepared bytes, and uses a private index
+to advance only the canonical fork's `deploy/prebuilt` branch. It preserves the
+previous deployment as first parent, rejects unknown changes and source divergence,
+and uses an ordinary push so concurrent advances fail. Caller checkout/index state
+does not change. Development branches retain ADR 0033's generated-output exclusion.
+
+`Dockerfile.prebuilt` has an independent Go/Alpine graph. The standard-library
+verifier in `scripts/prebuilt-verify` checks source freshness, exact embedded file
+inventory, public resources and relative static references before compiling Go for
+the target platform. It injects the original source revision and optional tag with
+comparison version `fork`; the deployment commit is never substituted as source
+identity. Its context excludes Git and native dependencies while admitting the
+verified dist. Runtime hardening and health behavior match the ordinary Dockerfile.
+`deploy/dokploy/compose.prebuilt.yml` inherits the source Compose service and changes
+its Dockerfile selection. `docs/install.md` documents prepare/verify/publish and
+Dokploy's exact branch and Compose path; built acceptance owns dynamic `/omc` loading.
+
 ### Demo mode is the same process with the gateway replaced
 
 `OMCPA_DEMO_MODE=true` runs this binary against its own fixture; see §13. The shape

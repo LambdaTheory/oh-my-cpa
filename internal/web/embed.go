@@ -6,8 +6,8 @@ import (
 	"io/fs"
 )
 
-// Dist is the console `pnpm build` syncs into dist/. The build output is not
-// committed: the directory is tracked only through its .gitkeep, which is why the
+// Dist is the console `pnpm build` syncs into dist/. Development branches track
+// only .gitkeep; deploy/prebuilt carries verified assets (ADR 0115). That is why the
 // pattern needs `all:` - without it a checkout that has not built the console has
 // no embeddable file and the package does not compile.
 //

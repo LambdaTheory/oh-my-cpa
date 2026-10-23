@@ -9,6 +9,7 @@ web/public/lobe-icons/
 web/dist/
 dist/
 internal/web/dist/*
+/deploy/prebuilt-manifest.json
 !internal/web/dist/
 !internal/web/dist/.gitkeep
 

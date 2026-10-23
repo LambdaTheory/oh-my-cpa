@@ -5,6 +5,30 @@ constraints a deployment must respect, and how the parts that outlive a page vis
 behave. Database backup, restore and maintenance from the host have their own runbook,
 `docs/ops/sqlite-operations.md`.
 
+## Prebuilt Dokploy updates
+
+The optional prebuilt service uses branch `deploy/prebuilt` and Compose Path
+`./deploy/dokploy/compose.prebuilt.yml`. It inherits the source service's runtime
+environment, external network, non-root/read-only configuration and `omc-data`
+volume. Keep the existing Dokploy service/project identity so an update retains
+that volume. The source entrypoint `./deploy/dokploy/compose.yml` remains available.
+
+Every source update requires a fresh Mac preparation from the full source SHA:
+`node scripts/prebuilt-web.mjs prepare <source-sha> <new-directory> [fork-tag]`,
+then `node scripts/prebuilt-web.mjs verify <directory>` and image acceptance.
+Publication is separately invoked with
+`node scripts/prebuilt-web.mjs publish <directory>`. Never edit generated digests
+or repair a stale bundle in place. A race, divergent source or unknown deployment
+commit requires investigation and a new preparation, not a forced push.
+
+System Information reports the manifest's source commit, not the generated deploy
+commit. Optional fork tags are fixed during preparation; `OMCPA_BUILD_VERSION`
+applies only to the source build path. Keep `OMCPA_VERSION` unset to retain the
+`fork` comparison version. Dokploy builds only Go/runtime layers and needs no
+frontend compiler; build dependencies still need network access or cached inputs.
+See `docs/install.md` for canonical origin requirements and full commands, and
+ADR 0115 for the deployment-only generated-assets exception.
+
 ## Native deployments
 
 Native releases support Darwin, Windows, Linux and FreeBSD on amd64/arm64. The

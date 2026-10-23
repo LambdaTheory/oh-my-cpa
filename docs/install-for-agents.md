@@ -248,6 +248,47 @@ may be set as `OMCPA_BUILD_VERSION`; the Compose comparison version remains `for
 so the tag is not treated as an upstream release. Leave runtime `OMCPA_VERSION`
 unset. Do not invent missing metadata. See `docs/releasing.md`.
 
+### Mac-prebuilt Dokploy deployment
+
+Use the canonical `LambdaTheory/oh-my-cpa` clone with exactly one origin fetch and
+push URL, either `https://github.com/LambdaTheory/oh-my-cpa.git` or
+`git@github.com:LambdaTheory/oh-my-cpa.git`. Never silently rewrite a renamed or
+unrelated caller remote; use a fresh canonical clone or ask the owner to correct
+that clone. Read the Node/pnpm pins from `package.json` and Go from
+`scripts/tools-versions.json`. Preparation needs their build-time dependencies.
+
+Obtain the approved full immutable source SHA. With `SOURCE_SHA` set to that value
+and a nonexistent destination outside the caller checkout, run on the Mac:
+
+```bash
+node scripts/prebuilt-web.mjs prepare "$SOURCE_SHA" ../omc-prebuilt
+node scripts/prebuilt-web.mjs verify ../omc-prebuilt
+docker build --platform linux/amd64 -f ../omc-prebuilt/Dockerfile.prebuilt -t omc-prebuilt:local ../omc-prebuilt
+```
+
+Use `linux/arm64` for an arm64 Dokploy host. Preparation is the required freshness
+command for each source update; its optional third argument is the actual fork tag.
+It builds in an isolated checkout and never switches or stages the caller. Preserve
+failure evidence; resolve the cause and use a new destination rather than editing
+the manifest. Smoke-test the image with synthetic settings, `/omc/`, local assets
+and the embedded source revision. The source SHA must differ from the later
+generated deploy commit. Do not describe local build success as production acceptance.
+
+Only after explicit publication authorization run:
+
+```bash
+node scripts/prebuilt-web.mjs publish ../omc-prebuilt
+```
+
+This advances only origin's `deploy/prebuilt`. Remote races, unknown changes and
+source divergence fail closed; investigate, then prepare again when appropriate.
+Never force push, delete the branch, or substitute upstream/dev/master. In Dokploy
+select branch `deploy/prebuilt` and Compose Path
+`./deploy/dokploy/compose.prebuilt.yml`, retaining the service's environment,
+external network and data volume. Source deployment remains available through
+`./deploy/dokploy/compose.yml`. Keep `OMCPA_VERSION` unset; prebuilt identity/tag
+comes from the manifest, not `OMCPA_BUILD_VERSION`. See `docs/install.md` and ADR 0115.
+
 ## 4. Verify
 
 ```bash

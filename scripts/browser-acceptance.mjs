@@ -34,6 +34,8 @@ import { runObservabilityAcceptance } from './acceptance/observability.mjs';
 import { auditNativePluginHostResponse, isNativePluginHostResponse, settleNativeResponseAudits, runConfigurationPluginsAcceptance } from './acceptance/configuration-plugins.mjs';
 import { runThemeBrandAcceptance } from './acceptance/theme-brand.mjs';
 import { runOAuthFlowAcceptance } from './acceptance/oauth-flow.mjs';
+import { parseBrowserSelection } from './acceptance/browser-selection.mjs';
+import { runYamlFormatAcceptance } from './acceptance/configuration-plugins.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -46,8 +48,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  * are supposed to cover exactly this material.
  */
 const providerSecrets = [FAKE_PROVIDER_SECRET, FAKE_SECOND_PROVIDER_SECRET];
-const smokeOnly = process.argv.includes('--smoke');
-const p0Only = process.argv.includes('--p0');
+const { smokeOnly, p0Only, scenarioId } = parseBrowserSelection(process.argv.slice(2));
 
 class SmokeComplete extends Error {}
 if (process.env.OMCPA_LIVE_CPA === '1') {
@@ -365,6 +366,9 @@ try {
   await page.locator('.app-shell').waitFor({ state: 'visible', timeout: 15000 });
   check('valid sign-in creates an administrator session', await page.locator('.app-shell').isVisible());
 
+  if (scenarioId === 'config-yaml-format') {
+    await runYamlFormatAcceptance({ appURL, page, check });
+  } else {
   await auditPage(page, responseBodies, '/dashboard', '.dashboard-page', { pageSecrets: providerSecrets });
 
   // Success-rate band: the seeded window carries 1 failure in 50 (2%), which is 98% success and
@@ -476,6 +480,7 @@ try {
     await runOAuthFlowAcceptance({ appURL, page, check });
   }
 
+  }
   await Promise.all(nativeResponseAudits);
 
   await context.clearCookies();
@@ -523,6 +528,6 @@ if (failures.length > 0) {
   if (appLog.length > 0) console.error(appLog.join('').slice(-8000));
   process.exitCode = 1;
 } else {
-  const mode = smokeOnly ? ' (smoke)' : p0Only ? ' (p0)' : '';
+  const mode = scenarioId ? ` (${scenarioId})` : smokeOnly ? ' (smoke)' : p0Only ? ' (p0)' : '';
   console.log(`\n${checks.length} deterministic browser checks passed${mode}.`);
 }

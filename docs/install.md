@@ -526,6 +526,63 @@ Set `OMCPA_BUILD_VERSION` only to an actual fork build tag; otherwise the page u
 at `fork`. Do not use `OMCPA_VERSION` to manufacture source identity. See
 `docs/releasing.md` for the build contract.
 
+### Mac-prebuilt frontend for Dokploy
+
+For the canonical fork `LambdaTheory/oh-my-cpa`, a Mac can build the complete SPA
+before Dokploy compiles Go. Install Git, Node and pnpm at the versions pinned in
+`package.json`, plus Go as pinned in `scripts/tools-versions.json`. Use a clone
+whose sole `origin` fetch/push URL is
+`https://github.com/LambdaTheory/oh-my-cpa.git` or
+`git@github.com:LambdaTheory/oh-my-cpa.git`. A renamed/other origin is rejected;
+use a fresh canonical clone or deliberately correct that clone's origin yourself.
+The commands never rewrite the caller's remotes.
+
+From that source clone, fetch the desired revision, set `SOURCE_SHA` to its full
+40-character commit SHA and choose a nonexistent destination outside the checkout:
+
+```bash
+node scripts/prebuilt-web.mjs prepare "$SOURCE_SHA" ../omc-prebuilt
+```
+
+This is the required freshness command for every update: it installs locked
+dependencies, builds the full SPA and records source/output hashes in the isolated
+checkout. An optional third argument is an actual fork build tag. The original
+checkout, including local work, stays untouched. On failure, inspect the preserved
+destination and prepare into a new directory after resolving the cause. Do not
+repair generated files or manifest digests by hand.
+
+Validate the prepared directory and build its image before publication:
+
+```bash
+node scripts/prebuilt-web.mjs verify ../omc-prebuilt
+docker build --platform linux/amd64 -f ../omc-prebuilt/Dockerfile.prebuilt -t omc-prebuilt:local ../omc-prebuilt
+```
+
+Choose `linux/arm64` instead when that is the Dokploy host architecture. Run the
+image with isolated synthetic settings and verify `/omc/`, its JS/CSS/fonts/provider
+artwork and source identity before proceeding. Docker compiles Go for the target
+platform; no Node, pnpm or Vite stage is reachable. Dependency/image downloads are
+build-time requirements; browser assets remain local and work offline.
+
+Publication is a separate, intentional operation:
+
+```bash
+node scripts/prebuilt-web.mjs publish ../omc-prebuilt
+```
+
+It pushes only `origin`'s `deploy/prebuilt`, with ordinary history advancement and
+no force push. A changed remote tip, divergent source or unknown deployment edit
+refuses publication. Inspect the branch before preparing again; do not overwrite
+it. The source SHA is the binary identity, distinct from the generated deploy commit.
+
+In Dokploy select branch **`deploy/prebuilt`** and Compose Path
+**`./deploy/dokploy/compose.prebuilt.yml`**. Keep the same environment, external
+network, service identity and data volume; the prebuilt Compose entry inherits
+them from the source service. Keep `OMCPA_VERSION` unset; `OMCPA_BUILD_VERSION` is
+used by source builds only, while prebuilt tags are fixed during preparation.
+Selecting `./deploy/dokploy/compose.yml` continues to build from source normally.
+See ADR 0115 and `docs/releasing.md` for inventory and publication boundaries.
+
 ## Verifying the install
 
 ```bash
