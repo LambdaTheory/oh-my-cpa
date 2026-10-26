@@ -1243,8 +1243,9 @@ selection invalidation on refresh/degradation. Its claims moved from the first-b
 suite alongside the drawer redesign; absent-inventory notices are obsolete because
 cleanup is deliberately silent. `scripts/test-account-automation.ts` owns precedence,
 active-roster counts and facet membership. The typed client contract suite asserts
-independent enabled/burn_credit payloads, encoded paths and the single/batch unadopt
-methods without gateway status writes; existing backend API tests certify those routes.
+independent enabled/burn_credit payloads, encoded paths, and cancel, manual reset,
+single and batch unadopt carrying their lifecycle versions without gateway status writes;
+existing backend API tests certify those routes.
 The existing `omc-account-automation` scenario owns desktop column alignment, accessible
 ellipsis, local SVG loading, mobile stacking, details and both batch modes, with synthetic
 English/Chinese desktop/phone captures.
@@ -1417,12 +1418,19 @@ credential. Policy tests own paused recovery projection, Credit disable exemptio
 separate absent/missing-name reasons, and the adoption-instant evidence cutoff. Repository
 tests own migration 054 defaults, the audit snapshot written before the tombstone,
 audit-failure rollback, executable-plan clearing, fresh re-adoption of a removed row,
-idempotent identical adoption and the refused relabel. Service tests own pause/resume
-execution, unadopt during an outage without a gateway write, removal of a confirmed-absent
-row even with a pending plan and retry, counter reset on failure/incomplete/reappearance/
-restart/intent change, duplicate-inventory write blocking, and the delayed-pass incarnation
-fence. API tests own the current-credential projection, unknown counts and last-known plans
-on an unavailable inventory, side-effect-free GET, and the stale-incarnation conflict. The
-rendered suite owns two credentials with one label staying two rows, unmanaged adoption,
-the unavailable protection state and Credit's lifecycle version. The read-only capability
-remains a summary, with no new write tool.
+idempotent identical adoption, the refused relabel, and the store's refusal of a fresh
+adoption plan whose evidence predates the removal it re-adopts. Service tests own
+pause/resume execution, unadopt during an outage without a gateway write, removal of a
+confirmed-absent row even with a pending plan and retry, counter reset on failure/incomplete/reappearance/
+restart/intent change, duplicate-inventory write blocking, the delayed-pass incarnation
+fence, the held adoption/confirmed-removal interleaving (a removal cannot commit between the
+previous-lifecycle read and the store, and a post-adoption reading still plans and enables at
+its own reset), and batch unadopt all-or-report across a stale member. API tests own the
+current-credential projection, unknown counts and last-known plans on an unavailable
+inventory, side-effect-free GET, the stale-incarnation conflict for every mutation the
+console sends (switch/Credit, cancel, manual reset, single unadopt, batch unadopt targets)
+with zero gateway status writes, and a cancel that still works during an inventory outage.
+The rendered suite owns two credentials with one label staying two rows, unmanaged adoption,
+the unavailable protection state, and Credit, cancel, manual reset, single unadopt and batch
+unadopt each carrying the lifecycle version they read. The read-only capability remains a
+summary, with no new write tool.

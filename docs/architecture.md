@@ -2382,8 +2382,28 @@ cleared executable plan fields in one transaction; audit failure rolls back the 
 Adopting the row again starts a fresh lifecycle (new adoption instant and batch, Credit
 off, no inherited plan) while the same row keeps its audit association. An idempotent
 adoption of the active credential changes nothing; the same index observed with a
-different provider or write name is refused, not relabelled. A mutation may name
-expected_intent_version so a delayed request against a re-adopted incarnation conflicts.
+different provider or write name is refused, not relabelled.
+
+Every automatic-management mutation the console sends names the lifecycle it read in
+`expected_intent_version`: the switch/Credit PUT, cancel, one-time manual reset, single
+unadopt and each member of a batch unadopt. A request naming a version that no longer
+matches is refused with 409 and changes nothing - in particular it cannot pause, schedule
+or unadopt a credential adopted again under the same index. A batch unadopt is
+all-or-report: every selected member's version is checked under its account lock before any
+membership is removed, so one stale member stops the whole batch instead of splitting its
+effect between an old and a new incarnation. The versions are optional on the wire so an
+older caller keeps working; only that omission is unfenced, and the console always sends
+them. Cancel and unadopt are local intent: they never read or write the gateway, so they
+remain available during an inventory outage.
+
+Adoption reads the previous lifecycle's removal instant, plans the takeover recovery and
+stores the fresh row under the same per-account locks the removal paths take (taken in
+sorted order, so an adoption batch and a removal cannot deadlock). A confirmed-absence
+removal therefore cannot commit between that read and the store and hand the new engagement
+a plan computed from the lifecycle that just ended; the store re-reads the removal instant
+inside its own transaction and refuses such a plan as a conflict. A removal that arrives
+while the adoption holds the lock becomes a sequential removal of a lifecycle that had
+already ended.
 
 RunOnce reads the live credential list once through the shared complete-inventory
 validator (`automation.ValidateInventory`). A blank, malformed or duplicated auth index

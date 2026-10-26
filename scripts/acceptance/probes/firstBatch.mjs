@@ -104,8 +104,11 @@ const automationState = {
   settings: automationSettings(),
   adopt: null,
   unadopt: null,
+  unadoptTargets: [],
   unadopted: [],
   cancel: null,
+  cancelBody: null,
+  singleUnadopt: null,
   manualReset: null,
 };
 
@@ -221,15 +224,18 @@ export function accountAutomationFixtures() {
       return automationListBody(automationState).accounts.find(account => account.auth_index === key);
     }],
     [(url, method) => method === 'POST' && url.pathname.endsWith('/account-automation/unadopt'), (url, method, request) => {
-      const keys = JSON.parse(request.postData()).auth_indexes;
+      const body = JSON.parse(request.postData());
+      const keys = body.auth_indexes;
       automationState.unadopted.push(...keys);
       automationState.unadopt = keys;
+      automationState.unadoptTargets = body.targets ?? [];
       return { removed: keys.length };
     }],
-    [(url, method) => method === 'POST' && /account-automation[/]accounts[/][^/]+[/]unadopt$/.test(url.pathname), url => {
+    [(url, method) => method === 'POST' && /account-automation[/]accounts[/][^/]+[/]unadopt$/.test(url.pathname), (url, method, request) => {
       const key = decodeURIComponent(url.pathname.split('/').at(-2));
       const account = automationListBody(automationState).accounts.find(account => account.auth_index === key);
       automationState.unadopted.push(key);
+      automationState.singleUnadopt = { key, body: JSON.parse(request.postData() ?? '{}') };
       return { ...account, is_adopted: false, removed: true };
     }],
     ...oauthManagementFixtures.routes,
@@ -254,8 +260,9 @@ export function accountAutomationFixtures() {
     ],
     [
       (url, method) => method === 'POST' && /\/account-automation\/accounts\/[^/]+\/cancel$/.test(url.pathname),
-      url => {
+      (url, method, request) => {
         automationState.cancel = decodeURIComponent(url.pathname.split('/').at(-2));
+        automationState.cancelBody = JSON.parse(request.postData() ?? '{}');
         return automationListBody(automationState).accounts[0];
       },
     ],
@@ -270,7 +277,7 @@ export function accountAutomationFixtures() {
 }
 
 export async function accountAutomation({ base, page, check }) {
-  Object.assign(automationState, { phase: 'first', adopt: null, unadopt: null, unadopted: [], cancel: null, manualReset: null, patches: {}, removed: [] });
+  Object.assign(automationState, { phase: 'first', adopt: null, unadopt: null, unadoptTargets: [], unadopted: [], cancel: null, cancelBody: null, singleUnadopt: null, manualReset: null, patches: {}, removed: [] });
   await gotoConsole(page, base, '/oauth-management', '.oauth-management-page');
   const drawer = await openAutomationDrawer(page);
   const statsText = async (surface) => await surface.getByTestId('automation-stats').evaluate(element => element.textContent ?? '');
@@ -345,10 +352,12 @@ export async function accountAutomation({ base, page, check }) {
   await reset.getByRole('button', { name: /^(OK|Confirm)$/ }).click();
   await until(() => automationState.manualReset !== null, { label: 'manual recovery submitted' });
   check('manual reset remains a future absolute instant', automationState.manualReset.reset_at_ms > Date.now());
+  check('manual reset names the lifecycle it was submitted from', automationState.manualReset.expected_intent_version === 4, JSON.stringify(automationState.manualReset));
   await until(async () => await card(longName).getByRole('button', { name: 'Unadopt', exact: true }).isEnabled(), { label: 'manual reset refresh complete' });
   await card('a@example.test').getByRole('button', { name: 'Cancel Retry', exact: true }).click();
   await page.locator('.ant-modal-confirm:visible .ant-btn-primary').click();
   await until(() => automationState.cancel === VERIFIED_CLAUDE, { label: 'retry cancellation recorded' });
+  check('cancel names the lifecycle it was submitted from', automationState.cancelBody?.expected_intent_version === 3, JSON.stringify(automationState.cancelBody));
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
   const phoneGeometry = await cards.evaluateAll(elements => elements.map(element => {
@@ -380,6 +389,7 @@ export async function accountAutomation({ base, page, check }) {
   await until(() => automationState.unadopt !== null, { label: 'unadoption request' });
   await until(async () => await cards.count() === 5 && (await statsText(drawer)).includes('Unmanaged2'), { label: 'unmanaged row after unadopt' });
   check('unadoption removed only the selected membership and kept the credential row', automationState.unadopt.length === 1 && automationState.unadopt[0] === 'historical-idle' && await card('Idle account').count() === 1);
+  check('batch unadopt names every selected target lifecycle', automationState.unadoptTargets?.length === 1 && automationState.unadoptTargets[0]?.auth_index === 'historical-idle' && automationState.unadoptTargets[0]?.expected_intent_version === 1, JSON.stringify(automationState.unadoptTargets));
   check('an unadopted credential is an unmanaged row, not a paused plan', (await card('Idle account').innerText()).includes('Unmanaged') && await card('Idle account').getByRole('button', { name: 'Adopt Idle account', exact: true }).count() === 1);
   // A single unadoption leaves the credential current, so its row offers the fresh-adoption action.
   await card('a@example.test').getByRole('button', { name: 'Details', exact: true }).click();
@@ -387,6 +397,7 @@ export async function accountAutomation({ base, page, check }) {
   await page.locator('.ant-modal-confirm:visible .ant-btn-primary').click();
   await until(async () => await card('a@example.test').getByRole('button', { name: 'Adopt a@example.test', exact: true }).count() === 1, { label: 'single unadoption keeps the credential row' });
   check('single unadoption removes membership only and keeps the same current credential', await cards.count() === 5 && (await drawer.getByTestId('automation-stats').evaluate(element => element.textContent ?? '')).includes('Unmanaged3'));
+  check('single unadopt names the lifecycle it was submitted from', automationState.singleUnadopt?.key === VERIFIED_CLAUDE && automationState.singleUnadopt?.body?.expected_intent_version === 3, JSON.stringify(automationState.singleUnadopt));
   // Adopting that same current row again is the fresh-adoption path: it returns managed
   // without a second row and without the previous lifecycle's plan.
   await card('a@example.test').getByRole('button', { name: 'Adopt a@example.test', exact: true }).click();

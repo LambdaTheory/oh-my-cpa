@@ -50,6 +50,23 @@ the plan ownership; a delayed pass that holds an older incarnation stops. An obs
 keeps its real timestamp and is ineligible for the current adoption when it predates it;
 it is excluded, never restamped.
 
+Fencing covers operator mutations, not only the background pass. Every automatic-management
+mutation the console sends - switch/Credit, cancel, one-time manual reset, single unadopt and
+each batch-unadopt member - names the `expected_intent_version` it read, and a request naming
+an ended lifecycle is refused (409) without acting on the replacement now stored under that
+index. A batch is all-or-report: all member versions are checked before any membership is
+removed, so a stale member refuses the whole batch. The field stays optional on the wire for
+older callers; only a caller that omits it is unfenced, which is documented rather than
+implied to be covered.
+
+Adoption closes the read/plan/store race the same way. The previous lifecycle's removal
+instant, the takeover plan and the fresh row are all read, computed and stored under the
+same per-account locks the removal paths take, in the one sorted order both take them. A
+confirmed-absence removal cannot commit inside that window, and the store re-reads the
+removal instant in its transaction and refuses a plan whose evidence predates it. A removal
+that arrives during the adoption is therefore a sequential removal of a lifecycle that had
+already ended, never a plan inherited by the new one.
+
 The console main table is built from the inventory, joined with whatever plan uniquely
 matched each credential. Managed counts, filters and batch actions describe current rows;
 a plan without a current credential is a pending-absence count. During an outage every

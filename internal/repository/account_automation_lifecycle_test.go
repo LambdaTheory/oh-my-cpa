@@ -201,3 +201,56 @@ func TestActiveIdenticalAdoptionPreservesThePlanAndARelabelledIdentityIsRefused(
 		t.Fatalf("a refused relabel must leave the plan untouched: %+v", unchanged)
 	}
 }
+
+// TestFreshAdoptionRefusesAPlanFromTheEndedLifecycle pins the store-side half of the adoption
+// race: a caller that read the previous lifecycle's removal instant before this row was
+// tombstoned can offer a plan built from a reading that belongs to the engagement that just
+// ended. The transaction re-reads the row and refuses such a plan instead of persisting it as
+// the new lifecycle's recovery, so no old reading can ever schedule an action for a new
+// incarnation of the same auth index.
+func TestFreshAdoptionRefusesAPlanFromTheEndedLifecycle(t *testing.T) {
+	repo, _ := testRepository(t)
+	ctx := context.Background()
+	first := int64(1_000_000_000_000)
+	oldObserved := first - 60_000
+	oldReset := first - 1_000
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "old", CreatedAtMS: first - 10_000}, []AutomationAccount{{
+		AuthIndex: "synthetic", Provider: "codex", Name: "synthetic.json",
+	}}, true, first); err != nil {
+		t.Fatal(err)
+	}
+	removedAt := first + 5_000
+	if _, err := repo.RemoveAutomationAccount(ctx, "synthetic", 1, removedAt, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// A plan derived from the ended lifecycle's reading. Its observation predates the removal,
+	// so it can only describe the engagement that has already been tombstoned.
+	offered := AutomationAccount{
+		AuthIndex: "synthetic", Provider: "codex", Name: "synthetic.json",
+		CycleResetAtMS: &oldReset, CycleKey: "synthetic:codex:old", DisableObservedAtMS: &oldObserved,
+		State: AutomationStateWaiting,
+	}
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "new", CreatedAtMS: removedAt + 1}, []AutomationAccount{offered}, true, removedAt+1); !errors.Is(err, ErrAutomationConflict) {
+		t.Fatalf("a plan from the ended lifecycle = %v, want ErrAutomationConflict", err)
+	}
+	unchanged, _, _ := repo.GetAutomationAccount(ctx, "synthetic")
+	if unchanged.RemovedAtMS == nil || unchanged.IsAdopted {
+		t.Fatalf("a refused fresh adoption must leave the tombstone untouched: %+v", unchanged)
+	}
+
+	// A reading recorded after the removal belongs to the new engagement and is admitted, so
+	// the guard refuses only what the previous lifecycle produced.
+	freshObserved := removedAt + 1_000
+	freshReset := removedAt + 3_600_000
+	offered.DisableObservedAtMS = &freshObserved
+	offered.CycleResetAtMS = &freshReset
+	offered.CycleKey = "synthetic:codex:new"
+	if adopted, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "new-2", CreatedAtMS: freshObserved + 1}, []AutomationAccount{offered}, true, freshObserved+1); err != nil || adopted != 1 {
+		t.Fatalf("a reading recorded after the removal must be admitted: %d %v", adopted, err)
+	}
+	fresh, _, _ := repo.GetAutomationAccount(ctx, "synthetic")
+	if fresh.RemovedAtMS != nil || !fresh.IsAdopted || fresh.DisableObservedAtMS == nil || *fresh.DisableObservedAtMS != freshObserved {
+		t.Fatalf("the admitted plan must be the post-removal reading: %+v", fresh)
+	}
+}

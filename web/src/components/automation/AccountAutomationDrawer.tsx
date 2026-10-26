@@ -51,6 +51,9 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
   const eligibleKeys = useMemo(() => batchMode === 'adopt'
     ? canUseInventory ? rows.filter(row => !row.isManaged && row.credential.adoptable).map(row => row.credential.auth_index) : []
     : rows.filter(row => row.isManaged).map(row => row.credential.auth_index), [batchMode, canUseInventory, rows]);
+  // The lifecycle each managed row carried in the view the operator selected from. Batch
+  // unadopt names it per member so a delayed request cannot act on a replacement.
+  const versions = useMemo(() => new Map(rows.filter(row => row.isManaged).map(row => [row.credential.auth_index, row.plan.intent_version])), [rows]);
   const selection = selected.filter(key => eligibleKeys.includes(key));
 
   useEffect(() => {
@@ -91,7 +94,7 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
   const confirmUnadopt = (row: AccountAutomationCredentialDTO) => modal.confirm({
     title: t('automation.unadopt_title'), content: displayName(row).primary + ': ' + t('automation.unadopt_desc'),
     okText: t('automation.unadopt_submit'), cancelText: t('common.cancel'),
-    onOk: () => write(() => api.postAccountAutomationUnadopt(row.auth_index), t('automation.unadopt_success')),
+    onOk: () => write(() => api.postAccountAutomationUnadopt(row.auth_index, row.plan?.intent_version ?? undefined), t('automation.unadopt_success')),
   });
   const adoptOne = (row: AccountAutomationCredentialDTO) => write(
     () => api.postAccountAutomationAdopt({ auth_indexes: [row.auth_index], enable: true }),
@@ -159,7 +162,7 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
               {account.last_error && <p className={styles['error']}>{t('automation.last_error')}: {account.last_error}</p>}
               <div className={styles['detail-actions']}>
                 <Button href={getAppConfig().basePath.replace(/[/]$/, '') + '/audit?q=' + encodeURIComponent(item.auth_index)}>{t('nav.audit')}</Button>
-                {(row.hasBackoff || account.state === 'waiting' || account.state === 'error') && <Button disabled={!canWrite} onClick={() => modal.confirm({ title: t('automation.btn_cancel_retry'), content: t('automation.cancel_confirm'), onOk: () => write(() => api.postAccountAutomationCancel(item.auth_index), t('automation.cancel_success')) })}>{t('automation.btn_cancel_retry')}</Button>}
+                {(row.hasBackoff || account.state === 'waiting' || account.state === 'error') && <Button disabled={!canWrite} onClick={() => modal.confirm({ title: t('automation.btn_cancel_retry'), content: t('automation.cancel_confirm'), onOk: () => write(() => api.postAccountAutomationCancel(item.auth_index, account.intent_version), t('automation.cancel_success')) })}>{t('automation.btn_cancel_retry')}</Button>}
                 {row.reason === 'missing_reset' && <Button disabled={!canWrite} onClick={() => { setResetTarget(account); setResetTime(''); setResetError(''); }}>{t('automation.btn_manual_reset')}</Button>}
                 <Button danger disabled={!canWrite} onClick={() => confirmUnadopt(item)}>{t('automation.unadopt_title')}</Button>
               </div>
@@ -171,7 +174,12 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
       footer={<><Button disabled={isBusy} onClick={closeBatch}>{t('common.cancel')}</Button><Button type="primary" danger={batchMode === 'unadopt'} loading={isBusy} disabled={!canWrite || !selection.length || listQuery.isFetching} onClick={() => {
         const keys = [...selection];
         if (batchMode === 'adopt') write(() => api.postAccountAutomationAdopt({ auth_indexes: keys, enable: shouldEnable, note: note.trim() || undefined }), t('automation.adopt_success', { n: keys.length }), closeBatch);
-        else write(() => api.postAccountAutomationUnadoptMany({ auth_indexes: keys }), t('automation.unadopt_success'), closeBatch);
+        else {
+          // Every selected row names the lifecycle the console read, so a stale batch is
+          // refused as a whole instead of removing membership from a re-adopted incarnation.
+          const targets = keys.map(key => ({ auth_index: key, expected_intent_version: versions.get(key) })).filter(target => target.expected_intent_version != null);
+          write(() => api.postAccountAutomationUnadoptMany({ auth_indexes: keys, targets }), t('automation.unadopt_success'), closeBatch);
+        }
       }}>{t(batchMode === 'adopt' ? 'automation.adopt_submit' : 'automation.unadopt_submit')}</Button></>}>
       <div className={styles['batch-content']}>
         <Segmented block disabled={isBusy} value={batchMode} onChange={value => { setBatchMode(value as 'adopt' | 'unadopt'); setSelected([]); }} options={[{ label: t('automation.adopt_title'), value: 'adopt' }, { label: t('automation.unadopt_title'), value: 'unadopt' }]} />
@@ -196,7 +204,7 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
         if (!resetTarget) return;
         const resetAtMs = dayjs(resetTime).valueOf();
         if (!Number.isFinite(resetAtMs) || resetAtMs <= Date.now()) { setResetError(t('automation.manual_reset_must_future')); return; }
-        write(() => api.postAccountAutomationManualReset(resetTarget.auth_index, { reset_at_ms: resetAtMs }), t('automation.manual_reset_success'), () => setResetTarget(null));
+        write(() => api.postAccountAutomationManualReset(resetTarget.auth_index, { reset_at_ms: resetAtMs, expected_intent_version: resetTarget.intent_version }), t('automation.manual_reset_success'), () => setResetTarget(null));
       }}>
       <p>{t('automation.manual_reset_desc')}</p><label htmlFor="automation-reset-time">{t('automation.manual_reset_field')} ({getTimeZone()})</label>
       <Input id="automation-reset-time" type="datetime-local" value={resetTime} disabled={isBusy} onChange={event => {

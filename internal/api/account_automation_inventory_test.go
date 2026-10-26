@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/automation"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -200,4 +203,138 @@ func TestAccountAutomationRejectsAStaleIncarnation(t *testing.T) {
 func jsonInt(value int64) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
+}
+
+// TestAccountAutomationRejectsStaleLifecycleMutations proves the lifecycle fence covers every
+// own-frontend mutation, not just the switch PUT. Cancel, manual reset, single unadopt and batch
+// unadopt each carry the intent version the console read; once the same auth index is removed
+// and adopted again, a delayed request naming the old version is refused and leaves the current
+// incarnation untouched - switch still on, no recovery time, membership intact. A refused
+// mutation must also send nothing to the gateway.
+func TestAccountAutomationRejectsStaleLifecycleMutations(t *testing.T) {
+	var gatewayMu sync.Mutex
+	gatewayWrites := []string{}
+	client, base, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(request.URL.Path, "/v8/management/credentials") {
+			_, _ = writer.Write([]byte(`{"files":[{"auth_index":"idx-1","name":"synthetic.json","provider":"codex","disabled":true}]}`))
+			return
+		}
+		if request.Method != http.MethodGet {
+			gatewayMu.Lock()
+			gatewayWrites = append(gatewayWrites, request.Method+" "+request.URL.Path)
+			gatewayMu.Unlock()
+		}
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(handler *Handler) { handler.SetAutomation(handler.BuildAutomationService()) })
+
+	ctx := context.Background()
+	call := func(method, path, body string, want int) []byte {
+		t.Helper()
+		request, err := http.NewRequest(method, base+"/omc/api/v1/account-automation"+path, bytes.NewReader([]byte(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		payload, _ := io.ReadAll(response.Body)
+		if response.StatusCode != want {
+			t.Fatalf("%s %s: status=%d body=%s", method, path, response.StatusCode, payload)
+		}
+		return payload
+	}
+
+	call(http.MethodPost, "/adopt", `{"auth_indexes":["idx-1"],"enable":true}`, http.StatusOK)
+	stale, _, err := repo.GetAutomationAccount(ctx, "idx-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The credential is removed and adopted again: a new incarnation under the same index.
+	call(http.MethodPost, "/accounts/idx-1/unadopt", ``, http.StatusOK)
+	call(http.MethodPost, "/adopt", `{"auth_indexes":["idx-1"],"enable":true}`, http.StatusOK)
+	current, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	if current.IntentVersion <= stale.IntentVersion {
+		t.Fatalf("fresh adoption must advance the incarnation: %d -> %d", stale.IntentVersion, current.IntentVersion)
+	}
+	staleVersion := jsonInt(stale.IntentVersion)
+	resetAt := time.Now().Add(time.Hour).UnixMilli()
+
+	for _, mutation := range []struct {
+		name   string
+		method string
+		path   string
+		body   string
+	}{
+		{"cancel", http.MethodPost, "/accounts/idx-1/cancel", `{"expected_intent_version":` + staleVersion + `}`},
+		{"manual reset", http.MethodPost, "/accounts/idx-1/manual-reset", `{"reset_at_ms":` + strconv.FormatInt(resetAt, 10) + `,"expected_intent_version":` + staleVersion + `}`},
+		{"single unadopt", http.MethodPost, "/accounts/idx-1/unadopt", `{"expected_intent_version":` + staleVersion + `}`},
+		{"batch unadopt", http.MethodPost, "/unadopt", `{"auth_indexes":["idx-1"],"targets":[{"auth_index":"idx-1","expected_intent_version":` + staleVersion + `}]}`},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			call(mutation.method, mutation.path, mutation.body, http.StatusConflict)
+			unchanged, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+			if unchanged.IntentVersion != current.IntentVersion || !unchanged.IsEnabled || !unchanged.IsAdopted ||
+				unchanged.RemovedAtMS != nil || unchanged.ManualResetAtMS != nil {
+				t.Fatalf("a refused stale mutation must not change the current incarnation: %+v", unchanged)
+			}
+		})
+	}
+	gatewayMu.Lock()
+	writes := append([]string{}, gatewayWrites...)
+	gatewayMu.Unlock()
+	for _, write := range writes {
+		if strings.Contains(write, "credentials/status") {
+			t.Fatalf("no mutation may change gateway credential status: %+v", writes)
+		}
+	}
+
+	// The same mutations with the current version are accepted: the fence refuses only what
+	// names an ended lifecycle.
+	call(http.MethodPost, "/accounts/idx-1/manual-reset", `{"reset_at_ms":`+strconv.FormatInt(resetAt, 10)+`,"expected_intent_version":`+jsonInt(current.IntentVersion)+`}`, http.StatusOK)
+	afterReset, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	call(http.MethodPost, "/accounts/idx-1/cancel", `{"expected_intent_version":`+jsonInt(afterReset.IntentVersion)+`}`, http.StatusOK)
+	call(http.MethodPost, "/accounts/idx-1/unadopt", `{"expected_intent_version":`+jsonInt(afterReset.IntentVersion+1)+`}`, http.StatusOK)
+}
+
+// TestAccountAutomationCancelStaysAvailableDuringAnInventoryOutage pins the preserved rule at
+// the wire: a cancel is local intent, so an unreadable gateway blocks automatic writes but not
+// the operator's pause. It never reads or writes credential status.
+func TestAccountAutomationCancelStaysAvailableDuringAnInventoryOutage(t *testing.T) {
+	client, base, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(request.URL.Path, "/v8/management/credentials") {
+			// A broken list: no files array, which is the decoded incompleteness signal.
+			_, _ = writer.Write([]byte(`{}`))
+			return
+		}
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(handler *Handler) { handler.SetAutomation(handler.BuildAutomationService()) })
+	ctx := context.Background()
+	account := repository.AutomationAccount{AuthIndex: "idx-1", Provider: "codex", Name: "synthetic.json"}
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: "synthetic", CreatedAtMS: 1}, []repository.AutomationAccount{account}, true, 1); err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, base+"/omc/api/v1/account-automation/accounts/idx-1/cancel",
+		bytes.NewReader([]byte(`{"expected_intent_version":1}`)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := io.ReadAll(response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("a cancel during an outage must still work: status=%d body=%s", response.StatusCode, payload)
+	}
+	paused, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	if paused.IsEnabled {
+		t.Fatalf("the cancel must pause the switch without reading the gateway: %+v", paused)
+	}
 }

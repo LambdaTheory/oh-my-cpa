@@ -195,12 +195,12 @@ it('single and batch unadopt remove roster membership without a gateway toggle',
   expect(await screen.findByText(/Only removes roster membership/)).toBeDefined();
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Unadopt' }));
   await waitFor(() => expect(within(row('Single')).getByRole('button', { name: 'Adopt Single' })).toBeDefined());
-  expect(api.postAccountAutomationUnadopt).toHaveBeenCalledWith('synthetic-Single');
+  expect(api.postAccountAutomationUnadopt).toHaveBeenCalledWith('synthetic-Single', 1);
   fireEvent.click(screen.getByRole('button', { name: 'Batch unadopt' }));
   expect(screen.queryByRole('checkbox', { name: /immediately/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
   fireEvent.click(within(screen.getByRole('radio', { name: 'Unadopt' }).closest('.ant-modal') as HTMLElement).getByRole('button', { name: 'Confirm Unadopt' }));
-  await waitFor(() => expect(api.postAccountAutomationUnadoptMany).toHaveBeenCalledWith({ auth_indexes: ['synthetic-Batch'] }));
+  await waitFor(() => expect(api.postAccountAutomationUnadoptMany).toHaveBeenCalledWith({ auth_indexes: ['synthetic-Batch'], targets: [{ auth_index: 'synthetic-Batch', expected_intent_version: 1 }] }));
   expect(api.putAccountAutomationAccount).not.toHaveBeenCalled();
 });
 
@@ -314,7 +314,7 @@ it('details retain retry cancellation and future manual-reset submission', async
   await screen.findByText('Retry'); details('Retry'); details('Reset');
   fireEvent.click(screen.getByRole('button', { name: 'Cancel Retry' }));
   fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
-  await waitFor(() => expect(api.postAccountAutomationCancel).toHaveBeenCalledWith('synthetic-Retry'));
+  await waitFor(() => expect(api.postAccountAutomationCancel).toHaveBeenCalledWith('synthetic-Retry', 1));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Set Manual Reset' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Set Manual Reset' }));
   const field = screen.getByLabelText(/Recovery time/);
@@ -322,5 +322,5 @@ it('details retain retry cancellation and future manual-reset submission', async
   expect(screen.getByText('Recovery time must be in the future')).toBeDefined();
   fireEvent.change(field, { target: { value: '2099-01-01T10:00' } });
   fireEvent.click(within(field.closest('.ant-modal') as HTMLElement).getByRole('button', { name: 'OK' }));
-  await waitFor(() => expect(api.postAccountAutomationManualReset).toHaveBeenCalledWith('synthetic-Reset', { reset_at_ms: Date.UTC(2099, 0, 1, 10) }));
+  await waitFor(() => expect(api.postAccountAutomationManualReset).toHaveBeenCalledWith('synthetic-Reset', { reset_at_ms: Date.UTC(2099, 0, 1, 10), expected_intent_version: 1 }));
 });

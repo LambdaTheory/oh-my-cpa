@@ -516,6 +516,11 @@ recorded and at least 95 percent of requests carried request-time pricing.
   idempotent; the same index observed with a different provider or write name is refused
   rather than relabelled under the old plan. An observation recorded before the current
   adoption keeps its real timestamp and is never eligible evidence for the new lifecycle.
+  Every console mutation names the lifecycle it read (`expected_intent_version`: switch,
+  Credit, cancel, manual reset, single and batch unadopt); a request naming an ended
+  lifecycle is refused without touching the replacement, and a batch unadopt removes
+  nothing unless every selected member's version still matches (all-or-report). The field
+  is optional on the wire for older callers, and only that omission is unfenced.
   CPA's credential list carries no total, page or completeness field, so an unmarked
   truncation cannot be detected and stays a documented external limit. A local identifier,
   UUID or email match is not treated as proof of continuity: a replacement at the same path,

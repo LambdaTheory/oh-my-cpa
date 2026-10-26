@@ -136,14 +136,27 @@ export interface AccountAutomationAdoptResponse {
 
 export interface AccountAutomationManualResetPayload {
   reset_at_ms: number;
+  /** The lifecycle the console read, so a delayed recovery time cannot land on a new one. */
+  expected_intent_version?: number;
 }
 
 export type AccountAutomationPatch =
   | { enabled: boolean; burn_credit?: boolean; expected_intent_version?: number }
   | { enabled?: boolean; burn_credit: boolean; expected_intent_version?: number };
 
+/**
+ * One batch member and the lifecycle the console read for it. A batch whose members no longer
+ * share those versions is refused as a whole; nothing is removed.
+ */
+export interface AccountAutomationUnadoptTarget {
+  auth_index: string;
+  expected_intent_version?: number;
+}
+
 export interface AccountAutomationUnadoptPayload {
   auth_indexes: string[];
+  /** Per-member lifecycle versions. The console always sends one for every selected row. */
+  targets?: AccountAutomationUnadoptTarget[];
 }
 
 export interface AccountAutomationUnadoptResponse {

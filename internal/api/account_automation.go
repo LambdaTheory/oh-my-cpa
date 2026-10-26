@@ -571,11 +571,25 @@ func (h *Handler) postAccountAutomationCancel(writer http.ResponseWriter, reques
 	if !ok {
 		return
 	}
+	var payload struct {
+		// ExpectedIntentVersion names the lifecycle the console read. A delayed or duplicated
+		// cancel against a re-adopted incarnation conflicts instead of pausing the new one.
+		ExpectedIntentVersion *int64 `json:"expected_intent_version"`
+	}
+	if err := decodeOptionalManagementJSON(writer, request, accountAutomationRequestLimit, &payload); err != nil {
+		return
+	}
+	if payload.ExpectedIntentVersion != nil && *payload.ExpectedIntentVersion < 0 {
+		writeError(writer, http.StatusBadRequest, "expected_intent_version must not be negative")
+		return
+	}
 	if h.automation == nil {
 		writeError(writer, http.StatusServiceUnavailable, "account automation is unavailable")
 		return
 	}
-	updated, err := h.automation.CancelAccount(request.Context(), authIndex)
+	// A cancel is local intent and must stay available during a CPA outage: it never reads
+	// the gateway, so an unavailable inventory cannot block it.
+	updated, err := h.automation.CancelAccountExpected(request.Context(), authIndex, payload.ExpectedIntentVersion)
 	if err != nil {
 		h.writeAccountAutomationError(writer, err)
 		return
@@ -590,8 +604,15 @@ func (h *Handler) postAccountAutomationManualReset(writer http.ResponseWriter, r
 	}
 	var payload struct {
 		ResetAtMS int64 `json:"reset_at_ms"`
+		// ExpectedIntentVersion names the lifecycle the console read, so a delayed recovery
+		// time cannot be scheduled onto a credential adopted again under the same index.
+		ExpectedIntentVersion *int64 `json:"expected_intent_version"`
 	}
 	if err := decodeManagementJSON(writer, request, accountAutomationRequestLimit, &payload); err != nil {
+		return
+	}
+	if payload.ExpectedIntentVersion != nil && *payload.ExpectedIntentVersion < 0 {
+		writeError(writer, http.StatusBadRequest, "expected_intent_version must not be negative")
 		return
 	}
 	// A recovery time must be in the future; a past instant would schedule an
@@ -605,7 +626,7 @@ func (h *Handler) postAccountAutomationManualReset(writer http.ResponseWriter, r
 		writeError(writer, http.StatusServiceUnavailable, "account automation is unavailable")
 		return
 	}
-	updated, err := h.automation.SetManualReset(request.Context(), authIndex, payload.ResetAtMS)
+	updated, err := h.automation.SetManualResetExpected(request.Context(), authIndex, payload.ResetAtMS, payload.ExpectedIntentVersion)
 	if err != nil {
 		h.writeAccountAutomationError(writer, err)
 		return
@@ -629,6 +650,8 @@ func (h *Handler) writeAccountAutomationError(writer http.ResponseWriter, err er
 	case errors.Is(err, automation.ErrUnverifiedWeeklyCapability):
 		writeError(writer, http.StatusBadRequest, "provider's account-level weekly window is not verified")
 	case errors.Is(err, repository.ErrAutomationConflict):
+		writeError(writer, http.StatusConflict, "account state changed; reload and retry")
+	case errors.Is(err, automation.ErrStaleBatchMutation):
 		writeError(writer, http.StatusConflict, "account state changed; reload and retry")
 	case errors.Is(err, repository.ErrAutomationIdentityConflict):
 		// Nothing reached the gateway: the current credential is not the one the old row

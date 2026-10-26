@@ -425,3 +425,197 @@ func TestServiceRecordsCredentialNotFoundWhenTheInventoryDropsTheTarget(t *testi
 		t.Fatalf("a missing target must not be enabled: %+v", calls)
 	}
 }
+
+
+
+
+
+
+
+// TestServiceAdoptionCannotPlanFromALifecycleRemovedUnderIt is the held interleaving the
+// review named, made deterministic by probing the adoption's own account lock rather than by
+// sleeping. Adopt reads the previous lifecycle's removal instant and then consults the clock
+// before it stores; the test uses that clock read to start a confirmed-absence removal of the
+// same index at exactly that point.
+//
+//   - When the adoption does not yet hold the account lock (the pre-fix ordering), the removal
+//     commits synchronously inside that window and the store takes its fresh-adoption branch,
+//     so the new lifecycle inherits a recovery plan built from the ended lifecycle's reading.
+//   - When the adoption already holds it (the fixed ordering), the removal is excluded and
+//     becomes a sequential removal once the adoption has stored.
+//
+// The asserted rule is the approved one: an active adoption may never carry a plan whose
+// evidence was observed at or before the lifecycle that ended. The positive half proves a
+// reading observed after the new lifecycle still plans and enables at its own reset.
+func TestServiceAdoptionCannotPlanFromALifecycleRemovedUnderIt(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1_000_000_000_000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{{AuthIndex: "idx-1", Name: "synthetic.json", Provider: "codex", Disabled: true, Controllable: true}}
+	service := newTestService(repo, clock, writer, &credentials)
+	if _, err := service.Adopt(ctx, []string{"idx-1"}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	// A reading recorded for the current lifecycle is what a takeover plan would be built from.
+	oldObserved := clock.Now().UnixMilli()
+	oldReset := clock.Now().Add(2 * time.Hour).UnixMilli()
+	insertWeekly(t, repo, "idx-1", "codex", 100, oldObserved, oldReset)
+
+	// holdsAccountLock reports whether the adoption already owns the per-account lock, using a
+	// non-blocking acquire of the very lock object the service uses.
+	holdsAccountLock := func() bool {
+		service.locksMu.Lock()
+		lock := service.locks["idx-1"]
+		service.locksMu.Unlock()
+		if lock == nil {
+			return false
+		}
+		if lock.TryLock() {
+			lock.Unlock()
+			return false
+		}
+		return true
+	}
+	emptyInventory := func(context.Context) ([]Credential, error) { return []Credential{}, nil }
+	removal := func() {
+		service.Credentials = emptyInventory
+		service.RunOnce(ctx) // first complete inventory: one confirmation
+		service.RunOnce(ctx) // second: the removal transaction commits
+	}
+
+	removalDone := make(chan struct{})
+	deferred := false
+	primed := false
+	service.Now = func() time.Time {
+		if !primed {
+			primed = true
+			if holdsAccountLock() {
+				// The fix: the removal cannot interleave, so it is left to run after the store.
+				deferred = true
+				go func() { defer close(removalDone); removal() }()
+			} else {
+				// The pre-fix ordering: nothing excludes the removal from the window.
+				removal()
+				close(removalDone)
+			}
+		}
+		return clock.Now()
+	}
+	clock.Set(clock.Now().Add(time.Minute))
+	_, adoptionErr := service.Adopt(ctx, []string{"idx-1"}, true, "")
+	select {
+	case <-removalDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the confirmed-absence removal never completed")
+	}
+	service.Now = clock.Now
+	service.Credentials = func(context.Context) ([]Credential, error) { return credentials, nil }
+
+	active, found, err := repo.GetAutomationAccount(ctx, "idx-1")
+	if err != nil || !found {
+		t.Fatalf("read the row after the interleaving: found=%v err=%v", found, err)
+	}
+	if active.RemovedAtMS == nil {
+		if active.AdoptedAtMS == nil {
+			t.Fatalf("an active adoption must record its instant: %+v", active)
+		}
+		if active.DisableObservedAtMS != nil && *active.DisableObservedAtMS <= oldObserved {
+			t.Fatalf("the fresh lifecycle inherited the ended lifecycle's evidence (deferred removal: %v, adoption error: %v): %+v", deferred, adoptionErr, active)
+		}
+		if active.CycleResetAtMS != nil && *active.CycleResetAtMS == oldReset {
+			t.Fatalf("the fresh lifecycle inherited the ended lifecycle's reset (deferred removal: %v, adoption error: %v): %+v", deferred, adoptionErr, active)
+		}
+	}
+
+	// The valid recovery path is unchanged: a reading observed after the lifecycle that ended
+	// plans the new adoption and enables directly at its own reset, with no quota probe.
+	if row, _, _ := repo.GetAutomationAccount(ctx, "idx-1"); row.RemovedAtMS == nil {
+		if _, err := service.Unadopt(ctx, "idx-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clock.Set(clock.Now().Add(2 * time.Hour))
+	insertWeekly(t, repo, "idx-1", "codex", 100, clock.Now().UnixMilli(), clock.Now().Add(time.Hour).UnixMilli())
+	newReset := clock.Now().Add(time.Hour).UnixMilli()
+	if adopted, err := service.Adopt(ctx, []string{"idx-1"}, true, ""); err != nil || adopted != 1 {
+		t.Fatalf("fresh adoption with a post-removal reading: %d %v", adopted, err)
+	}
+	planned, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	if planned.CycleResetAtMS == nil || *planned.CycleResetAtMS != newReset {
+		t.Fatalf("a reading recorded after the new lifecycle must be eligible: %+v", planned)
+	}
+	clock.Set(time.UnixMilli(newReset))
+	service.RunOnce(ctx)
+	calls := writer.snapshot()
+	if len(calls) != 1 || calls[0].disabled {
+		t.Fatalf("a post-adoption reading must still plan and enable: %+v", calls)
+	}
+}
+
+// TestServiceBatchUnadoptIsAllOrReportAcrossStaleMembers proves the batch fence is not partially
+// applied: one member naming an ended lifecycle makes the whole batch a conflict, and nothing
+// is removed - not the stale member and not its siblings. The same batch with the current
+// versions removes every selected member and still writes nothing to the gateway.
+func TestServiceBatchUnadoptIsAllOrReportAcrossStaleMembers(t *testing.T) {
+	ctx := context.Background()
+	repo := automationRepo(t)
+	clock := &testClock{now: time.UnixMilli(1_000_000_000_000)}
+	writer := &fakeWriter{}
+	credentials := []Credential{
+		{AuthIndex: "idx-1", Name: "one.json", Provider: "codex", Controllable: true},
+		{AuthIndex: "idx-2", Name: "two.json", Provider: "codex", Controllable: true},
+	}
+	service := newTestService(repo, clock, writer, &credentials)
+	if adopted, err := service.Adopt(ctx, []string{"idx-1", "idx-2"}, true, ""); err != nil || adopted != 2 {
+		t.Fatalf("adopt: %d %v", adopted, err)
+	}
+	idle, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	// idx-2 is re-adopted (removed then adopted again), so a version read before it is stale.
+	if _, err := service.Unadopt(ctx, "idx-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Adopt(ctx, []string{"idx-2"}, true, ""); err != nil {
+		t.Fatal(err)
+	}
+	current, _, _ := repo.GetAutomationAccount(ctx, "idx-2")
+	if current.IntentVersion <= idle.IntentVersion {
+		t.Fatalf("the fixture needs a newer idx-2 incarnation: %d vs %d", current.IntentVersion, idle.IntentVersion)
+	}
+
+	// A batch whose idx-2 target names the ended incarnation removes nothing.
+	if removed, err := service.UnadoptManyExpected(ctx, []UnadoptTarget{
+		{AuthIndex: "idx-1", ExpectedIntentVersion: int64Pointer(idle.IntentVersion)},
+		{AuthIndex: "idx-2", ExpectedIntentVersion: int64Pointer(idle.IntentVersion)},
+	}); !errors.Is(err, ErrStaleBatchMutation) || removed != 0 {
+		t.Fatalf("a stale batch member must stop the whole batch: removed=%d err=%v", removed, err)
+	}
+	for _, authIndex := range []string{"idx-1", "idx-2"} {
+		row, _, _ := repo.GetAutomationAccount(ctx, authIndex)
+		if row.RemovedAtMS != nil || !row.IsAdopted {
+			t.Fatalf("a refused batch must leave %s adopted: %+v", authIndex, row)
+		}
+	}
+
+	// With each member's current version the batch removes both and touches no gateway state.
+	freshOne, _, _ := repo.GetAutomationAccount(ctx, "idx-1")
+	freshTwo, _, _ := repo.GetAutomationAccount(ctx, "idx-2")
+	removed, err := service.UnadoptManyExpected(ctx, []UnadoptTarget{
+		{AuthIndex: "idx-1", ExpectedIntentVersion: int64Pointer(freshOne.IntentVersion)},
+		{AuthIndex: "idx-2", ExpectedIntentVersion: int64Pointer(freshTwo.IntentVersion)},
+	})
+	if err != nil || removed != 2 {
+		t.Fatalf("the current batch: removed=%d err=%v", removed, err)
+	}
+	for _, authIndex := range []string{"idx-1", "idx-2"} {
+		row, _, _ := repo.GetAutomationAccount(ctx, authIndex)
+		if row.RemovedAtMS == nil {
+			t.Fatalf("the current batch must remove %s: %+v", authIndex, row)
+		}
+	}
+	if calls := writer.snapshot(); len(calls) != 0 {
+		t.Fatalf("unadoption must never write the gateway: %+v", calls)
+	}
+}
+
+func int64Pointer(value int64) *int64 { return &value }

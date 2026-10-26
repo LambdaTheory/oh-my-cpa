@@ -270,6 +270,23 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 	if len(selected) == 0 {
 		return 0, nil
 	}
+	// The batch snapshot records the operator's selection order; the keyed locks are taken in
+	// sorted order so concurrent batches cannot deadlock on each other.
+	selectedJSON, _ := json.Marshal(adoptedIndexes)
+	sort.Strings(adoptedIndexes)
+	releases := make([]func(), 0, len(adoptedIndexes))
+	for _, authIndex := range adoptedIndexes {
+		releases = append(releases, s.lockAccount(authIndex))
+	}
+	defer func() {
+		for i := len(releases) - 1; i >= 0; i-- {
+			releases[i]()
+		}
+	}()
+	// Everything the adoption derives from a previous lifecycle is read, planned and stored
+	// under those same per-account locks, which are the ones the removal paths take. A
+	// confirmed-absence removal therefore cannot commit between the bound read and the store
+	// and hand the fresh engagement a plan computed from the lifecycle that just ended.
 	// A tombstoned row is a fresh engagement: it may not plan recovery from an observation
 	// recorded for the lifecycle that ended. The bound is the removal instant, because the
 	// new adoption instant is only assigned inside the store transaction.
@@ -285,9 +302,6 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 		// need, recorded as a recovery plan but never as a disable.
 		s.planAdoptionRecovery(ctx, selected, byIndex, priorLifecycle)
 	}
-	// The batch snapshot records the operator's selection order; the keyed locks below are
-	// taken in sorted order so concurrent batches cannot deadlock on each other.
-	selectedJSON, _ := json.Marshal(adoptedIndexes)
 	nowMS := s.now().UnixMilli()
 	batch := repository.AutomationBatch{
 		ID:            uuid.NewString(),
@@ -296,16 +310,6 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 		SelectedJSON:  string(selectedJSON),
 		Note:          strings.TrimSpace(note),
 	}
-	sort.Strings(adoptedIndexes)
-	releases := make([]func(), 0, len(adoptedIndexes))
-	for _, authIndex := range adoptedIndexes {
-		releases = append(releases, s.lockAccount(authIndex))
-	}
-	defer func() {
-		for i := len(releases) - 1; i >= 0; i-- {
-			releases[i]()
-		}
-	}()
 	adopted, refreshed, err := s.Repo.AdoptAutomationAccounts(ctx, batch, selected, enable, nowMS)
 	if err != nil {
 		return 0, err
@@ -419,7 +423,14 @@ func (s *Service) SetAccountOptionsExpected(ctx context.Context, authIndex strin
 // CancelAccount pauses a pending enable or retry by turning the account switch
 // off. It never re-enables a credential OMC disabled.
 func (s *Service) CancelAccount(ctx context.Context, authIndex string) (repository.AutomationAccount, error) {
-	updated, err := s.SetAccountSwitch(ctx, authIndex, false)
+	return s.CancelAccountExpected(ctx, authIndex, nil)
+}
+
+// CancelAccountExpected applies a pause against the lifecycle the caller read. A request that
+// names a different intent version describes an engagement that has since ended, so it must
+// not act on the one now stored under the index.
+func (s *Service) CancelAccountExpected(ctx context.Context, authIndex string, expectedIntentVersion *int64) (repository.AutomationAccount, error) {
+	updated, err := s.SetAccountOptionsExpected(ctx, authIndex, boolPtr(false), nil, expectedIntentVersion)
 	if err != nil {
 		return repository.AutomationAccount{}, err
 	}
@@ -435,11 +446,21 @@ func (s *Service) CancelAccount(ctx context.Context, authIndex string) (reposito
 // rule. Because a recovery time only takes effect while the credential is disabled
 // upstream, it can never disable a live account.
 func (s *Service) SetManualReset(ctx context.Context, authIndex string, resetAtMS int64) (repository.AutomationAccount, error) {
+	return s.SetManualResetExpected(ctx, authIndex, resetAtMS, nil)
+}
+
+// SetManualResetExpected applies a recovery time against the lifecycle the caller read. A
+// delayed request that names an older incarnation conflicts instead of scheduling an enable
+// for the credential that now shares the index.
+func (s *Service) SetManualResetExpected(ctx context.Context, authIndex string, resetAtMS int64, expectedIntentVersion *int64) (repository.AutomationAccount, error) {
 	if resetAtMS <= 0 {
 		return repository.AutomationAccount{}, errors.New("invalid_parameters")
 	}
 	var updated repository.AutomationAccount
 	err := s.WithAccount(ctx, authIndex, func(ctx context.Context, account repository.AutomationAccount) error {
+		if expectedIntentVersion != nil && *expectedIntentVersion != account.IntentVersion {
+			return repository.ErrAutomationConflict
+		}
 		if !ProviderHasVerifiedWeeklyCapability(account.Provider) {
 			return ErrUnverifiedWeeklyCapability
 		}
@@ -456,6 +477,8 @@ func (s *Service) SetManualReset(ctx context.Context, authIndex string, resetAtM
 	s.audit(ctx, "account_automation.manual_reset", "success", updated.AuthIndex, map[string]any{"reset_at_ms": resetAtMS})
 	return updated, nil
 }
+
+func boolPtr(value bool) *bool { return &value }
 
 // RunOnce evaluates every adopted account once. It is not concurrent with itself
 // and performs at most one side effect per account per pass.

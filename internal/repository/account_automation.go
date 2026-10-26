@@ -330,6 +330,15 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 			// A reappearing credential is a new engagement. Every executable field is
 			// reset here rather than inherited, and the evidence watermark is cleared so
 			// an observation recorded before this adoption cannot justify an action.
+			//
+			// The offered plan is admitted again against the removal instant read inside this
+			// same transaction. A caller that read the previous lifecycle's bound before this
+			// row was tombstoned would otherwise carry a plan derived from a reading that
+			// belongs to the engagement that ended; that is refused rather than persisted as
+			// this lifecycle's recovery.
+			if adoptionPlanPredatesLifecycle(account, *existing.RemovedAtMS) {
+				return 0, 0, fmt.Errorf("%w: %s carries a recovery plan from the ended lifecycle", ErrAutomationConflict, authIndex)
+			}
 			if _, err := tx.ExecContext(ctx, `
 				UPDATE account_automation_accounts SET
 					provider = ?, name = ?, account_label = ?,
@@ -411,6 +420,16 @@ func sameAutomationIdentity(existing AutomationAccount, offered AutomationAccoun
 		return false
 	}
 	return true
+}
+
+// adoptionPlanPredatesLifecycle reports whether an offered fresh-adoption plan was built from
+// a reading observed at or before the instant the previous lifecycle ended. Such a plan
+// describes the engagement that has ended, so it can never schedule an action for the new one.
+func adoptionPlanPredatesLifecycle(offered AutomationAccount, removedAtMS int64) bool {
+	if offered.DisableObservedAtMS == nil {
+		return false
+	}
+	return *offered.DisableObservedAtMS <= removedAtMS
 }
 
 func getAutomationAccountTx(ctx context.Context, tx *sql.Tx, authIndex string) (AutomationAccount, bool, error) {
