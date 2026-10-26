@@ -302,3 +302,18 @@ func compactText(value string, limit int) string {
 	}
 	return value
 }
+
+// Report-level absence is presentation, not a credential episode that could
+// remain open forever without a provider identity to supply recovery evidence.
+func rememberReportedAlerts(state *State, alerts []Alert, now time.Time) {
+	for _, alert := range alerts {
+		if alert.Kind == statusHealthy || alert.Provider == "" {
+			continue
+		}
+		identity := alertItemID(alert)
+		if _, exists := state.pendingByID(identity); exists {
+			continue
+		}
+		state.PendingItems = append(state.PendingItems, PendingItem{ID: identity, Kind: alert.Kind, Provider: alert.Provider, Key: alert.Key, Alias: alert.Alias, Action: alert.Advice, Status: PendingOpen, Since: now, LastSeen: now, NotifiedAt: now})
+	}
+}

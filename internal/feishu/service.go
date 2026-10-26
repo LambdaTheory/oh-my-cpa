@@ -823,6 +823,7 @@ func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolve
 	s.logger.InfoContext(ctx, "feishu startup summary queued", "open_items", len(open), "tight_channels", len(tight))
 	notification := summaryNotification(open, tight, now)
 	notification.Alerts = reportDecisionAlerts(rep, has, now)
+	rememberReportedAlerts(state, notification.Alerts, now)
 	state.queueNotification(notification)
 }
 
@@ -848,6 +849,7 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 	}
 	notification := summaryNotification(open, tight, now)
 	notification.Alerts = reportDecisionAlerts(rep, has, now)
+	rememberReportedAlerts(state, notification.Alerts, now)
 	state.queueNotification(notification)
 }
 

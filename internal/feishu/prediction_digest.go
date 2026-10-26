@@ -185,10 +185,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 							continue
 						}
 						notification.Alerts = append(notification.Alerts, alert)
-						identity := alertItemID(alert)
-						if _, exists := state.pendingByID(identity); !exists {
-							state.PendingItems = append(state.PendingItems, PendingItem{ID: identity, Kind: alert.Kind, Provider: alert.Provider, Key: alert.Key, Alias: alert.Alias, Action: alert.Advice, Status: PendingOpen, Since: now, LastSeen: now, NotifiedAt: now})
-						}
+						rememberReportedAlerts(state, []Alert{alert}, now)
 					}
 				}
 			}

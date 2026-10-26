@@ -206,6 +206,35 @@ func TestMorningPredictionFirstDoesNotRepeatLowQuota(t *testing.T) {
 	}
 }
 
+func TestMorningFallbackFirstDoesNotRepeatLowQuota(t *testing.T) {
+	now := mustTime("2026-10-26T10:00:00Z")
+	env := newTestEnv(t, Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "claude", Accounts: []AccountReport{{Key: "low", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(95, nil)}}}}}}, true)
+	*env.clock = now
+	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) { return PredictionDigest{}, nil })
+	job.Activate()
+	job.tick(context.Background())
+	env.service.tick(context.Background())
+	if sends, _ := env.sender.counts(); sends != 1 {
+		t.Fatalf("same fallback morning risk sent %d cards", sends)
+	}
+}
+
+func TestMissingReportMorningDoesNotLeaveGlobalIncident(t *testing.T) {
+	now := mustTime("2026-10-26T10:00:00Z")
+	env := newTestEnv(t, Report{}, false)
+	*env.clock = now
+	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
+		return PredictionDigest{Items: []PredictionDigestItem{{Key: "forecast", Provider: "codex", Verdict: "will_exhaust"}}}, nil
+	})
+	job.tick(context.Background())
+	state, _ := env.store.Load(context.Background())
+	for _, item := range state.PendingItems {
+		if item.Provider == "" && item.Status == PendingOpen {
+			t.Fatalf("global missing-data item cannot recover: %+v", item)
+		}
+	}
+}
+
 func TestReadingFailureDoesNotRepeatAsMonitorDown(t *testing.T) {
 	now := mustTime("2026-10-26T12:00:00Z")
 	report := Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "failure", State: StateStale, ObservedAt: now}}}}}
