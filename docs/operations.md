@@ -5,6 +5,18 @@ constraints a deployment must respect, and how the parts that outlive a page vis
 behave. Database backup, restore and maintenance from the host have their own runbook,
 `docs/ops/sqlite-operations.md`.
 
+## StepFun balance observation
+
+The built-in `stepfun` quota reader accepts CPA credential providers `step` and
+`stepfun`. It uses the ordinary API key through CPA token substitution to read only
+`GET https://api.stepfun.com/v1/accounts`; it does not download credential files or
+send inference requests. Existing refresh scheduling, timeout and backoff apply.
+Balances are CNY. Prepaid estimates use available balance divided by cumulative cash
+top-ups plus cumulative gifts, rather than a recurring quota. Postpaid has no window
+or percentage. Failed or stale observations display missing data.
+The upstream field definitions are documented at
+<https://platform.stepfun.com/docs/zh/api-reference/accounts/get>.
+
 ## Prebuilt Dokploy updates
 
 The optional prebuilt service uses branch `deploy/prebuilt` and Compose Path

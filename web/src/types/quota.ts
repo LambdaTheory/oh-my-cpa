@@ -94,6 +94,7 @@ export interface QuotaUsageShare {
 }
 
 export interface QuotaPlan {
+  account_balance?: QuotaAccountBalance;
   /** Whether the provider reports an active subscription; absent when unknown. */
   subscription_active?: boolean;
   plan_type: string;
@@ -110,6 +111,15 @@ export interface QuotaPlan {
   credits?: QuotaCredits;
   balances?: QuotaBalance[];
   usage_breakdown?: QuotaUsageShare[];
+}
+
+export interface QuotaAccountBalance {
+  account_type: 'prepaid' | 'postpaid';
+  currency: 'CNY';
+  balance: number;
+  total_cash_balance?: number;
+  total_voucher_balance?: number;
+  remaining_percent?: number;
 }
 
 export interface QuotaCredits {

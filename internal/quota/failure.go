@@ -10,7 +10,7 @@ import (
 
 func quotaErrorSource(endpoint string) authfailure.Source {
 	switch endpoint {
-	case CodexUsageURL, ClaudeUsageURL, AntigravityQuotaURLDaily, AntigravityQuotaURLSandbox, AntigravityQuotaURLCloud, KimiUsageURL, KimiInternationalUsageURL, XaiBillingWeeklyURL, XaiBillingMonthlyURL, XaiApiMeURL, MetaUsageURL, DevinSeatStatusURL:
+	case CodexUsageURL, ClaudeUsageURL, AntigravityQuotaURLDaily, AntigravityQuotaURLSandbox, AntigravityQuotaURLCloud, KimiUsageURL, KimiInternationalUsageURL, XaiBillingWeeklyURL, XaiBillingMonthlyURL, XaiApiMeURL, MetaUsageURL, DevinSeatStatusURL, StepFunAccountsURL:
 		return authfailure.UpstreamQuota
 	case XaiApiChatURL:
 		return authfailure.Inference
@@ -54,6 +54,8 @@ func isRecognizedQuotaPayload(endpoint string, body []byte) bool {
 		keys = []string{"groups"}
 	case KimiUsageURL, KimiInternationalUsageURL:
 		keys = []string{"usage", "usages", "limits"}
+	case StepFunAccountsURL:
+		keys = []string{"balance"}
 	case XaiBillingWeeklyURL, XaiBillingMonthlyURL:
 		keys = []string{"config"}
 	case XaiApiMeURL:

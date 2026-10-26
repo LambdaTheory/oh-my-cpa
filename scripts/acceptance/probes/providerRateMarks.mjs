@@ -18,6 +18,9 @@
  * empty meter, and a probe that only read colours would call that a pass.
  */
 
+import fs from 'node:fs';
+import { settleLayout } from '../harness.mjs';
+
 /** The rates the fixture publishes, and what each is meant to prove. */
 const ROWS = [
   // 92.44% - above the healthy boundary.
@@ -232,6 +235,62 @@ export async function providerRateMarks({ base, page, check }) {
   }
 
   await assertProviderFold({ base, page, check });
+  await assertStepFunBalance({ base, page, check });
+}
+
+async function assertStepFunBalance({ base, page, check }) {
+  await page.route('**/omc/api/v1/management/providers**', route => route.fulfill({ json: {
+    providers: [{ id: 'step-synthetic', family: 'openai-compatibility', name: 'StepFun primary', upstream_name: 'step', disabled: false, key_configured: true, auth_indexes: ['synthetic-step'] }], total: 1,
+  } }));
+  await page.route('**/omc/api/v1/management/auth-files**', route => route.fulfill({ json: { files: [{
+    name: 'Synthetic StepFun', auth_index: 'synthetic-step', type: 'step', provider: 'step', disabled: false, runtime_only: false, unavailable: false,
+  }], total: 1 } }));
+  let accountType = 'prepaid';
+  let isFailed = false;
+  await page.route('**/omc/api/v1/management/quota', route => route.fulfill({ json: { quotas: [{
+    auth_index: 'synthetic-step', name: 'Synthetic StepFun', provider: 'stepfun', type: 'step',
+    status: 'healthy', disabled: false, observed_at_ms: Date.now(), windows: [],
+    capabilities: { refresh_supported: true },
+    last_refresh: isFailed ? { outcome: 'failed', attempted_at_ms: Date.now(), reason: 'timeout' } : undefined,
+    plan: { account_balance: { account_type: accountType, currency: 'CNY', balance: accountType === 'prepaid' ? 75 : -12.5, remaining_percent: accountType === 'prepaid' ? 75 : undefined } },
+  }] } }));
+  fs.mkdirSync('tmp/issue-79', { recursive: true });
+  await page.evaluate(() => localStorage.setItem('omc-lang', 'zh'));
+  for (const width of [1360, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto(`${base}/dashboard`, { waitUntil: 'domcontentloaded' });
+    const row = page.locator('.provider-row-enhanced').filter({ has: page.locator('.provider-title', { hasText: /^StepFun primary$/ }) });
+    await row.locator('[data-account-balance=prepaid]').waitFor();
+    await settleLayout(page);
+    const meter = row.getByRole('meter', { name: '余额占累计充值与赠送的估算比例' });
+    const meterBox = await meter.boundingBox();
+    const geometry = await row.evaluate(element => ({ width: element.getBoundingClientRect().width, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth, viewport: document.documentElement.clientWidth, pageWidth: document.documentElement.scrollWidth }));
+    check(`StepFun prepaid balance fits ${width}px with a visible estimate`,
+      (await row.innerText()).includes('余额: CNY 75.00') && (await row.innerText()).includes('估算剩余 75%') && meterBox?.width > 0 && geometry.scrollWidth <= geometry.clientWidth + 1 && geometry.pageWidth <= geometry.viewport + 1, JSON.stringify(geometry));
+    await row.screenshot({ path: `tmp/issue-79/prepaid-${width}.png` });
+    const credential = page.locator('.quota-row').filter({ hasText: 'Synthetic StepFun' });
+    await credential.locator('[data-account-balance=prepaid]').waitFor();
+    const credentialGeometry = await credential.locator('[data-account-balance]').evaluate(element => ({
+      width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, rowWidth: element.closest('.quota-row').clientWidth,
+    }));
+    check(`StepFun credential balance keeps its reading area at ${width}px`, credentialGeometry.width > 100 && credentialGeometry.width <= credentialGeometry.rowWidth && credentialGeometry.height < 120, JSON.stringify(credentialGeometry));
+    await credential.screenshot({ path: `tmp/issue-79/credential-${width}.png` });
+  }
+  accountType = 'postpaid';
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const postpaid = page.locator('.provider-row-enhanced [data-account-balance=postpaid]');
+  await postpaid.waitFor();
+  check('StepFun postpaid shows debt and no quota meter', (await postpaid.innerText()).includes('后付费·无窗口') && (await postpaid.innerText()).includes('CNY -12.50') && await postpaid.getByRole('meter').count() === 0);
+  await postpaid.screenshot({ path: 'tmp/issue-79/postpaid-375.png' });
+  isFailed = true;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  const missing = page.locator('.provider-row-enhanced [data-account-balance=missing]');
+  await missing.waitFor();
+  check('StepFun failed refresh hides old money behind data missing', (await missing.innerText()).includes('数据缺失') && !(await missing.innerText()).includes('CNY') && await missing.getByRole('meter').count() === 0);
+  await missing.screenshot({ path: 'tmp/issue-79/missing-375.png' });
+  await page.unroute('**/omc/api/v1/management/providers**');
+  await page.unroute('**/omc/api/v1/management/quota');
+  await page.unroute('**/omc/api/v1/management/auth-files**');
 }
 
 /** A fleet past the panel's preview limit, so the fold has rows to hide. */

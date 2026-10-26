@@ -280,6 +280,9 @@ troubleshooting.
 
 ## Features
 
+StepFun account balances appear in CNY, with an estimated prepaid remaining share;
+postpaid accounts show balance without a quota window.
+
 <details open>
 <summary><b>Gateway & providers</b></summary>
 

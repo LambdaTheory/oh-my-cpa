@@ -924,6 +924,15 @@ For changes here, run affected self-tests, `pnpm verify`, `pnpm check:ui` and
 
 ### Quota reading coverage
 
+`internal/quota/stepfun_test.go` covers prepaid/postpaid normalization, 401, deterministic
+deadline failure, absent versus zero balance, invalid funding totals, endpoint admission
+and CPA token substitution using a fake transport. `internal/api/management_stepfun_test.go`
+owns the existing snapshot round trip for account money. The automatically discovered
+`web/tests/stepfun-balance.component.test.tsx` owns localized balance rendering, estimated
+prepaid share, postpaid without a meter and failed/stale money withholding. The existing
+`provider-rate-marks` browser scenario adds StepFun desktop/phone geometry and screenshots
+under `tmp/issue-79/`, with synthetic quota responses only.
+
 `internal/api/quota_refresh_status_test.go` drives success, failure, rate limiting and recovery
 through the real quota service and overview, retaining successful snapshots across failures.
 The credential-quota component suite owns shared row/dashboard status, exhaustive counts,

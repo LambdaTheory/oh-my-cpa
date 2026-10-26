@@ -4,6 +4,13 @@
  * Keys mirror DICT in ../index.tsx. Keep this catalog complete: a missing key would fall back to another language and violate the console-wide full-localization rule.
  */
 export const MS: Readonly<Record<string, string>> = {
+  "quota.account_balance": "Baki",
+  "quota.balance_estimate_hint": "Anggaran daripada jumlah tambah nilai dan hadiah; ketersediaan sebenar mungkin berbeza",
+  "quota.balance_missing": "Data tiada",
+  "quota.balance_prepaid": "Prabayar · tiada tetingkap",
+  "quota.balance_postpaid": "Pascabayar · tiada tetingkap",
+  "quota.balance_estimated_remaining": "Anggaran baki {percent}%",
+  "quota.balance_estimated_share": "Anggaran bahagian baki daripada jumlah tambah nilai dan hadiah",
   "automation.empty": "Tiada akaun sepadan",
   "automation.batch_title": "Operasi Kelompok",
   "automation.unadopt_title": "Hentikan pengurusan",

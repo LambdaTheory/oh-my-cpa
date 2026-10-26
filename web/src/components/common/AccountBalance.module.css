@@ -1,0 +1,16 @@
+.account-balance {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.balance-meter {
+  width: 96px;
+  flex: 0 0 96px;
+}

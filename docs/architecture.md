@@ -2148,6 +2148,19 @@ price editor in place (`web/src/components/pricing/`).
 
 ## 8. Quota flow
 
+StepFun's built-in reader recognizes `step` and `stepfun`, and uses CPA credential
+substitution for the single allowlisted `GET https://api.stepfun.com/v1/accounts`.
+`internal/quota/stepfun.go` decodes only account type and monetary fields into
+`QuotaPlan.AccountBalance`; existing `plan_json` storage round-trips this optional
+projection without a migration. It creates no windows or reset/capacity observations.
+Prepaid percentage uses balance over lifetime cash top-ups plus gifts; postpaid has no
+percentage. The dashboard provider row reads the existing quota overview only when a
+StepFun row exists, associates configured keys by exact auth indexes and never sums
+account balances. Credential rows and details use the same account-balance component.
+Failure and stale state withhold money and percentages behind localized missing-data
+copy. The main probe's 401 evidence is an authentication failure; transport failures
+retain their source and existing 429 scheduling/backoff applies.
+
 `internal/quota` calls CPA's `/api-call` with the credential under observation to
 reach the provider's own usage endpoint. Targets are restricted to
 `AllowedURLPrefixes` — a compile-time allowlist of official HTTPS endpoints — and

@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { AccountBalance, isStepFunProvider } from '../common/AccountBalance';
 import { useNavigate } from 'react-router-dom';
 import { DownOutlined, RightOutlined, UpOutlined } from '../icons';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
@@ -146,6 +147,22 @@ export const DashboardProviders: React.FC<DashboardProvidersProps> = ({
 
   const isFoldable = aggregated.length > PROVIDER_PREVIEW_LIMIT;
   const visibleProviders = isFoldable && !isExpanded ? aggregated.slice(0, PROVIDER_PREVIEW_LIMIT) : aggregated;
+  const isStepFunRow = (provider: AggregatedProvider): boolean => {
+    const configured = configuredProviders.find(candidate => candidate.id === provider.providerId);
+    return configured
+      ? isStepFunProvider(configured.upstream_name) || isStepFunProvider(configured.family)
+      : isStepFunProvider(provider.id) || isStepFunProvider(provider.family);
+  };
+  const hasStepFun = aggregated.some(isStepFunRow);
+  const balanceQuery = useQuery({
+    queryKey: ['management-quota'],
+    queryFn: api.getQuotaOverview,
+    enabled: hasStepFun,
+    refetchInterval: 60_000,
+    staleTime: 15_000,
+    meta: { silent: true },
+  });
+  const stepFunQuotas = balanceQuery.data?.quotas.filter(item => isStepFunProvider(item.provider)) ?? [];
 
   const handleRowClick = (provider: AggregatedProvider) => {
     if (provider.kind === 'oauth') {
@@ -172,6 +189,10 @@ export const DashboardProviders: React.FC<DashboardProvidersProps> = ({
               // meter's fill *is* the rate: at a measured 0% it has no width, and without the number
               // the worst row on the page would carry no red at all and would read as an idle one.
               const rateColor = RATE_TONE_COLOR[successRateTone(provider.successRate)];
+              const isStepFun = isStepFunRow(provider);
+              const configured = configuredProviders.find(candidate => candidate.id === provider.providerId);
+              const indexes = configured?.auth_indexes ?? (configured?.auth_index ? [configured.auth_index] : []);
+              const balances = stepFunQuotas.filter(item => !configured || indexes.includes(item.auth_index));
               return (
                 <div
                   className="provider-row-enhanced is-clickable"
@@ -236,6 +257,16 @@ export const DashboardProviders: React.FC<DashboardProvidersProps> = ({
                   <div className="provider-visual-col">
                     <Meter className="dashboard-meter" value={provider.successRate ?? 0} color={rateColor} />
                   </div>
+                  {isStepFun && (
+                    <div style={{ gridColumn: '1 / -1', minWidth: 0 }}>
+                      {balances.length > 0 && !balanceQuery.isError ? balances.map(item => (
+                        <div key={item.auth_index}>
+                          {balances.length > 1 && <span>{item.name}</span>}
+                          <AccountBalance item={item} />
+                        </div>
+                      )) : <AccountBalance />}
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -6,6 +6,13 @@
 
 web
 
+## StepFun account balance
+
+StepFun credentials expose their CNY account balance in the dashboard provider list
+and credential quota views. Prepaid shows an estimated remaining share of lifetime
+funding when available; postpaid shows money without a quota window or percentage.
+Unavailable observations remain explicit missing data.
+
 ## Distribution
 
 Tagged releases ship the embedded console as native executables for Darwin (macOS),

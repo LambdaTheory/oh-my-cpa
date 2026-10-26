@@ -710,15 +710,20 @@ upstream quota endpoint. It returns no credential identity, account label,
 address, key or path, regardless of caller authority. See ADR 0097.
 
 `quota_list` and `quota_refresh` expose the same safe window results as the console.
-Their `plan` projection contains only `plan_type`, `plan_label`, `tier` and optional
+StepFun also exposes an optional `plan.account_balance` containing only account
+type, CNY currency, signed available balance, cash/gift funding totals and the
+estimated prepaid remaining share. It contains no window or reset. Failed readings
+withhold this projection. The existing list/read and refresh/write permissions apply;
+refresh uses CPA token substitution for the fixed accounts endpoint without inference.
+Alongside the StepFun balance, their `plan` projection contains `plan_type`, `plan_label`, `tier` and optional
 `subscription_active`; false denotes an explicit inactive subscription, while an
 absent field means unknown. The projection includes live xAI/Antigravity tiers and
 Meta plan readings, not credential metadata, raw responses or minted keys. Meta
 refresh uses its key-exchange endpoint and can mint a key upstream; the refresh
 tool description states this side effect, and returned keys are discarded (ADR 0065).
 No new capability or permission is needed: listing remains a read and refreshing
-remains a low-risk write. Their tool descriptions identify these as estimates rather
-than balances or routing instructions.
+remains a low-risk write. Their tool descriptions identify window capacity as an
+estimate and StepFun account money as a separate balance, never routing instructions.
 
 A standard five-hour or weekly window whose request headers published a reading newer than the
 stored snapshot is presented from that reading, marked with `observed_at_ms` and

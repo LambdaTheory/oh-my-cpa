@@ -55,6 +55,15 @@ func EvaluateStatusAndRecommendation(q *NormalizedQuota, nowMS int64) {
 		return
 	}
 
+	if q.Provider == "stepfun" && q.Plan != nil && q.Plan.AccountBalance != nil {
+		q.Status = "healthy"
+		if q.Plan.AccountBalance.AccountType == "prepaid" && q.Plan.AccountBalance.Balance <= 0 {
+			q.Status = "exhausted"
+		}
+		q.Recommendation = QuotaRecommendation{Status: q.Status, Priority: "none", Action: "none"}
+		return
+	}
+
 	if len(q.Windows) > 0 {
 		minRemaining := 100.0
 		hasRemaining := false

@@ -1,5 +1,6 @@
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
+import { AccountBalance, isStepFunProvider } from '../../components/common/AccountBalance';
 import { Button } from 'antd';
 import { SyncOutlined, ThunderboltOutlined } from '../../components/icons';
 import { useT } from '../../i18n';
@@ -306,9 +307,9 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
       )}
 
       <div className={styles.section}>
-        <SectionHeading level="label" as="div" title={t('quota.windows_title')} />
+        <SectionHeading level="label" as="div" title={t(isStepFunProvider(item.provider) ? 'quota.account_balance' : 'quota.windows_title')} />
         <div className={styles['windows-list']}>
-          {windows.length > 0 ? (
+          {isStepFunProvider(item.provider) ? <AccountBalance item={item} nowMS={nowMS} /> : windows.length > 0 ? (
             renderWindowRows(windows)
           ) : (
             <div className={styles['no-window']}>

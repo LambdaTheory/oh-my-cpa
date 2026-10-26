@@ -15,7 +15,7 @@ import (
 // even when a plugin also advertises quota for the same provider.
 var builtInQuotaProviders = map[string]bool{
 	"codex": true, "claude": true, "antigravity": true, "kimi": true,
-	"xai": true, "meta": true, "devin": true,
+	"xai": true, "meta": true, "devin": true, "stepfun": true,
 }
 
 // pluginQuotaCapabilities is what a plugin-provided credential supports: live

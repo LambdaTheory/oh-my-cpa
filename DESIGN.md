@@ -155,6 +155,16 @@ components:
 
 ## Overview
 
+StepFun account money is labelled Balance in the provider row, credential row and
+detail view. It shows CNY and a signed amount; prepaid adds an explicitly estimated
+remaining share of lifetime top-ups and gifts using the existing neutral meter.
+The visible estimate note states that this funding-based share may contain error.
+Postpaid reads “Postpaid · no window” and draws no balance meter. Failed, absent or
+stale observations read “Data missing”, with no amount or meter. Money never takes
+the place of request counts, success rates or quota-window usage. Multiple credentials
+remain separate readings. The layout wraps on phones using existing type, spacing,
+colour and motion tokens; no token mappings change.
+
 **Creative North Star: "The Terminal-Flat Console"**
 
 Oh My CPA is a dedicated developer control plane for AI resources and proxy telemetry. Built upon an OpenCode-inspired minimalist console philosophy, the system delivers dense, honest, and high-frequency operational visibility without aesthetic clutter. It repudiates decorative gradients, glassmorphism, heavy shadows, and flying entrances in favor of strict terminal discipline.

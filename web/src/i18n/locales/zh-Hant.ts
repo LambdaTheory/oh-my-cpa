@@ -4,6 +4,13 @@
  * Keys mirror DICT in ../index.tsx. Keep this catalog complete: a missing key would fall back to another language and violate the console-wide full-localization rule.
  */
 export const ZH_HANT: Readonly<Record<string, string>> = {
+  "quota.account_balance": "餘額",
+  "quota.balance_estimate_hint": "按累計儲值與贈送推算，可能存在誤差",
+  "quota.balance_missing": "資料缺失",
+  "quota.balance_prepaid": "預付費·無視窗",
+  "quota.balance_postpaid": "後付費·無視窗",
+  "quota.balance_estimated_remaining": "估算剩餘 {percent}%",
+  "quota.balance_estimated_share": "餘額佔累計儲值與贈送的估算比例",
   "automation.empty": "暫無符合帳號",
   "automation.batch_title": "批次操作",
   "automation.unadopt_title": "取消接管",

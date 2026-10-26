@@ -26,3 +26,16 @@ func TestSafeQuotaIncludesSubscriptionWithoutRawSignals(t *testing.T) {
 		t.Fatal("fabricated plan for unobserved credential")
 	}
 }
+
+func TestSafeQuotaIncludesStepFunBalance(t *testing.T) {
+	reading := &quota.NormalizedQuota{Provider: "stepfun", Status: "healthy", Plan: &quota.QuotaPlan{
+		AccountBalance: &quota.QuotaAccountBalance{AccountType: "postpaid", Currency: "CNY", Balance: -12.5},
+	}}
+	if safe := SafeQuota(reading); safe.Plan == nil || safe.Plan.AccountBalance == nil || safe.Plan.AccountBalance.Balance != -12.5 || len(safe.Windows) != 0 {
+		t.Fatalf("balance projection lost: %+v", safe)
+	}
+	reading.Error = "timeout"
+	if SafeQuota(reading).Plan.AccountBalance != nil {
+		t.Fatal("failed reading returned stale money as current")
+	}
+}

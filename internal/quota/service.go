@@ -33,6 +33,7 @@ const (
 	XaiSubscriptionURL         = "https://cli-chat-proxy.grok.com/v1/user?include=subscription"
 	XaiSettingsURL             = "https://cli-chat-proxy.grok.com/v1/settings"
 	KimiUsageURL               = "https://api.kimi.com/coding/v1/usages"
+	StepFunAccountsURL         = "https://api.stepfun.com/v1/accounts"
 	KimiInternationalUsageURL  = "https://api.kimi.ai/coding/v1/usages"
 	XaiBillingMonthlyURL       = "https://cli-chat-proxy.grok.com/v1/billing"
 	XaiBillingWeeklyURL        = "https://cli-chat-proxy.grok.com/v1/billing?format=credits"
@@ -65,6 +66,7 @@ var AllowedURLPrefixes = []string{
 	"https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 	"https://api.kimi.com/coding/v1/",
 	KimiInternationalUsageURL,
+	StepFunAccountsURL,
 	"https://cli-chat-proxy.grok.com/v1/billing",
 	"https://api.x.ai/v1/",
 	DevinSeatStatusURL,
@@ -147,6 +149,8 @@ func DetectProvider(fileType, provider string) string {
 	p := strings.ToLower(strings.TrimSpace(provider))
 
 	switch {
+	case t == "step" || p == "step" || t == "stepfun" || p == "stepfun":
+		return "stepfun"
 	case t == "antigravity" || p == "antigravity":
 		return "antigravity"
 	case strings.Contains(t, "codex") || strings.Contains(p, "codex") || strings.Contains(t, "chatgpt"):
@@ -193,7 +197,7 @@ func CapabilitiesForProvider(provider string) QuotaCapabilities {
 			ClearCooldownSupported: true,
 			ResetCreditSupported:   true,
 		}
-	case "claude", "antigravity", "kimi", "xai", "devin", "meta":
+	case "claude", "antigravity", "kimi", "xai", "devin", "meta", "stepfun":
 		return QuotaCapabilities{
 			RefreshSupported:       true,
 			ClearCooldownSupported: true,
@@ -379,6 +383,15 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 				}
 			}
 
+		case "stepfun":
+			plan, err := s.fetchStepFunBalance(ctx, file)
+			if err != nil {
+				fetchErr = err
+			} else {
+				result.Plan = plan
+				result.Windows = nil
+			}
+
 		case "xai":
 			plan, windows, err := s.fetchXaiQuota(ctx, file, nowMS)
 			if err != nil {
@@ -417,7 +430,7 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 		// otherwise put that token in a stored and displayed reading.
 		result.Error = security.RedactText(fetchErr.Error())
 		result.Failure = failureEvidence(fetchErr)
-		if prior != nil && len(prior.Windows) > 0 {
+		if prior != nil && (len(prior.Windows) > 0 || (stdProvider == "stepfun" && prior.Plan != nil && prior.Plan.AccountBalance != nil)) {
 			result.Status = "stale"
 			result.ObservedAtMS = prior.ObservedAtMS
 			result.Windows = prior.Windows

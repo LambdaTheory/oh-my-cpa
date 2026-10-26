@@ -1,4 +1,5 @@
 import React from 'react';
+import { AccountBalance, isStepFunProvider } from '../common/AccountBalance';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
@@ -137,7 +138,7 @@ const CredentialQuotaRowView: React.FC<{ row: CredentialQuotaRow; nowMS: number 
         className="quota-row-icon"
       />
       <span className="quota-row-name" title={row.primary}>{row.primary}</span>
-      {status ? (
+      {isStepFunProvider(row.quota?.provider) || isStepFunProvider(row.provider) ? <div className="quota-row-windows"><AccountBalance item={row.quota} nowMS={nowMS} /></div> : status ? (
         <span className="quota-row-status" title={row.detail}>
           <status.Icon className="quota-row-status-icon" aria-hidden="true" />
           {t(status.labelKey)}

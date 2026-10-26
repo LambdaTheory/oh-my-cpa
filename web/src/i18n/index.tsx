@@ -9,6 +9,13 @@ export type { Lang } from './language';
  * found fall through to the key itself so misses are visible in dev.
  */
 const DICT: Record<string, [string, string]> = {
+  'quota.account_balance': ['余额', 'Balance'],
+  'quota.balance_estimate_hint': ['按累计充值与赠送推算，可能存在误差', 'Estimated from total top-ups and gifts; may differ from actual availability'],
+  'quota.balance_missing': ['数据缺失', 'Data missing'],
+  'quota.balance_prepaid': ['预付费·无窗口', 'Prepaid · no window'],
+  'quota.balance_postpaid': ['后付费·无窗口', 'Postpaid · no window'],
+  'quota.balance_estimated_remaining': ['估算剩余 {percent}%', 'Estimated remaining {percent}%'],
+  'quota.balance_estimated_share': ['余额占累计充值与赠送的估算比例', 'Estimated balance share of total top-ups and gifts'],
   'automation.empty': ['暂无匹配账号', 'No matching accounts'],
   'automation.batch_title': ["批量操作","Batch Operations"],
   'automation.unadopt_title': ["取消接管","Unadopt"],

@@ -1,4 +1,5 @@
 import React from 'react';
+import { AccountBalance, isStepFunProvider } from '../../components/common/AccountBalance';
 import { ThunderboltOutlined } from '../../components/icons';
 import { useT } from '../../i18n';
 import type { QuotaItem } from '../../types/quota';
@@ -136,7 +137,7 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
         </div>
       )}
 
-      {windows.length > 0 ? (
+      {isStepFunProvider(item.provider) ? <AccountBalance item={item} nowMS={nowMS} /> : windows.length > 0 ? (
         <div className={styles.windows}>
           {windows.map((window) => {
             const remaining = quotaRemainingPercent(window);

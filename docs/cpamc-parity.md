@@ -79,6 +79,11 @@ Status definitions: `Covered` = Fully implemented with live endpoints and UI; `I
 
 ## Current State and Roadmap
 
+StepFun balance support is covered through the official accounts endpoint and the
+dashboard/credential views: CNY balance, estimated prepaid share, explicit postpaid
+no-window copy and missing-data state. Adapter, snapshot and rendered tests own the
+data semantics; the provider-rate browser scenario covers desktop and phone layout.
+
 Plugin auth-provider discovery does not imply an interactive OAuth method. The OAuth
 connection picker labels plugin entries as plugin-managed, opens their registered page
 when available, and otherwise resolves device/callback controls from an explicitly

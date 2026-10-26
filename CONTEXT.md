@@ -363,6 +363,20 @@ rather than named, and it carries the registered palette it started from, which
 is what its reset returns to. See ADR 0011 for the derivation, its constants,
 and the places it deliberately differs from the hand-tuned values it replaced.
 
+## StepFun account balance
+
+StepFun credentials named `step` or `stepfun` share the built-in `stepfun` balance reader.
+Its official accounts endpoint reports CNY available balance, lifetime cash top-ups and
+lifetime voucher gifts. A prepaid account's estimated remaining share is balance divided
+by the sum of top-ups and gifts, clamped to 0–100%; it is withheld when either total is
+missing, negative or their sum is zero. This is lifetime funding, never a quota window,
+reset schedule, measured request usage or window-capacity estimate. Postpaid accounts
+show their signed balance and explicitly have no window or percentage meter. Missing
+or failed readings remain missing; a published zero is a measured balance. Multiple
+credentials are shown separately because they may share a billed account.
+The prepaid share always carries visible copy that the estimate may contain error;
+the endpoint supplies no numeric error bound, so the console does not invent one.
+
 ## Time windows
 
 ### Quota prediction evidence

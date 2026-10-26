@@ -95,13 +95,14 @@ const (
 
 // QuotaPlan represents the normalized subscription plan and tier.
 type QuotaPlan struct {
-	IsSubscriptionActive *bool            `json:"subscription_active,omitempty"`
-	PlanType             string           `json:"plan_type"`               // e.g. "pro", "plus", "ultra", "team", "free"
-	PlanLabel            string           `json:"plan_label"`              // e.g. "Pro 200", "Pro", "Ultra", "Team"
-	Tier                 string           `json:"tier"`                    // "elite", "premium", "standard", "free", "unknown"
-	ExpiresAtMS          *int64           `json:"expires_at_ms,omitempty"` // epoch ms
-	ExpiresLabel         string           `json:"expires_label,omitempty"`
-	ExtraUsage           *QuotaExtraUsage `json:"extra_usage,omitempty"`
+	AccountBalance       *QuotaAccountBalance `json:"account_balance,omitempty"`
+	IsSubscriptionActive *bool                `json:"subscription_active,omitempty"`
+	PlanType             string               `json:"plan_type"`               // e.g. "pro", "plus", "ultra", "team", "free"
+	PlanLabel            string               `json:"plan_label"`              // e.g. "Pro 200", "Pro", "Ultra", "Team"
+	Tier                 string               `json:"tier"`                    // "elite", "premium", "standard", "free", "unknown"
+	ExpiresAtMS          *int64               `json:"expires_at_ms,omitempty"` // epoch ms
+	ExpiresLabel         string               `json:"expires_label,omitempty"`
+	ExtraUsage           *QuotaExtraUsage     `json:"extra_usage,omitempty"`
 
 	// ExpiresSource names where ExpiresAtMS came from; see the PlanSource
 	// constants. Empty on snapshots written before provenance was tracked.
@@ -116,6 +117,16 @@ type QuotaPlan struct {
 	Balances []QuotaBalance `json:"balances,omitempty"`
 	// UsageBreakdown splits the plan's shared usage by product.
 	UsageBreakdown []QuotaUsageShare `json:"usage_breakdown,omitempty"`
+}
+
+// QuotaAccountBalance is account money, independent of metered quota windows.
+type QuotaAccountBalance struct {
+	AccountType         string   `json:"account_type"`
+	Currency            string   `json:"currency"`
+	Balance             float64  `json:"balance"`
+	TotalCashBalance    *float64 `json:"total_cash_balance,omitempty"`
+	TotalVoucherBalance *float64 `json:"total_voucher_balance,omitempty"`
+	RemainingPercent    *float64 `json:"remaining_percent,omitempty"`
 }
 
 // QuotaCredits is a prepaid credit balance, or the statement that credits are

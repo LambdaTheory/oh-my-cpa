@@ -82,6 +82,7 @@ function isUnavailable(file: ManagementAuthFile): boolean {
 }
 
 export interface CredentialQuotaRow {
+  quota?: QuotaItem;
   key: string;
   fileName: string;
   /** The account when the credential names one, otherwise its file name. */
@@ -119,6 +120,7 @@ function resolveState(file: ManagementAuthFile, item: QuotaItem | undefined, rem
   if (item?.active_cooldown?.is_active || item?.status === 'cooldown') return 'cooldown';
   if (item?.status === 'exhausted' || remainingPercent === 0) return 'exhausted';
   if (isUnavailable(file) || item?.status === 'error') return 'problem';
+  if (item?.provider === 'stepfun' && item.plan?.account_balance) return 'healthy';
   if (remainingPercent == null) return 'unread';
   return remainingPercent < QUOTA_LOW_PERCENT ? 'low' : 'healthy';
 }
@@ -172,6 +174,7 @@ export function buildCredentialQuotaBoard(files: ManagementAuthFile[], quotas: Q
     }
     const state = resolveState(file, item, remainingPercent);
     rows.push({
+      quota: item,
       key: file.auth_index || file.name,
       fileName: file.name,
       primary: (file.email || file.project_id || file.name || '').trim() || '—',
