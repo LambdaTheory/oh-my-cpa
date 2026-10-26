@@ -292,7 +292,7 @@ describe('First Batch OMC UI Component Tests', () => {
       vi.mocked(api.getFeishuSettings).mockResolvedValue(mockSettings);
       vi.mocked(api.getFeishuStatus).mockResolvedValue(mockStatus);
       vi.mocked(api.putFeishuSettings).mockResolvedValue(mockSettings);
-      vi.mocked(api.postFeishuTest).mockResolvedValue({ sent: true });
+      vi.mocked(api.postFeishuTest).mockResolvedValue({ sent: false, reason: 'queued_for_retry', attempts: 1, next_attempt_at: '2026-10-26T12:00:30Z' });
 
       renderWithClient(<FeishuSettingsPanel />);
 
@@ -313,6 +313,8 @@ describe('First Batch OMC UI Component Tests', () => {
         );
       });
 
+      expect(api.putFeishuSettings).toHaveBeenCalledWith(expect.not.objectContaining({ tight_remaining_percent: expect.anything() }));
+
       // Click test card button -> opens modal confirmation first, does NOT immediately post
       const testBtn = screen.getByRole('button', { name: '发送测试卡片' });
       fireEvent.click(testBtn);
@@ -327,6 +329,8 @@ describe('First Batch OMC UI Component Tests', () => {
       await waitFor(() => {
         expect(api.postFeishuTest).toHaveBeenCalledTimes(1);
       });
+      expect(await screen.findByText(/测试卡片已排队重试（已尝试 1 次/)).toBeDefined();
+      expect(screen.queryByText(/测试卡片发送失败/)).toBeNull();
     });
 
     it('disables editing when environment overrides are forced off', async () => {

@@ -701,9 +701,7 @@ func (s *Service) tick(ctx context.Context) {
 		return
 	}
 	s.unlockStateTransition()
-	if !quiet {
-		s.deliverOutbox(ctx, resolved)
-	}
+	s.deliverOutbox(ctx, resolved)
 }
 
 // promoteQueued collects the quiet-hours queued notifications whose problems are
@@ -800,6 +798,9 @@ func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolve
 		return
 	}
 	state.Bootstrapped = true
+	if morningMinute(resolved, now) {
+		return
+	}
 	newItems := make(map[string]bool, len(opened))
 	for _, item := range opened {
 		newItems[item.ID] = true
@@ -848,6 +849,7 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 		return
 	}
 	notification := summaryNotification(open, tight, now)
+	notification.Kind = KindMorning
 	notification.Alerts = reportDecisionAlerts(rep, has, now)
 	rememberReportedAlerts(state, notification.Alerts, now)
 	state.queueNotification(notification)
@@ -884,6 +886,14 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 		return
 	}
 	due := state.Outbox
+	if notificationID == "" && withinQuiet(resolved, s.now()) {
+		due = nil
+		for _, notification := range state.Outbox {
+			if notification.Kind == KindMorning || notification.Kind == predictionKindPrefix+KindMorning {
+				due = append(due, notification)
+			}
+		}
+	}
 	if notificationID != "" {
 		due = nil
 		for _, notification := range state.Outbox {
@@ -970,14 +980,21 @@ func (s *Service) StatusSnapshot(ctx context.Context) Status {
 
 // SendTest delivers a live status card to the configured person. The console calls
 // it only on an explicit operator action; the bot never triggers it on its own.
-func (s *Service) SendTest(ctx context.Context) error {
+type TestDelivery struct {
+	Sent           bool
+	QueuedForRetry bool
+	Attempts       int
+	NextAttemptAt  time.Time
+}
+
+func (s *Service) SendTest(ctx context.Context) (TestDelivery, error) {
 	resolved := s.resolvedNow()
 	if !resolved.Ready() {
-		return fmt.Errorf("feishu is not ready: %s", s.inactiveReason(resolved))
+		return TestDelivery{}, fmt.Errorf("feishu is not ready: %s", s.inactiveReason(resolved))
 	}
 	dispatcher := s.currentDispatcher()
 	if dispatcher == nil {
-		return errors.New("feishu sender is not configured")
+		return TestDelivery{}, errors.New("feishu sender is not configured")
 	}
 	rep, has := Report{}, false
 	if s.source != nil {
@@ -993,21 +1010,21 @@ func (s *Service) SendTest(ctx context.Context) error {
 	}
 	s.unlockStateTransition()
 	if err != nil {
-		return err
+		return TestDelivery{}, err
 	}
 	s.deliverOutboxNotification(ctx, resolved, notification.ID)
 	s.lockStateTransition()
 	defer s.unlockStateTransition()
 	state, err = s.store.Load(ctx)
 	if err != nil {
-		return err
+		return TestDelivery{}, err
 	}
 	for _, candidate := range state.Outbox {
-		if candidate.ID == notification.ID && candidate.State == NotifySent {
-			return nil
+		if candidate.ID == notification.ID {
+			return TestDelivery{Sent: candidate.State == NotifySent, QueuedForRetry: candidate.State == NotifyPending, Attempts: candidate.Attempts, NextAttemptAt: candidate.NextAttemptAt}, nil
 		}
 	}
-	return errors.New("feishu test delivery is pending retry")
+	return TestDelivery{}, errors.New("feishu test notification was not persisted")
 }
 
 func (s *Service) setLastError(err error) {

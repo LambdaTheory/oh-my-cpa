@@ -247,8 +247,17 @@ missing-data results. Later ordinary slots stay silent. New credential windows a
 or below 10% remaining, predicted exhaustion before reset, and abnormal readings
 open persistent episodes. Untimed and long-stale
 readings retain the existing monitoring grace. A credential/window/reset cycle is
-announced once across forecast, low-quota and exhaustion states. Recovery sends nothing. Quiet hours defer delivery through the existing retry
-outbox.
+announced once across forecast, low-quota and exhaustion states. Window IDs (or
+window kinds when IDs are absent) stay stable across derived reset estimates.
+Only exact reset evidence establishes a cycle: a new reading at or after the
+previous boundary with a later reset opens a new cycle. Recovery sends nothing;
+without a reliable cycle, positive recovery allows a subsequent recurrence to
+notify again. Migration 055 persists the exact boundary in pending-item state.
+Resolved episodes expire after seven days; active forecast markers retain their
+last-seen time so ongoing risks stay deduplicated.
+Quiet hours defer ordinary alerts through the existing retry outbox. The morning
+fallback and morning prediction digest bypass quiet hours at the configured slot,
+including retries; startup and morning summaries share that minute's delivery.
 The process must be running during the scheduled minute to send that day's fallback.
 
 Cards lead with whether quota allocation needs attention, then at most three
@@ -260,6 +269,17 @@ an absent or invalid address disables it with configuration guidance. No card wr
 callback or table is emitted. Full and simplified cards have the same content bound.
 Delivery is persisted before sending; failure logs attempts and retries from 30
 seconds with exponential backoff capped at 30 minutes.
+The manual status-test API returns sent=false with reason=queued_for_retry,
+attempts and next_attempt_at when delivery failed but its retry was persisted.
+The console shows this as queued for retry. Errors remain reserved for requests
+that could not establish a persisted delivery outcome.
+
+The settings response exposes tight_remaining_percent as a read-only fixed 10.
+Writes that explicitly contain 10 are accepted; conflicting values return 400.
+The console omits this field on save, while schedule, quiet hours and monitoring
+durations remain editable. Legacy group recipients surface an actionable degraded
+reason requiring a recipient Open ID. Query cards retain scoped empty-result
+answers and stale-observation notices; an empty abnormal filter means no anomalies.
 
 The earliest summary slot always supplies the morning fallback. Prediction
 evaluation runs once per minute from stored data and only

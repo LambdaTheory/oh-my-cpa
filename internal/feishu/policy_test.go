@@ -10,7 +10,7 @@ func policyCfg() PolicyConfig {
 }
 
 func accountWindow(used float64, reset *time.Time) Window {
-	return Window{Name: "7d", Label: "7d", Scope: ScopeAccount, UsedPercent: &used, ResetAt: reset}
+	return Window{Name: "7d", Label: "7d", Scope: ScopeAccount, UsedPercent: &used, ResetAt: reset, ResetAccuracy: "exact"}
 }
 
 func TestCredentialInvalidAlertsOncePerEpisode(t *testing.T) {

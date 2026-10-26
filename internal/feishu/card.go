@@ -17,6 +17,14 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 	}
 	alerts := decisionAlerts(msg)
 	elements := []map[string]any{markdown("**" + decisionConclusion(msg, alerts) + "**")}
+	if msg.Kind == KindQuery {
+		if msg.Body != "" && decisionConclusion(msg, alerts) != msg.Body {
+			elements = append(elements, markdown(msg.Body))
+		}
+		if msg.Notice != "" {
+			elements = append(elements, markdown(msg.Notice))
+		}
+	}
 	count := min(len(alerts), maxDecisionPoints)
 	for _, alert := range alerts[:count] {
 		elements = append(elements, markdown("• "+decisionPoint(alert)))

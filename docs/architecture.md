@@ -3734,7 +3734,12 @@ and keeps explicit empty, unknown and stale states.
 component. At configured summary minutes the Feishu loop evaluates it before the legacy
 scheduled summary. The earliest summary slot supplies the daily fallback. Prediction evaluation runs
 once per minute; only exhaustion findings raise an event. Credential/window/reset
-identity is shared with low-quota alerts so the same risk sends once. Morning
+identity is shared with low-quota alerts so the same risk sends once. Migration
+055 persists exact cycle boundaries separately from stable window identities;
+derived reset estimates cannot create new episodes. Positive recovery permits
+recurrence when a reliable cycle is absent. The internal prediction projection
+also includes recovery verdicts and reset provenance without exposing additional
+public fields. Morning delivery bypasses quiet hours while ordinary alerts wait. Morning
 prediction cards also carry stored anomalies and open items. Explicit manual sends deliver only their newly persisted row, never claim
 a scheduled minute, and return `no_findings` when empty. The card is limited to
 three advice points and discloses omitted content. See `docs/feishu-notifications.md`

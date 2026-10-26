@@ -30,16 +30,18 @@ const (
 )
 
 type QuotaPredictionInput struct {
-	Provider   string `json:"provider,omitempty" jsonschema:"Provider such as codex, claude or antigravity; omit for all"`
-	WindowKind string `json:"window_kind,omitempty" jsonschema:"five_hour, weekly, model_scoped or another normalized kind; omit for all"`
-	AuthIndex  string `json:"auth_index,omitempty" jsonschema:"Credential auth index for console or Agent callers; read-only MCP callers must omit it"`
-	Limit      int    `json:"limit,omitempty" jsonschema:"Maximum predictions to return, 1 to 100; defaults to 100"`
+	IncludeRecovery bool   `json:"-" jsonschema:"-"`
+	Provider        string `json:"provider,omitempty" jsonschema:"Provider such as codex, claude or antigravity; omit for all"`
+	WindowKind      string `json:"window_kind,omitempty" jsonschema:"five_hour, weekly, model_scoped or another normalized kind; omit for all"`
+	AuthIndex       string `json:"auth_index,omitempty" jsonschema:"Credential auth index for console or Agent callers; read-only MCP callers must omit it"`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Maximum predictions to return, 1 to 100; defaults to 100"`
 	// FindingsOnly is an internal digest projection. It is deliberately absent
 	// from the capability schema so callers cannot change the public contract.
 	FindingsOnly bool `json:"-" jsonschema:"-"`
 }
 
 type QuotaPredictionItem struct {
+	ResetAccuracy             string   `json:"-" jsonschema:"-"`
 	CredentialLabel           string   `json:"credential_label"`
 	Provider                  string   `json:"provider"`
 	WindowKind                string   `json:"window_kind"`
@@ -120,7 +122,7 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 			}
 			storedKind := quota.WindowObservationKind(reading.Provider, window)
 			item := s.predictQuotaWindow(ctx, reading, window, reportedKind, storedKind, nowMS)
-			if input.FindingsOnly && item.Verdict != quota.PredictionVerdictWillExhaust && item.Verdict != quota.PredictionVerdictUnderUsed {
+			if input.FindingsOnly && !input.IncludeRecovery && item.Verdict != quota.PredictionVerdictWillExhaust && item.Verdict != quota.PredictionVerdictUnderUsed {
 				continue
 			}
 			candidates = append(candidates, predictionCandidate{
@@ -350,7 +352,7 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 	predicted := quota.PredictWindow(predictionInput)
 	return QuotaPredictionItem{
 		CredentialLabel: reading.Name, Provider: reading.Provider, WindowKind: reportedKind, AuthIndex: reading.AuthIndex,
-		WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
+		ResetAccuracy: window.ResetAccuracy, WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
 		UsedPercent: predicted.UsedPercent, ResetAtMS: predicted.ResetAtMS, ObservedAtMS: predicted.ObservedAtMS,
 		DataAgeSeconds: predicted.DataAgeSeconds, BurnRatePerHour: predicted.BurnRatePerHour,
 		ProjectedPercentAtReset: predicted.ProjectedPercentAtReset, ProjectedTokensAtReset: predicted.ProjectedTokensAtReset,

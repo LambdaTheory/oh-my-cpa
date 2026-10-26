@@ -31,8 +31,16 @@ func TestAttentionEpisodeNotifiesOnceThroughExhaustionAndRecovery(t *testing.T) 
 	if len(openItems(recovered.Items)) != 0 || len(recovered.Alerts) != 0 {
 		t.Fatalf("recovery: %+v", recovered)
 	}
+	if recovered.Items[0].ResolvedAt.IsZero() {
+		t.Fatal("quota recovery has no retention timestamp")
+	}
+	resolvedState := &State{PendingItems: append([]PendingItem(nil), recovered.Items...)}
+	resolvedState.prune(now.Add(30 * 24 * time.Hour))
+	if len(resolvedState.PendingItems) != 0 {
+		t.Fatal("recovered quota retained forever")
+	}
 	report.Providers[0].Accounts[0].Windows = []Window{accountWindow(90, nil)}
-	if recurring := evaluatePolicy(config, PolicyInput{Report: report, Prev: recovered.Items, Now: now}); len(recurring.Alerts) != 0 {
+	if recurring := evaluatePolicy(config, PolicyInput{Report: report, Prev: recovered.Items, Now: now}); len(recurring.Alerts) != 1 {
 		t.Fatalf("recurrence: %+v", recurring)
 	}
 }
@@ -161,6 +169,8 @@ func TestPredictionEpisodePersistsAndSharesLowQuotaIdentity(t *testing.T) {
 	now := mustTime("2026-10-26T12:00:00Z")
 	reset := now.Add(12 * time.Hour).UnixMilli()
 	item := PredictionDigestItem{Key: "synthetic", Provider: "codex", CredentialLabel: "work", WindowID: "7d", WindowKind: "weekly", ResetAtMS: &reset, Verdict: "will_exhaust"}
+	item.ResetAccuracy = "exact"
+	item.ObservedAtMS = now.UnixMilli()
 	job := &PredictionJob{service: NewService(Options{})}
 	state := EmptyState()
 	if !job.queueFindings(state, readyPredictionConfig(), now, PredictionDigest{Items: []PredictionDigestItem{item}}) {
@@ -186,7 +196,8 @@ func TestPredictionEpisodePersistsAndSharesLowQuotaIdentity(t *testing.T) {
 	}
 	nextReset := reset + int64((7*24*time.Hour)/time.Millisecond)
 	item.ResetAtMS = &nextReset
-	if !job.queueFindings(reloaded, readyPredictionConfig(), now.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}}) {
+	item.ObservedAtMS = reset + 1
+	if !job.queueFindings(reloaded, readyPredictionConfig(), time.UnixMilli(reset+1), PredictionDigest{Items: []PredictionDigestItem{item}}) {
 		t.Fatal("new reset cycle was suppressed")
 	}
 }
@@ -252,8 +263,8 @@ func TestReadingFailureDoesNotRepeatAsMonitorDown(t *testing.T) {
 func TestManualStatusFailurePersistsAndRetries(t *testing.T) {
 	env := newTestEnv(t, Report{}, false)
 	env.sender.failSends = 2
-	if err := env.service.SendTest(context.Background()); err == nil {
-		t.Fatal("failed manual send reported success")
+	if result, err := env.service.SendTest(context.Background()); err != nil || result.Sent || !result.QueuedForRetry || result.Attempts != 1 || result.NextAttemptAt.IsZero() {
+		t.Fatalf("retry result=%+v err=%v", result, err)
 	}
 	state, err := env.store.Load(context.Background())
 	if err != nil {

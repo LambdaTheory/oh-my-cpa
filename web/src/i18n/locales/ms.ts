@@ -3683,6 +3683,7 @@ export const MS: Readonly<Record<string, string>> = {
   "feishu.test_confirm_desc": "Hantar satu kad ujian sebenar kepada Open ID penerima yang ditetapkan.",
   "feishu.test_sending": "Sedang menghantar...",
   "feishu.test_success": "Kad ujian dihantar kepada penerima yang ditetapkan",
+  "feishu.test_queued": "Kad ujian beratur untuk dicuba semula ({attempts} percubaan; seterusnya {next})",
   "feishu.test_failed": "Gagal menghantar kad ujian: {error}",
   "feishu.save_success": "Tetapan pemberitahuan Feishu berjaya disimpan",
   "dash.prediction.title": "Ramalan kuota",

@@ -149,14 +149,16 @@ func rankAlert(alert Alert) int {
 }
 
 func quotaSignalScope(window Window) string {
-	scope := window.Name
-	if window.ResetAt != nil {
-		scope += "@" + fmt.Sprint(window.ResetAt.UnixMilli())
+	if window.ID != "" {
+		return window.ID
 	}
-	return scope
+	if window.Name != "" {
+		return window.Name
+	}
+	return window.Kind
 }
 
-func quotaEpisodeEnd(item PendingItem, report Report) time.Time {
+func quotaCycleEvidence(item PendingItem, report Report) (time.Time, time.Time) {
 	for _, provider := range report.Providers {
 		if provider.Provider != item.Provider {
 			continue
@@ -166,13 +168,18 @@ func quotaEpisodeEnd(item PendingItem, report Report) time.Time {
 				continue
 			}
 			for _, window := range account.Windows {
-				if ItemID(AlertQuotaLow, provider.Provider, account.Key, quotaSignalScope(window)) == item.ID && window.ResetAt != nil {
-					return *window.ResetAt
+				if ItemID(AlertQuotaLow, provider.Provider, account.Key, quotaSignalScope(window)) == item.ID && window.ResetAt != nil && window.ResetAccuracy == "exact" {
+					return *window.ResetAt, account.ObservedAt
 				}
 			}
 		}
 	}
-	return time.Time{}
+	return time.Time{}, time.Time{}
+}
+
+// A revised future deadline is not evidence that the current cycle ended.
+func hasNewQuotaCycle(previous PendingItem, reset, observed time.Time) bool {
+	return !previous.CycleResetAt.IsZero() && !observed.Before(previous.CycleResetAt) && reset.After(previous.CycleResetAt)
 }
 
 func decisionAlerts(msg Message) []Alert {
@@ -248,6 +255,9 @@ func decisionAlerts(msg Message) []Alert {
 }
 
 func decisionConclusion(msg Message, alerts []Alert) string {
+	if msg.Kind == KindQuery && msg.Body != "" && len(alerts) == 0 {
+		return msg.Body
+	}
 	if len(alerts) == 1 && alerts[0].Kind == statusHealthy {
 		return "今天暂不需要调整额度，未发现异常"
 	}

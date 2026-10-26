@@ -51,14 +51,15 @@ type PendingItem struct {
 	Kind     string
 	Provider string
 	// Key is empty for channel-level items.
-	Key        string
-	Alias      string
-	Since      time.Time
-	LastSeen   time.Time
-	Action     string
-	Status     string
-	NotifiedAt time.Time
-	ResolvedAt time.Time
+	Key          string
+	Alias        string
+	Since        time.Time
+	LastSeen     time.Time
+	Action       string
+	Status       string
+	NotifiedAt   time.Time
+	ResolvedAt   time.Time
+	CycleResetAt time.Time
 }
 
 // ChannelTrack is the per-provider memory behind monitor_down: when the channel
@@ -148,7 +149,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	for id, sig := range desired {
 		seen[id] = true
 		prev, ok := prevAll[id]
-		if ok && prev.Status == PendingOpen {
+		cycleReset, cycleObserved := quotaCycleEvidence(sig, in.Report)
+		isNewCycle := ok && hasNewQuotaCycle(prev, cycleReset, cycleObserved)
+		if ok && prev.Status == PendingOpen && !isNewCycle {
 			item := prev
 			item.Kind = sig.Kind
 			item.Provider = sig.Provider
@@ -157,6 +160,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			item.Action = sig.Action
 			item.LastSeen = in.Now
 			item.Status = PendingOpen
+			if item.CycleResetAt.IsZero() && !cycleReset.IsZero() {
+				item.CycleResetAt = cycleReset
+			}
 			if item.NotifiedAt.IsZero() {
 				if _, has := alertFor[id]; has {
 					item.NotifiedAt = in.Now
@@ -171,6 +177,7 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		item.Since = in.Now
 		item.LastSeen = in.Now
 		item.Status = PendingOpen
+		item.CycleResetAt = cycleReset
 		if sig.Kind == AlertMonitorDown {
 			for _, previous := range in.Prev {
 				if previous.Provider == sig.Provider && previous.Kind == AlertReadingMissing && previous.Status == PendingOpen && !previous.NotifiedAt.IsZero() {
@@ -183,8 +190,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 				continue
 			}
 		}
-		if ok && !prev.NotifiedAt.IsZero() && (sig.Kind == AlertQuotaLow || sig.Kind == AlertQuotaExhausted) {
+		if ok && !prev.NotifiedAt.IsZero() && !isNewCycle && (sig.Kind == AlertQuotaLow || sig.Kind == AlertQuotaExhausted) && (!prev.CycleResetAt.IsZero() || prev.Kind == predictionKindPrefix && prev.ResolvedAt.IsZero()) {
 			item.NotifiedAt = prev.NotifiedAt
+			item.CycleResetAt = prev.CycleResetAt
 			items = append(items, item)
 			continue
 		}
@@ -209,9 +217,6 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			item := prev
 			item.Status = PendingResolved
 			item.ResolvedAt = in.Now
-			if item.Kind == AlertQuotaLow || item.Kind == AlertQuotaExhausted {
-				item.ResolvedAt = quotaEpisodeEnd(item, in.Report)
-			}
 			items = append(items, item)
 			resolved = append(resolved, item)
 			continue

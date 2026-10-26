@@ -197,7 +197,10 @@ func validateResolved(r Resolved) string {
 		return "缺少应用 App Secret"
 	}
 	if r.ChatID == "" && r.OAuthChatID == "" {
-		return "缺少目标群 chat_id"
+		return "缺少接收人的 Open ID（ou_ 开头）"
+	}
+	if r.ChatID != "" && !strings.HasPrefix(r.ChatID, "ou_") {
+		return "通知接收人必须使用 Open ID（ou_ 开头）；群 chat_id 已不再支持，请在飞书设置中更换"
 	}
 	return ""
 }

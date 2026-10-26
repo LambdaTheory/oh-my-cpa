@@ -58,10 +58,11 @@ func (f *fakeSender) ReplyText(_ context.Context, _ string, text string) error {
 	return nil
 }
 
-func (f *fakeSender) ReplyCard(_ context.Context, _ string, _ map[string]any) error {
+func (f *fakeSender) ReplyCard(_ context.Context, _ string, card map[string]any) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.replies++
+	f.cards = append(f.cards, card)
 	f.notify()
 	return nil
 }
@@ -513,7 +514,7 @@ func TestScheduledSummarySendsForFreshTightChannel(t *testing.T) {
 		t.Fatalf("a fresh tight channel should fire the digest, got %d", sends)
 	}
 	state, _ := env.store.Load(context.Background())
-	summary, found := notificationOfKind(state.Outbox, KindSummary)
+	summary, found := notificationOfKind(state.Outbox, KindMorning)
 	if !found || len(summary.Tight) != 1 || summary.Tight[0].Provider != "claude" {
 		t.Fatalf("expected one tight channel in the digest, got %+v", summary.Tight)
 	}
@@ -561,7 +562,7 @@ func TestScheduledSummaryKeepsOpenItemsWithoutReport(t *testing.T) {
 		t.Fatalf("an open item must still be summarized with no report, got %d", sends)
 	}
 	state, _ = env.store.Load(context.Background())
-	summary, found := notificationOfKind(state.Outbox, KindSummary)
+	summary, found := notificationOfKind(state.Outbox, KindMorning)
 	if !found || len(summary.Pending) != 1 {
 		t.Fatalf("expected the open item in the digest, got %+v", summary.Pending)
 	}
@@ -651,7 +652,7 @@ func TestReloadTargetGroupDoesNotReconnectButIdentityDoes(t *testing.T) {
 	if senders.count() != baselineSenders {
 		t.Fatalf("a recipient change must not rebuild the sender: %d -> %d", baselineSenders, senders.count())
 	}
-	if err := service.SendTest(context.Background()); err != nil {
+	if result, err := service.SendTest(context.Background()); err != nil || !result.Sent {
 		t.Fatalf("send test after a recipient change: %v", err)
 	}
 	if last := sender.lastChatID(); last != "ou_new" {

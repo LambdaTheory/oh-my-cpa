@@ -14,6 +14,7 @@ const defaultPredictionInterval = time.Minute
 type PredictionDigestItem struct {
 	Key                       string
 	WindowID                  string
+	ResetAccuracy             string
 	ResetAtMS                 *int64
 	ExhaustionETAMS           *int64
 	WindowScope               string
@@ -202,9 +203,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 		return
 	}
 	service.unlockStateTransition()
-	if !withinQuiet(resolved, now) {
-		service.deliverOutbox(ctx, resolved)
-	}
+	service.deliverOutbox(ctx, resolved)
 }
 
 func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved Resolved, now time.Time) bool {
@@ -235,12 +234,31 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 	}
 	var findings []PredictionDigestItem
 	for _, item := range digest.Items {
+		identity := predictionItemID(item)
+		previous, exists := state.pendingByID(identity)
+		reset := time.Time{}
+		if item.ResetAccuracy == "exact" && item.ResetAtMS != nil {
+			reset = time.UnixMilli(*item.ResetAtMS).UTC()
+		}
+		if exists && previous.Kind == predictionKindPrefix && (item.Verdict == "on_track" || item.Verdict == "under_used") {
+			for index := range state.PendingItems {
+				marker := &state.PendingItems[index]
+				if marker.ID == identity && marker.ResolvedAt.IsZero() {
+					marker.ResolvedAt = now
+				}
+			}
+		}
 		if item.Verdict != "will_exhaust" {
 			continue
 		}
-		identity := predictionItemID(item)
-		_, exists := state.pendingByID(identity)
-		if exists {
+		isNewCycle := exists && hasNewQuotaCycle(previous, reset, time.UnixMilli(item.ObservedAtMS))
+		isRecurrence := exists && previous.Status == PendingResolved && previous.CycleResetAt.IsZero() && !previous.ResolvedAt.IsZero()
+		if exists && !isNewCycle && !isRecurrence {
+			for index := range state.PendingItems {
+				if state.PendingItems[index].ID == identity {
+					state.PendingItems[index].LastSeen = now
+				}
+			}
 			if morningMinute(resolved, now) {
 				findings = append(findings, item)
 			}
@@ -248,21 +266,22 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 		}
 		// A resolved marker remembers the announced risk without turning a
 		// forecast into a permanent incident in the ordinary pending list.
-		state.PendingItems = append(state.PendingItems, PendingItem{ID: identity, Kind: predictionKindPrefix,
+		marker := PendingItem{ID: identity, Kind: predictionKindPrefix,
 			Provider: item.Provider, Key: predictionKey(item), Alias: item.CredentialLabel, Status: PendingResolved,
-			Action: "提前准备备用凭证，按需分流", Since: now, LastSeen: now, NotifiedAt: now})
+			Action: "提前准备备用凭证，按需分流", Since: now, LastSeen: now, NotifiedAt: now, CycleResetAt: reset}
+		if exists {
+			for index := range state.PendingItems {
+				if state.PendingItems[index].ID == identity {
+					state.PendingItems[index] = marker
+				}
+			}
+		} else {
+			state.PendingItems = append(state.PendingItems, marker)
+		}
 		findings = append(findings, item)
 	}
 	if len(findings) == 0 {
 		return false
-	}
-	for index := range state.PendingItems {
-		item := &state.PendingItems[index]
-		for _, finding := range findings {
-			if item.ID == predictionItemID(finding) && finding.ResetAtMS != nil {
-				item.ResolvedAt = time.UnixMilli(*finding.ResetAtMS).UTC()
-			}
-		}
 	}
 	if morningMinute(resolved, now) {
 		state.LastSummaryAt = now
@@ -299,6 +318,9 @@ func predictionNotification(items []PredictionDigestItem, omitted int, resolved 
 		alerts = append(alerts, Alert{Kind: "omitted", Title: fmt.Sprintf("另有 %d 项预测发现未展示", omitted), Advice: "打开控制台查看完整预测"})
 	}
 	localMinute := now.In(resolved.Location).Format("15:04")
+	if morningMinute(resolved, now) {
+		localMinute = KindMorning
+	}
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, strings.Join([]string{item.Provider, item.CredentialLabel, item.WindowKind, item.Verdict}, ":"))
@@ -354,9 +376,6 @@ func predictionScope(item PredictionDigestItem) string {
 	window := item.WindowID
 	if window == "" {
 		window = item.WindowKind
-	}
-	if item.ResetAtMS != nil {
-		window += "@" + fmt.Sprint(*item.ResetAtMS)
 	}
 	return window
 }

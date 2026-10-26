@@ -4100,7 +4100,7 @@ const DICT: Record<string, [string, string]> = {
   'feishu.form_app_secret': ['App Secret', 'App Secret'],
   'feishu.form_app_secret_desc': ['应用凭证密钥，由服务器加密存储。留空保存表示不修改原有密钥。', 'App secret, encrypted on server. Leave blank to preserve.'],
   'feishu.form_chat_id': ['本人 Open ID', 'Recipient Open ID'],
-  'feishu.form_chat_id_desc': ['填浩文本人的 Open ID（ou_ 开头），只向该用户私聊发送。', 'Enter the operator’s Open ID (ou_ prefix). Notifications go only to this person.'],
+  'feishu.form_chat_id_desc': ['填写接收人的 Open ID（ou_ 开头），只向该用户私聊发送。', 'Enter the recipient’s Open ID (ou_ prefix). Notifications go only to this person.'],
   'feishu.form_summary_times': ['每日定时播报时间', 'Daily Summary Times'],
   'feishu.form_summary_times_desc': ['默认 10:00 / 17:00，最多 5 个 HH:MM。最早时点每天发一条早报，其余时段有异常才发。', 'Default 10:00 / 17:00, up to 5 HH:MM slots. The earliest slot sends a daily morning report; other periods send only actionable alerts.'],
   'feishu.form_quiet_hours': ['免打扰静音时段', 'Quiet Hours'],
@@ -4117,6 +4117,7 @@ const DICT: Record<string, [string, string]> = {
   'feishu.test_confirm_desc': ['向配置的本人 Open ID 发送一条真实测试卡片。', 'Sends one real test card to the configured recipient Open ID.'],
   'feishu.test_sending': ['正在发送...', 'Sending...'],
   'feishu.test_success': ['测试卡片已发送给指定本人', 'Test card sent to the configured person'],
+  'feishu.test_queued': ['测试卡片已排队重试（已尝试 {attempts} 次，下次 {next}）', 'Test card queued for retry ({attempts} attempts; next {next})'],
   'feishu.test_failed': ['测试卡片发送失败: {error}', 'Failed to send test card: {error}'],
   'feishu.save_success': ['飞书通知配置已保存', 'Feishu settings saved successfully'],
 };

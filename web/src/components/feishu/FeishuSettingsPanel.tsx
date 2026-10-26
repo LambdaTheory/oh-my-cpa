@@ -82,7 +82,6 @@ export const FeishuSettingsPanel: React.FC = () => {
         summary_times,
         quiet_start: quietStart.trim(),
         quiet_end: quietEnd.trim(),
-        tight_remaining_percent: 10,
         channel_unavailable_after_ms: Number(channelTimeoutMinutes) * 60_000,
         monitor_down_after_ms: Number(monitorTimeoutMinutes) * 60_000,
       };
@@ -109,6 +108,8 @@ export const FeishuSettingsPanel: React.FC = () => {
     onSuccess: (res) => {
       if (res.sent) {
         toast.success(t('feishu.test_success'));
+      } else if (res.reason === 'queued_for_retry') {
+        toast.info(t('feishu.test_queued', { attempts: res.attempts ?? 0, next: formatTime(res.next_attempt_at) }));
       } else {
         toast.error(t('feishu.test_failed', { error: res.error || 'Unknown error' }));
       }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -193,7 +194,7 @@ func TestManualPredictionIsolatesOutboxAndPreservesScheduledDigest(t *testing.T)
 	}
 	var scheduledSent bool
 	for _, notification := range state.Outbox {
-		if notification.Kind == predictionKindPrefix+"10:00" && notification.State == NotifySent {
+		if notification.Kind == predictionKindPrefix+KindMorning && notification.State == NotifySent {
 			scheduledSent = true
 		}
 	}
@@ -488,7 +489,11 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 				SenderFactory: func(Resolved) Sender { return newFakeSender() }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 			})
 			lockBoundary := make(chan bool, 2)
+			var transitionCount atomic.Int32
 			service.beforeStateTransitionLock = func() {
+				if transitionCount.Add(1) > 2 {
+					return
+				}
 				isHeld := !service.stateMu.TryLock()
 				if !isHeld {
 					service.stateMu.Unlock()

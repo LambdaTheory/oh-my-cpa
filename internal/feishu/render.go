@@ -14,6 +14,8 @@ const KindQuery = "query"
 // KindSummary marks a scheduled or quiet-end digest.
 const KindSummary = "summary"
 
+const KindMorning = "morning"
+
 // KindAlertBatch carries same-cycle monitoring alerts or a quiet-end merge in a
 // single notification.
 const KindAlertBatch = "alert_batch"
@@ -29,6 +31,7 @@ var defaultTitles = map[string]string{
 	AlertMonitorDown:        "监控停摆",
 	KindQuery:               "额度查询",
 	KindSummary:             "额度汇总",
+	KindMorning:             "额度早报",
 	KindAlertBatch:          "异常提醒",
 }
 

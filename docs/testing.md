@@ -362,6 +362,14 @@ The automatically discovered Feishu attention tests own the inclusive 10% trigge
 shared forecast/reading identity across restarts, scheduler-order deduplication,
 missing-data decisions and the three-point card bound. The SDK sender test injects
 an HTTP transport and certifies Open ID addressing without network access.
+Feishu repair regressions exercise five moving-reset ticks, observed-time cycle
+rollover, recovery and recurrence, finite resolved retention, startup/morning
+deduplication, and morning delivery during quiet hours. Query regressions call
+HandleMessage with synthetic transports. The API repair suite covers the actual
+prediction source's recovery/provenance projection, SQLite cycle round trips and
+service restart deduplication, conflicting threshold writes, and persisted retry
+outcomes. The existing settings component test covers retry feedback and omission
+of the fixed threshold from save payloads.
 
 
 Discovery is automatic wherever it can be, so a test cannot be written and then never
