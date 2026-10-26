@@ -599,9 +599,13 @@ The dashboard reads the same computation through
 `GET /api/v1/management/dashboard/predictions`. This console projection retains the full
 stored roster and operator-visible credential labels and auth indexes, groups items by
 provider, and adds prediction-call duration `duration_ms` plus nullable cycle accounting
-(`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`). These
+(`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`,
+`remaining_window_hours`, `window_error_hours`, `remaining_tokens`,
+`capacity_error_percent` and optional `capacity_unavailable`). These
 console fields are excluded from capability JSON and schemas. Missing or unreadable
-credential snapshots remain unknown rows rather than disappearing. The existing
+credential snapshots remain unknown rows rather than disappearing. Safe stored Ollama
+account snapshots join the same roster without reading cookies. Step and Stepfun share
+one dashboard group while retaining their stored provider identities in items. The existing
 `quota_prediction` tool keeps its name, filters and prediction semantics, with the additive
 window identity fields described above. The five-minute foreground refresh and the manual dashboard refresh
 therefore recompute only from stored evidence and never probe CPA.

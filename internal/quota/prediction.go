@@ -103,6 +103,11 @@ type PredictionAccounting struct {
 	WindowStartMS                  *int64   `json:"window_start_ms"`
 	RemainingPercent               *float64 `json:"remaining_percent"`
 	UniformProjectedPercentAtReset *float64 `json:"uniform_projected_percent_at_reset"`
+	RemainingWindowHours           *float64 `json:"remaining_window_hours"`
+	WindowErrorHours               *float64 `json:"window_error_hours"`
+	RemainingTokens                *int64   `json:"remaining_tokens"`
+	CapacityErrorPercent           *float64 `json:"capacity_error_percent"`
+	CapacityUnavailable            string   `json:"capacity_unavailable,omitempty"`
 }
 
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
@@ -272,16 +277,22 @@ func calculatePredictionAccounting(input PredictionInput, prediction WindowPredi
 	if prediction.UsedPercent == nil {
 		return result
 	}
+	for _, reason := range prediction.Reasons {
+		if reason == PredictionReasonReadingStale || reason == PredictionReasonCycleExpired {
+			return result
+		}
+	}
 	result.RemainingPercent = floatPointer(100 - *prediction.UsedPercent)
 	if result.WindowStartMS == nil {
-		result.RemainingPercent = nil
 		return result
 	}
+	// Percentage-point rounding affects the entire window allowance, including
+	// a fresh reading whose trend cannot yet be fitted. State that uncertainty.
+	result.RemainingWindowHours = floatPointer(*input.Window.PeriodHours * *result.RemainingPercent / 100)
+	result.WindowErrorHours = floatPointer(*input.Window.PeriodHours * usedPercentHalfStep / 100)
 	for _, reason := range prediction.Reasons {
-		if reason == PredictionReasonResetMidCycle || reason == PredictionReasonReadingStale {
-			if reason == PredictionReasonReadingStale {
-				result.RemainingPercent = nil
-			}
+		if reason == PredictionReasonResetMidCycle || reason == PredictionReasonInvalidObservation || reason == PredictionReasonArithmeticUnsafe {
+			result.CapacityUnavailable = reason
 			return result
 		}
 	}
@@ -289,6 +300,29 @@ func calculatePredictionAccounting(input PredictionInput, prediction WindowPredi
 		input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS ||
 		input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
 		return result
+	}
+	if input.UsageReason != "" {
+		result.CapacityUnavailable = input.UsageReason
+	} else if input.Usage != nil {
+		switch {
+		case *prediction.UsedPercent < CapacityMinUsedPercent:
+			result.CapacityUnavailable = PredictionReasonLowUsage
+		case input.Usage.Requests <= 0:
+			result.CapacityUnavailable = PredictionReasonNoTraffic
+		default:
+			remainingTokens, isSafe := roundedInt64(float64(input.Usage.Tokens) * *result.RemainingPercent / *prediction.UsedPercent)
+			if isSafe && input.Usage.Tokens > 0 && remainingTokens >= 0 {
+				result.RemainingTokens = &remainingTokens
+				if *result.RemainingPercent > usedPercentHalfStep {
+					result.CapacityErrorPercent = floatPointer(math.Ceil(usedPercentHalfStep*100/((*prediction.UsedPercent-usedPercentHalfStep)**result.RemainingPercent)*1000) / 10)
+				} else {
+					result.RemainingTokens = nil
+					result.CapacityUnavailable = PredictionReasonLowUsage
+				}
+			} else {
+				result.CapacityUnavailable = PredictionReasonArithmeticUnsafe
+			}
+		}
 	}
 	periodMS := *input.Window.ResetAtMS - fromMS
 	elapsedMS := input.ObservedAtMS - fromMS

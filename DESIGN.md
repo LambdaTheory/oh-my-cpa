@@ -923,13 +923,20 @@ billing evidence. Unknown billing pauses requests; observed unsupported response
 subsequent automatic requests for the same model. Reuse the existing tokens,
 responsive Drawer and semantic feedback without introducing global design tokens.
 
-### Quota prediction provider disclosures
+### Quota remaining and endurance
 
-Quota prediction opens with provider summaries only. Native details/summary controls
-provide keyboard disclosure and a 44px hit area; each header shows the provider mark,
-24-hour sufficiency first and sufficiency until reset second. Unknown or omitted
-evidence cannot read as enough. Expanded windows retain their observed percentage,
-forecast and reasons, and add the window start, remaining share, a separately labelled
-uniform-rate full-window estimate and a manual suggestion. Missing readings say Data
-missing and draw no meter. A just-reset window explains its lack of history. Existing
-palette, typography, spacing and motion tokens are reused.
+The panel pairs remaining allowance and time at the current pace within each credential
+window. Provider sections open collapsed; their headings show one sufficiency verdict,
+and the panel head counts insufficient providers once. At most 10% remaining or a
+forecast that runs out before reset yields Insufficient. Five provider families share
+this surface: Codex, Claude, Antigravity, Ollama and Step.
+
+Native details/summary retains a 44px hit area and keyboard disclosure. Each expanded
+row holds the credential/window identity, its status, the two readings, a labelled
+inferred allowance with its error when available, the reset instant and one manual
+suggestion. Quota-hours state that they are allowance rather than runtime. There is
+no separate capacity card, projected-percentage meter or cost forecast in this panel.
+Missing values say Data missing, never zero; a known exhausted reading says Exhausted.
+Unavailable forecasts show one of four categories with detailed reasons in a tooltip
+reachable by hover and keyboard focus. Existing palette, type, spacing and motion
+tokens are reused.

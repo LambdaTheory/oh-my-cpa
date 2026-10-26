@@ -74,6 +74,68 @@ func TestQuotaPredictionRejectsReadOnlyAuthIndex(t *testing.T) {
 	}
 }
 
+func TestQuotaPredictionIncludesFiveProvidersAndOllamaUnknownCycle(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-five-providers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+	reset, period, used := now.Add(5*time.Hour).UnixMilli(), 10.0, 95.0
+	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	resources := []domain.DiscoveredResource{}
+	for _, provider := range []string{"codex", "claude", "antigravity", "step"} {
+		resources = append(resources, predictionResource(provider+"-fixture", provider+"@example.test", provider))
+		seedPredictionSnapshot(t, repo, provider+"-fixture", provider, now.UnixMilli(), []quota.QuotaWindow{window})
+	}
+	seedPredictionResources(t, repo, resources)
+	account, err := repo.CreateOllamaAccount(context.Background(), repository.OllamaAccountCreate{ID: "fixture-ollama", Label: "ollama@example.test", Enabled: true, Ciphertext: []byte("synthetic"), Nonce: []byte("synthetic"), NowMS: now.UnixMilli()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window.PeriodHours = nil
+	encoded, err := json.Marshal(quota.NormalizedQuota{AuthIndex: "ollama:" + account.ID, Provider: "ollama", Status: "healthy", ObservedAtMS: now.UnixMilli(), Windows: []quota.QuotaWindow{window}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.RecordOllamaResult(context.Background(), repository.OllamaCollectionResult{ID: account.ID, Status: "ok", ObservedAtMS: now.UnixMilli(), IsSuccess: true, SnapshotJSON: string(encoded)}); err != nil {
+		t.Fatal(err)
+	}
+	service := &Service{Repo: repo}
+	result, err := service.DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 5 {
+		t.Fatalf("five-provider roster = %+v", result)
+	}
+	for _, item := range result.Items {
+		if item.UsedPercent == nil || *item.UsedPercent != 95 || item.Accounting.RemainingPercent == nil || *item.Accounting.RemainingPercent != 5 {
+			t.Fatalf("provider lost current balance: %+v", item)
+		}
+		if item.Provider == "ollama" {
+			if item.Accounting.RemainingWindowHours != nil || item.ExhaustionETAMS != nil || !slices.Contains(item.Reasons, quota.PredictionReasonBoundaryUnknown) {
+				t.Fatalf("Ollama invented a period: %+v", item)
+			}
+		} else if item.Accounting.RemainingWindowHours == nil || *item.Accounting.RemainingWindowHours != 0.5 {
+			t.Fatalf("missing allowance: %+v", item)
+		}
+	}
+	if _, _, err := repo.RecordOllamaResult(context.Background(), repository.OllamaCollectionResult{ID: account.ID, Status: "transport_error", ObservedAtMS: now.Add(time.Minute).UnixMilli(), Error: "synthetic failure"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err = service.DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.Add(time.Minute).UnixMilli()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range result.Items {
+		if item.Provider == "ollama" && (item.UsedPercent != nil || !slices.Contains(item.Reasons, quota.PredictionReasonReadingError)) {
+			t.Fatalf("failed Ollama collection still claims balance: %+v", item)
+		}
+	}
+}
+
 func TestQuotaPredictionIncludesMissingCredentialReadings(t *testing.T) {
 	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-missing.db"))
 	if err != nil {

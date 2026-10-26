@@ -397,22 +397,38 @@ Reset-time token and cost values are projections from OMC-recorded current-cycle
 not capacity estimates. They exist only when at least five percent is used, traffic was
 recorded and at least 95 percent of requests carried request-time pricing.
 
-The dashboard shows providers collapsed by default. Each provider reports sufficiency
-until the next reset and urgency over the next 24 hours; the latter determines whether
-action is needed today. Any known shortage wins over unknown rows, and an unknown or
-omitted row prevents an all-clear. These summaries describe the included windows, not
-interchangeable provider capacity. Every expanded window carries a manual suggestion
-or an explicit no-action reading. Suggestions never change credentials or routing.
+The dashboard combines remaining allowance and endurance into one reading per window,
+with Codex, Claude, Antigravity, stored Ollama accounts and Step/Stepfun credentials
+using the same calculation. Providers are collapsed by default and the header counts
+each insufficient provider once. A provider is insufficient when any valid window
+reports at most 10% remaining **or** the existing fitted forecast exhausts before its
+next reset. The low-balance condition does not require historical trend evidence.
+Unknown windows prevent an all-clear; known shortages outrank unknown neighbours.
+The next 24 hours determine the urgency of the manual suggestion, without hiding a
+shortage later in the cycle. Suggestions never change credentials or routing.
 
-Console window accounting uses the credential's own reset minus its reported period
-for the start, and 100 minus its valid used share for the remaining percentage. Its
-separate full-window reading is labelled **uniform-rate estimate**: used percentage
-divided by elapsed time at observation, multiplied by the window length. It is withheld
-for expired, stale, failed, incomplete or reset-crossing readings and until at least
-`max(30 minutes, 5% of the cycle)` has elapsed. This arithmetic does not replace the
-existing fitted forecast. Credentials with no stored snapshot, unreadable windows or
-no published window remain visible as unknown; missing readings are never zero.
-The console-only accounting fields do not extend the `quota_prediction` capability.
+Remaining allowance is 100 minus the valid used percentage. Where the reading supplies
+a trustworthy period and reset, the window's start is reset minus period; percentage
+times period expresses used or remaining **quota-hours**, not elapsed runtime. The
+remaining allowance is an inferred value with rounding uncertainty of half a percentage
+point times period. If current-cycle recorded token use is positive and at least 5% of
+the quota is used, remaining tokens are inferred as recorded tokens times remaining
+percentage divided by used percentage. Its reported relative error propagates the
+half-point rounding through both numerator and denominator, rounded upward; outside
+usage and different model mixes add uncertainty that this bound cannot quantify.
+Near-zero remaining shares with unbounded relative error omit the token estimate.
+These estimates are labelled and never represented as provider-published capacity.
+
+Endurance comes from the existing fitted forecast, not from quota-hours. Missing
+readings, expired cycles, unsafe arithmetic and reset-crossing evidence do not yield
+invented amounts or times. A missing period stays unknown, including Ollama's current
+settings-page readings; labels alone never establish duration. Step and Stepfun share
+one console provider group while stored provider identity stays intact for joins.
+Failed forecasts use four visible categories: reading failed, insufficient history,
+unknown cycle and abnormal usage. Detailed reason codes are localized in hover/focus
+tooltips. Missing values say Data missing; exhaustion says Exhausted instead of
+presenting a missing value as zero. All extra accounting stays console-only and does
+not extend the quota_prediction capability schema.
 
 - **Range Preset**: A relative window — Live (last 15m), 1h, 6h, 24h, 7d, 30d,
   90d, and on the dashboard only, All time. It slides with the current time, so its totals move on every poll even

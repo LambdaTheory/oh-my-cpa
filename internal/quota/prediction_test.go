@@ -25,9 +25,27 @@ func TestPredictionAccountingUsesEachObservedWindow(t *testing.T) {
 		accounting := result.Accounting
 		if accounting.WindowStartMS == nil || *accounting.WindowStartMS != start.UnixMilli() ||
 			accounting.RemainingPercent == nil || *accounting.RemainingPercent != 70 ||
+			accounting.RemainingWindowHours == nil || math.Abs(*accounting.RemainingWindowHours-periodHours*0.7) > 0.000001 ||
+			accounting.WindowErrorHours == nil || *accounting.WindowErrorHours != periodHours*0.005 ||
 			accounting.UniformProjectedPercentAtReset == nil || *accounting.UniformProjectedPercentAtReset != 60 {
 			t.Fatalf("period %v accounting = %+v", periodHours, accounting)
 		}
+	}
+}
+
+func TestPredictionAccountingInfersTokensWithoutRequiringPrices(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	window, _ := predictionWindow(start, 25)
+	input := PredictionInput{Window: window, ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(), NowMS: start.Add(5 * time.Hour).UnixMilli(), Usage: &WindowUsage{Requests: 2, Tokens: 1000}}
+	result := PredictWindow(input)
+	if result.Accounting.RemainingTokens == nil || *result.Accounting.RemainingTokens != 3000 ||
+		result.Accounting.CapacityErrorPercent == nil || *result.Accounting.CapacityErrorPercent != 2.8 {
+		t.Fatalf("inferred remaining tokens = %+v", result.Accounting)
+	}
+	input.Usage.Tokens = math.MaxInt64
+	result = PredictWindow(input)
+	if result.Accounting.RemainingTokens != nil || result.Accounting.CapacityUnavailable != PredictionReasonArithmeticUnsafe {
+		t.Fatalf("unsafe token estimate = %+v", result.Accounting)
 	}
 }
 

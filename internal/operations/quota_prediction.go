@@ -196,9 +196,6 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(metadata) == 0 {
-		return []Quota{}, nil
-	}
 	authIndexes := make([]string, 0, len(metadata))
 	for _, entry := range metadata {
 		authIndexes = append(authIndexes, entry.AuthIndex)
@@ -257,6 +254,33 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 			AuthIndex: entry.AuthIndex, Name: safeLabel(entry.Name), Provider: provider,
 			Status: snapshot.Status, ObservedAtMS: snapshot.ObservedAtMS, Windows: windows,
 		})
+	}
+	ollamaAccounts, err := s.Repo.ListOllamaAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range ollamaAccounts {
+		reading := Quota{AuthIndex: "ollama:" + account.ID, Name: safeLabel(account.Label), Provider: "ollama"}
+		var snapshot quota.NormalizedQuota
+		if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
+			if err := json.Unmarshal([]byte(account.QuotaSnapshotJSON), &snapshot); err != nil {
+				reading.Status = "error"
+			} else {
+				reading.Windows = snapshot.Windows
+				reading.ObservedAtMS = snapshot.ObservedAtMS
+				reading.Status = snapshot.Status
+			}
+		}
+		if account.QuotaObservedAtMS != nil {
+			reading.ObservedAtMS = *account.QuotaObservedAtMS
+		}
+		if account.Status != "ok" && account.Status != "idle" && account.Status != "" {
+			reading.Status = "error"
+		}
+		if len(reading.Windows) == 0 {
+			reading.Windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
+		}
+		result = append(result, reading)
 	}
 	return result, nil
 }

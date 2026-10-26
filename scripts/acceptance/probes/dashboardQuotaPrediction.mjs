@@ -20,6 +20,8 @@ const PREDICTION_RESPONSE = {
           used_percent: 65,
           window_start_ms: Date.parse('2026-10-14T08:00:00Z'),
           remaining_percent: 35,
+          remaining_tokens: 125000,
+          capacity_error_percent: 1.2,
           uniform_projected_percent_at_reset: 75.83,
           reset_at_ms: Date.parse('2026-10-21T08:00:00Z'),
           observed_at_ms: Date.parse('2026-10-20T07:55:00Z'),
@@ -47,6 +49,8 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
     ...PREDICTION_RESPONSE.providers,
     { provider: 'claude', items: [{ ...sample, provider: 'claude', credential_label: 'stale@example.com', verdict: 'unknown', reasons: ['stale_reading'], data_age_seconds: 90000, projected_percent_at_reset: null, uniform_projected_percent_at_reset: null, remaining_percent: null }] },
     { provider: 'antigravity', items: [{ ...sample, provider: 'antigravity', credential_label: 'gravity@example.com' }] },
+    { provider: 'ollama', items: [{ ...sample, provider: 'ollama', credential_label: 'ollama@example.test', verdict: 'unknown', used_percent: 95, reset_at_ms: null, exhaustion_eta_ms: null, reasons: ['boundary_unknown'], remaining_tokens: null }] },
+    { provider: 'step', items: [{ ...sample, provider: 'step', credential_label: 'step@example.test', verdict: 'on_track', used_percent: 25, exhaustion_eta_ms: null, reasons: [] }] },
   ] };
   await page.route('**/omc/api/**/preferences', (route) => route.fulfill({
     json: { preferences: { omc_dashboard_layout: [{ id: 'quota_prediction', span: 2, hidden: false }] }, time_zone: { server_timezone: 'UTC' } },
@@ -76,14 +80,26 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
   for (const summary of await panel.locator('summary').all()) await summary.click();
   await panel.getByText('operator@example.com').waitFor();
   check('the dashboard groups and renders the operator prediction row',
-    await panel.locator('[data-verdict="will_exhaust"]').count() === 2
-      && (await panel.innerText()).includes('65.0%')
-      && (await panel.innerText()).includes('110.0%')
+    await panel.locator('[data-sufficiency="insufficient"]').count() === 3
+      && (await panel.innerText()).includes('35.0%')
+      && (await panel.innerText()).includes('About 22.0 hours')
+      && (await panel.innerText()).includes('3 providers insufficient')
+      && (await panel.innerText()).includes('error ±1.2%')
       && (await panel.innerText()).includes('7 ms'));
   const groups = await panel.locator('section').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')));
-  check('provider headings follow dashboard order', groups.join(',') === 'Antigravity,Claude,Codex', groups.join(','));
-  check('unknown stale evidence remains visible', await panel.locator('[data-verdict="unknown"]').count() === 1
-    && await panel.getByText(/Quota reading is stale|额度读数已过期/).count() === 1);
+  check('provider headings follow dashboard order', groups.join(',') === 'Antigravity,Claude,Codex,Ollama,Step', groups.join(','));
+  check('unknown evidence uses four-category labels', await panel.getByText('Reading failed', { exact: true }).count() === 1
+    && await panel.getByText('Unknown cycle', { exact: true }).count() === 1);
+  await settleLayout(page);
+  const reasonTrigger = panel.locator('span[tabindex="0"]').filter({ hasText: 'Reading failed' });
+  await reasonTrigger.focus();
+  await reasonTrigger.hover();
+  const tooltip = page.getByRole('tooltip').filter({ hasText: 'Quota reading is stale' });
+  let hasVisibleDetails = false;
+  await until(async () => { hasVisibleDetails = await tooltip.isVisible(); return hasVisibleDetails; }, { label: 'hover and focus reason details' });
+  check('detailed reasons are reachable on hover and focus', hasVisibleDetails);
+  await page.keyboard.press('Tab');
+  await page.mouse.move(0, 0);
 
   const cell = page.locator('[data-widget="quota_prediction"]');
   await until(async () => await cell.getAttribute('data-span') === '2', { label: 'the prediction span-2 arrangement' });
@@ -91,7 +107,7 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
     await settleLayout(page);
     const geometry = await panel.evaluate((node) => {
       const bounds = node.getBoundingClientRect();
-      const facts = [...node.querySelectorAll('dd[title]')];
+      const facts = [...node.querySelectorAll('p span[title]')];
       return {
         width: bounds.width,
         overflow: node.scrollWidth > node.clientWidth + 1,
@@ -101,8 +117,8 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
         rowsInside: [...node.querySelectorAll('li')].every((row) => row.getBoundingClientRect().right <= bounds.right + 1),
       };
     });
-    check(`${label} fits its container and preserves complete reset/projection/ETA values`,
-      !geometry.overflow && !geometry.documentOverflow && geometry.rowsInside && geometry.facts >= 6 && geometry.fullValues, JSON.stringify(geometry));
+    check(`${label} fits its container and preserves combined remaining/endurance values`,
+      !geometry.overflow && !geometry.documentOverflow && geometry.rowsInside && geometry.facts >= 5 && geometry.fullValues, JSON.stringify(geometry));
   }
   await checkGeometry('desktop span 2');
   fs.mkdirSync('tmp/issue-78', { recursive: true });

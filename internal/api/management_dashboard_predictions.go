@@ -49,12 +49,16 @@ func (h *Handler) dashboardPredictions(writer http.ResponseWriter, request *http
 	}
 	byProvider := make(map[string]int)
 	for _, item := range result.Items {
-		index, ok := byProvider[item.Provider]
+		provider := item.Provider
+		if provider == "stepfun" {
+			provider = "step"
+		}
+		index, ok := byProvider[provider]
 		if !ok {
 			index = len(response.Providers)
-			byProvider[item.Provider] = index
+			byProvider[provider] = index
 			response.Providers = append(response.Providers, dashboardPredictionProvider{
-				Provider: item.Provider,
+				Provider: provider,
 				Items:    []dashboardPredictionItem{},
 			})
 		}

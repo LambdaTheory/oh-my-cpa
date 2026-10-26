@@ -135,12 +135,18 @@ func TestDashboardPredictionAccountingPreservesCapabilityWireContract(t *testing
 		t.Fatal(err)
 	}
 	fields := dashboard.Providers[0].Items[0]
-	for key, want := range map[string]float64{"window_start_ms": float64(now.Add(-5 * time.Hour).UnixMilli()), "remaining_percent": 70, "uniform_projected_percent_at_reset": 60} {
+	for key, want := range map[string]float64{"window_start_ms": float64(now.Add(-5 * time.Hour).UnixMilli()), "remaining_percent": 70, "uniform_projected_percent_at_reset": 60, "remaining_window_hours": 7, "window_error_hours": 0.05} {
 		if fields[key] != want {
 			t.Fatalf("%s = %v, want %v", key, fields[key], want)
 		}
 		if _, exists := capabilityFields[key]; exists {
 			t.Fatalf("console accounting leaked into quota_prediction: %s", key)
+		}
+		delete(fields, key)
+	}
+	for _, key := range []string{"remaining_tokens", "capacity_error_percent", "capacity_unavailable"} {
+		if _, exists := capabilityFields[key]; exists {
+			t.Fatalf("console accounting leaked into capability: %s", key)
 		}
 		delete(fields, key)
 	}

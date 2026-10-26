@@ -34,6 +34,11 @@ export interface DashboardPredictionItem extends QuotaPredictionItem {
   window_start_ms?: number | null;
   remaining_percent?: number | null;
   uniform_projected_percent_at_reset?: number | null;
+  remaining_window_hours?: number | null;
+  window_error_hours?: number | null;
+  remaining_tokens?: number | null;
+  capacity_error_percent?: number | null;
+  capacity_unavailable?: string;
 }
 
 export interface DashboardPredictionsResponse {

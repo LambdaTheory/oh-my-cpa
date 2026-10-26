@@ -3726,19 +3726,28 @@ by provider and measures the actual computation duration. It does not refresh qu
 CPA. `web/src/components/dashboard/QuotaPrediction.tsx` renders that response as a
 reorderable dashboard panel, refreshes it every five minutes only while the page is visible,
 and keeps explicit empty, unknown and stale states.
-The dashboard DTO adds only `window_start_ms`, `remaining_percent` and
-`uniform_projected_percent_at_reset`, computed alongside the same window prediction
-using its observation time and period. The operations item's internal accounting field
-is excluded from JSON and capability schema generation, preserving the existing
-`quota_prediction` contract and shared facts for console, Agent and MCP. Missing or
-unreadable snapshots produce an unknown placeholder window for a recognized provider
-rather than removing the credential. No upstream read or database write is introduced.
-The dashboard reads the full stored roster before grouping so capability payload limits
-cannot hide an entire provider; Agent/MCP keeps its 100-row and 32-KiB limits.
-The dashboard folds each provider with native details/summary controls. A pure view
-function derives reset sufficiency and 24-hour urgency, with unknown/omitted evidence
-preventing a healthy summary. A failed dashboard refetch preserves details but changes
-its summaries and suggestions to require checking data. Suggestions remain local copy.
+The dashboard DTO includes nullable console accounting: window start, remaining share,
+remaining quota-hours and their absolute rounding error, and optional inferred remaining
+tokens with relative rounding error. These values are computed beside the same prediction
+from its observation, period and current-cycle usage. The operations item's accounting
+field is excluded from JSON and capability schema generation. The quota_prediction wire
+contract, evidence thresholds, 100-row / 32-KiB limits and read-only masking stay intact.
+The dashboard reads the complete roster before grouping, so a later provider cannot be
+hidden by capability payload bounds. Missing snapshots remain unknown rows.
+
+The prediction roster also reads Ollama's safe account projection and persisted normalized
+snapshot; it never selects cookie ciphertext. A later failed collection invalidates a
+retained reading. Ollama duration remains unknown unless actually present in stored data.
+Step and Stepfun stored provider identities are consumed without new provider probes and
+share the console's Step group. No endpoint, upstream read or database write is added.
+
+Native details/summary controls fold each provider. A pure view function applies the
+10%-remaining-or-pre-reset-exhaustion rule and counts insufficient providers once.
+The combined row shows remaining allowance and endurance, with one of four failure
+categories and localized hover/focus details when a forecast is unavailable. A failed
+refetch keeps identities but withholds amounts, marks summaries unknown and requests
+data verification. The separate uniform-rate/reset-time projections are no longer
+rendered as competing readouts.
 
 `internal/feishu/prediction_digest.go` is the scheduled and operator-triggered prediction
 component. At configured summary minutes the Feishu loop evaluates it before the legacy

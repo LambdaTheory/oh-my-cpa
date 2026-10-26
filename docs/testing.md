@@ -131,7 +131,9 @@ Rules that keep the suite fast and honest:
 `pnpm test:components` runs the complete, automatically discovered frontend integration layer: rendered `*.component.test.tsx` suites and Node-environment `*.contract.test.ts` suites.
 The quota prediction suites also cover per-credential cycle accounting, missing roster
 readings, dashboard-only fields versus the unchanged capability JSON, provider disclosure,
-24-hour precedence, incomplete summaries and per-window suggestions. The existing
+10% boundary admission independent of history, pre-reset exhaustion, provider counts,
+four reason classes, estimate uncertainty, five-provider stored reads including cookie-free
+Ollama failure invalidation, incomplete summaries and per-window suggestions. The existing
 dashboard prediction probe owns keyboard disclosure and desktop/phone geometry, and
 captures synthetic-data evidence under `tmp/issue-78/`; reviewed copies can be
 retained under `docs/images/quota-prediction/` without routine probes dirtying the tree.
