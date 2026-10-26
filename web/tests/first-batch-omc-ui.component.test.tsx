@@ -265,11 +265,11 @@ describe('First Batch OMC UI Component Tests', () => {
         enabled: true,
         app_id: 'cli_12345',
         has_secret: true,
-        chat_id: 'oc_chat_999',
+        chat_id: 'ou_synthetic',
         summary_times: ['10:00', '17:00'],
         quiet_start: '23:00',
         quiet_end: '08:00',
-        tight_remaining_percent: 20,
+        tight_remaining_percent: 10,
         channel_unavailable_after_ms: 1800000,
         monitor_down_after_ms: 1800000,
         source: 'web',
@@ -297,6 +297,7 @@ describe('First Batch OMC UI Component Tests', () => {
       renderWithClient(<FeishuSettingsPanel />);
 
       expect(await screen.findByDisplayValue('cli_12345')).toBeDefined();
+      expect(screen.getByDisplayValue('10').hasAttribute('disabled')).toBe(true);
 
       // App secret input should be empty (has_secret is true)
       const secretInput = document.querySelector('input[type="password"]') as HTMLInputElement;
@@ -317,7 +318,7 @@ describe('First Batch OMC UI Component Tests', () => {
       fireEvent.click(testBtn);
 
       expect(api.postFeishuTest).not.toHaveBeenCalled();
-      expect(await screen.findByText('此操作将向配置的飞书群发送一条真实测试卡片消息。请确认当前为调试需要。')).toBeDefined();
+      expect(await screen.findByText('向配置的本人 Open ID 发送一条真实测试卡片。')).toBeDefined();
 
       // Click confirm inside test modal
       const confirmTestBtn = screen.getByRole('button', { name: /确\s*定/ });
@@ -337,7 +338,7 @@ describe('First Batch OMC UI Component Tests', () => {
         summary_times: ['10:00'],
         quiet_start: '23:00',
         quiet_end: '08:00',
-        tight_remaining_percent: 20,
+        tight_remaining_percent: 10,
         channel_unavailable_after_ms: 1800000,
         monitor_down_after_ms: 1800000,
         source: 'env_forced_off',

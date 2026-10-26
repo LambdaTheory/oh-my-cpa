@@ -215,7 +215,7 @@ func readyConfig() (Config, Overlay) {
 	return Config{
 		Enabled:                 true,
 		AppID:                   "cli_test",
-		ChatID:                  "oc_test",
+		ChatID:                  "ou_test",
 		Timezone:                "UTC",
 		QuietStart:              "23:00",
 		QuietEnd:                "08:00",
@@ -281,7 +281,7 @@ func TestPrivateChatQueryRepliesWithoutUpstreamRefresh(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	env := newTestEnv(t, invalidReport(now), true)
 	if err := env.service.HandleMessage(context.Background(), Inbound{
-		EventID: "e1", MessageID: "m1", ChatID: "oc_x", ChatType: "p2p", Text: "额度",
+		EventID: "e1", MessageID: "m1", ChatID: "ou_x", ChatType: "p2p", SenderOpenID: "ou_test", Text: "额度",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -297,32 +297,21 @@ func TestPrivateChatQueryRepliesWithoutUpstreamRefresh(t *testing.T) {
 	}
 }
 
-func TestGroupMessageNeedsMention(t *testing.T) {
-	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
-	env := newTestEnv(t, invalidReport(now), true)
-	// A group message without an @-mention is ignored entirely.
-	_ = env.service.HandleMessage(context.Background(), Inbound{
-		EventID: "e2", MessageID: "m2", ChatID: "oc_x", ChatType: "group", Text: "额度",
-	})
-	if waitSignal(t, env.sender.signal) {
-		t.Fatal("a group message without an @-mention must not be answered")
-	}
+func TestGroupQueryIsIgnoredEvenWhenMentioned(t *testing.T) {
+	env := newTestEnv(t, Report{}, false)
+	_ = env.service.HandleMessage(context.Background(), Inbound{EventID: "group", MessageID: "group-message", ChatID: "oc_group", ChatType: "group", Text: "额度", BotMentioned: true})
 	if env.source.readCount() != 0 {
-		t.Fatal("an ignored message must not read the report")
+		t.Fatal("group query read quota data")
 	}
-	// With an @-mention it is answered.
-	_ = env.service.HandleMessage(context.Background(), Inbound{
-		EventID: "e3", MessageID: "m3", ChatID: "oc_x", ChatType: "group", Text: "额度", BotMentioned: true,
-	})
-	if !waitSignal(t, env.sender.signal) {
-		t.Fatal("a mentioned group message should be answered")
+	if _, replies := env.sender.counts(); replies != 0 {
+		t.Fatal("group query received a reply")
 	}
 }
 
 func TestDuplicateEventIsAnsweredOnce(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	env := newTestEnv(t, invalidReport(now), true)
-	in := Inbound{EventID: "dup-1", MessageID: "m1", ChatID: "oc_x", ChatType: "p2p", Text: "额度"}
+	in := Inbound{EventID: "dup-1", MessageID: "m1", ChatID: "ou_x", ChatType: "p2p", SenderOpenID: "ou_test", Text: "额度"}
 	_ = env.service.HandleMessage(context.Background(), in)
 	if !waitSignal(t, env.sender.signal) {
 		t.Fatal("expected a reply")
@@ -343,7 +332,7 @@ func TestHelpReplyDoesNotReadReport(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	env := newTestEnv(t, invalidReport(now), true)
 	_ = env.service.HandleMessage(context.Background(), Inbound{
-		EventID: "h1", MessageID: "m1", ChatID: "oc_x", ChatType: "p2p", Text: "帮助",
+		EventID: "h1", MessageID: "m1", ChatID: "ou_x", ChatType: "p2p", SenderOpenID: "ou_test", Text: "帮助",
 	})
 	if !waitSignal(t, env.sender.signal) {
 		t.Fatal("expected a help reply")
@@ -357,7 +346,7 @@ func TestBotMessageIsIgnoredToPreventLoop(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	env := newTestEnv(t, invalidReport(now), true)
 	_ = env.service.HandleMessage(context.Background(), Inbound{
-		EventID: "b1", MessageID: "m1", ChatID: "oc_x", ChatType: "p2p", Text: "额度", FromBot: true,
+		EventID: "b1", MessageID: "m1", ChatID: "ou_x", ChatType: "p2p", SenderOpenID: "ou_test", Text: "额度", FromBot: true,
 	})
 	if waitSignal(t, env.sender.signal) {
 		t.Fatal("the bot must never answer its own message")
@@ -412,7 +401,7 @@ func TestQuietQueueDropsFullyRecoveredProblem(t *testing.T) {
 	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
 	healthy := Report{GeneratedAt: *env.clock, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", State: StateHealthy, OK: true, ObservedAt: *env.clock, LastSuccessAt: *env.clock}},
+		Accounts: []AccountReport{{Key: "a1", State: StateHealthy, OK: true, ObservedAt: *env.clock, LastSuccessAt: *env.clock, Windows: []Window{accountWindow(25, nil)}}},
 	}}}
 	env.source.report = healthy
 	service.tick(context.Background())
@@ -495,7 +484,7 @@ func TestStartupSummarySentOnceAndNotOnReload(t *testing.T) {
 	}
 }
 
-func TestScheduledSummaryOnlyWhenThereIsATodo(t *testing.T) {
+func TestMorningSummarySendsWithoutTodo(t *testing.T) {
 	env := newTestEnv(t, Report{}, false)
 	// 10:00 UTC is a configured summary time and outside quiet hours.
 	*env.clock = time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
@@ -503,8 +492,8 @@ func TestScheduledSummaryOnlyWhenThereIsATodo(t *testing.T) {
 	env.source.report = Report{GeneratedAt: *env.clock, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "a1", State: StateHealthy, OK: true}}}}}
 	env.source.has = true
 	service.tick(context.Background())
-	if sends, _ := env.sender.counts(); sends != 0 {
-		t.Fatalf("a scheduled summary with no to-do and nothing tight must stay silent, got %d", sends)
+	if sends, _ := env.sender.counts(); sends != 1 {
+		t.Fatalf("a morning summary must send once, got %d", sends)
 	}
 }
 
@@ -545,8 +534,8 @@ func TestScheduledSummaryIgnoresStaleTightSample(t *testing.T) {
 	}}}
 	env.source.has = true
 	service.tick(context.Background())
-	if sends, _ := env.sender.counts(); sends != 0 {
-		t.Fatalf("a stale tight sample must not fire a tight digest, got %d", sends)
+	if sends, _ := env.sender.counts(); sends != 1 {
+		t.Fatalf("a stale sample must still receive the morning fallback, got %d", sends)
 	}
 }
 
@@ -652,21 +641,21 @@ func TestReloadTargetGroupDoesNotReconnectButIdentityDoes(t *testing.T) {
 	}
 	baselineSenders := senders.count()
 
-	// A target-group change applies on the next send without a reconnect.
+	// A recipient change applies on the next send without a reconnect.
 	chatOnly := web
-	chatOnly.ChatID = "oc_new"
+	chatOnly.ChatID = "ou_new"
 	service.Reload(context.Background(), chatOnly, overlay)
 	if starts, stops := sources.counts(); starts != 1 || stops != 0 {
-		t.Fatalf("a target-group change must not reconnect: starts=%d stops=%d", starts, stops)
+		t.Fatalf("a recipient change must not reconnect: starts=%d stops=%d", starts, stops)
 	}
 	if senders.count() != baselineSenders {
-		t.Fatalf("a target-group change must not rebuild the sender: %d -> %d", baselineSenders, senders.count())
+		t.Fatalf("a recipient change must not rebuild the sender: %d -> %d", baselineSenders, senders.count())
 	}
 	if err := service.SendTest(context.Background()); err != nil {
-		t.Fatalf("send test after a target-group change: %v", err)
+		t.Fatalf("send test after a recipient change: %v", err)
 	}
-	if last := sender.lastChatID(); last != "oc_new" {
-		t.Fatalf("the next send must use the new target group, got %q", last)
+	if last := sender.lastChatID(); last != "ou_new" {
+		t.Fatalf("the next send must use the new recipient, got %q", last)
 	}
 
 	// A policy-only change (quiet hours, thresholds) must not reconnect either.
@@ -757,6 +746,7 @@ func mixedReport(now time.Time, states map[string]string) Report {
 		}
 		if account.OK {
 			account.ObservedAt, account.LastSuccessAt = now, now
+			account.Windows = []Window{accountWindow(25, nil)}
 		}
 		reports = append(reports, account)
 	}

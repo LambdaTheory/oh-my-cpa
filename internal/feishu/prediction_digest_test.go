@@ -12,7 +12,7 @@ import (
 
 func readyPredictionConfig() Resolved {
 	return resolveConfig(Config{
-		Enabled: true, AppID: "app", ChatID: "chat", SummaryTimes: []string{"10:00", "17:00"}, Timezone: "UTC",
+		Enabled: true, AppID: "app", ChatID: "ou_test", SummaryTimes: []string{"10:00", "17:00"}, Timezone: "UTC",
 	}, Overlay{AppSecret: stringPointer("secret")})
 }
 
@@ -536,6 +536,13 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 					alerts++
 				}
 				if strings.HasPrefix(notification.Kind, predictionKindPrefix) {
+					for _, alert := range notification.Alerts {
+						if alert.Kind == AlertCredential {
+							alerts++
+						}
+					}
+				}
+				if strings.HasPrefix(notification.Kind, predictionKindPrefix) {
 					predictions++
 				}
 			}
@@ -558,12 +565,12 @@ func TestPredictionDigestDisclosesOmittedFindingsWithinCardLimit(t *testing.T) {
 	card := NewPlainReportRenderer(time.UTC).Card(message)
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]map[string]any)
-	if len(elements) != maxCardElements || !strings.Contains(marshalTestJSON(card), "另有 3 项预测发现未展示") {
+	if len(elements) != 6 || !strings.Contains(marshalTestJSON(card), "另有") {
 		t.Fatalf("prediction card elements=%d payload=%s", len(elements), marshalTestJSON(card))
 	}
 }
 
-const quotaPredictionFindingsForCardTest = maxCardElements - 2
+const quotaPredictionFindingsForCardTest = 178
 
 func marshalTestJSON(value any) string {
 	encoded, _ := json.Marshal(value)

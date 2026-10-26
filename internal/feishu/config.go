@@ -16,9 +16,8 @@ const (
 	// DefaultSummaryTimes are the two daily digests.
 	DefaultSummaryTime1 = "10:00"
 	DefaultSummaryTime2 = "17:00"
-	// DefaultTightRemainingPercent is the account-window remaining share below
-	// which a scheduled digest is sent even with no open item.
-	DefaultTightRemainingPercent = 20.0
+	// DefaultTightRemainingPercent is the fixed inclusive remaining-share trigger.
+	DefaultTightRemainingPercent = 10.0
 	// DefaultChannelUnavailableAfter and DefaultMonitorDownAfter are the
 	// immediate-notify thresholds: an unavailable channel whose earliest
 	// recovery is later than the first, or a channel with no valid data for
@@ -108,7 +107,7 @@ type Resolved struct {
 
 // Ready reports whether the resolved configuration can run the bot.
 func (r Resolved) Ready() bool {
-	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && r.ChatID != ""
+	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && OAUTH_OPEN_ID.MatchString(r.ChatID)
 }
 
 func (r Resolved) ConnectionReady() bool {
@@ -132,7 +131,7 @@ func resolveConfig(web Config, overlay Overlay) Resolved {
 		Location:                resolveLocation(web.Timezone),
 		QuietStart:              clockOr(web.QuietStart, DefaultQuietStart),
 		QuietEnd:                clockOr(web.QuietEnd, DefaultQuietEnd),
-		TightRemainingPercent:   web.TightRemainingPercent,
+		TightRemainingPercent:   DefaultTightRemainingPercent,
 		ChannelUnavailableAfter: web.ChannelUnavailableAfter,
 		MonitorDownAfter:        web.MonitorDownAfter,
 		Source:                  SourceDefaultOff,

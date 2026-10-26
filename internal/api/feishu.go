@@ -98,7 +98,8 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 		return nil, err
 	}
 	api.service = feishu.NewService(feishu.Options{
-		Web: web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
+		ConsoleURL: feishu.ConsoleAddress(h.cfg.PublicURL, h.cfg.BasePath),
+		Web:        web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
 		Logger: h.logger, Now: h.now,
 	})
 	h.buildReauthService(api.service)
@@ -114,6 +115,8 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 				UsedPercent: item.UsedPercent, ProjectedPercentAtReset: item.ProjectedPercentAtReset,
 				ProjectedTokensAtReset: item.ProjectedTokensAtReset, ProjectedCostNanosAtReset: item.ProjectedCostNanosAtReset,
 				ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
+				ExhaustionETAMS: item.ExhaustionETAMS, WindowScope: item.WindowScope,
+				Key: item.AuthIndex, WindowID: item.WindowID, ResetAtMS: item.ResetAtMS,
 			})
 		}
 		return feishu.PredictionDigest{Items: items, Omitted: prediction.Omitted}, nil
@@ -210,7 +213,7 @@ func (f *FeishuAPI) putSettings(writer http.ResponseWriter, request *http.Reques
 			SummaryTimesJSON:        `["10:00","17:00"]`,
 			QuietStart:              "23:00",
 			QuietEnd:                "08:00",
-			TightRemainingPercent:   20,
+			TightRemainingPercent:   10,
 			ChannelUnavailableAfter: 30 * 60 * 1000,
 			MonitorDownAfterMS:      30 * 60 * 1000,
 		}
@@ -359,7 +362,7 @@ func feishuWebConfig(settings repository.FeishuSettings) feishu.Config {
 		Timezone:                settings.Timezone,
 		QuietStart:              settings.QuietStart,
 		QuietEnd:                settings.QuietEnd,
-		TightRemainingPercent:   settings.TightRemainingPercent,
+		TightRemainingPercent:   feishu.DefaultTightRemainingPercent,
 		ChannelUnavailableAfter: time.Duration(settings.ChannelUnavailableAfter) * time.Millisecond,
 		MonitorDownAfter:        time.Duration(settings.MonitorDownAfterMS) * time.Millisecond,
 	}
@@ -370,7 +373,7 @@ func feishuSettingsFrom(settings repository.FeishuSettings, found, hasSecret boo
 		SummaryTimes:          []string{"10:00", "17:00"},
 		QuietStart:            "23:00",
 		QuietEnd:              "08:00",
-		TightRemainingPercent: 20,
+		TightRemainingPercent: 10,
 		ChannelUnavailableMS:  30 * 60 * 1000,
 		MonitorDownMS:         30 * 60 * 1000,
 		HasSecret:             hasSecret,
@@ -388,7 +391,7 @@ func feishuSettingsFrom(settings repository.FeishuSettings, found, hasSecret boo
 	dto.Timezone = settings.Timezone
 	dto.QuietStart = settings.QuietStart
 	dto.QuietEnd = settings.QuietEnd
-	dto.TightRemainingPercent = settings.TightRemainingPercent
+	dto.TightRemainingPercent = feishu.DefaultTightRemainingPercent
 	dto.ChannelUnavailableMS = settings.ChannelUnavailableAfter
 	dto.MonitorDownMS = settings.MonitorDownAfterMS
 	if settings.SummaryTimesJSON != "" {
@@ -463,7 +466,7 @@ func applyFeishuWrite(settings *repository.FeishuSettings, payload feishuSetting
 		if value < 0 || value > 100 {
 			return errors.New("tight_remaining_percent must be between 0 and 100")
 		}
-		settings.TightRemainingPercent = value
+		settings.TightRemainingPercent = feishu.DefaultTightRemainingPercent
 	}
 	if payload.ChannelUnavailableMS != nil {
 		if *payload.ChannelUnavailableMS < 0 {

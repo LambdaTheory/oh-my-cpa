@@ -369,7 +369,7 @@
     "feishu-settings": {
       "status": 200,
       "content_type": "application/json; charset=utf-8",
-      "body": "{\"channel_unavailable_after_ms\":1800000,\"degraded\":false,\"enabled\":false,\"forced_off\":true,\"has_secret\":false,\"monitor_down_after_ms\":1800000,\"quiet_end\":\"08:00\",\"quiet_start\":\"23:00\",\"source\":\"env_disabled\",\"summary_times\":[\"10:00\",\"17:00\"],\"tight_remaining_percent\":20}"
+      "body": "{\"channel_unavailable_after_ms\":1800000,\"degraded\":false,\"enabled\":false,\"forced_off\":true,\"has_secret\":false,\"monitor_down_after_ms\":1800000,\"quiet_end\":\"08:00\",\"quiet_start\":\"23:00\",\"source\":\"env_disabled\",\"summary_times\":[\"10:00\",\"17:00\"],\"tight_remaining_percent\":10}"
     },
     "feishu-status": {
       "status": 200,

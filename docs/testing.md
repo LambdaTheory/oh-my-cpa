@@ -358,6 +358,11 @@ retry and restart deduplication, and disabled/unsupported channel exclusions.
 nonpositive timestamp decoding and a fake-sender service restart flow through the real
 stored report source and SQLite outbox. Existing report-source tests retain the
 stored-only and auth-signal claims. These Go suites are discovered automatically.
+The automatically discovered Feishu attention tests own the inclusive 10% trigger,
+shared forecast/reading identity across restarts, scheduler-order deduplication,
+missing-data decisions and the three-point card bound. The SDK sender test injects
+an HTTP transport and certifies Open ID addressing without network access.
+
 
 Discovery is automatic wherever it can be, so a test cannot be written and then never
 run:

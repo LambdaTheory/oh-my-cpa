@@ -523,22 +523,16 @@ recorded and at least 95 percent of requests carried request-time pricing.
   not a generation: a label edit does not invalidate a reading, and a disable plus a
   quick resume under one in-flight scrape is an accepted race, not a security boundary.
   Ollama is the deliberate exception to the CPA data sources.
-- **Feishu Notification**: One message the Feishu bot sends to the operator's group
-  from OMC's stored quota data, after denoising. It is not a language model and holds
-  no Agent session. A problem is announced once per episode - a credential is invalid,
-  every enabled account of a channel is unusable with an earliest recovery beyond the
-  threshold, or a channel has produced no valid data for longer than the threshold -
-  and recovery is never nagged. Monitoring downtime starts at the newest real numeric
-  reading, or the persisted first applicable observation before any success; missing
-  and nonpositive timestamps never prove elapsed downtime. Disabled credentials and
-  credentials without quota-reader evidence do not drive channel outages, while
-  independently evidenced authentication failures retain their episode policy.
-  Same-cycle monitoring alerts share one card. Immediate alerts are held during quiet hours and
-  merged at the quiet end, dropping any whose problem has recovered; a scheduled
-  digest is sent only when there are open items or a channel is tight. Queries are
-  read-only and never trigger a refresh. The app secret is encrypted at rest, and the
-  environment can force the module off or override its connection, with the console
-  showing the effective source.
+- **Feishu Notification**: A stored-only decision card for one configured operator.
+  It states whether quota allocation needs attention, with at most three advice
+  points and one console link. Low/exhausted credential windows and fresh abnormal
+  readings open denoised episodes. The earliest daily summary slot always supplies
+  a morning fallback, including healthy or missing-data results; later ordinary
+  slots remain silent. Private queries accept only the configured operator Open ID;
+  the separate OAuth code group retains its authorization. Delivery is persisted
+  and retried, and recovery is not nagged. The same credential/window/reset identity is notified only once, including forecast-to-low-to-exhausted
+  transitions. See the personal card contract in
+  `docs/feishu-notifications.md`.
 
 - **Unpublished Quota Reading**: A quota observation a provider answered without
   publishing any window — the endpoint replied successfully, and the document

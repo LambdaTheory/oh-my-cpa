@@ -1,6 +1,6 @@
 // Package feishu implements the Oh My CPA Feishu (Lark) bot: outbound
-// notifications to one configured group plus a long-connection listener for
-// group @-mentions and private-chat help, status, exception and channel queries.
+// notifications to one configured person plus a long-connection listener for
+// that person’s private-chat help, status, exception and channel queries.
 //
 // Scope of the first batch (lane C): reuse the bot long connection, answer
 // read-only queries from OMC's newest quota data, and denoise notifications so a
@@ -15,12 +15,10 @@
 // card interactions land on a process at random, so a message could be answered
 // by an instance that does not hold the newest report.
 //
-// Authorization boundary: every member of a chat the bot has joined may run the
-// read-only queries, and the bot answers with the same numbers in every chat.
-// Only the configured target group receives unprompted alerts. A group message
-// still needs an @-mention; the mention is decided from the event's Mentions
-// list, never by matching message text. The card callback's Action.Value is
-// untrusted input parsed for its action name and nothing else.
+// Authorization boundary: quota notifications and read-only queries address the
+// single configured operator Open ID. Group queries and other senders are ignored.
+// The dedicated OAuth code group keeps its separate existing authorization path.
+// Cards contain only display content and one console link.
 //
 // SECURITY: the app secret is encrypted at rest and never appears in the
 // configuration struct, in DTOs, in logs or in error strings. The bot never

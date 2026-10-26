@@ -30,6 +30,8 @@ const (
 // Alert is one immediate notification unit. It is secret-free: it carries the
 // opaque credential key and the display alias, never a cookie or token.
 type Alert struct {
+	Scope      string
+	ObservedAt time.Time
 	Kind       string
 	Severity   string
 	Provider   string
@@ -70,6 +72,8 @@ type ChannelTrack struct {
 
 // PolicyConfig is the policy's immutable thresholds.
 type PolicyConfig struct {
+	EnableAttention         bool
+	TightRemainingPercent   float64
 	ChannelUnavailableAfter time.Duration
 	MonitorDownAfter        time.Duration
 	// Location only affects the renderer; it is threaded for fact formatting.
@@ -117,6 +121,23 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	}
 
 	desired, alertFor := policySignals(info, in.Now)
+	if cfg.EnableAttention {
+		for _, alert := range attentionSignals(in.Report, cfg.TightRemainingPercent, in.Now) {
+			if alert.Kind == AlertReadingMissing && !hasFreshAttempt(in.Report, alert, in.Now) {
+				continue
+			}
+			id := alertItemID(alert)
+			desired[id] = PendingItem{ID: id, Kind: alert.Kind, Provider: alert.Provider, Key: alert.Key, Alias: alert.Alias, Action: alert.Advice}
+			copy := alert
+			alertFor[id] = &copy
+			if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted {
+				// The credential window already explains the outage and its action.
+				channelID := ItemID(AlertChannelUnavailable, alert.Provider, "", "")
+				delete(alertFor, channelID)
+				delete(desired, channelID)
+			}
+		}
+	}
 
 	var (
 		opened   []PendingItem
@@ -150,6 +171,23 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		item.Since = in.Now
 		item.LastSeen = in.Now
 		item.Status = PendingOpen
+		if sig.Kind == AlertMonitorDown {
+			for _, previous := range in.Prev {
+				if previous.Provider == sig.Provider && previous.Kind == AlertReadingMissing && previous.Status == PendingOpen && !previous.NotifiedAt.IsZero() {
+					item.NotifiedAt = previous.NotifiedAt
+					break
+				}
+			}
+			if !item.NotifiedAt.IsZero() {
+				items = append(items, item)
+				continue
+			}
+		}
+		if ok && !prev.NotifiedAt.IsZero() && (sig.Kind == AlertQuotaLow || sig.Kind == AlertQuotaExhausted) {
+			item.NotifiedAt = prev.NotifiedAt
+			items = append(items, item)
+			continue
+		}
 		if alertFor[id] != nil {
 			item.NotifiedAt = in.Now
 		}
@@ -167,10 +205,13 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			items = append(items, prev)
 			continue
 		}
-		if info.resolvedByEvidence(prev) {
+		if info.resolvedByEvidence(prev) || cfg.EnableAttention && attentionRecovered(prev, in.Report, cfg.TightRemainingPercent, in.Now) {
 			item := prev
 			item.Status = PendingResolved
 			item.ResolvedAt = in.Now
+			if item.Kind == AlertQuotaLow || item.Kind == AlertQuotaExhausted {
+				item.ResolvedAt = quotaEpisodeEnd(item, in.Report)
+			}
 			items = append(items, item)
 			resolved = append(resolved, item)
 			continue
@@ -192,6 +233,21 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		}
 	}
 	return res
+}
+
+// Untimed or long-stale missing data retains the established monitor-down grace.
+func hasFreshAttempt(rep Report, alert Alert, now time.Time) bool {
+	for _, provider := range rep.Providers {
+		if provider.Provider != alert.Provider {
+			continue
+		}
+		for _, account := range provider.Accounts {
+			if account.Key == alert.Key {
+				return observationFresh(account, now, defaultFreshWindow)
+			}
+		}
+	}
+	return false
 }
 
 // policySignals builds the desired pending items from the report, plus the alert
