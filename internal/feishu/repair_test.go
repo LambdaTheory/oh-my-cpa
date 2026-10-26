@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -131,6 +132,204 @@ func TestLegacyGroupRecipientShowsActionableDegradation(t *testing.T) {
 	cfg := resolveConfig(web, overlay)
 	if !cfg.Degraded || cfg.Ready() || !strings.Contains(cfg.Reason, "Open ID") || !strings.Contains(cfg.Reason, "ou_") {
 		t.Fatalf("config=%+v", cfg)
+	}
+}
+
+func TestMorningRecurrencePredictionFirst(t *testing.T) {
+	for _, hasForecast := range []bool{false, true} {
+		for _, hasReset := range []bool{false, true} {
+			t.Run(fmt.Sprintf("forecast=%v/reset=%v", hasForecast, hasReset), func(t *testing.T) {
+				now := mustTime("2026-10-26T12:00:00Z")
+				morning := mustTime("2026-10-27T10:00:00Z")
+				boundary := morning.Add(10 * time.Minute)
+				env := newTestEnv(t, Report{}, true)
+				setReading := func(at time.Time, used float64, reset time.Time) {
+					*env.clock = at
+					w := accountWindow(used, nil)
+					if hasReset {
+						w.ResetAt = &reset
+					}
+					env.source.report = Report{GeneratedAt: at, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "synthetic", State: StateHealthy, OK: true, ObservedAt: at, Windows: []Window{w}}}}}}
+				}
+				setReading(now, 95, now.Add(time.Hour))
+				env.service.tick(context.Background())
+				setReading(now.Add(time.Minute), 20, now.Add(time.Hour))
+				env.service.tick(context.Background())
+				setReading(morning, 95, boundary)
+				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
+					if hasForecast {
+						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "7d", Verdict: "will_exhaust"}}}, nil
+					}
+					return PredictionDigest{}, nil
+				})
+				job.Activate()
+				job.tick(context.Background())
+				env.service.tick(context.Background())
+				if sends, _ := env.sender.counts(); sends != 2 {
+					t.Fatalf("previous episode and morning recurrence sent %d cards", sends)
+				}
+				state, err := env.store.Load(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				identity := ItemID(AlertQuotaLow, "codex", "synthetic", "7d")
+				item, exists := state.pendingByID(identity)
+				if !exists || item.Status != PendingOpen || !item.ResolvedAt.IsZero() || !item.Since.Equal(morning) || !item.NotifiedAt.Equal(morning) || hasReset && !item.CycleResetAt.Equal(boundary) {
+					t.Fatalf("morning recurrence not acknowledged: %+v", item)
+				}
+				*env.clock = morning.Add(30 * time.Second)
+				account := env.source.report.Providers[0].Accounts[0]
+				account.Key = "later-risk"
+				account.ObservedAt = *env.clock
+				env.source.report.Providers[0].Accounts = append(env.source.report.Providers[0].Accounts, account)
+				env.service.tick(context.Background())
+				if sends, _ := env.sender.counts(); sends != 3 {
+					t.Fatalf("unseen risk later in the summary minute suppressed: %d", sends)
+				}
+				if hasReset {
+					setReading(morning.Add(time.Minute), 95, boundary.Add(time.Minute))
+					env.service.tick(context.Background())
+					if sends, _ := env.sender.counts(); sends != 3 {
+						t.Fatalf("revised future reset repeated risk: %d", sends)
+					}
+					setReading(boundary, 95, boundary.Add(24*time.Hour))
+					env.service.tick(context.Background())
+					if sends, _ := env.sender.counts(); sends != 4 {
+						t.Fatalf("observed new cycle suppressed: %d", sends)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestForecastLearnsLaterExactCycle(t *testing.T) {
+	for _, accuracy := range []string{"", "derived"} {
+		t.Run(accuracy, func(t *testing.T) {
+			now := mustTime("2026-10-26T12:00:00Z")
+			boundary := now.Add(time.Hour)
+			reset := boundary.UnixMilli()
+			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ResetAtMS: &reset, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+			state := EmptyState()
+			job := &PredictionJob{service: NewService(Options{})}
+			cfg := readyPredictionConfig()
+			if !job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}}) {
+				t.Fatal("first risk absent")
+			}
+			item.ResetAccuracy = "exact"
+			item.ObservedAtMS = now.Add(time.Minute).UnixMilli()
+			if job.queueFindings(state, cfg, now.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}}) {
+				t.Fatal("learning boundary repeated current risk")
+			}
+			if !state.PendingItems[0].CycleResetAt.Equal(boundary) || !state.PendingItems[0].Since.Equal(now) || !state.PendingItems[0].NotifiedAt.Equal(now) {
+				t.Fatalf("first exact boundary not learned in existing episode: %+v", state.PendingItems)
+			}
+			nextReset := boundary.Add(7 * 24 * time.Hour).UnixMilli()
+			item.ResetAtMS = &nextReset
+			if job.queueFindings(state, cfg, boundary.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}}) {
+				t.Fatal("cached pre-boundary observation opened a cycle")
+			}
+			item.ObservedAtMS = boundary.Add(time.Minute).UnixMilli()
+			if !job.queueFindings(state, cfg, boundary.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}}) {
+				t.Fatalf("observed new exact cycle suppressed: %+v", state.PendingItems)
+			}
+		})
+	}
+}
+
+func TestLegacyQuotaRecipientPreservesOAuthTransport(t *testing.T) {
+	for _, mode := range []string{"enabled", "forced-off", "missing-app-id", "missing-app-secret"} {
+		t.Run(mode, func(t *testing.T) {
+			web, overlay := readyConfig()
+			web.ChatID, overlay.OAuthChatID = "oc_synthetic", "oc_oauth"
+			switch mode {
+			case "forced-off":
+				overlay.ForceDisabled = true
+			case "missing-app-id":
+				web.AppID = ""
+			case "missing-app-secret":
+				overlay.AppSecret = nil
+			}
+			sender := newFakeSender()
+			factory := newCountingSourceFactory()
+			bot := NewService(Options{Web: web, Overlay: overlay, SenderFactory: func(Resolved) Sender { return sender }, SourceFactory: factory.New})
+			accepted := false
+			bot.ConfigureOAuth("oc_oauth", "ou_contact", func(context.Context, string, string) error { accepted = true; return nil })
+			wantReady := mode == "enabled"
+			cfg := bot.resolvedNow()
+			if cfg.Ready() || cfg.ConnectionReady() != wantReady || bot.OAuthReady() != wantReady {
+				t.Fatalf("quota/OAuth readiness=%v/%v/%v, want false/%v/%v", cfg.Ready(), cfg.ConnectionReady(), bot.OAuthReady(), wantReady, wantReady)
+			}
+			if wantReady {
+				if !cfg.Degraded || !strings.Contains(cfg.Reason, "Open ID") {
+					t.Fatalf("quota degradation missing: %q", cfg.Reason)
+				}
+				if err := bot.Start(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				defer bot.Stop()
+				waitEvent(t, "OAuth connection", factory.signal, func() bool { starts, _ := factory.counts(); return starts == 1 })
+			}
+			if err := bot.HandleMessage(context.Background(), Inbound{MessageID: "synthetic-msg", ChatID: "oc_oauth", ChatType: "group", SenderOpenID: "ou_contact", MessageType: "text", Text: "123456"}); err != nil {
+				t.Fatal(err)
+			}
+			if accepted != wantReady {
+				t.Fatalf("OAuth code accepted=%v, want %v", accepted, wantReady)
+			}
+		})
+	}
+}
+
+type deliveryFailureStore struct {
+	Store
+	saves    int
+	loads    int
+	failSave int
+	failLoad int
+	err      error
+}
+
+func (store *deliveryFailureStore) Save(ctx context.Context, state *State) error {
+	store.saves++
+	if store.saves == store.failSave {
+		return store.err
+	}
+	return store.Store.Save(ctx, state)
+}
+
+func (store *deliveryFailureStore) Load(ctx context.Context) (*State, error) {
+	store.loads++
+	if store.loads == store.failLoad {
+		return nil, store.err
+	}
+	return store.Store.Load(ctx)
+}
+
+func TestSendTestPropagatesDeliveryPersistenceFailure(t *testing.T) {
+	for _, phase := range []string{"load-outbox", "load-latest", "save-attempt"} {
+		t.Run(phase, func(t *testing.T) {
+			env := newTestEnv(t, Report{}, true)
+			wantErr := errors.New("synthetic delivery persistence failure")
+			store := &deliveryFailureStore{Store: env.store, err: wantErr}
+			switch phase {
+			case "load-outbox":
+				store.failLoad = 2
+			case "load-latest":
+				store.failLoad = 3
+			case "save-attempt":
+				store.failSave = 2
+			}
+			env.service.store = store
+			env.sender.failSends = 2
+			delivery, err := env.service.SendTest(context.Background())
+			if !errors.Is(err, wantErr) || delivery.Sent || delivery.QueuedForRetry || delivery.Attempts != 0 || !delivery.NextAttemptAt.IsZero() {
+				t.Fatalf("unpersisted attempt reported as delivery=%+v error=%v", delivery, err)
+			}
+			state, err := store.Load(context.Background())
+			if err != nil || len(state.Outbox) != 1 || state.Outbox[0].Attempts != 0 || !state.Outbox[0].NextAttemptAt.IsZero() {
+				t.Fatalf("initial insert must survive, state=%+v error=%v", state, err)
+			}
+		})
 	}
 }
 

@@ -88,7 +88,9 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	service.deliverOutboxNotification(ctx, resolved, notification.ID)
+	if err := service.deliverOutboxNotification(ctx, resolved, notification.ID); err != nil {
+		return false, err
+	}
 
 	service.lockStateTransition()
 	latest, loadErr := service.store.Load(ctx)
@@ -186,7 +188,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 							continue
 						}
 						notification.Alerts = append(notification.Alerts, alert)
-						rememberReportedAlerts(state, []Alert{alert}, now)
+						rememberReportedAlerts(state, []Alert{alert}, report, now)
 					}
 				}
 			}
@@ -257,6 +259,9 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 			for index := range state.PendingItems {
 				if state.PendingItems[index].ID == identity {
 					state.PendingItems[index].LastSeen = now
+					if state.PendingItems[index].CycleResetAt.IsZero() {
+						state.PendingItems[index].CycleResetAt = reset
+					}
 				}
 			}
 			if morningMinute(resolved, now) {

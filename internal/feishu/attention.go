@@ -315,15 +315,35 @@ func compactText(value string, limit int) string {
 
 // Report-level absence is presentation, not a credential episode that could
 // remain open forever without a provider identity to supply recovery evidence.
-func rememberReportedAlerts(state *State, alerts []Alert, now time.Time) {
+func rememberReportedAlerts(state *State, alerts []Alert, report Report, now time.Time) {
 	for _, alert := range alerts {
 		if alert.Kind == statusHealthy || alert.Provider == "" {
 			continue
 		}
 		identity := alertItemID(alert)
-		if _, exists := state.pendingByID(identity); exists {
-			continue
+		item := PendingItem{ID: identity, Kind: alert.Kind, Provider: alert.Provider, Key: alert.Key, Alias: alert.Alias, Action: alert.Advice, Status: PendingOpen, Since: now, LastSeen: now, NotifiedAt: now}
+		reset, observed := quotaCycleEvidence(item, report)
+		item.CycleResetAt = reset
+		if previous, exists := state.pendingByID(identity); exists {
+			isNewCycle := hasNewQuotaCycle(previous, reset, observed)
+			if previous.Status == PendingOpen && !isNewCycle {
+				item.Since = previous.Since
+				if !previous.NotifiedAt.IsZero() {
+					item.NotifiedAt = previous.NotifiedAt
+				}
+			}
+			// A summary acknowledges only its reported episode; revised future
+			// deadlines must not replace an already observed cycle boundary.
+			if !isNewCycle && !previous.CycleResetAt.IsZero() {
+				item.CycleResetAt = previous.CycleResetAt
+			}
+			for index := range state.PendingItems {
+				if state.PendingItems[index].ID == identity {
+					state.PendingItems[index] = item
+				}
+			}
+		} else {
+			state.PendingItems = append(state.PendingItems, item)
 		}
-		state.PendingItems = append(state.PendingItems, PendingItem{ID: identity, Kind: alert.Kind, Provider: alert.Provider, Key: alert.Key, Alias: alert.Alias, Action: alert.Advice, Status: PendingOpen, Since: now, LastSeen: now, NotifiedAt: now})
 	}
 }

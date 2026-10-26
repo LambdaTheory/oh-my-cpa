@@ -95,8 +95,8 @@ type Resolved struct {
 	MonitorDownAfter        time.Duration
 	// Source is one of the Source* constants.
 	Source string
-	// Degraded reports that the configuration is unusable. The module then stays
-	// loaded but disabled: it must never fail process startup.
+	// Degraded reports an unusable quota configuration. A recipient problem
+	// leaves the independently configured OAuth transport available.
 	Degraded bool
 	// Reason names the first validation problem, empty when the configuration is
 	// usable.
@@ -111,7 +111,7 @@ func (r Resolved) Ready() bool {
 }
 
 func (r Resolved) ConnectionReady() bool {
-	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && (r.ChatID != "" || r.OAuthChatID != "")
+	return r.Enabled && r.AppID != "" && r.AppSecret != "" && (OAUTH_OPEN_ID.MatchString(r.ChatID) || r.OAuthChatID != "")
 }
 
 // clock is a wall-clock time of day in minutes since midnight.
@@ -119,8 +119,9 @@ type clock int
 
 // resolveConfig combines the web settings and the environment overlay and
 // validates the result. It never returns an error: an unusable configuration
-// yields a degraded, disabled Resolved so the caller can log and continue rather
-// than fail startup. The environment force-off is applied first and wins.
+// yields a degraded Resolved so the caller can log and continue rather than fail
+// startup. Shared transport failures disable both uses; quota recipient failures
+// leave OAuth available. The environment force-off is applied first and wins.
 func resolveConfig(web Config, overlay Overlay) Resolved {
 	out := Resolved{
 		OAuthChatID:             overlay.OAuthChatID,
@@ -178,6 +179,11 @@ func resolveConfig(web Config, overlay Overlay) Resolved {
 		out.Degraded = true
 		out.Enabled = false
 		out.Reason = reason
+		return out
+	}
+	if out.Enabled && out.ChatID != "" && !OAUTH_OPEN_ID.MatchString(out.ChatID) {
+		out.Degraded = true
+		out.Reason = "通知接收人必须使用 Open ID（ou_ 开头）；群 chat_id 已不再支持，请在飞书设置中更换"
 	}
 	return out
 }
@@ -198,9 +204,6 @@ func validateResolved(r Resolved) string {
 	}
 	if r.ChatID == "" && r.OAuthChatID == "" {
 		return "缺少接收人的 Open ID（ou_ 开头）"
-	}
-	if r.ChatID != "" && !strings.HasPrefix(r.ChatID, "ou_") {
-		return "通知接收人必须使用 Open ID（ou_ 开头）；群 chat_id 已不再支持，请在飞书设置中更换"
 	}
 	return ""
 }

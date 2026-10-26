@@ -145,6 +145,41 @@ func TestFeishuTestRouteReportsPersistedRetry(t *testing.T) {
 	}
 }
 
+type failedFeishuAttemptStore struct {
+	feishu.Store
+	saves int
+}
+
+func (store *failedFeishuAttemptStore) Save(ctx context.Context, state *feishu.State) error {
+	store.saves++
+	if store.saves == 2 {
+		return errors.New("synthetic attempt save failure")
+	}
+	return store.Store.Save(ctx, state)
+}
+
+func TestFeishuTestRouteReportsAttemptPersistenceFailure(t *testing.T) {
+	api, repo, _, _ := newFeishuAPITest(t)
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	secret := "synthetic-secret"
+	sender := &apiPredictionSender{err: errors.New("synthetic transport failure")}
+	store := &failedFeishuAttemptStore{Store: feishuStore{repo: repo}}
+	api.service = feishu.NewService(feishu.Options{Web: feishu.Config{Enabled: true, AppID: "synthetic", ChatID: "ou_synthetic"}, Overlay: feishu.Overlay{AppSecret: &secret}, Store: store, Now: func() time.Time { return now }, SenderFactory: func(feishu.Resolved) feishu.Sender { return sender }})
+	response := httptest.NewRecorder()
+	api.postTest(response, httptest.NewRequest(http.MethodPost, "/feishu/test", nil))
+	var result feishuTestResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != 200 || result.Sent || result.Error != "synthetic attempt save failure" || result.Reason != "" || result.Attempts != 0 || result.NextAttemptAt != nil {
+		t.Fatalf("response=%s", response.Body.String())
+	}
+	state, err := store.Load(context.Background())
+	if err != nil || len(state.Outbox) != 1 || state.Outbox[0].Attempts != 0 || !state.Outbox[0].NextAttemptAt.IsZero() {
+		t.Fatalf("initial notification not preserved: state=%+v error=%v", state, err)
+	}
+}
+
 func TestFeishuWindowProvenanceAndCycleRoundTrip(t *testing.T) {
 	_, repo, _, _ := newFeishuAPITest(t)
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)

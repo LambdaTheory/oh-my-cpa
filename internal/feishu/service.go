@@ -824,7 +824,7 @@ func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolve
 	s.logger.InfoContext(ctx, "feishu startup summary queued", "open_items", len(open), "tight_channels", len(tight))
 	notification := summaryNotification(open, tight, now)
 	notification.Alerts = reportDecisionAlerts(rep, has, now)
-	rememberReportedAlerts(state, notification.Alerts, now)
+	rememberReportedAlerts(state, notification.Alerts, rep, now)
 	state.queueNotification(notification)
 }
 
@@ -851,28 +851,30 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 	notification := summaryNotification(open, tight, now)
 	notification.Kind = KindMorning
 	notification.Alerts = reportDecisionAlerts(rep, has, now)
-	rememberReportedAlerts(state, notification.Alerts, now)
+	rememberReportedAlerts(state, notification.Alerts, rep, now)
 	state.queueNotification(notification)
 }
 
 func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
-	s.deliverOutboxMatching(ctx, resolved, "")
+	if err := s.deliverOutboxMatching(ctx, resolved, ""); err != nil {
+		s.logger.WarnContext(ctx, "feishu outbox delivery failed", "error", err)
+	}
 }
 
 // deliverOutboxNotification delivers one persisted row without flushing other
 // pending notifications. A manual console action therefore sends exactly the
 // requested prediction card and leaves scheduled or retry work to the service loop.
-func (s *Service) deliverOutboxNotification(ctx context.Context, resolved Resolved, notificationID string) {
+func (s *Service) deliverOutboxNotification(ctx context.Context, resolved Resolved, notificationID string) error {
 	if notificationID == "" {
-		return
+		return errors.New("feishu notification ID is missing")
 	}
-	s.deliverOutboxMatching(ctx, resolved, notificationID)
+	return s.deliverOutboxMatching(ctx, resolved, notificationID)
 }
 
-func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, notificationID string) {
+func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, notificationID string) error {
 	dispatcher := s.currentDispatcher()
 	if dispatcher == nil || resolved.ChatID == "" {
-		return
+		return errors.New("feishu delivery is not configured")
 	}
 	// Only delivery itself is serialized. Report and prediction sources are read
 	// before this point, so a slow Feishu request cannot block either scheduler.
@@ -883,7 +885,7 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	s.unlockStateTransition()
 	if err != nil {
 		s.setLastError(err)
-		return
+		return err
 	}
 	due := state.Outbox
 	if notificationID == "" && withinQuiet(resolved, s.now()) {
@@ -909,7 +911,7 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	latest, err := s.store.Load(ctx)
 	if err != nil {
 		s.setLastError(err)
-		return
+		return err
 	}
 	byID := make(map[string]Notification, len(delivered))
 	for _, notification := range delivered {
@@ -925,8 +927,9 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	latest.UpdatedAt = now
 	if err := s.store.Save(ctx, latest); err != nil {
 		s.setLastError(err)
-		s.logger.WarnContext(ctx, "feishu outbox save failed", "error", err)
+		return err
 	}
+	return nil
 }
 
 // Status is the read-only state the console shows.
@@ -1012,7 +1015,9 @@ func (s *Service) SendTest(ctx context.Context) (TestDelivery, error) {
 	if err != nil {
 		return TestDelivery{}, err
 	}
-	s.deliverOutboxNotification(ctx, resolved, notification.ID)
+	if err := s.deliverOutboxNotification(ctx, resolved, notification.ID); err != nil {
+		return TestDelivery{}, err
+	}
 	s.lockStateTransition()
 	defer s.unlockStateTransition()
 	state, err = s.store.Load(ctx)
