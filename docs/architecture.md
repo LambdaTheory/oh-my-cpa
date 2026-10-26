@@ -3721,11 +3721,24 @@ the renderer.
 
 `internal/api/management_dashboard_predictions.go` exposes the same stored computation to
 the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler
-uses the operator projection (credential labels and auth indexes are retained), groups rows
+uses the complete operator projection (credential labels and auth indexes are retained), groups rows
 by provider and measures the actual computation duration. It does not refresh quota or call
 CPA. `web/src/components/dashboard/QuotaPrediction.tsx` renders that response as a
 reorderable dashboard panel, refreshes it every five minutes only while the page is visible,
 and keeps explicit empty, unknown and stale states.
+The dashboard DTO adds only `window_start_ms`, `remaining_percent` and
+`uniform_projected_percent_at_reset`, computed alongside the same window prediction
+using its observation time and period. The operations item's internal accounting field
+is excluded from JSON and capability schema generation, preserving the existing
+`quota_prediction` contract and shared facts for console, Agent and MCP. Missing or
+unreadable snapshots produce an unknown placeholder window for a recognized provider
+rather than removing the credential. No upstream read or database write is introduced.
+The dashboard reads the full stored roster before grouping so capability payload limits
+cannot hide an entire provider; Agent/MCP keeps its 100-row and 32-KiB limits.
+The dashboard folds each provider with native details/summary controls. A pure view
+function derives reset sufficiency and 24-hour urgency, with unknown/omitted evidence
+preventing a healthy summary. A failed dashboard refetch preserves details but changes
+its summaries and suggestions to require checking data. Suggestions remain local copy.
 
 `internal/feishu/prediction_digest.go` is the scheduled and operator-triggered prediction
 component. At configured summary minutes the Feishu loop evaluates it before the legacy

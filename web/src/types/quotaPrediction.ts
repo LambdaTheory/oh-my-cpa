@@ -27,7 +27,13 @@ export interface QuotaPredictionItem {
 
 export interface QuotaPredictionProvider {
   provider: string;
-  items: QuotaPredictionItem[];
+  items: DashboardPredictionItem[];
+}
+
+export interface DashboardPredictionItem extends QuotaPredictionItem {
+  window_start_ms?: number | null;
+  remaining_percent?: number | null;
+  uniform_projected_percent_at_reset?: number | null;
 }
 
 export interface DashboardPredictionsResponse {

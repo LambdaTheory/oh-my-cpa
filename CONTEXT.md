@@ -397,6 +397,23 @@ Reset-time token and cost values are projections from OMC-recorded current-cycle
 not capacity estimates. They exist only when at least five percent is used, traffic was
 recorded and at least 95 percent of requests carried request-time pricing.
 
+The dashboard shows providers collapsed by default. Each provider reports sufficiency
+until the next reset and urgency over the next 24 hours; the latter determines whether
+action is needed today. Any known shortage wins over unknown rows, and an unknown or
+omitted row prevents an all-clear. These summaries describe the included windows, not
+interchangeable provider capacity. Every expanded window carries a manual suggestion
+or an explicit no-action reading. Suggestions never change credentials or routing.
+
+Console window accounting uses the credential's own reset minus its reported period
+for the start, and 100 minus its valid used share for the remaining percentage. Its
+separate full-window reading is labelled **uniform-rate estimate**: used percentage
+divided by elapsed time at observation, multiplied by the window length. It is withheld
+for expired, stale, failed, incomplete or reset-crossing readings and until at least
+`max(30 minutes, 5% of the cycle)` has elapsed. This arithmetic does not replace the
+existing fitted forecast. Credentials with no stored snapshot, unreadable windows or
+no published window remain visible as unknown; missing readings are never zero.
+The console-only accounting fields do not extend the `quota_prediction` capability.
+
 - **Range Preset**: A relative window — Live (last 15m), 1h, 6h, 24h, 7d, 30d,
   90d, and on the dashboard only, All time. It slides with the current time, so its totals move on every poll even
   when no request arrived: the left edge keeps dropping old events. That is why

@@ -40,28 +40,29 @@ type QuotaPredictionInput struct {
 }
 
 type QuotaPredictionItem struct {
-	CredentialLabel           string   `json:"credential_label"`
-	Provider                  string   `json:"provider"`
-	WindowKind                string   `json:"window_kind"`
-	WindowID                  string   `json:"window_id"`
-	WindowScope               string   `json:"window_scope"`
-	WindowModel               string   `json:"window_model,omitempty"`
-	AuthIndex                 string   `json:"auth_index,omitempty"`
-	UsedPercent               *float64 `json:"used_percent"`
-	ResetAtMS                 *int64   `json:"reset_at_ms"`
-	ObservedAtMS              int64    `json:"observed_at_ms"`
-	DataAgeSeconds            *int64   `json:"data_age_seconds"`
-	BurnRatePerHour           *float64 `json:"burn_rate_per_hour"`
-	ProjectedPercentAtReset   *float64 `json:"projected_percent_at_reset"`
-	ProjectedTokensAtReset    *int64   `json:"projected_tokens_at_reset"`
-	ProjectedCostNanosAtReset *int64   `json:"projected_cost_nanos_at_reset"`
-	ExhaustionETAMS           *int64   `json:"exhaustion_eta_ms"`
-	Verdict                   string   `json:"verdict"`
-	Evidence                  string   `json:"evidence"`
-	Reasons                   []string `json:"reasons"`
-	SampleCount               int      `json:"sample_count"`
-	CoverageSeconds           *int64   `json:"coverage_seconds"`
-	MaxGapSeconds             *int64   `json:"max_gap_seconds"`
+	Accounting                quota.PredictionAccounting `json:"-" jsonschema:"-"`
+	CredentialLabel           string                     `json:"credential_label"`
+	Provider                  string                     `json:"provider"`
+	WindowKind                string                     `json:"window_kind"`
+	WindowID                  string                     `json:"window_id"`
+	WindowScope               string                     `json:"window_scope"`
+	WindowModel               string                     `json:"window_model,omitempty"`
+	AuthIndex                 string                     `json:"auth_index,omitempty"`
+	UsedPercent               *float64                   `json:"used_percent"`
+	ResetAtMS                 *int64                     `json:"reset_at_ms"`
+	ObservedAtMS              int64                      `json:"observed_at_ms"`
+	DataAgeSeconds            *int64                     `json:"data_age_seconds"`
+	BurnRatePerHour           *float64                   `json:"burn_rate_per_hour"`
+	ProjectedPercentAtReset   *float64                   `json:"projected_percent_at_reset"`
+	ProjectedTokensAtReset    *int64                     `json:"projected_tokens_at_reset"`
+	ProjectedCostNanosAtReset *int64                     `json:"projected_cost_nanos_at_reset"`
+	ExhaustionETAMS           *int64                     `json:"exhaustion_eta_ms"`
+	Verdict                   string                     `json:"verdict"`
+	Evidence                  string                     `json:"evidence"`
+	Reasons                   []string                   `json:"reasons"`
+	SampleCount               int                        `json:"sample_count"`
+	CoverageSeconds           *int64                     `json:"coverage_seconds"`
+	MaxGapSeconds             *int64                     `json:"max_gap_seconds"`
 }
 
 type QuotaPredictionResult struct {
@@ -75,6 +76,16 @@ func (s *Service) registerQuotaPrediction(registry *capability.Registry) error {
 }
 
 func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInput) (QuotaPredictionResult, error) {
+	return s.predictQuotas(ctx, input, true)
+}
+
+// DashboardQuotaPrediction retains the complete stored roster. Capability payload
+// limits must not hide a provider's shortage from the console summary.
+func (s *Service) DashboardQuotaPrediction(ctx context.Context) (QuotaPredictionResult, error) {
+	return s.predictQuotas(ctx, QuotaPredictionInput{}, false)
+}
+
+func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput, shouldBound bool) (QuotaPredictionResult, error) {
 	if input.Provider != "" && !quotaObservationToken.MatchString(input.Provider) {
 		return QuotaPredictionResult{}, invalidParameters{detail: "provider must be a lowercase identifier"}
 	}
@@ -166,7 +177,7 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 		if err := boundQuotaPredictionFindings(&result); err != nil {
 			return QuotaPredictionResult{}, err
 		}
-	} else {
+	} else if shouldBound {
 		if len(result.Items) > limit {
 			result.Omitted += len(result.Items) - limit
 			result.Items = result.Items[:limit]
@@ -203,16 +214,24 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 	result := make([]Quota, 0, len(metadata))
 	for _, entry := range metadata {
 		snapshot, ok := snapshots[entry.AuthIndex]
-		if !ok {
-			continue
-		}
-		var windows []quota.QuotaWindow
-		if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err != nil {
-			continue
-		}
 		provider := strings.TrimSpace(snapshot.Provider)
 		if provider == "" {
 			provider = quota.DetectProvider("", entry.Driver)
+		}
+		if provider == "" {
+			continue
+		}
+		var windows []quota.QuotaWindow
+		if ok {
+			if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err != nil {
+				snapshot.Status = "error"
+				windows = nil
+			}
+		}
+		// An unread or empty credential is part of the roster, with an unknown
+		// window rather than a fabricated zero balance or a silently omitted row.
+		if len(windows) == 0 {
+			windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
 		}
 		for index := range windows {
 			window := &windows[index]
@@ -349,6 +368,7 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 	}
 	predicted := quota.PredictWindow(predictionInput)
 	return QuotaPredictionItem{
+		Accounting:      predicted.Accounting,
 		CredentialLabel: reading.Name, Provider: reading.Provider, WindowKind: reportedKind, AuthIndex: reading.AuthIndex,
 		WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
 		UsedPercent: predicted.UsedPercent, ResetAtMS: predicted.ResetAtMS, ObservedAtMS: predicted.ObservedAtMS,

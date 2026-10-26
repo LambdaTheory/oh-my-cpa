@@ -52,6 +52,13 @@ func TestQuotaPredictionMasksReadOnlyIdentityAndBoundsRows(t *testing.T) {
 	if len(encoded) > quotaPredictionByteLimit {
 		t.Fatalf("result bytes = %d", len(encoded))
 	}
+	dashboard, err := service.DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dashboard.Items) != 120 || dashboard.Omitted != 0 {
+		t.Fatalf("dashboard lost stored credentials: %d omitted %d", len(dashboard.Items), dashboard.Omitted)
+	}
 }
 
 func TestQuotaPredictionRejectsReadOnlyAuthIndex(t *testing.T) {
@@ -64,6 +71,42 @@ func TestQuotaPredictionRejectsReadOnlyAuthIndex(t *testing.T) {
 	_, err := service.QuotaPrediction(capability.WithReadOnly(context.Background(), true), QuotaPredictionInput{AuthIndex: "private"})
 	if err == nil || err.Error() != "invalid_parameters" {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestQuotaPredictionIncludesMissingCredentialReadings(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-missing.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{
+		predictionResource("unread", "unread@example.test", "codex"),
+		predictionResource("empty", "empty@example.test", "codex"),
+		predictionResource("corrupt", "corrupt@example.test", "codex"),
+	})
+	now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+	seedPredictionSnapshot(t, repo, "empty", "codex", now.UnixMilli(), []quota.QuotaWindow{})
+	if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: "corrupt", Provider: "codex", Status: "healthy", WindowsJSON: "invalid", ObservedAtMS: now.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 3 {
+		t.Fatalf("missing rows: %+v", result)
+	}
+	for _, item := range result.Items {
+		wantReason := quota.CapacityReasonNoReading
+		if item.AuthIndex == "corrupt" {
+			wantReason = quota.PredictionReasonReadingError
+		}
+		if item.Verdict != quota.PredictionVerdictUnknown || item.UsedPercent != nil || item.ProjectedPercentAtReset != nil ||
+			item.Accounting.RemainingPercent != nil || !slices.Contains(item.Reasons, wantReason) {
+			t.Fatalf("missing reading invented data: %+v", item)
+		}
 	}
 }
 

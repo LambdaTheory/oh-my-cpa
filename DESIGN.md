@@ -922,3 +922,14 @@ an approved enabled policy admits the first automatic attempt through current wi
 billing evidence. Unknown billing pauses requests; observed unsupported responses pause
 subsequent automatic requests for the same model. Reuse the existing tokens,
 responsive Drawer and semantic feedback without introducing global design tokens.
+
+### Quota prediction provider disclosures
+
+Quota prediction opens with provider summaries only. Native details/summary controls
+provide keyboard disclosure and a 44px hit area; each header shows the provider mark,
+24-hour sufficiency first and sufficiency until reset second. Unknown or omitted
+evidence cannot read as enough. Expanded windows retain their observed percentage,
+forecast and reasons, and add the window start, remaining share, a separately labelled
+uniform-rate full-window estimate and a manual suggestion. Missing readings say Data
+missing and draw no meter. A just-reset window explains its lack of history. Existing
+palette, typography, spacing and motion tokens are reused.

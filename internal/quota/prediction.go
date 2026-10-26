@@ -77,6 +77,7 @@ type PredictionInput struct {
 }
 
 type WindowPrediction struct {
+	Accounting                PredictionAccounting
 	UsedPercent               *float64
 	ResetAtMS                 *int64
 	ObservedAtMS              int64
@@ -96,7 +97,16 @@ type WindowPrediction struct {
 	MaxGapSeconds   *int64
 }
 
+// PredictionAccounting keeps cycle arithmetic separate from the fitted forecast.
+// It is console context, not an addition to the quota_prediction wire contract.
+type PredictionAccounting struct {
+	WindowStartMS                  *int64   `json:"window_start_ms"`
+	RemainingPercent               *float64 `json:"remaining_percent"`
+	UniformProjectedPercentAtReset *float64 `json:"uniform_projected_percent_at_reset"`
+}
+
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
+	defer func() { result.Accounting = calculatePredictionAccounting(input, result) }()
 	result = WindowPrediction{
 		UsedPercent:  nil,
 		ResetAtMS:    input.Window.ResetAtMS,
@@ -249,6 +259,47 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.Verdict = PredictionVerdictUnderUsed
 	default:
 		result.Verdict = PredictionVerdictOnTrack
+	}
+	return result
+}
+
+func calculatePredictionAccounting(input PredictionInput, prediction WindowPrediction) PredictionAccounting {
+	result := PredictionAccounting{}
+	fromMS, _, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
+	if reason == "" && input.ObservedAtMS >= fromMS {
+		result.WindowStartMS = &fromMS
+	}
+	if prediction.UsedPercent == nil {
+		return result
+	}
+	result.RemainingPercent = floatPointer(100 - *prediction.UsedPercent)
+	if result.WindowStartMS == nil {
+		result.RemainingPercent = nil
+		return result
+	}
+	for _, reason := range prediction.Reasons {
+		if reason == PredictionReasonResetMidCycle || reason == PredictionReasonReadingStale {
+			if reason == PredictionReasonReadingStale {
+				result.RemainingPercent = nil
+			}
+			return result
+		}
+	}
+	if input.Window.HasIncompleteHistory || input.Window.HasMidCycleReset ||
+		input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS ||
+		input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
+		return result
+	}
+	periodMS := *input.Window.ResetAtMS - fromMS
+	elapsedMS := input.ObservedAtMS - fromMS
+	// Reuse the existing evidence floor so a just-reset denominator cannot turn
+	// upstream rounding into a misleading full-cycle estimate.
+	if elapsedMS < max(PredictionMinimumEvidenceMS, periodMS/predictionMinimumCoverageDivisor) {
+		return result
+	}
+	projected, isSafe := roundPrediction(*prediction.UsedPercent/float64(elapsedMS)*float64(periodMS), 2)
+	if isSafe {
+		result.UniformProjectedPercentAtReset = &projected
 	}
 	return result
 }

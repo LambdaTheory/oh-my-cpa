@@ -3138,3 +3138,14 @@ Manual activation requires confirmation naming the credential and model and expl
 quota consumption. Pending and uncertain outcomes never read as activation success.
 Manual execution outcomes stay in the credential section without a duplicate toast;
 background confirmation updates that same result. The public demo cannot save or consume. Existing type, shape, spacing and semantic-feedback tokens are reused.
+
+### Quota prediction provider disclosures
+
+Quota prediction opens with provider summaries only. Native details/summary controls
+provide keyboard disclosure and a 44px hit area; each header shows the provider mark,
+24-hour sufficiency first and sufficiency until reset second. Unknown or omitted
+evidence cannot read as enough. Expanded windows retain their observed percentage,
+forecast and reasons, and add the window start, remaining share, a separately labelled
+uniform-rate full-window estimate and a manual suggestion. Missing readings say Data
+missing and draw no meter. A just-reset window explains its lack of history. Existing
+palette, typography, spacing and motion tokens are reused.

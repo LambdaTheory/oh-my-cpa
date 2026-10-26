@@ -67,6 +67,8 @@ route or reading evidence stays unknown, and the advice does not choose a route.
 
 - Read-only quota prediction projects stored observations to reset, distinguishes fact,
   projection and unknown evidence, and masks credential identity for read-only MCP.
+  The dashboard folds credentials by provider, compares reset sufficiency with 24-hour
+  urgency, labels uniform-rate cycle estimates and offers manual action suggestions.
 - Feishu sends one scheduled prediction digest for exhaustion or under-use findings and
   replaces the ordinary digest for that minute; prediction never changes routing,
   credentials or models.

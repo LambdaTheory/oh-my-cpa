@@ -12,6 +12,7 @@ import {
 } from '../src/components/dashboard/QuotaPrediction';
 import { api } from '../src/api/client';
 import type { DashboardPredictionsResponse, QuotaPredictionItem } from '../src/types/quotaPrediction';
+import { summarizePredictions } from '../src/components/dashboard/quotaPredictionLogic';
 
 vi.mock('../src/api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/api/client')>(),
@@ -67,6 +68,10 @@ function renderOwner() {
   );
 }
 
+function expandProviders() {
+  for (const summary of document.querySelectorAll('summary')) fireEvent.click(summary);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
@@ -81,6 +86,9 @@ describe('dashboard quota prediction', () => {
     ])} />));
     const groups = screen.getAllByRole('region');
     expect(groups.map((group) => group.getAttribute('aria-label'))).toEqual(['Antigravity', 'Codex']);
+    expect([...document.querySelectorAll('details')].every((details) => !details.open)).toBe(true);
+    expandProviders();
+    expect([...document.querySelectorAll('details')].every((details) => details.open)).toBe(true);
     const codex = groups[1];
     expect(within(codex).getByText('operator@example.com')).toBeTruthy();
     expect(within(codex).getByText('Will exhaust')).toBeTruthy();
@@ -111,6 +119,7 @@ describe('dashboard quota prediction', () => {
       projected_tokens_at_reset: null, projected_cost_nanos_at_reset: null,
       data_age_seconds: 90000, reasons: ['stale_reading', 'fewer_than_two_observations'],
     })] }])} />));
+    expandProviders();
     expect(screen.getByText('Unknown')).toBeTruthy();
     expect(screen.getByText('Stale data')).toBeTruthy();
     expect(screen.getByText('Quota reading is stale')).toBeTruthy();
@@ -129,6 +138,8 @@ describe('dashboard quota prediction', () => {
     vi.mocked(api.getDashboardPredictions).mockResolvedValue(response([{ provider: 'codex', items: [item()] }]));
     vi.mocked(api.postFeishuPredictionTest).mockResolvedValue({ sent: false, reason: 'no_findings' });
     renderOwner();
+    await screen.findByText('Codex');
+    expandProviders();
     await screen.findByText('operator@example.com');
     fireEvent.click(screen.getByRole('button', { name: 'Send prediction summary to Feishu' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Send summary' }));
@@ -143,6 +154,7 @@ describe('dashboard quota prediction', () => {
         item({ window_kind: 'model_scoped', window_id: 'seven_day_opus', window_scope: 'model', window_model: 'claude-opus' }),
         item({ window_kind: 'model_scoped', window_id: 'seven_day_sonnet', window_scope: 'model', window_model: 'claude-sonnet' }),
       ] }])} />));
+      expandProviders();
       expect(screen.getByText('Model window · claude-opus')).toBeTruthy();
       expect(screen.getByText('Model window · claude-sonnet')).toBeTruthy();
       expect(errors.mock.calls.some((args) => args.join(' ').includes('same key'))).toBe(false);
@@ -153,6 +165,7 @@ describe('dashboard quota prediction', () => {
 
   it.each([['fallback-auth', 'fallback-auth'], [undefined, 'Unknown credential']])('names both meters with the resolved identity %s', (authIndex, label) => {
     render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ credential_label: '', auth_index: authIndex })] }])} />));
+    expandProviders();
     expect(screen.getByText(label)).toBeTruthy();
     expect(screen.getByRole('meter', { name: `${label} quota used now` })).toBeTruthy();
     expect(screen.getByRole('meter', { name: `${label} projected quota at reset` })).toBeTruthy();
@@ -164,6 +177,8 @@ describe('dashboard quota prediction', () => {
       .mockResolvedValueOnce(response([{ provider: 'codex', items: [item()] }]))
       .mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
     renderOwner();
+    await screen.findByText('Codex');
+    expandProviders();
     await screen.findByText('operator@example.com');
     const refresh = screen.getByRole('button', { name: 'Refresh quota prediction' });
     fireEvent.click(refresh);
@@ -189,6 +204,8 @@ describe('dashboard quota prediction', () => {
       complete = () => mode === 'pending' ? resolve({ sent: false, error: 'Delivery pending' }) : reject(new Error('Transport failed'));
     }));
     renderOwner();
+    await screen.findByText('Codex');
+    expandProviders();
     await screen.findByText('operator@example.com');
     const trigger = screen.getByRole('button', { name: 'Send prediction summary to Feishu' });
     fireEvent.click(trigger);
@@ -201,5 +218,45 @@ describe('dashboard quota prediction', () => {
     complete();
     expect(await screen.findByText('Could not send prediction summary')).toBeTruthy();
     expect(screen.queryByText('Prediction summary sent to Feishu')).toBeNull();
+  });
+
+  it('uses 24-hour urgency before reset risk and never certifies partial providers', () => {
+    const generatedAtMS = response([]).generated_at_ms;
+    const late = item({ reset_at_ms: generatedAtMS + 72 * 3_600_000, exhaustion_eta_ms: generatedAtMS + 48 * 3_600_000 });
+    expect(summarizePredictions([late], generatedAtMS)).toEqual({ today: 'enough', untilReset: 'insufficient' });
+    expect(summarizePredictions([item({ exhaustion_eta_ms: generatedAtMS + 24 * 3_600_000 })], generatedAtMS).today).toBe('insufficient');
+    const healthy = item({ verdict: 'on_track', projected_percent_at_reset: 80 });
+    expect(summarizePredictions([healthy], generatedAtMS, true).today).toBe('unknown');
+    expect(summarizePredictions([healthy, item({ verdict: 'unknown' })], generatedAtMS).today).toBe('unknown');
+    expect(summarizePredictions([healthy, item()], generatedAtMS).today).toBe('insufficient');
+  });
+
+  it('renders missing readings explicitly, with an action for every forecast', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
+      verdict: 'unknown', used_percent: null, reset_at_ms: null, data_age_seconds: null,
+      projected_percent_at_reset: null, projected_tokens_at_reset: null, projected_cost_nanos_at_reset: null,
+      exhaustion_eta_ms: null, reasons: ['reading_error'],
+    })] }])} />));
+    expandProviders();
+    expect(screen.getAllByText('Data missing').length).toBeGreaterThan(3);
+    expect(screen.queryAllByRole('meter')).toHaveLength(0);
+    expect(screen.queryByText('0.0%')).toBeNull();
+    expect(screen.getByText('Quota reading failed')).toBeTruthy();
+    expect(screen.getByText('Suggestion: check quota readings and history before deciding.')).toBeTruthy();
+  });
+
+  it('labels uniform cycle arithmetic and distinguishes a just-reset window', () => {
+    const data = response([{ provider: 'codex', items: [{ ...item({ verdict: 'unknown', reasons: ['fewer_than_three_buckets'] }),
+      window_start_ms: Date.parse('2026-10-20T07:59:00Z'), remaining_percent: 35, uniform_projected_percent_at_reset: null,
+    }] }]);
+    const { rerender } = render(surface(<QuotaPredictionPanel data={data} />));
+    expandProviders();
+    expect(screen.getByText('Window just reset; history is not sufficient yet')).toBeTruthy();
+    expect(screen.getByText('Full-window use (uniform-rate estimate)')).toBeTruthy();
+    expect(screen.getByText('35.0%')).toBeTruthy();
+    rerender(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ verdict: 'on_track' })] }])} />));
+    expect(screen.getByText('No action needed.')).toBeTruthy();
+    rerender(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item()] }])} />));
+    expect(screen.getByText(/Exhaustion within 22 hours/)).toBeTruthy();
   });
 });

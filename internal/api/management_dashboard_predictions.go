@@ -6,11 +6,17 @@ import (
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 )
 
+type dashboardPredictionItem struct {
+	operations.QuotaPredictionItem
+	quota.PredictionAccounting
+}
+
 type dashboardPredictionProvider struct {
-	Provider string                           `json:"provider"`
-	Items    []operations.QuotaPredictionItem `json:"items"`
+	Provider string                    `json:"provider"`
+	Items    []dashboardPredictionItem `json:"items"`
 }
 
 type dashboardPredictionsResponse struct {
@@ -28,10 +34,7 @@ func (h *Handler) dashboardPredictions(writer http.ResponseWriter, request *http
 	ctx := capability.WithAnchor(request.Context(), h.now().UnixMilli())
 	service := h.operationsService()
 	started := time.Now()
-	result, err := service.QuotaPrediction(
-		ctx,
-		operations.QuotaPredictionInput{FindingsOnly: false},
-	)
+	result, err := service.DashboardQuotaPrediction(ctx)
 	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
 		writeInternalError(writer, err)
@@ -52,10 +55,10 @@ func (h *Handler) dashboardPredictions(writer http.ResponseWriter, request *http
 			byProvider[item.Provider] = index
 			response.Providers = append(response.Providers, dashboardPredictionProvider{
 				Provider: item.Provider,
-				Items:    []operations.QuotaPredictionItem{},
+				Items:    []dashboardPredictionItem{},
 			})
 		}
-		response.Providers[index].Items = append(response.Providers[index].Items, item)
+		response.Providers[index].Items = append(response.Providers[index].Items, dashboardPredictionItem{QuotaPredictionItem: item, PredictionAccounting: item.Accounting})
 	}
 	writeJSON(writer, http.StatusOK, response)
 }

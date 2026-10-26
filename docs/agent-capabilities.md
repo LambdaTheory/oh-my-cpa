@@ -595,10 +595,13 @@ a fabricated zero; model/group usage that cannot be assigned safely reports
 `scope_unknown`. Freshness is window-aware: at least the two-hour idle
 refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
 
-The dashboard reads the same operation through
-`GET /api/v1/management/dashboard/predictions` with `findings_only=false`. This console
-projection retains operator-visible credential labels and auth indexes, groups the bounded
-items by provider, and adds prediction-call duration `duration_ms`. The existing
+The dashboard reads the same computation through
+`GET /api/v1/management/dashboard/predictions`. This console projection retains the full
+stored roster and operator-visible credential labels and auth indexes, groups items by
+provider, and adds prediction-call duration `duration_ms` plus nullable cycle accounting
+(`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`). These
+console fields are excluded from capability JSON and schemas. Missing or unreadable
+credential snapshots remain unknown rows rather than disappearing. The existing
 `quota_prediction` tool keeps its name, filters and prediction semantics, with the additive
 window identity fields described above. The five-minute foreground refresh and the manual dashboard refresh
 therefore recompute only from stored evidence and never probe CPA.
