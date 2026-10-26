@@ -407,7 +407,18 @@ Unknown windows prevent an all-clear; known shortages outrank unknown neighbours
 The next 24 hours determine the urgency of the manual suggestion, without hiding a
 shortage later in the cycle. Suggestions never change credentials or routing.
 
-Remaining allowance is 100 minus the valid used percentage. Where the reading supplies
+The prediction roster includes built-in refresh-capable providers, independent Ollama
+accounts and other providers only when they have actual stored quota windows. An
+unsupported provider without window evidence is not applicable and does not form a
+permanent unknown group. Missing-window placeholders belong only to the dashboard;
+Agent/MCP and digest results contain actual windows, so unread credentials cannot
+displace real findings inside their payload bounds. Passive observations can supply
+missing standard windows with their stated period, reset, percentage and observation
+time; provider identities must match before that evidence is attributed.
+
+Remaining allowance is 100 minus the valid used percentage, independently of whether
+the cycle start is known. An elapsed exhaustion ETA is stated explicitly rather than
+as a zero-hour countdown. Where the reading supplies
 a trustworthy period and reset, the window's start is reset minus period; percentage
 times period expresses used or remaining **quota-hours**, not elapsed runtime. The
 remaining allowance is an inferred value with rounding uncertainty of half a percentage

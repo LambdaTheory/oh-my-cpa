@@ -153,7 +153,7 @@ func TestQuotaPredictionIncludesMissingCredentialReadings(t *testing.T) {
 	if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: "corrupt", Provider: "codex", Status: "healthy", WindowsJSON: "invalid", ObservedAtMS: now.UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), QuotaPredictionInput{})
+	result, err := (&Service{Repo: repo}).DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +169,122 @@ func TestQuotaPredictionIncludesMissingCredentialReadings(t *testing.T) {
 			item.Accounting.RemainingPercent != nil || !slices.Contains(item.Reasons, wantReason) {
 			t.Fatalf("missing reading invented data: %+v", item)
 		}
+	}
+	capabilityResult, err := (&Service{Repo: repo}).QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilityResult.Items) != 0 || capabilityResult.Omitted != 0 {
+		t.Fatalf("presentation placeholders spent capability payload: %+v", capabilityResult)
+	}
+}
+
+func TestQuotaPredictionUnreadRosterCannotDisplaceExhaustion(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-roster-pressure.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+	resources := []domain.DiscoveredResource{predictionResource("exhausted", "zzz-exhausted@example.test", "codex")}
+	for index := 0; index < 100; index++ {
+		resources = append(resources, predictionResource(fmt.Sprintf("unread-%03d", index), fmt.Sprintf("aaa-%03d@example.test", index), "codex"))
+	}
+	for _, provider := range []string{"openai", "gemini", "qwen", "deepseek", "glm"} {
+		resources = append(resources, predictionResource(provider, provider+"@example.test", provider))
+		seedPredictionSnapshot(t, repo, provider, provider, now.UnixMilli(), []quota.QuotaWindow{})
+	}
+	seedPredictionResources(t, repo, resources)
+	reset, period, used := now.Add(time.Hour).UnixMilli(), 5.0, 100.0
+	seedPredictionSnapshot(t, repo, "exhausted", "codex", now.UnixMilli(), []quota.QuotaWindow{{ID: "five_hour", Kind: "five_hour", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	service := &Service{Repo: repo}
+	for _, isReadOnly := range []bool{false, true} {
+		ctx := capability.WithReadOnly(capability.WithAnchor(context.Background(), now.UnixMilli()), isReadOnly)
+		result, err := service.QuotaPrediction(ctx, QuotaPredictionInput{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Items) != 1 || result.Omitted != 0 || result.Items[0].Verdict != quota.PredictionVerdictWillExhaust || result.Items[0].Evidence != quota.PredictionEvidenceFact {
+			t.Fatalf("read-only=%v urgent finding was displaced: %+v", isReadOnly, result)
+		}
+	}
+	dashboard, err := service.DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dashboard.Items) != 101 {
+		t.Fatalf("dashboard applicability = %+v", dashboard)
+	}
+	for _, item := range dashboard.Items {
+		if item.Provider != "codex" {
+			t.Fatalf("unsupported provider occupied prediction roster: %+v", item)
+		}
+	}
+}
+
+func TestQuotaPredictionRecoversPassiveWindowsWithoutSnapshotWindows(t *testing.T) {
+	for _, mode := range []string{"absent", "empty", "failed", "wrong_provider", "incomplete_window"} {
+		t.Run(mode, func(t *testing.T) {
+			database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-passive-roster.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = database.Close() })
+			repo := repository.New(database)
+			now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+			seedPredictionResources(t, repo, []domain.DiscoveredResource{predictionResource("passive-roster", "passive@example.test", "codex")})
+			if mode != "absent" {
+				status := "healthy"
+				if mode == "failed" {
+					status = "error"
+				}
+				if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: "passive-roster", Provider: "codex", Status: status, WindowsJSON: "[]", ObservedAtMS: now.Add(-5 * time.Minute).UnixMilli()}); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "incomplete_window" {
+					seedPredictionSnapshot(t, repo, "passive-roster", "codex", now.Add(-4*time.Minute).UnixMilli(), []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", ResetAccuracy: "approximate"}})
+				}
+			}
+			provider := "codex"
+			if mode == "wrong_provider" {
+				provider = "claude"
+			}
+			if _, err := repo.SQL().ExecContext(context.Background(), `INSERT INTO quota_observations
+				(auth_index, provider, window_kind, scope, model, window_minutes, used_percent, reset_at_ms, status, observed_at_ms, event_key, created_at_ms, source)
+				VALUES ('passive-roster', ?, 'weekly', 'standard', '', 10080, 42, ?, 'healthy', ?, 'passive-roster-reading', ?, 'passive')`, provider, now.Add(24*time.Hour).UnixMilli(), now.UnixMilli(), now.UnixMilli()); err != nil {
+				t.Fatal(err)
+			}
+			service := &Service{Repo: repo}
+			ctx := capability.WithAnchor(context.Background(), now.UnixMilli())
+			for _, isDashboard := range []bool{false, true} {
+				var result QuotaPredictionResult
+				if isDashboard {
+					result, err = service.DashboardQuotaPrediction(ctx)
+				} else {
+					result, err = service.QuotaPrediction(ctx, QuotaPredictionInput{})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if mode == "wrong_provider" {
+					if !isDashboard && len(result.Items) != 0 {
+						t.Fatalf("foreign passive provider attributed: %+v", result)
+					}
+					if isDashboard && (len(result.Items) != 1 || result.Items[0].UsedPercent != nil) {
+						t.Fatalf("foreign reading exposed: %+v", result)
+					}
+					continue
+				}
+				if len(result.Items) != 1 || result.Items[0].UsedPercent == nil || *result.Items[0].UsedPercent != 42 ||
+					result.Items[0].WindowKind != "weekly" || result.Items[0].ObservedAtMS != now.UnixMilli() ||
+					result.Items[0].Accounting.RemainingPercent == nil || *result.Items[0].Accounting.RemainingPercent != 58 ||
+					result.Items[0].Accounting.WindowStartMS == nil || slices.Contains(result.Items[0].Reasons, quota.PredictionReasonBoundaryUnknown) ||
+					slices.Contains(result.Items[0].Reasons, quota.CapacityReasonNoReading) || slices.Contains(result.Items[0].Reasons, quota.PredictionReasonReadingError) {
+					t.Fatalf("dashboard=%v passive reading discarded: %+v", isDashboard, result)
+				}
+			}
+		})
 	}
 }
 

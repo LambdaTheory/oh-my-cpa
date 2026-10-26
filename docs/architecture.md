@@ -3733,7 +3733,14 @@ from its observation, period and current-cycle usage. The operations item's acco
 field is excluded from JSON and capability schema generation. The quota_prediction wire
 contract, evidence thresholds, 100-row / 32-KiB limits and read-only masking stay intact.
 The dashboard reads the complete roster before grouping, so a later provider cannot be
-hidden by capability payload bounds. Missing snapshots remain unknown rows.
+hidden by capability payload bounds. Missing-window placeholders are emitted only for
+the dashboard, so they do not consume Agent/MCP or digest payload bounds. Credentials
+without a built-in refresh capability or stored window evidence are not applicable and
+are omitted. Existing plugin-provided stored windows remain eligible. Before any
+placeholder is added, missing standard windows are reconstructed from matching-provider
+passive observations in deterministic kind order. Their period and reset come from the
+actual observation, never a label; a newer passive reading can supersede an active read
+failure for that window. Existing windows are overlaid without duplicate passive rows.
 
 The prediction roster also reads Ollama's safe account projection and persisted normalized
 snapshot; it never selects cookie ciphertext. A later failed collection invalidates a

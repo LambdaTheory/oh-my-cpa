@@ -602,8 +602,11 @@ provider, and adds prediction-call duration `duration_ms` plus nullable cycle ac
 (`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`,
 `remaining_window_hours`, `window_error_hours`, `remaining_tokens`,
 `capacity_error_percent` and optional `capacity_unavailable`). These
-console fields are excluded from capability JSON and schemas. Missing or unreadable
-credential snapshots remain unknown rows rather than disappearing. Safe stored Ollama
+console fields are excluded from capability JSON and schemas. Dashboard-only unknown
+placeholders do not enter quota_prediction or digest results and cannot displace their
+actual windows. Providers without refresh support or stored window evidence are omitted.
+Matching passive observations can establish missing standard windows without a snapshot;
+ordinary and read-only callers use the same restored evidence before masking. Safe stored Ollama
 account snapshots join the same roster without reading cookies. Step and Stepfun share
 one dashboard group while retaining their stored provider identities in items. The existing
 `quota_prediction` tool keeps its name, filters and prediction semantics, with the additive

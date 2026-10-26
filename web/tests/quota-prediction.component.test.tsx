@@ -282,6 +282,15 @@ describe('dashboard quota prediction', () => {
     expect(screen.getByText('1 providers insufficient')).toBeTruthy();
   });
 
+  it('describes an elapsed exhaustion ETA without a zero-hour countdown', () => {
+    const generatedAtMS = response([]).generated_at_ms;
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ exhaustion_eta_ms: generatedAtMS - 60_000 })] }])} />));
+    expandProviders();
+    expect(screen.getByText('Exhausted')).toBeTruthy();
+    expect(screen.getByText(/Estimated exhaustion time has passed/)).toBeTruthy();
+    expect(screen.queryByText(/within 0 hours|About 0.0 hours/)).toBeNull();
+  });
+
   it('renders missing readings explicitly, with an action for every forecast', () => {
     render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
       verdict: 'unknown', used_percent: null, reset_at_ms: null, data_age_seconds: null,

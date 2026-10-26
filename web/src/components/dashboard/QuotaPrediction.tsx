@@ -97,6 +97,7 @@ const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: nu
   if (item.capacity_unavailable) details.push(translatedValue('dash.prediction.reason', item.capacity_unavailable, t));
   const failureDetail = details.join(' · ') || t('dash.prediction.missing');
   const advice = hasReadError || sufficiency === 'unknown' ? t('dash.prediction.advice_check')
+    : assessment.enduranceMS === 0 ? t('dash.prediction.advice_exhausted')
     : assessment.isLow ? t('dash.prediction.advice_low')
       : assessment.isUrgent ? t('dash.prediction.advice_urgent', { n: Math.max(1, Math.ceil((assessment.enduranceMS ?? 0) / 3_600_000)) })
         : sufficiency === 'insufficient' ? t('dash.prediction.advice_later') : t('dash.prediction.advice_none');

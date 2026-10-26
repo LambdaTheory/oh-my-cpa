@@ -106,7 +106,7 @@ func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput,
 		return QuotaPredictionResult{}, errors.New("capability_unavailable")
 	}
 	nowMS := capability.AnchorMS(ctx)
-	readings, err := s.storedPredictionQuotas(ctx)
+	readings, err := s.storedPredictionQuotas(ctx, !shouldBound)
 	if err != nil {
 		return QuotaPredictionResult{}, err
 	}
@@ -191,7 +191,7 @@ func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput,
 
 // storedPredictionQuotas assembles the prediction roster from OMC persistence.
 // It never asks CPA which credentials exist or refreshes a quota window.
-func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
+func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissing bool) ([]Quota, error) {
 	metadata, err := s.Repo.ListFeishuCredentialMetadata(ctx)
 	if err != nil {
 		return nil, err
@@ -225,19 +225,26 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 				windows = nil
 			}
 		}
-		// An unread or empty credential is part of the roster, with an unknown
-		// window rather than a fabricated zero balance or a silently omitted row.
-		if len(windows) == 0 {
-			windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
+		hasReportedWindows := len(windows) > 0
+		// Stored windows certify plugin-provided quota without a live discovery
+		// read. An unsupported provider with no such evidence is not applicable.
+		if !quota.CapabilitiesForProvider(provider).RefreshSupported && !hasReportedWindows {
+			continue
 		}
+		matchedPassiveKinds := map[string]bool{}
 		for index := range windows {
 			window := &windows[index]
 			kind, sharesPassiveStream := quota.PassiveWindowKindFor(provider, *window)
+			if !sharesPassiveStream && provider == quota.PassiveProviderCodex && window.Scope == quota.ObservationScopeStandard && window.Model == "" &&
+				(window.ID == quota.PassiveWindowFiveHour || window.Kind == quota.PassiveWindowFiveHour) {
+				kind, sharesPassiveStream = quota.PassiveWindowFiveHour, true
+			}
 			if !sharesPassiveStream {
 				continue
 			}
+			matchedPassiveKinds[kind] = true
 			observation, found := passive[entry.AuthIndex][kind]
-			if !found || observation.ObservedAtMS <= snapshot.ObservedAtMS {
+			if !found || observation.Provider != provider || observation.ObservedAtMS <= snapshot.ObservedAtMS {
 				continue
 			}
 			usedPercent := observation.UsedPercent
@@ -245,10 +252,32 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 			window.RemainingPercent = floatPointer(max(0, 100-usedPercent))
 			if observation.ResetAtMS != nil {
 				window.ResetAtMS = observation.ResetAtMS
+				window.ResetAccuracy = "exact"
+			}
+			if observation.WindowMinutes > 0 {
+				periodHours := float64(observation.WindowMinutes) / 60
+				window.PeriodHours = &periodHours
 			}
 			observedAtMS := observation.ObservedAtMS
 			window.ObservedAtMS = &observedAtMS
 			window.Source = observation.Source
+		}
+		// A passive stream can establish a window without an active snapshot.
+		// Iterate its closed vocabulary so map order never changes row identity.
+		for _, kind := range []string{quota.PassiveWindowFiveHour, quota.PassiveWindowWeekly} {
+			observation, found := passive[entry.AuthIndex][kind]
+			if !found || matchedPassiveKinds[kind] || observation.Provider != provider {
+				continue
+			}
+			if hasReportedWindows && observation.ObservedAtMS <= snapshot.ObservedAtMS {
+				continue
+			}
+			windows = append(windows, predictionWindowFromPassive(observation))
+		}
+		// Placeholders are presentation-only. They must not spend the bounded
+		// capability payload and displace a real exhaustion finding.
+		if len(windows) == 0 && shouldIncludeMissing {
+			windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
 		}
 		result = append(result, Quota{
 			AuthIndex: entry.AuthIndex, Name: safeLabel(entry.Name), Provider: provider,
@@ -277,12 +306,33 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 		if account.Status != "ok" && account.Status != "idle" && account.Status != "" {
 			reading.Status = "error"
 		}
-		if len(reading.Windows) == 0 {
+		if len(reading.Windows) == 0 && shouldIncludeMissing {
 			reading.Windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
 		}
 		result = append(result, reading)
 	}
 	return result, nil
+}
+
+func predictionWindowFromPassive(observation repository.QuotaObservationRecord) quota.QuotaWindow {
+	windowID := observation.WindowKind
+	if observation.Provider == quota.PassiveProviderClaude && observation.WindowKind == quota.PassiveWindowWeekly {
+		windowID = "seven_day"
+	}
+	usedPercent, observedAtMS := observation.UsedPercent, observation.ObservedAtMS
+	window := quota.QuotaWindow{
+		ID: windowID, Kind: observation.WindowKind, Scope: quota.ObservationScopeStandard,
+		UsedPercent: &usedPercent, ResetAtMS: observation.ResetAtMS,
+		ObservedAtMS: &observedAtMS, Source: quota.ObservationSourcePassive,
+	}
+	if observation.WindowMinutes > 0 {
+		periodHours := float64(observation.WindowMinutes) / 60
+		window.PeriodHours = &periodHours
+	}
+	if observation.ResetAtMS != nil {
+		window.ResetAccuracy = "exact"
+	}
+	return window
 }
 
 func predictionFindingRank(item QuotaPredictionItem) int {
@@ -373,6 +423,11 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 		observedAtMS = *window.ObservedAtMS
 	}
 	predictionInput := quota.PredictionInput{Window: window, ObservedAtMS: observedAtMS, Status: reading.Status, NowMS: nowMS}
+	if window.Source == quota.ObservationSourcePassive && observedAtMS > reading.ObservedAtMS {
+		// A newer response-header reading is independent of the failed active
+		// refresh retained on the snapshot; only that window becomes current.
+		predictionInput.Status = "healthy"
+	}
 	fromMS, toMS, boundaryReason := quota.WindowCycleRange(window, observedAtMS, nowMS)
 	if boundaryReason == "" {
 		buckets, hasMore, err := s.Repo.ListQuotaObservationBuckets(ctx, repository.QuotaObservationBucketFilter{

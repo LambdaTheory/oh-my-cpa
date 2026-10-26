@@ -49,6 +49,24 @@ func TestPredictionAccountingInfersTokensWithoutRequiringPrices(t *testing.T) {
 	}
 }
 
+func TestPredictionAccountingRemainingDoesNotRequireCycleBounds(t *testing.T) {
+	now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+	for _, mode := range []string{"no_period", "no_reset", "no_bounds"} {
+		window, _ := predictionWindow(now.Add(-time.Hour), 65)
+		if mode != "no_reset" {
+			window.PeriodHours = nil
+		}
+		if mode != "no_period" {
+			window.ResetAtMS = nil
+		}
+		result := PredictWindow(PredictionInput{Window: window, ObservedAtMS: now.UnixMilli(), NowMS: now.UnixMilli()})
+		if result.Accounting.RemainingPercent == nil || *result.Accounting.RemainingPercent != 35 ||
+			result.Accounting.WindowStartMS != nil || result.Accounting.RemainingWindowHours != nil || result.ExhaustionETAMS != nil {
+			t.Fatalf("%s lost independent remaining share: %+v", mode, result)
+		}
+	}
+}
+
 func TestPredictionAccountingWithholdsUnavailableAndJustResetEstimates(t *testing.T) {
 	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
 	for _, mode := range []string{"no_reading", "error", "stale", "just_reset", "mid_cycle_reset", "incomplete", "expired"} {
