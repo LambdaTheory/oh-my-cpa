@@ -1,890 +1,198 @@
-import React, { useState, useMemo } from 'react';
-import { App as AntdApp, Button, Checkbox, Input, Modal, Select, Space } from 'antd';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { App as AntdApp, Button, Checkbox, Input, Modal, Segmented, Tooltip } from 'antd';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppDrawer } from '../common/AppDrawer';
 import { Switch } from '../common/Switch';
-import { Tag } from '../common/Tag';
 import { Notice, useToast } from '../feedback';
 import { EmptyState } from '../common/EmptyState';
 import { PageLoading } from '../common/PageLoading';
 import { StatusLabel, type StatusTone } from '../common/StatusLabel';
-import { ClockCircleOutlined, ReloadOutlined } from '../icons';
+import { ReloadOutlined } from '../icons';
+import { ProviderBrandIcon } from '../LobeIcon';
+import { credentialProviderIconId } from '../common/providerMetadata';
 import { api } from '../../api/client';
-import { useT } from '../../i18n';
+import { useI18n, languageLocale } from '../../i18n';
 import { isDemoMode } from '../../types/demoMode';
-import { getTimeZone } from '../../utils/time';
+import { getAppConfig } from '../../types/config';
+import dayjs, { getTimeZone } from '../../utils/time';
 import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
 import { credentialLabel } from '../../utils/credentialLabel';
-import type {
-  AccountAutomationAccountDTO,
-  AccountAutomationCandidateDTO,
-  AccountAutomationSettingsDTO,
-} from '../../types/accountAutomation';
+import type { AccountAutomationAccountDTO, AccountAutomationPatch } from '../../types/accountAutomation';
+import { automationReasonKey, automationRowReasonKey, matchesAutomationFacet, projectAutomationRoster, type AutomationFacet } from './accountAutomationModel';
+import styles from './AccountAutomationDrawer.module.css';
 
-interface AccountAutomationDrawerProps {
-  open: boolean;
-  onClose: () => void;
-}
+const FACETS: AutomationFacet[] = ['all', 'controlled', 'paused', 'disabled', 'monitor_only', 'error'];
+const TONES: Record<string, StatusTone> = { monitoring: 'accent', disabled: 'warn', paused: 'neutral', credit: 'accent', monitor_only: 'neutral', error: 'danger' };
 
-function isMonitorOnly(account: AccountAutomationAccountDTO): boolean {
-  return !account.auto_disable_supported || account.monitor_reason?.toLowerCase() === 'no_controllable_credential';
-}
-
-function getAccountAutomationDisplayName(item: { auth_index?: string; account_label?: string; name?: string; provider?: string } | null | undefined, fallback: string): {
-  primary: string;
-  secondary?: string;
-  provider?: string;
-} {
-  if (!item) return { primary: fallback };
-  const provider = item.provider;
-  const accountLabel = credentialLabel(item.account_label, [item.auth_index]);
-  const name = credentialLabel(item.name, [item.auth_index]);
-  if (accountLabel) {
-    return {
-      primary: accountLabel,
-      secondary: name && name !== accountLabel ? name : undefined,
-      provider,
-    };
-  }
-  if (name) {
-    return {
-      primary: name,
-      provider,
-    };
-  }
-  return { primary: fallback, provider };
-}
-
-export const AccountAutomationDrawer: React.FC<AccountAutomationDrawerProps> = ({ open, onClose }) => {
-  const t = useT();
-  const displayName = (item: Parameters<typeof getAccountAutomationDisplayName>[0]) =>
-    getAccountAutomationDisplayName(item, t('credential.account_fallback', { provider: item?.provider || '' }).trim());
+export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
+  const { t, lang } = useI18n();
   const toast = useToast();
   const { modal } = AntdApp.useApp();
   const queryClient = useQueryClient();
   const isDemo = isDemoMode();
+  const [facet, setFacet] = useState<AutomationFacet>('all');
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<string[]>([]);
+  const [isBatchOpen, setIsBatchOpen] = useState(false);
+  const [batchMode, setBatchMode] = useState<'adopt' | 'unadopt'>('adopt');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [shouldEnable, setShouldEnable] = useState(true);
+  const [note, setNote] = useState('');
+  const [resetTarget, setResetTarget] = useState<AccountAutomationAccountDTO | null>(null);
+  const [resetTime, setResetTime] = useState('');
+  const [resetError, setResetError] = useState('');
+  const mutationLock = useRef(false);
+  const listQuery = useQuery({ queryKey: ['account-automation'], queryFn: () => api.getAccountAutomation(), enabled: open, refetchInterval: 15_000 });
+  const { rows, stats } = useMemo(() => projectAutomationRoster(listQuery.data), [listQuery.data]);
+  const settings = listQuery.data?.settings;
+  const candidates = listQuery.data?.candidates ?? [];
+  const canUseInventory = Boolean(listQuery.data && !listQuery.isError && !listQuery.data.candidates_degraded);
+  const eligibleKeys = useMemo(() => batchMode === 'adopt'
+    ? canUseInventory ? (listQuery.data?.candidates ?? []).filter(c => !c.adopted && c.adoptable).map(c => c.auth_index) : []
+    : rows.map(row => row.account.auth_index), [batchMode, canUseInventory, listQuery.data, rows]);
+  const selection = selected.filter(key => eligibleKeys.includes(key));
 
-  // Filters & State
-  const [filterState, setFilterState] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isAdoptModalOpen, setIsAdoptModalOpen] = useState(false);
-  const [selectedAdoptKeys, setSelectedAdoptKeys] = useState<string[]>([]);
-  const [adoptAutoEnable, setAdoptAutoEnable] = useState(true);
-  const [adoptNote, setAdoptNote] = useState('');
-  const [manualResetTarget, setManualResetTarget] = useState<AccountAutomationAccountDTO | null>(null);
-  const [manualResetTime, setManualResetTime] = useState('');
-  const [manualResetError, setManualResetError] = useState('');
+  useEffect(() => {
+    setSelected(keys => keys.filter(key => eligibleKeys.includes(key)));
+  }, [eligibleKeys]);
+  useEffect(() => {
+    if (!open) { setIsBatchOpen(false); setSelected([]); setResetTarget(null); setExpanded([]); }
+  }, [open]);
 
-  // Queries
-  const listQuery = useQuery({
-    queryKey: ['account-automation'],
-    queryFn: () => api.getAccountAutomation(),
-    enabled: open,
-    refetchInterval: 15_000,
+  const writeMutation = useMutation({
+    mutationFn: async ({ action }: { action: () => Promise<unknown>; success: string; done?: () => void }) => action(),
+    onSuccess: async (_, variables) => {
+      variables.done?.();
+      toast.success(variables.success);
+      await queryClient.invalidateQueries({ queryKey: ['account-automation'] });
+    },
+    onError: (error: Error) => { toast.error(error.message); },
+    onSettled: () => { mutationLock.current = false; },
   });
-
-  const settingsQuery = useQuery({
-    queryKey: ['account-automation-settings'],
-    queryFn: () => api.getAccountAutomationSettings(),
-    enabled: open,
-  });
-
-  // Mutations
-  const masterMutation = useMutation({
-    mutationFn: (enabled: boolean) => api.putAccountAutomationSettings({ enabled }),
-    onSuccess: () => {
-      toast.success(t('automation.master_switch_updated'));
-      void queryClient.invalidateQueries({ queryKey: ['account-automation-settings'] });
-      void queryClient.invalidateQueries({ queryKey: ['account-automation'] });
-    },
-    onError: (err: Error) => {
-      toast.error(err.message);
-    },
-  });
-
-  const accountSwitchMutation = useMutation({
-    mutationFn: ({ authIndex, enabled }: { authIndex: string; enabled: boolean }) =>
-      api.putAccountAutomationAccount(authIndex, { enabled }),
-    onSuccess: () => {
-      toast.success(t('automation.account_switch_updated'));
-      void queryClient.invalidateQueries({ queryKey: ['account-automation'] });
-    },
-    onError: (err: Error) => {
-      toast.error(err.message);
-    },
-  });
-
-  const adoptMutation = useMutation({
-    mutationFn: () =>
-      api.postAccountAutomationAdopt({
-        auth_indexes: selectedAdoptKeys,
-        enable: adoptAutoEnable,
-        note: adoptNote.trim() || undefined,
-      }),
-    onSuccess: (res) => {
-      toast.success(t('automation.adopt_success', { n: res.adopted }));
-      setIsAdoptModalOpen(false);
-      setSelectedAdoptKeys([]);
-      setAdoptNote('');
-      void queryClient.invalidateQueries({ queryKey: ['account-automation'] });
-    },
-    onError: (err: Error) => {
-      toast.error(err.message);
-    },
-  });
-
-  const cancelMutation = useMutation({
-    mutationFn: (authIndex: string) => api.postAccountAutomationCancel(authIndex),
-    onSuccess: () => {
-      toast.success(t('automation.cancel_success'));
-      void queryClient.invalidateQueries({ queryKey: ['account-automation'] });
-    },
-    onError: (err: Error) => {
-      toast.error(err.message);
-    },
-  });
-
-  const manualResetMutation = useMutation({
-    mutationFn: ({ authIndex, resetAtMs }: { authIndex: string; resetAtMs: number }) =>
-      api.postAccountAutomationManualReset(authIndex, { reset_at_ms: resetAtMs }),
-    onSuccess: () => {
-      toast.success(t('automation.manual_reset_success'));
-      setManualResetTarget(null);
-      setManualResetTime('');
-      setManualResetError('');
-      void queryClient.invalidateQueries({ queryKey: ['account-automation'] });
-    },
-    onError: (err: Error) => {
-      toast.error(err.message);
-    },
-  });
-
-  // Candidates & Accounts from live list
-  const accounts: AccountAutomationAccountDTO[] = listQuery.data?.accounts ?? [];
-  const candidates: AccountAutomationCandidateDTO[] = listQuery.data?.candidates ?? [];
-  const settings: AccountAutomationSettingsDTO | undefined = settingsQuery.data;
-  const adoptableCandidates = useMemo(() => {
-    return candidates.filter((c) => !c.adopted && c.adoptable);
-  }, [candidates]);
-
-  // Formatters
-  const formatTime = (timeMs?: number | null) => {
-    if (!timeMs) return '—';
-    try {
-      const d = new Date(timeMs);
-      return getDateTimeFormatter('zh-CN', {
-        timeZone: getTimeZone(),
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false,
-      }).format(d);
-    } catch {
-      return String(timeMs);
-    }
+  const isBusy = writeMutation.isPending;
+  const canWrite = !isDemo && !isBusy && Boolean(listQuery.data) && !listQuery.isError;
+  const write = (action: () => Promise<unknown>, success: string, done?: () => void) => {
+    if (!canWrite || mutationLock.current) return;
+    mutationLock.current = true;
+    writeMutation.mutate({ action, success, done });
   };
-
-  // Stats calculation
-  const stats = useMemo(() => {
-    let adopted = 0;
-    let monitorOnly = 0;
-    let disabled = 0;
-    let waiting = 0;
-    let error = 0;
-    const candidateIndexes = new Set(candidates.map((candidate) => candidate.auth_index));
-    let absent = 0;
-
-    for (const a of accounts) {
-      if (a.is_adopted) {
-        adopted++;
-        if (!candidateIndexes.has(a.auth_index)) absent++;
-      }
-      const s = a.state?.toLowerCase();
-      if (isMonitorOnly(a)) monitorOnly++;
-      if (s === 'disabled') disabled++;
-      if (s === 'waiting') waiting++;
-      if (s === 'error') error++;
-    }
-
-    const credentialTotal = listQuery.data?.candidates_degraded ? null : candidates.length;
-    return { credentialTotal, adopted, absent: credentialTotal === null ? null : absent, monitorOnly, disabled, waiting, error };
-  }, [accounts, candidates, listQuery.data?.candidates_degraded]);
-  const absentSummary = stats.absent ? t('automation.adopted_absent', { n: stats.absent }) : '';
-
-  // Filtered accounts
-  const filteredAccounts = useMemo(() => {
-    return accounts.filter((a) => {
-      const s = a.state?.toLowerCase();
-      if (filterState === 'adopted' && !a.is_adopted) return false;
-      if (filterState === 'unadopted' && a.is_adopted) return false;
-      if (filterState === 'monitor_only' && !isMonitorOnly(a)) return false;
-      if (filterState === 'disabled' && s !== 'disabled') return false;
-      if (filterState === 'waiting' && s !== 'waiting') return false;
-      if (filterState === 'error' && s !== 'error') return false;
-
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchAuth = a.auth_index.toLowerCase().includes(q);
-        const matchLabel = a.account_label?.toLowerCase().includes(q);
-        const matchName = a.name?.toLowerCase().includes(q);
-        if (!matchAuth && !matchLabel && !matchName) return false;
-      }
-      return true;
-    });
-  }, [accounts, filterState, searchQuery]);
-
-  // State Tone & Label
-  const getStatusInfo = (a: AccountAutomationAccountDTO): { tone: StatusTone; label: string } => {
-    if (!a.is_adopted) return { tone: 'neutral', label: t('automation.tag_not_adopted') };
-    if (isMonitorOnly(a)) {
-      return { tone: 'neutral', label: t(a.is_enabled ? 'automation.state_monitor_only' : 'automation.state_monitor_only_off') };
-    }
-    if (!a.is_enabled) return { tone: 'neutral', label: t('automation.state_idle') };
-    const s = a.state?.toLowerCase();
-    switch (s) {
-      case 'idle':
-        return { tone: 'neutral', label: t('automation.state_idle') };
-      case 'monitoring':
-        return { tone: 'accent', label: t('automation.state_monitoring') };
-      case 'disabled':
-        return { tone: 'danger', label: t('automation.state_disabled') };
-      case 'waiting':
-        return { tone: 'warn', label: t('automation.state_waiting') };
-      case 'error':
-        return { tone: 'danger', label: t('automation.state_error') };
-      default:
-        return { tone: 'neutral', label: t('automation.state_unknown') };
-    }
+  const patchAccount = (account: AccountAutomationAccountDTO, patch: AccountAutomationPatch) =>
+    write(() => api.putAccountAutomationAccount(account.auth_index, patch), t('automation.account_switch_updated'));
+  const displayName = (item: { auth_index: string; account_label?: string; name?: string; provider?: string }) => {
+    const primary = credentialLabel(item.account_label, [item.auth_index]) || credentialLabel(item.name, [item.auth_index]) || t('credential.account_fallback', { provider: item.provider || '' }).trim();
+    const name = credentialLabel(item.name, [item.auth_index]);
+    return { primary, secondary: name !== primary ? name : undefined };
   };
+  const formatTime = (value?: number | null) => value ? getDateTimeFormatter(languageLocale(lang), { timeZone: getTimeZone(), month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value) : '—';
+  const closeBatch = () => { setIsBatchOpen(false); setSelected([]); setNote(''); };
+  const filtered = rows.filter(row => matchesAutomationFacet(row, facet) &&
+    (!search.trim() || [row.account.account_label, row.account.name, row.account.provider, row.account.auth_index].some(value => value?.toLowerCase().includes(search.trim().toLowerCase()))));
+  const confirmUnadopt = (account: AccountAutomationAccountDTO) => modal.confirm({
+    title: t('automation.unadopt_title'), content: displayName(account).primary + ': ' + t('automation.unadopt_desc'),
+    okText: t('automation.unadopt_submit'), cancelText: t('common.cancel'),
+    onOk: () => write(() => api.postAccountAutomationUnadopt(account.auth_index), t('automation.unadopt_success')),
+  });
+  const statItems = [
+    ['adopted', stats.adopted], ['credentials', stats.credentials ?? '—'], ['monitor_only', stats.monitorOnly],
+    ['disabled', stats.disabled], ['waiting', stats.waiting], ['backoff', stats.backoff],
+  ] as const;
 
-  const getReasonLabel = (reason?: string) => {
-    if (!reason) return '';
-    switch (reason) {
-      case 'NOT_ADOPTED':
-      case 'not_adopted':
-        return t('automation.reason_not_adopted');
-      case 'NO_CONTROLLABLE_CREDENTIAL':
-      case 'no_controllable_credential':
-        return t('automation.reason_no_credential');
-      case 'SWITCH_OFF':
-      case 'switch_off':
-        return t('automation.reason_switch_off');
-      case 'NO_WEEKLY_EVIDENCE':
-      case 'no_weekly_evidence':
-        return t('automation.no_weekly_summary');
-      case 'NOT_EXHAUSTED':
-      case 'not_exhausted':
-        return t('automation.reason_not_exhausted');
-      case 'EXPIRED_RESET':
-      case 'expired_reset':
-        return t('automation.reason_expired_reset');
-      case 'STALE_EVIDENCE':
-      case 'stale_evidence':
-        return t('automation.reason_stale_evidence');
-      case 'MISSING_RESET':
-      case 'missing_reset':
-      case 'EXHAUSTED_MISSING_RESET':
-      case 'exhausted_missing_reset':
-        return t('automation.reason_missing_reset');
-      case 'RECOVERY_SCHEDULED':
-      case 'recovery_scheduled':
-        return t('automation.reason_recovery_scheduled');
-      case 'BACKOFF':
-      case 'backoff':
-        return t('automation.reason_backoff');
-      case 'EXTERNALLY_DISABLED':
-      case 'externally_disabled':
-        return t('automation.reason_externally_disabled');
-      case 'EXTERNALLY_RE_ENABLED':
-      case 'externally_re_enabled':
-        return t('automation.reason_externally_re_enabled');
-      case 'UNVERIFIED_ACCOUNT_WEEKLY_CAPABILITY':
-      case 'unverified_account_weekly_capability':
-        return t('automation.reason_unverified_account_weekly_capability');
-      case 'EVIDENCE_IDENTITY_MISMATCH':
-      case 'evidence_identity_mismatch':
-        return t('automation.reason_evidence_identity_mismatch');
-      case 'default_off':
-        return t('automation.source_default_off');
-      case 'web':
-        return t('automation.source_web');
-      case 'env_disabled':
-        return t('automation.source_env_disabled');
-      case 'env_enabled':
-        return t('automation.source_env_enabled');
-      case 'demo':
-        return t('automation.source_demo');
-      case 'unavailable':
-        return t('automation.source_unavailable');
-      case 'error':
-        return t('automation.source_error');
-      default:
-        return reason;
-    }
-  };
-
-  const getSourceBadge = (source?: string) => {
-    const s = source?.toLowerCase();
-    switch (s) {
-      case 'default_off':
-        return <Tag size="small">{t('automation.source_default_off')}</Tag>;
-      case 'web':
-        return <Tag size="small" tone="success">{t('automation.source_web')}</Tag>;
-      case 'env_enabled':
-        return <Tag size="small" tone="accent">{t('automation.source_env_enabled')}</Tag>;
-      case 'env_disabled':
-        return <Tag size="small" tone="danger">{t('automation.source_env_disabled')}</Tag>;
-      case 'demo':
-        return <Tag size="small">{t('automation.source_demo')}</Tag>;
-      case 'unavailable':
-        return <Tag size="small" tone="warn">{t('automation.source_unavailable')}</Tag>;
-      case 'error':
-        return <Tag size="small" tone="danger">{t('automation.source_error')}</Tag>;
-      default:
-        return source ? <Tag size="small">{source}</Tag> : null;
-    }
-  };
-
-  return (
-    <AppDrawer
-      title={t('automation.title')}
-      width="wide"
-      open={open}
-      onClose={onClose}
-      footerStart={
-        <span style={{ fontSize: 13, color: 'var(--muted)' }}>
-          {t('automation.adoption_summary', {
-            adopted: stats.adopted,
-            total: stats.credentialTotal ?? '—',
-          })}
-          {absentSummary && ` · ${absentSummary}`}
-        </span>
-      }
-      footer={
-        <Button onClick={onClose}>
-          {t('common.close')}
-        </Button>
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* Notice description */}
-        <Notice
-          tone="info"
-          title={t('automation.title')}
-          description={t('automation.desc')}
-        />
-
-        {listQuery.data?.candidates_degraded && (
-          <Notice
-            tone="warning"
-            title={t('automation.source_unavailable')}
-            description={listQuery.data.candidates_error || t('af.error')}
-          />
-        )}
-
-        {/* Master switch card */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)',
-          }}
-        >
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
-              <span>{t('automation.master_switch')}</span>
-              {getSourceBadge(settings?.source)}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
-              {t('automation.master_switch_desc')}
-              {!settings?.enabled && settings?.disabled_reason && (
-                <span style={{ marginLeft: 8, color: 'var(--warn)' }}>
-                  ({getReasonLabel(settings.disabled_reason)})
-                </span>
-              )}
-            </div>
-          </div>
-          <Switch
-            checked={Boolean(settings?.enabled)}
-            disabled={isDemo || masterMutation.isPending || settings?.master_from_env}
-            onChange={(checked) => masterMutation.mutate(checked)}
-            aria-label={t('automation.master_switch')}
-          />
-        </div>
-
-        {/* Stat strip */}
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(90px, 1fr))',
-            gap: 8,
-            padding: 12,
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 'var(--radius)',
-            textAlign: 'center',
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_adopted')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--accent)' }}>{stats.adopted}</div>
-            {absentSummary && <div style={{ fontSize: 12, color: 'var(--muted)' }}>{absentSummary}</div>}
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_credentials')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600 }}>{stats.credentialTotal ?? '—'}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_monitor_only')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--info)' }}>{stats.monitorOnly}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_disabled')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--danger)' }}>{stats.disabled}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_waiting')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--warn)' }}>{stats.waiting}</div>
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('automation.stat_error')}</div>
-            <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--danger)' }}>{stats.error}</div>
-          </div>
-        </div>
-
-        {/* Toolbar & Filter */}
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', flex: 1 }}>
-            <Input
-              style={{ maxWidth: 220 }}
-              placeholder={t('af.search_ph')}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              allowClear
-            />
-            <Select
-              style={{ width: 140 }}
-              value={filterState}
-              onChange={setFilterState}
-              options={[
-                { value: 'all', label: t('automation.filter_all') },
-                { value: 'adopted', label: t('automation.filter_adopted') },
-                { value: 'unadopted', label: t('automation.filter_unadopted') },
-                { value: 'monitor_only', label: t('automation.filter_monitor_only') },
-                { value: 'disabled', label: t('automation.filter_disabled') },
-                { value: 'waiting', label: t('automation.filter_waiting') },
-                { value: 'error', label: t('automation.filter_error') },
-              ]}
-            />
-          </div>
-          <Space>
-            <Button
-              type="primary"
-              disabled={isDemo || listQuery.isPending}
-              onClick={() => {
-                setSelectedAdoptKeys([]);
-                setIsAdoptModalOpen(true);
-              }}
-            >
-              {t('automation.btn_adopt')}
-            </Button>
-            <Button
-              icon={<ReloadOutlined />}
-              aria-label={t('common.refresh')}
-              onClick={() => {
-                void listQuery.refetch();
-                void settingsQuery.refetch();
-              }}
-            />
-          </Space>
-        </div>
-
-        {/* List of accounts */}
-        {listQuery.isPending ? (
-          <PageLoading />
-        ) : filteredAccounts.length === 0 ? (
-          <EmptyState title={t('af.empty_all')} />
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {filteredAccounts.map((account) => {
-              const statusInfo = getStatusInfo(account);
-              const s = account.state?.toLowerCase();
-              const isWaitingOrError = s === 'waiting' || s === 'error';
-              const r = account.monitor_reason?.toLowerCase();
-              const isMissingReset = r === 'missing_reset' || r === 'exhausted_missing_reset';
-              const hasWeeklyUsage = account.weekly_used_percent !== undefined && account.weekly_used_percent !== null;
-              const reason = !account.is_adopted ? ''
-                : r === 'no_controllable_credential' ? getReasonLabel(r)
-                : !account.auto_disable_supported ? t('automation.reason_unverified_account_weekly_capability')
-                : r === 'no_weekly_evidence' && !hasWeeklyUsage ? ''
-                : getReasonLabel(account.monitor_reason);
-
-                  const nameInfo = displayName(account);
-
-                  return (
-                    <div
-                      key={account.auth_index}
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                        padding: '12px 14px',
-                        background: 'var(--surface)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 'var(--radius)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                          <span style={{ fontWeight: 600 }}>
-                            {nameInfo.primary}
-                          </span>
-                          {nameInfo.secondary && (
-                            <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                              ({nameInfo.secondary})
-                            </span>
-                          )}
-                          {nameInfo.provider && (
-                            <Tag size="small">{nameInfo.provider}</Tag>
-                          )}
-                          {account.is_adopted && (
-                            <Tag size="small" tone="accent">{t('automation.tag_adopted')}</Tag>
-                          )}
-                          {account.disabled_by_automation ? (
-                            <Tag size="small" tone="danger">{t('automation.tag_disabled_by_auto')}</Tag>
-                          ) : null}
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0 }}>
-                          <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
-                          <Switch
-                            size="small"
-                            checked={account.is_enabled}
-                            disabled={isDemo || !account.is_adopted || accountSwitchMutation.isPending}
-                            onChange={(checked) =>
-                              accountSwitchMutation.mutate({ authIndex: account.auth_index, enabled: checked })
-                            }
-                            aria-label={nameInfo.primary}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Quota & Reset Details Row */}
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      flexWrap: 'wrap',
-                      gap: 8,
-                      fontSize: 12,
-                      color: 'var(--fg2)',
-                      background: 'var(--bg)',
-                      padding: '6px 10px',
-                      borderRadius: 4,
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                      {hasWeeklyUsage ? (
-                        <span>
-                          {t('automation.weekly_used', { n: account.weekly_used_percent!.toFixed(1) })}
-                          {account.weekly_reset_at_ms && (
-                            <span style={{ marginLeft: 6, color: 'var(--muted)' }}>
-                              ({t('automation.weekly_reset', { time: formatTime(account.weekly_reset_at_ms) })})
-                            </span>
-                          )}
-                        </span>
-                      ) : (
-                        <span style={{ color: 'var(--muted)' }}>{t(isMonitorOnly(account) ? 'automation.no_weekly_summary' : 'automation.no_weekly')}</span>
-                      )}
-
-                      {reason && (
-                        <span style={{ color: 'var(--warn)' }}>
-                          · {reason}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Recovery / Retry information */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {account.recovery_at_ms && account.recovery_status === 'scheduled' && (
-                        <span style={{ color: 'var(--accent)' }}>
-                          <ClockCircleOutlined style={{ marginRight: 4 }} />
-                          {t('automation.recovery_at', { time: formatTime(account.recovery_at_ms) })}
-                        </span>
-                      )}
-                      {account.recovery_at_ms && account.recovery_status === 'overdue' && (
-                        <span style={{ color: 'var(--warn)' }}>
-                          <ClockCircleOutlined style={{ marginRight: 4 }} />
-                          {t('automation.recovery_overdue')}
-                        </span>
-                      )}
-                      {account.next_attempt_at_ms && (
-                        <span style={{ color: 'var(--warn)' }}>
-                          {t('automation.next_attempt', {
-                            time: formatTime(account.next_attempt_at_ms),
-                            count: account.attempt_count ?? 1,
-                          })}
-                        </span>
-                      )}
-                      {isWaitingOrError && (
-                        <Button
-                          size="small"
-                          danger
-                          disabled={isDemo || cancelMutation.isPending}
-                          onClick={() => {
-                            modal.confirm({
-                              title: t('automation.btn_cancel_retry'),
-                              content: `${nameInfo.primary}: ${t('automation.cancel_confirm')}`,
-                              onOk: () => cancelMutation.mutate(account.auth_index),
-                            });
-                          }}
-                        >
-                          {t('automation.btn_cancel_retry')}
-                        </Button>
-                      )}
-                      {isMissingReset && (
-                        <Button
-                          size="small"
-                          type="primary"
-                          disabled={isDemo}
-                          onClick={() => {
-                            setManualResetTarget(account);
-                            setManualResetTime('');
-                            setManualResetError('');
-                          }}
-                        >
-                          {t('automation.btn_manual_reset')}
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+  return <AppDrawer title={t('automation.title')} width="wide" open={open} onClose={onClose}
+    footerStart={<span className={styles['muted']}>{t('automation.adoption_summary', { adopted: stats.adopted, total: stats.credentials ?? '—' })}</span>}
+    footer={<Button onClick={onClose}>{t('common.close')}</Button>}>
+    <div className={styles['content']}>
+      <p className={styles['intro']}>{t('automation.desc')}</p>
+      {listQuery.isError && <Notice tone="error" title={t('automation.load_failed')} description={t('automation.refresh_help')} />}
+      {listQuery.data?.candidates_degraded && <Notice tone="warning" title={t('automation.source_unavailable')} description={t('automation.inventory_degraded')} />}
+      <div className={styles['master']}>
+        <div><strong>{t('automation.master_switch')}</strong><p>{t('automation.master_switch_desc')}</p>
+          {settings && <span className={styles['muted']}>{t(['default_off', 'web', 'env_enabled', 'env_disabled', 'demo', 'unavailable', 'error'].includes(settings.source) ? `automation.source_${settings.source}` : 'automation.source_error')}</span>}</div>
+        <Switch checked={Boolean(settings?.enabled)} disabled={!canWrite || settings?.master_from_env}
+          aria-label={t('automation.master_switch')} onChange={enabled => write(() => api.putAccountAutomationSettings({ enabled }), t('automation.master_switch_updated'))} />
       </div>
-
-      {/* Batch Adopt Modal */}
-      <Modal
-        open={isAdoptModalOpen}
-        title={t('automation.adopt_title')}
-        onCancel={() => setIsAdoptModalOpen(false)}
-        footer={[
-          <Button key="cancel" onClick={() => setIsAdoptModalOpen(false)}>
-            {t('common.cancel')}
-          </Button>,
-          <Button
-            key="submit"
-            type="primary"
-            disabled={selectedAdoptKeys.length === 0 || adoptMutation.isPending}
-            loading={adoptMutation.isPending}
-            onClick={() => adoptMutation.mutate()}
-          >
-            {t('automation.adopt_submit')}
-          </Button>,
-        ]}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <p style={{ color: 'var(--muted)', fontSize: 13 }}>{t('automation.adopt_desc')}</p>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 13, fontWeight: 500 }}>
-              {t('automation.adopt_selected_count', { n: selectedAdoptKeys.length })}
-            </span>
-            <Space size="small">
-              <Button
-                type="link"
-                size="small"
-                onClick={() => {
-                  const unadopted = adoptableCandidates.length > 0
-                    ? adoptableCandidates.map((c) => c.auth_index)
-                    : accounts.filter((a) => !a.is_adopted).map((a) => a.auth_index);
-                  setSelectedAdoptKeys(unadopted);
-                }}
-              >
-                {t('automation.adopt_select_all')}
-              </Button>
-              <Button
-                type="link"
-                size="small"
-                disabled={selectedAdoptKeys.length === 0}
-                onClick={() => setSelectedAdoptKeys([])}
-              >
-                {t('automation.adopt_deselect_all')}
-              </Button>
-            </Space>
-          </div>
-
-          <div
-            style={{
-              maxHeight: 220,
-              overflowY: 'auto',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)',
-              padding: 8,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-            }}
-          >
-            {candidates.length > 0 ? (
-              candidates.map((c) => {
-                const nameInfo = displayName(c);
-                return (
-                  <Checkbox
-                    key={c.auth_index}
-                    checked={selectedAdoptKeys.includes(c.auth_index)}
-                    disabled={!c.adoptable}
-                    aria-label={nameInfo.primary}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedAdoptKeys([...selectedAdoptKeys, c.auth_index]);
-                      } else {
-                        setSelectedAdoptKeys(selectedAdoptKeys.filter((k) => k !== c.auth_index));
-                      }
-                    }}
-                  >
-                    <span style={{ fontWeight: 500, fontSize: 13 }}>{nameInfo.primary}</span>
-                    {nameInfo.secondary && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>({nameInfo.secondary})</span>}
-                    {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
-                    {c.adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
-                    {c.disabled && <span style={{ marginLeft: 6, color: 'var(--warn)', fontSize: 12 }}>[{t('automation.tag_disabled_external')}]</span>}
-                    {!c.adoptable && c.adoption_blocked_reason && (
-                      <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
-                        ({getReasonLabel(c.adoption_blocked_reason)})
-                      </span>
-                    )}
-                    {c.adoptable && !c.auto_disable_supported && (
-                      <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>
-                        ({t('automation.adopt_monitor_only')})
-                      </span>
-                    )}
-                  </Checkbox>
-                );
-              })
-            ) : (
-              accounts.map((a) => {
-                const nameInfo = displayName(a);
-                return (
-                  <Checkbox
-                    key={a.auth_index}
-                    checked={selectedAdoptKeys.includes(a.auth_index)}
-                    aria-label={nameInfo.primary}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedAdoptKeys([...selectedAdoptKeys, a.auth_index]);
-                      } else {
-                        setSelectedAdoptKeys(selectedAdoptKeys.filter((k) => k !== a.auth_index));
-                      }
-                    }}
-                  >
-                    <span style={{ fontWeight: 500, fontSize: 13 }}>{nameInfo.primary}</span>
-                    {nameInfo.secondary && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>({nameInfo.secondary})</span>}
-                    {nameInfo.provider && <Tag size="small" style={{ marginLeft: 6 }}>{nameInfo.provider}</Tag>}
-                    {a.is_adopted && <span style={{ marginLeft: 6, color: 'var(--muted)', fontSize: 12 }}>[{t('automation.tag_adopted')}]</span>}
-                  </Checkbox>
-                );
-              })
-            )}
-          </div>
-
-          <Checkbox
-            checked={adoptAutoEnable}
-            onChange={(e) => setAdoptAutoEnable(e.target.checked)}
-          >
-            {t('automation.adopt_enable_switch')}
-          </Checkbox>
-
-          <Input
-            placeholder={t('automation.adopt_note_placeholder')}
-            value={adoptNote}
-            maxLength={256}
-            onChange={(e) => setAdoptNote(e.target.value)}
-          />
+      <div className={styles['stats']} data-testid="automation-stats">{statItems.map(([key, value]) => <div key={key} title={t(`automation.stat_help_${key}`)}><span>{t(`automation.stat_${key}`)}</span><strong>{value}</strong></div>)}</div>
+      <div className={styles['toolbar']}>
+        <Input className={styles['search']} aria-label={t('af.search_ph')} placeholder={t('af.search_ph')} value={search} onChange={event => setSearch(event.target.value)} allowClear />
+        <Button icon={<ReloadOutlined />} aria-label={t('common.refresh')} loading={listQuery.isFetching} disabled={isBusy} onClick={() => { void listQuery.refetch(); }}>{t('common.refresh')}</Button>
+        <Button type="primary" disabled={!canWrite} onClick={() => { setBatchMode('adopt'); setSelected([]); setShouldEnable(true); setNote(''); setIsBatchOpen(true); }}>{t('automation.batch_title')}</Button>
+      </div>
+      <div className={styles['facets']} role="group" aria-label={t('automation.filter_label')}>{FACETS.map(value => <button type="button" key={value} aria-pressed={facet === value} onClick={() => setFacet(value)}>{t(`automation.facet_${value}`)}</button>)}</div>
+      <div className={styles['list-header']} aria-hidden="true"><span>{t('automation.account_credential')}</span><span>{t('automation.state_reason')}</span><span>{t('automation.col_actions')}</span></div>
+      {listQuery.isPending ? <PageLoading /> : filtered.length === 0 ? <EmptyState title={t('automation.empty')} /> :
+        <div className={styles['list']}>{filtered.map(row => {
+          const account = row.account;
+          const name = displayName(account);
+          const isExpanded = expanded.includes(account.auth_index);
+          const detailId = 'automation-details-' + encodeURIComponent(account.auth_index);
+          const reason = t(automationRowReasonKey(row), { time: formatTime(account.recovery_at_ms), count: account.attempt_count });
+          return <article key={account.auth_index} className={styles['account-card']} data-testid="automation-account" aria-label={name.primary}>
+            <div className={styles['account-row']}>
+              <div className={styles['identity']} data-testid="automation-identity"><ProviderBrandIcon iconId={credentialProviderIconId(account.provider || '')} size={26} />
+                <div className={styles['identity-text']}><strong title={name.primary}>{name.primary}</strong><span title={name.secondary || account.provider}>{name.secondary || account.provider || '—'}</span></div></div>
+              <div className={styles['status']} data-testid="automation-status"><StatusLabel tone={TONES[row.state]}>{t(`automation.display_${row.state}`)}</StatusLabel><span className={styles['reason']} title={reason}>{reason}</span></div>
+              <div className={styles['actions']} data-testid="automation-actions">
+                <Tooltip title={t('automation.credit_help')}><button type="button" className={styles['credit']} aria-label={t('automation.credit_account', { name: name.primary })} aria-pressed={account.burn_credit} disabled={!canWrite || row.isMonitorOnly} onClick={() => patchAccount(account, { burn_credit: !account.burn_credit })}>{t('automation.credit')}</button></Tooltip>
+                <label className={styles['switch-hit']} htmlFor={detailId + '-switch'}><Switch id={detailId + '-switch'} checked={account.is_enabled} disabled={!canWrite} aria-label={t('automation.switch_account', { name: name.primary })} onChange={enabled => patchAccount(account, { enabled })} /></label>
+                <Button type="text" aria-expanded={isExpanded} aria-controls={detailId} onClick={() => setExpanded(keys => isExpanded ? keys.filter(key => key !== account.auth_index) : [...keys, account.auth_index])}>{t('automation.details')}</Button>
+              </div>
+            </div>
+            {isExpanded && <div id={detailId} className={styles['details']}>
+              <dl className={styles['detail-grid']}>
+                <div><dt>{t('automation.col_weekly')}</dt><dd>{account.has_weekly_evidence && account.weekly_used_percent != null ? t('automation.weekly_used', { n: account.weekly_used_percent.toFixed(1) }) : t(row.isMonitorOnly ? 'automation.no_weekly_summary' : 'automation.no_weekly')}</dd></div>
+                <div><dt>{t('automation.reset_time')}</dt><dd>{formatTime(account.weekly_reset_at_ms)}</dd></div>
+                <div><dt>{t('automation.last_disable')}</dt><dd>{formatTime(account.last_disable_at_ms)}</dd></div>
+                <div><dt>{t('automation.last_enable')}</dt><dd>{formatTime(account.last_enable_at_ms)}</dd></div>
+              </dl>
+              {row.hasRecovery && <p>{t(account.recovery_status === 'overdue' ? 'automation.recovery_overdue' : 'automation.recovery_at', { time: formatTime(account.recovery_at_ms) })}</p>}
+              {account.next_attempt_at_ms && <p>{t('automation.next_attempt', { time: formatTime(account.next_attempt_at_ms), count: account.attempt_count })}</p>}
+              {account.last_error && <p className={styles['error']}>{t('automation.last_error')}: {account.last_error}</p>}
+              <div className={styles['detail-actions']}>
+                <Button href={getAppConfig().basePath.replace(/[/]$/, '') + '/audit?q=' + encodeURIComponent(account.auth_index)}>{t('nav.audit')}</Button>
+                {(row.hasBackoff || account.state === 'waiting' || account.state === 'error') && <Button disabled={!canWrite} onClick={() => modal.confirm({ title: t('automation.btn_cancel_retry'), content: t('automation.cancel_confirm'), onOk: () => write(() => api.postAccountAutomationCancel(account.auth_index), t('automation.cancel_success')) })}>{t('automation.btn_cancel_retry')}</Button>}
+                {row.reason === 'missing_reset' && <Button disabled={!canWrite} onClick={() => { setResetTarget(account); setResetTime(''); setResetError(''); }}>{t('automation.btn_manual_reset')}</Button>}
+                <Button danger disabled={!canWrite} onClick={() => confirmUnadopt(account)}>{t('automation.unadopt_title')}</Button>
+              </div>
+            </div>}
+          </article>;
+        })}</div>}
+    </div>
+    <Modal open={isBatchOpen} title={t('automation.batch_title')} onCancel={() => { if (!isBusy) closeBatch(); }} closable={!isBusy} mask={{ closable: !isBusy }}
+      footer={<><Button disabled={isBusy} onClick={closeBatch}>{t('common.cancel')}</Button><Button type="primary" danger={batchMode === 'unadopt'} loading={isBusy} disabled={!canWrite || !selection.length || listQuery.isFetching} onClick={() => {
+        const keys = [...selection];
+        if (batchMode === 'adopt') write(() => api.postAccountAutomationAdopt({ auth_indexes: keys, enable: shouldEnable, note: note.trim() || undefined }), t('automation.adopt_success', { n: keys.length }), closeBatch);
+        else write(() => api.postAccountAutomationUnadoptMany({ auth_indexes: keys }), t('automation.unadopt_success'), closeBatch);
+      }}>{t(batchMode === 'adopt' ? 'automation.adopt_submit' : 'automation.unadopt_submit')}</Button></>}>
+      <div className={styles['batch-content']}>
+        <Segmented block disabled={isBusy} value={batchMode} onChange={value => { setBatchMode(value as 'adopt' | 'unadopt'); setSelected([]); }} options={[{ label: t('automation.adopt_title'), value: 'adopt' }, { label: t('automation.unadopt_title'), value: 'unadopt' }]} />
+        <p>{t(batchMode === 'adopt' ? 'automation.adopt_desc' : 'automation.unadopt_desc')}</p>
+        <div className={styles['batch-tools']}><span>{t('automation.adopt_selected_count', { n: selection.length })}</span><Button size="small" disabled={isBusy || !eligibleKeys.length} onClick={() => setSelected(eligibleKeys)}>{t('automation.select_all')}</Button><Button size="small" disabled={isBusy || !selection.length} onClick={() => setSelected([])}>{t('automation.adopt_deselect_all')}</Button></div>
+        <div className={styles['batch-list']}>
+          {(batchMode === 'adopt' ? candidates.filter(candidate => !candidate.adopted) : rows.map(row => row.account)).map(item => {
+            const name = displayName(item);
+            return <Checkbox key={item.auth_index} aria-label={name.primary} checked={selection.includes(item.auth_index)} disabled={isBusy || !eligibleKeys.includes(item.auth_index)} onChange={event => setSelected(keys => event.target.checked ? [...keys, item.auth_index] : keys.filter(key => key !== item.auth_index))}>
+              <span className={styles['batch-name']} title={name.primary}>{name.primary}</span>
+              {name.secondary && <span className={styles['muted']}> {name.secondary}</span>}
+              {'adoptable' in item && !item.adoptable && <span className={styles['muted']}> · {t(automationReasonKey(item.adoption_blocked_reason))}</span>}
+              {'adoptable' in item && item.adoptable && !item.auto_disable_supported && <span className={styles['muted']}> · {t('automation.adopt_monitor_only')}</span>}
+            </Checkbox>;
+          })}
         </div>
-      </Modal>
-
-      {/* Manual Reset Modal */}
-      <Modal
-        open={Boolean(manualResetTarget)}
-        title={t('automation.manual_reset_title')}
-        onCancel={() => setManualResetTarget(null)}
-        footer={[
-          <Button key="cancel" onClick={() => setManualResetTarget(null)}>
-            {t('common.cancel')}
-          </Button>,
-          <Button
-            key="submit"
-            type="primary"
-            disabled={!manualResetTime || Boolean(manualResetError) || manualResetMutation.isPending}
-            loading={manualResetMutation.isPending}
-            onClick={() => {
-              if (!manualResetTarget) return;
-              const date = new Date(manualResetTime);
-              if (isNaN(date.getTime()) || date.getTime() <= Date.now()) {
-                setManualResetError(t('automation.manual_reset_must_future'));
-                return;
-              }
-              manualResetMutation.mutate({
-                authIndex: manualResetTarget.auth_index,
-                resetAtMs: date.getTime(),
-              });
-            }}
-          >
-            {t('common.confirm')}
-          </Button>,
-        ]}
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <p style={{ color: 'var(--muted)', fontSize: 13 }}>{t('automation.manual_reset_desc')}</p>
-          <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>{displayName(manualResetTarget).primary}</span>
-            {displayName(manualResetTarget).secondary && (
-              <span style={{ color: 'var(--muted)', fontSize: 12 }}>({displayName(manualResetTarget).secondary})</span>
-            )}
-            {displayName(manualResetTarget).provider && (
-              <Tag size="small">{displayName(manualResetTarget).provider}</Tag>
-            )}
-          </div>
-          <div>
-            <label style={{ display: 'block', marginBottom: 4, fontSize: 13 }}>
-              {t('automation.manual_reset_field')} ({getTimeZone()})
-            </label>
-            <input
-              type="datetime-local"
-              style={{
-                width: '100%',
-                padding: '6px 10px',
-                background: 'var(--surface)',
-                color: 'var(--fg)',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius)',
-              }}
-              value={manualResetTime}
-              onChange={(e) => {
-                setManualResetTime(e.target.value);
-                const d = new Date(e.target.value);
-                if (isNaN(d.getTime()) || d.getTime() <= Date.now()) {
-                  setManualResetError(t('automation.manual_reset_must_future'));
-                } else {
-                  setManualResetError('');
-                }
-              }}
-            />
-            {manualResetError && (
-              <span style={{ color: 'var(--danger)', fontSize: 12, marginTop: 4, display: 'block' }}>
-                {manualResetError}
-              </span>
-            )}
-          </div>
-        </div>
-      </Modal>
-    </AppDrawer>
-  );
+        {batchMode === 'adopt' && <><Checkbox disabled={isBusy} checked={shouldEnable} onChange={event => setShouldEnable(event.target.checked)}>{t('automation.adopt_enable_switch')}</Checkbox><Input disabled={isBusy} aria-label={t('automation.adopt_note_placeholder')} placeholder={t('automation.adopt_note_placeholder')} value={note} maxLength={256} onChange={event => setNote(event.target.value)} /></>}
+      </div>
+    </Modal>
+    <Modal open={Boolean(resetTarget)} title={t('automation.manual_reset_title')} onCancel={() => { if (!isBusy) setResetTarget(null); }} confirmLoading={isBusy}
+      okButtonProps={{ disabled: !canWrite || !resetTime || Boolean(resetError) }} onOk={() => {
+        if (!resetTarget) return;
+        const resetAtMs = dayjs(resetTime).valueOf();
+        if (!Number.isFinite(resetAtMs) || resetAtMs <= Date.now()) { setResetError(t('automation.manual_reset_must_future')); return; }
+        write(() => api.postAccountAutomationManualReset(resetTarget.auth_index, { reset_at_ms: resetAtMs }), t('automation.manual_reset_success'), () => setResetTarget(null));
+      }}>
+      <p>{t('automation.manual_reset_desc')}</p><label htmlFor="automation-reset-time">{t('automation.manual_reset_field')} ({getTimeZone()})</label>
+      <Input id="automation-reset-time" type="datetime-local" value={resetTime} disabled={isBusy} onChange={event => {
+        setResetTime(event.target.value);
+        const value = dayjs(event.target.value).valueOf();
+        setResetError(Number.isFinite(value) && value > Date.now() ? '' : t('automation.manual_reset_must_future'));
+      }} />{resetError && <p className={styles['error']}>{resetError}</p>}
+    </Modal>
+  </AppDrawer>;
 };

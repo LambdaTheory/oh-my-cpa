@@ -16,6 +16,8 @@ export type AutomationMonitorReason =
   | 'not_adopted'
   | 'switch_off'
   | 'no_controllable_credential'
+  | 'credential_not_found'
+  | 'credential_missing_name'
   | 'no_weekly_evidence'
   | 'not_exhausted'
   | 'missing_reset'
@@ -36,6 +38,8 @@ export interface AccountAutomationAccountDTO {
   account_label?: string;
   is_adopted: boolean;
   is_enabled: boolean;
+  burn_credit: boolean;
+  removed: boolean;
   state: AutomationState;
   monitor_reason?: AutomationMonitorReason;
   auto_disable_supported: boolean;
@@ -98,4 +102,16 @@ export interface AccountAutomationAdoptResponse {
 
 export interface AccountAutomationManualResetPayload {
   reset_at_ms: number;
+}
+
+export type AccountAutomationPatch =
+  | { enabled: boolean; burn_credit?: boolean }
+  | { enabled?: boolean; burn_credit: boolean };
+
+export interface AccountAutomationUnadoptPayload {
+  auth_indexes: string[];
+}
+
+export interface AccountAutomationUnadoptResponse {
+  removed: number;
 }
