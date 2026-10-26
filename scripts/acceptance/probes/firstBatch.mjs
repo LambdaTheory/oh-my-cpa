@@ -103,98 +103,114 @@ const automationState = {
   removed: [],
   settings: automationSettings(),
   adopt: null,
+  unadopt: null,
+  unadopted: [],
   cancel: null,
   manualReset: null,
 };
 
 function automationListBody(state) {
-  const adopted = state.phase !== 'first';
-  const body = {
-    settings: { ...state.settings, accounts: adopted ? 4 : 0 },
-    accounts: adopted
-      ? [
-        {
-          auth_index: VERIFIED_CLAUDE,
-          provider: 'claude',
-          name: VERIFIED_CLAUDE,
-          account_label: `${VERIFIED_CLAUDE}: a@example.test`,
-          is_adopted: true,
-          is_enabled: true,
-          state: 'waiting',
-          monitor_reason: 'backoff',
-          auto_disable_supported: true,
-          disabled_by_automation: true,
-          recovery_at_ms: Date.now() - 60_000,
-          recovery_status: 'overdue',
-          attempt_count: 2,
-          next_attempt_at_ms: Date.now() + 300_000,
-          has_weekly_evidence: true,
-          weekly_used_percent: 100,
-          weekly_reset_at_ms: Date.now() + 86_400_000,
-          intent_version: 3,
-        },
-        {
-          auth_index: VERIFIED_CODEX,
-          provider: 'codex',
-          name: 'codex-credential-with-a-very-long-descriptive-file-name-for-layout.json',
-          account_label: 'b-with-a-very-long-account-name-for-ellipsis@example.test',
-          is_adopted: true,
-          is_enabled: true,
-          state: state.manualReset ? 'waiting' : 'monitoring',
-          monitor_reason: state.manualReset ? 'recovery_scheduled' : 'missing_reset',
-          auto_disable_supported: true,
-          disabled_by_automation: false,
-          recovery_at_ms: state.manualReset?.reset_at_ms,
-          recovery_status: state.manualReset ? 'scheduled' : undefined,
-          attempt_count: 0,
-          has_weekly_evidence: true,
-          weekly_used_percent: 100,
-          intent_version: 4,
-        },
-        {
-          auth_index: MONITOR_ONLY_UNVERIFIED,
-          provider: 'antigravity',
-          name: 'Unverified C',
-          account_label: 'c@example.test',
-          is_adopted: true,
-          is_enabled: true,
-          state: 'monitoring',
-          monitor_reason: 'unverified_account_weekly_capability',
-          auto_disable_supported: false,
-          disabled_by_automation: false,
-          // A stale timestamp from an older server is history without an active
-          // recovery status and must not render as an expected recovery.
-          recovery_at_ms: Date.now() - 86_400_000,
-          attempt_count: 0,
-          has_weekly_evidence: false,
-          intent_version: 1,
-        },
-        {
-          auth_index: 'historical-idle',
-          provider: 'claude',
-          account_label: 'Idle account',
-          is_adopted: true,
-          is_enabled: false,
-          state: 'idle',
-          monitor_reason: 'switch_off',
-          auto_disable_supported: true,
-          disabled_by_automation: false,
-          attempt_count: 0,
-          has_weekly_evidence: false,
-          intent_version: 1,
-        },
-      ]
-      : [],
-    candidates: [
-      candidate(VERIFIED_CLAUDE, { provider: 'claude', name: VERIFIED_CLAUDE, label: `${VERIFIED_CLAUDE}: a@example.test`, disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
-      candidate(VERIFIED_CODEX, { provider: 'codex', name: 'codex-credential-with-a-very-long-descriptive-file-name-for-layout.json', label: 'b@example.test', disabled: true, controllable: true, adopted, adoptable: true, autoDisableSupported: true }),
-      candidate(MONITOR_ONLY_UNVERIFIED, { provider: 'antigravity', name: 'Unverified C', label: 'c@example.test', disabled: false, controllable: true, adopted, adoptable: true, autoDisableSupported: false }),
-      candidate(BLOCKED_UNCONTROLLABLE, { provider: 'antigravity', name: '', label: 'runtime-only@example.test', disabled: false, controllable: false, adopted: false, adoptable: false, autoDisableSupported: false, reason: 'no_controllable_credential' }),
-    ],
+  // Every row is a CURRENT gateway credential, exactly as the handler projects it: the
+  // matched plan is nested under its credential, and a plan without a current credential is
+  // a count, never a row. The fixture drives managed, unmanaged and unavailable states.
+  const available = state.phase !== 'unavailable';
+  // An outage keeps the plans: they are the last-known state the drawer labels as history.
+  const managed = state.phase === 'adopted' || state.phase === 'unavailable';
+  const planFor = (credential, overrides) => managed ? {
+    auth_index: credential.auth_index,
+    provider: credential.provider,
+    name: credential.name,
+    account_label: credential.account_label,
+    is_adopted: true,
+    is_enabled: true,
+    burn_credit: false,
+    removed: false,
+    state: 'monitoring',
+    auto_disable_supported: credential.auto_disable_supported,
+    disabled_by_automation: false,
+    attempt_count: 0,
+    intent_version: 1,
+    has_weekly_evidence: false,
+    ...overrides,
+  } : null;
+  const credentials = [
+    {
+      auth_index: VERIFIED_CLAUDE, provider: 'claude', name: 'claude-credential.json',
+      account_label: `${VERIFIED_CLAUDE}: a@example.test`, disabled: true, controllable: true,
+      managed, adoptable: true, auto_disable_supported: true,
+      plan: planFor({ auth_index: VERIFIED_CLAUDE, provider: 'claude', name: 'claude-credential.json', account_label: 'a@example.test', auto_disable_supported: true }, {
+        state: 'waiting', monitor_reason: 'backoff', disabled_by_automation: true,
+        recovery_at_ms: Date.now() - 60_000, recovery_status: 'overdue',
+        attempt_count: 2, next_attempt_at_ms: Date.now() + 300_000, intent_version: 3,
+        has_weekly_evidence: true, weekly_used_percent: 100, weekly_reset_at_ms: Date.now() + 86_400_000,
+      }),
+    },
+    {
+      auth_index: VERIFIED_CODEX, provider: 'codex',
+      name: 'codex-credential-with-a-very-long-descriptive-file-name-for-layout.json',
+      account_label: 'b-with-a-very-long-account-name-for-ellipsis@example.test',
+      disabled: false, controllable: true, managed, adoptable: true, auto_disable_supported: true,
+      plan: planFor({ auth_index: VERIFIED_CODEX, provider: 'codex', name: 'codex-credential-with-a-very-long-descriptive-file-name-for-layout.json', account_label: 'b-with-a-very-long-account-name-for-ellipsis@example.test', auto_disable_supported: true }, {
+        state: state.manualReset ? 'waiting' : 'monitoring',
+        monitor_reason: state.manualReset ? 'recovery_scheduled' : 'missing_reset',
+        recovery_at_ms: state.manualReset?.reset_at_ms,
+        recovery_status: state.manualReset ? 'scheduled' : undefined,
+        intent_version: 4, has_weekly_evidence: true, weekly_used_percent: 100,
+      }),
+    },
+    {
+      auth_index: MONITOR_ONLY_UNVERIFIED, provider: 'antigravity', name: 'Unverified C',
+      account_label: 'c@example.test', disabled: false, controllable: true, managed,
+      adoptable: true, auto_disable_supported: false,
+      plan: planFor({ auth_index: MONITOR_ONLY_UNVERIFIED, provider: 'antigravity', name: 'Unverified C', account_label: 'c@example.test', auto_disable_supported: false }, {
+        monitor_reason: 'unverified_account_weekly_capability',
+        // A stale timestamp without an active recovery status is history, never an
+        // expected recovery.
+        recovery_at_ms: Date.now() - 86_400_000,
+      }),
+    },
+    {
+      auth_index: 'historical-idle', provider: 'claude', name: 'idle.json',
+      account_label: 'Idle account', disabled: true, controllable: true, managed,
+      adoptable: true, auto_disable_supported: true,
+      plan: planFor({ auth_index: 'historical-idle', provider: 'claude', name: 'idle.json', account_label: 'Idle account', auto_disable_supported: true }, {
+        is_enabled: false, state: 'idle', monitor_reason: 'switch_off',
+      }),
+    },
+    {
+      auth_index: BLOCKED_UNCONTROLLABLE, provider: 'antigravity', name: '',
+      account_label: 'runtime-only@example.test', disabled: false, controllable: false,
+      managed: false, adoptable: false, auto_disable_supported: false,
+      adoption_blocked_reason: 'credential_missing_name', plan: null,
+    },
+  ];
+  const patched = credentials.map(row => {
+    const patch = automationState.patches[row.auth_index] ?? {};
+    const unadopted = automationState.unadopted.includes(row.auth_index);
+    return { ...row, managed: row.managed && !unadopted, plan: row.plan && !unadopted ? { ...row.plan, ...patch } : null };
+  });
+  const listed = available ? patched : [];
+  const managedRows = listed.filter(row => row.managed).length;
+  const roster = patched.filter(row => row.plan).map(row => row.plan);
+  return {
+    settings: { ...state.settings, accounts: managedRows },
+    inventory: available ? {
+      available: true,
+      credentials: listed.length,
+      managed: managedRows,
+      unmanaged: listed.length - managedRows,
+      disabled: listed.filter(row => row.disabled).length,
+      pending_absence: 0,
+    } : { available: false, error: 'credential list unavailable' },
+    credentials: listed,
+    accounts: roster,
+    accounts_last_known: !available,
+    candidates: listed.map(row => ({
+      auth_index: row.auth_index, provider: row.provider, name: row.name, account_label: row.account_label,
+      disabled: row.disabled, controllable: row.controllable, adopted: row.managed, adoptable: row.adoptable,
+      adoption_blocked_reason: row.adoption_blocked_reason, auto_disable_supported: row.auto_disable_supported,
+    })),
   };
-  body.accounts = body.accounts.filter(account => !automationState.removed.includes(account.auth_index)).map(account => ({ burn_credit: false, removed: false, ...account, ...(automationState.patches[account.auth_index] ?? {}) }));
-  body.candidates = body.candidates.map(candidate => ({ ...candidate, adopted: body.accounts.some(account => account.auth_index === candidate.auth_index) }));
-  return body;
 }
 
 export function accountAutomationFixtures() {
@@ -206,13 +222,14 @@ export function accountAutomationFixtures() {
     }],
     [(url, method) => method === 'POST' && url.pathname.endsWith('/account-automation/unadopt'), (url, method, request) => {
       const keys = JSON.parse(request.postData()).auth_indexes;
-      automationState.removed.push(...keys);
+      automationState.unadopted.push(...keys);
+      automationState.unadopt = keys;
       return { removed: keys.length };
     }],
     [(url, method) => method === 'POST' && /account-automation[/]accounts[/][^/]+[/]unadopt$/.test(url.pathname), url => {
       const key = decodeURIComponent(url.pathname.split('/').at(-2));
       const account = automationListBody(automationState).accounts.find(account => account.auth_index === key);
-      automationState.removed.push(key);
+      automationState.unadopted.push(key);
       return { ...account, is_adopted: false, removed: true };
     }],
     ...oauthManagementFixtures.routes,
@@ -228,9 +245,10 @@ export function accountAutomationFixtures() {
       (url, method) => method === 'POST' && url.pathname.endsWith('/account-automation/adopt'),
       (url, method, request) => {
         automationState.adopt = JSON.parse(request.postData() ?? '{}');
-        // The roster exists after the one-time selection, so the drawer's refetch can
-        // show the planned accounts the second half of the scenario drives.
+        // Every selected credential joins the roster, so the drawer's refetch shows the
+        // current rows as managed; re-adopting a previously unadopted row restores it.
         automationState.phase = 'adopted';
+        automationState.unadopted = automationState.unadopted.filter(key => !(automationState.adopt.auth_indexes ?? []).includes(key));
         return { adopted: (automationState.adopt.auth_indexes ?? []).length };
       },
     ],
@@ -252,9 +270,10 @@ export function accountAutomationFixtures() {
 }
 
 export async function accountAutomation({ base, page, check }) {
-  Object.assign(automationState, { phase: 'first', adopt: null, cancel: null, manualReset: null, patches: {}, removed: [] });
+  Object.assign(automationState, { phase: 'first', adopt: null, unadopt: null, unadopted: [], cancel: null, manualReset: null, patches: {}, removed: [] });
   await gotoConsole(page, base, '/oauth-management', '.oauth-management-page');
   const drawer = await openAutomationDrawer(page);
+  const statsText = async (surface) => await surface.getByTestId('automation-stats').evaluate(element => element.textContent ?? '');
   const checkStatAlignment = async (surface, label) => {
     const stats = await surface.getByTestId('automation-stats').locator(':scope > div').evaluateAll(elements => elements.map(element => {
       const label = element.querySelector('span');
@@ -263,27 +282,39 @@ export async function accountAutomation({ base, page, check }) {
     }));
     check(label + ' statistic labels stay on one line with aligned values', stats.length === 6 && stats.every(stat => stat.labelHeight <= stat.lineHeight + 1 && stats.filter(other => Math.abs(other.top - stat.top) < 1).every(other => Math.abs(other.valueTop - stat.valueTop) < 1)), JSON.stringify(stats));
   };
-  const batch = drawer.getByRole('button', { name: 'Batch Operations', exact: true });
-  await until(() => batch.isEnabled(), { label: 'live inventory ready' });
-  await batch.click();
-  const dialog = page.locator('.ant-modal:visible').filter({ hasText: 'Batch Operations' });
-  const submit = dialog.getByRole('button', { name: 'Confirm Adoption', exact: true });
-  check('first adoption starts empty with immediate automation enabled', await submit.isDisabled() && await dialog.getByRole('checkbox', { name: /immediately/ }).isChecked());
-  check('uncontrollable credentials cannot be selected', await dialog.getByRole('checkbox', { name: 'runtime-only@example.test', exact: true }).isDisabled());
-  check('monitor-only adoption names its capability limit', (await dialog.innerText()).includes('Capability unverified; monitor-only after adoption'));
-  check('adoption labels hide standalone and prefixed internal indexes', !(await dialog.innerText()).includes(VERIFIED_CLAUDE) && await dialog.getByRole('checkbox', { name: 'a@example.test', exact: true }).count() === 1);
-  await dialog.getByRole('button', { name: 'Select all', exact: true }).click();
-  await dialog.getByRole('textbox').fill('Synthetic browser batch');
-  await page.screenshot({ path: 'tmp/issue-69/batch-adopt-desktop-en.png' });
-  await submit.click();
-  await until(() => automationState.adopt !== null, { label: 'adoption request' });
-  check('batch adoption sends eligible indexes and operator options', automationState.adopt.auth_indexes.length === 3 && !automationState.adopt.auth_indexes.includes(BLOCKED_UNCONTROLLABLE) && automationState.adopt.enable && automationState.adopt.note === 'Synthetic browser batch');
   const cards = drawer.getByTestId('automation-account');
-  await until(async () => await cards.count() === 4, { label: 'refreshed roster' });
   const card = label => drawer.getByRole('article', { name: label, exact: true });
   const longName = 'b-with-a-very-long-account-name-for-ellipsis@example.test';
-  check('the managed roster retains friendly account labels without internal indexes', await card('a@example.test').count() === 1 && !(await cards.allTextContents()).join('').includes(VERIFIED_CLAUDE));
-  check('cleanup is silent and footer only reports roster and inventory totals', (await drawer.innerText()).includes('Adopted 4 / Gateway 4 credentials') && !(await drawer.innerText()).includes('absent from gateway'));
+  const batchAdopt = drawer.getByRole('button', { name: 'Batch adopt', exact: true });
+  const batchUnadopt = drawer.getByRole('button', { name: 'Batch unadopt', exact: true });
+
+  // Every current credential is a row before anything is adopted, and each offers its own
+  // fresh-adoption action. An unavailable inventory never reaches this state.
+  await until(async () => await cards.count() === 5, { label: 'current inventory ready' });
+  const initial = await statsText(drawer);
+  check('the main table lists every current credential before adoption, unmanaged', initial.includes('Credentials5') && initial.includes('Managed0') && initial.includes('Unmanaged5'), initial);
+  check('an unmanaged credential offers adoption without exposing its internal index', await card('a@example.test').getByRole('button', { name: 'Adopt a@example.test', exact: true }).isEnabled() && !(await cards.allTextContents()).join('').includes(VERIFIED_CLAUDE));
+  check('an unmanaged credential is not shown as a paused plan', (await card('a@example.test').innerText()).includes('Unmanaged') && !(await card('a@example.test').innerText()).includes('Paused'));
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'feedback clear before unmanaged capture' });
+  await page.screenshot({ path: 'tmp/issue-76/automation-unmanaged-desktop-en.png' });
+
+  await batchAdopt.click();
+  const adoptDialog = page.locator('.ant-modal:visible').filter({ hasText: 'Batch adopt' });
+  const submit = adoptDialog.getByRole('button', { name: 'Confirm Adoption', exact: true });
+  check('first adoption starts empty with immediate automation enabled', await submit.isDisabled() && await adoptDialog.getByRole('checkbox', { name: /immediately/ }).isChecked());
+  check('a credential CPA cannot address is blocked from selection', await adoptDialog.getByRole('checkbox', { name: 'runtime-only@example.test', exact: true }).isDisabled());
+  check('monitor-only adoption names its capability limit', (await adoptDialog.innerText()).includes('Capability unverified; monitor-only after adoption'));
+  check('adoption labels hide standalone and prefixed internal indexes', !(await adoptDialog.innerText()).includes(VERIFIED_CLAUDE) && await adoptDialog.getByRole('checkbox', { name: 'a@example.test', exact: true }).count() === 1);
+  await adoptDialog.getByRole('button', { name: 'Select all', exact: true }).click();
+  await adoptDialog.getByRole('textbox').fill('Synthetic browser batch');
+  await page.screenshot({ path: 'tmp/issue-76/batch-adopt-desktop-en.png' });
+  await submit.click();
+  await until(() => automationState.adopt !== null, { label: 'adoption request' });
+  check('batch adoption sends eligible indexes and operator options', automationState.adopt.auth_indexes.length === 4 && !automationState.adopt.auth_indexes.includes(BLOCKED_UNCONTROLLABLE) && automationState.adopt.enable && automationState.adopt.note === 'Synthetic browser batch');
+
+  await until(async () => (await statsText(drawer)).includes('Managed4'), { label: 'refreshed managed roster' });
+  check('the managed roster retains friendly account labels without internal indexes', await card('a@example.test').count() === 1 && !(await drawer.innerText()).includes(VERIFIED_CLAUDE));
+  check('the drawer reports the complete gateway count with no orphan placeholder row', (await drawer.innerText()).includes('Adopted 4 / Gateway 5 credentials') && !(await drawer.innerText()).includes('absent from gateway'));
   check('every account has exactly one status', await cards.evaluateAll(elements => elements.every(element => element.querySelectorAll('.status-label').length === 1)));
   check('monitor-only reason is singular', (await card('c@example.test').innerText()).includes('Capability unverified'));
   check('stale completed recovery timestamps stay hidden', !(await card('c@example.test').innerText()).includes('Recovery at:'));
@@ -301,10 +332,10 @@ export async function accountAutomation({ base, page, check }) {
   check('provider artwork uses bundled Codex Claude and Antigravity SVGs', ['codex', 'claude', 'antigravity'].every(provider => logos.some(logo => logo.source.toLowerCase().includes(provider + '-color.svg'))), JSON.stringify(logos));
   await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'feedback clear for capture' });
   await checkStatAlignment(drawer, 'Desktop EN');
-  await page.screenshot({ path: 'tmp/issue-69/automation-desktop-en.png' });
+  await page.screenshot({ path: 'tmp/issue-76/automation-desktop-en.png' });
   await card('a@example.test').getByRole('button', { name: 'Credit exemption for a@example.test', exact: true }).click();
   await until(async () => await card('a@example.test').getByRole('button', { name: 'Credit exemption for a@example.test', exact: true }).getAttribute('aria-pressed') === 'true', { label: 'Credit patch refetched' });
-  check('Credit writes only its independent field and preserves error state', JSON.stringify(automationState.patches[VERIFIED_CLAUDE]) === JSON.stringify({ burn_credit: true }) && (await card('a@example.test').innerText()).includes('Error'));
+  check('Credit writes only its independent field with the lifecycle version and preserves error state', automationState.patches[VERIFIED_CLAUDE]?.burn_credit === true && automationState.patches[VERIFIED_CLAUDE]?.expected_intent_version === 3 && Object.keys(automationState.patches[VERIFIED_CLAUDE]).length === 2 && (await card('a@example.test').innerText()).includes('Error'), JSON.stringify(automationState.patches[VERIFIED_CLAUDE]));
   await card('a@example.test').getByRole('button', { name: 'Details', exact: true }).click();
   check('details disclose overdue recovery and retry', (await card('a@example.test').innerText()).includes('Recovery time passed; waiting to retry') && (await card('a@example.test').innerText()).includes('Next attempt:'));
   await card(longName).getByRole('button', { name: 'Details', exact: true }).click();
@@ -316,7 +347,7 @@ export async function accountAutomation({ base, page, check }) {
   check('manual reset remains a future absolute instant', automationState.manualReset.reset_at_ms > Date.now());
   await until(async () => await card(longName).getByRole('button', { name: 'Unadopt', exact: true }).isEnabled(), { label: 'manual reset refresh complete' });
   await card('a@example.test').getByRole('button', { name: 'Cancel Retry', exact: true }).click();
-  await page.locator('.ant-modal-confirm:visible').getByRole('button', { name: 'OK', exact: true }).click();
+  await page.locator('.ant-modal-confirm:visible .ant-btn-primary').click();
   await until(() => automationState.cancel === VERIFIED_CLAUDE, { label: 'retry cancellation recorded' });
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
@@ -330,21 +361,56 @@ export async function accountAutomation({ base, page, check }) {
   check('phone rows stack identity state and reachable actions without horizontal clipping', phoneGeometry.every(row => row.left >= 0 && row.right <= 390 && row.scroll <= row.width + 1 && row.stacked), JSON.stringify(phoneGeometry));
   await card('a@example.test').scrollIntoViewIfNeeded();
   await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'feedback clear before phone capture' });
-  await page.screenshot({ path: 'tmp/issue-69/automation-mobile-details-en.png' });
+  await page.screenshot({ path: 'tmp/issue-76/automation-mobile-details-en.png' });
   await card('a@example.test').getByRole('button', { name: 'Details', exact: true }).click();
   await card(longName).getByRole('button', { name: 'Details', exact: true }).click();
   await drawer.locator('.ant-drawer-body').evaluate(element => { element.scrollTop = 0; });
   await settleLayout(page);
   await checkStatAlignment(drawer, 'Phone EN');
-  await page.screenshot({ path: 'tmp/issue-69/automation-mobile-en.png' });
-  await batch.scrollIntoViewIfNeeded(); await batch.click();
-  await dialog.locator('.ant-segmented-item').filter({ hasText: 'Unadopt' }).click();
-  check('unadopt dialog explicitly preserves gateway state', (await dialog.innerText()).includes('Gateway credentials keep their current enabled or disabled state'));
-  await dialog.getByRole('checkbox', { name: 'Idle account', exact: true }).check();
-  await page.screenshot({ path: 'tmp/issue-69/batch-unadopt-mobile-en.png' });
-  await dialog.getByRole('button', { name: 'Confirm Unadopt', exact: true }).click();
-  await until(async () => await cards.count() === 3, { label: 'batch unadopt refresh' });
-  check('unadopt removed only the selected membership', automationState.removed.length === 1 && automationState.removed[0] === 'historical-idle');
+  await page.screenshot({ path: 'tmp/issue-76/automation-mobile-en.png' });
+
+  // Unadopting keeps the credential as an unmanaged current row: membership leaves, the
+  // gateway and its row stay.
+  await batchUnadopt.scrollIntoViewIfNeeded(); await batchUnadopt.click();
+  const unadoptDialog = page.locator('.ant-modal:visible').filter({ hasText: 'Batch unadopt' });
+  check('unadopt dialog explicitly preserves gateway state', (await unadoptDialog.innerText()).includes('Gateway credentials keep their current enabled or disabled state'));
+  await unadoptDialog.getByRole('checkbox', { name: 'Idle account', exact: true }).check();
+  await page.screenshot({ path: 'tmp/issue-76/batch-unadopt-mobile-en.png' });
+  await unadoptDialog.getByRole('button', { name: 'Confirm Unadopt', exact: true }).click();
+  await until(() => automationState.unadopt !== null, { label: 'unadoption request' });
+  await until(async () => await cards.count() === 5 && (await statsText(drawer)).includes('Unmanaged2'), { label: 'unmanaged row after unadopt' });
+  check('unadoption removed only the selected membership and kept the credential row', automationState.unadopt.length === 1 && automationState.unadopt[0] === 'historical-idle' && await card('Idle account').count() === 1);
+  check('an unadopted credential is an unmanaged row, not a paused plan', (await card('Idle account').innerText()).includes('Unmanaged') && await card('Idle account').getByRole('button', { name: 'Adopt Idle account', exact: true }).count() === 1);
+  // A single unadoption leaves the credential current, so its row offers the fresh-adoption action.
+  await card('a@example.test').getByRole('button', { name: 'Details', exact: true }).click();
+  await card('a@example.test').getByRole('button', { name: 'Unadopt', exact: true }).click();
+  await page.locator('.ant-modal-confirm:visible .ant-btn-primary').click();
+  await until(async () => await card('a@example.test').getByRole('button', { name: 'Adopt a@example.test', exact: true }).count() === 1, { label: 'single unadoption keeps the credential row' });
+  check('single unadoption removes membership only and keeps the same current credential', await cards.count() === 5 && (await drawer.getByTestId('automation-stats').evaluate(element => element.textContent ?? '')).includes('Unmanaged3'));
+  // Adopting that same current row again is the fresh-adoption path: it returns managed
+  // without a second row and without the previous lifecycle's plan.
+  await card('a@example.test').getByRole('button', { name: 'Adopt a@example.test', exact: true }).click();
+  await until(async () => (await statsText(drawer)).includes('Managed3'), { label: 'fresh adoption of the same current row' });
+  check('fresh adoption keeps one row per current credential and returns it to managed', await card('a@example.test').count() === 1 && await card('a@example.test').getByRole('switch', { name: 'Auto-management for a@example.test', exact: true }).count() === 1);
+
+  // Inventory outage: the drawer states the protection, keeps counts unknown and offers no
+  // adoption; it never renders the gateway as an empty table.
+  automationState.phase = 'unavailable';
+  await drawer.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await until(async () => await cards.count() === 0, { label: 'unavailable inventory projection' });
+  await drawer.getByText('Credential inventory unavailable', { exact: true }).first().waitFor({ state: 'visible' });
+  const outage = await drawer.innerText();
+  const outageStats = await statsText(drawer);
+  check('an unavailable inventory is protection, not an empty gateway', outage.includes('Credential inventory unavailable') && !outage.includes('No matching accounts'));
+  check('unavailable counts stay unknown and adoption is refused', ['Credentials', 'Managed', 'Unmanaged', 'Gateway disabled', 'Paused', 'Pending absence'].every(label => outageStats.includes(label + '—')) && await batchAdopt.isDisabled() && await batchUnadopt.isDisabled(), outageStats);
+  check('last-known plans are labelled as history', outage.includes('Last known plans: 3 (not current state)'), outage);
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'feedback clear before failure capture' });
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/issue-76/automation-unavailable-mobile-en.png' });
+  automationState.phase = 'adopted';
+  await drawer.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await until(async () => await cards.count() === 5, { label: 'inventory restored' });
+
   await drawer.locator('.ant-drawer-close').click();
   await drawer.waitFor({ state: 'hidden' });
   const more = page.locator('.terminal-page-head .terminal-page-actions').getByRole('button', { name: 'More', exact: true });
@@ -354,7 +420,7 @@ export async function accountAutomation({ base, page, check }) {
   check('account automation and Ollama management remain reachable from the phone toolbar', await automationEntry.isVisible() && await page.getByTestId('oauth-management-ollama-open-mobile').isVisible());
   await automationEntry.click();
   await drawer.waitFor({ state: 'visible' });
-  check('the phone automation entry opens the managed roster', await card('a@example.test').isVisible());
+  check('the phone automation entry opens the current credential table', await card('a@example.test').isVisible());
   await page.setViewportSize({ width: 1440, height: 1050 });
   await page.evaluate(() => localStorage.setItem('omc-lang', 'zh-CN'));
   await page.reload({ waitUntil: 'domcontentloaded' });
@@ -364,11 +430,11 @@ export async function accountAutomation({ base, page, check }) {
   await chinese.getByRole('article', { name: 'a@example.test', exact: true }).waitFor({ state: 'visible' });
   await settleLayout(page);
   await checkStatAlignment(chinese, 'Desktop ZH');
-  await page.screenshot({ path: 'tmp/issue-69/automation-desktop-zh.png' });
+  await page.screenshot({ path: 'tmp/issue-76/automation-desktop-zh.png' });
   await page.setViewportSize({ width: 390, height: 844 });
   await settleLayout(page);
   await checkStatAlignment(chinese, 'Phone ZH');
-  await page.screenshot({ path: 'tmp/issue-69/automation-mobile-zh.png' });
+  await page.screenshot({ path: 'tmp/issue-76/automation-mobile-zh.png' });
 }
 
 

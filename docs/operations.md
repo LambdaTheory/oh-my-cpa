@@ -167,19 +167,27 @@ does not expose as controllable cannot be adopted and retain an explicit reason 
 candidate list. The console reports the two inventory scopes separately as adopted
 accounts and total live credentials (ADR 0108).
 
-The drawer presents account/credential, one state/reason, and actions in aligned columns;
-phones stack those groups. Details disclose weekly evidence, resets, action history,
-errors, retry cancellation, manual recovery and the account audit link. The Credit
-control exempts automatic disable only and retains recovery. Batch Operations offers
-adoption (with the immediate-enable choice and note) and unadoption. Unadoption removes
-only roster membership, leaving the gateway credential's current enabled/disabled state.
-Background removal is silent. The footer shows adopted and gateway totals only.
+The drawer's one main table lists the gateway's current credentials - enabled, disabled
+and unmanaged - and is built from the live inventory, not from stored memberships. Each
+row shows account/credential, one state/reason, and actions in aligned columns; phones
+stack those groups. A managed row offers Credit, the automation switch and Details; an
+unmanaged row offers a single Adopt action, and a credential CPA cannot address by name
+is unmanaged with that reason. Details disclose weekly evidence, resets, action history,
+errors, retry cancellation, manual recovery and the account audit link. The Credit control
+exempts automatic disable only and retains recovery. Batch Operations offers adoption of
+unmanaged credentials (with the immediate-enable choice and note) and unadoption of
+managed ones. Unadoption removes only roster membership, leaving the gateway credential's
+current enabled/disabled state and its row as unmanaged. Confirmed background removal is
+silent: the plan is snapshotted into the audit trail and the row leaves without a
+placeholder. The footer shows managed and gateway totals only.
 
-Summary counts share the same active-roster projection as the filters: monitor-only is
-a capability/controllability fact, auto-disabled uses the backend ownership flag, waiting
-means an active scheduled or overdue recovery, and backoff means a next retry instant.
-These counts can overlap and include retained paused plans. Gateway totals are unknown
-when inventory is degraded, and adoption is unavailable until a complete read succeeds.
+Summary counts describe the same current rows as the filters: total gateway credentials
+(disabled and unmanaged included), managed and unmanaged (by a uniquely matched plan),
+gateway-disabled (CPA's own flag, never a historical automation action), paused (a managed
+plan switched off) and pending absence (active plans awaiting the second complete absence
+confirmation; counted, never shown as rows). Counts are unknown and adoption is refused
+when the inventory cannot be read; retained plans are then labelled last-known. A
+repeated display label never merges two credentials.
 
 
 | Variable | Default | Purpose |

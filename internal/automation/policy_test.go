@@ -575,3 +575,37 @@ func TestAdoptionRecoveryRequiresFreshExhaustedFutureReset(t *testing.T) {
 		})
 	}
 }
+
+// TestDecideRejectsEvidenceRecordedBeforeTheCurrentAdoption pins the policy-level cutoff
+// the service relies on: a reading observed before this adoption is ineligible for a disable
+// and for a takeover plan, while a reading observed at or after it is eligible.
+func TestDecideRejectsEvidenceRecordedBeforeTheCurrentAdoption(t *testing.T) {
+	now := time.UnixMilli(1_000_000_000_000)
+	account := adoptedAccount()
+	// The adoption instant is in the past so a reading on either side of it is a real
+	// observation that is not in the future.
+	account.AdoptedAtMS = ptrInt64(now.Add(-10 * time.Minute).UnixMilli())
+	cfg := DefaultPolicyConfig()
+
+	before := weekly(100, now.Add(-11*time.Minute).UnixMilli(), now.Add(time.Hour).UnixMilli())
+	if decision := Decide(account, &before, liveCredential(), now, cfg); decision.Kind == DecisionDisable {
+		t.Fatalf("a pre-adoption reading must not disable: %+v", decision)
+	}
+	after := weekly(100, now.Add(-time.Minute).UnixMilli(), now.Add(time.Hour).UnixMilli())
+	if decision := Decide(account, &after, liveCredential(), now, cfg); decision.Kind != DecisionDisable {
+		t.Fatalf("a post-adoption reading is eligible: %+v", decision)
+	}
+	if _, _, _, ok := AdoptionRecovery(account, &before, liveCredential(), now, cfg); ok {
+		t.Fatal("a pre-adoption reading must not plan a takeover recovery")
+	}
+	if _, _, _, ok := AdoptionRecovery(account, &after, liveCredential(), now, cfg); !ok {
+		t.Fatal("a post-adoption reading must be eligible for a takeover plan")
+	}
+
+	// A legacy row without an adoption instant keeps the watermark rule.
+	legacy := adoptedAccount()
+	legacy.AdoptedAtMS = nil
+	if decision := Decide(legacy, &before, liveCredential(), now, cfg); decision.Kind != DecisionDisable {
+		t.Fatalf("a row without an adoption instant must keep the old rule: %+v", decision)
+	}
+}

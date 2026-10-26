@@ -850,7 +850,10 @@ without a new adapter or any secret-bearing response.
 
 `account_automation_status` is a low-risk read exposed to the Agent and MCP. It returns
 the resolved master switch (whether the environment variable or the console's web
-switch is in effect) and, for each adopted credential, its plan: the state, why it has
+switch is in effect), the current gateway credential inventory (whether it could be read,
+and the total, managed, unmanaged, gateway-disabled and pending-absence counts - all counts
+omitted when the read failed, so zero only means a complete empty gateway), and, for each
+adopted credential, its plan: the state, why it has
 no automatic control, the burn_credit exception, removed=false for active rows, whether OMC disabled it, an active recovery instant with
 `recovery_status=scheduled|overdue`, and whether a standard weekly reading exists with
 its used share. `scheduled` means the still-disabled credential has a future recovery;
@@ -862,7 +865,7 @@ the read-only MCP key cannot reach them, so the agent cannot adopt, unadopt, set
 set a recovery time. Controllable credentials may be adopted even before their provider
 capability is verified; the read then reports `state=monitoring` with
 `monitor_reason=unverified_account_weekly_capability`, and no automatic disable or
-recovery action is permitted. Paused plans retain their recovery projection, with is_enabled=false preventing execution. Tombstones are excluded from this summary. Missing gateway credentials and missing CPA names have separate reasons, credential_not_found and credential_missing_name; historical no_controllable_credential values remain readable. See ADR 0105, ADR 0108 and ADR 0114.
+recovery action is permitted. Paused plans retain their recovery projection, with is_enabled=false preventing execution. Tombstones are excluded from this summary. Missing gateway credentials and missing CPA names have separate reasons, credential_not_found and credential_missing_name; historical no_controllable_credential values remain readable. The summary is read-only: it never confirms an absence, removes a plan or writes the gateway. See ADR 0105, ADR 0108 and ADR 0116.
 
 ### Ollama and Feishu status
 

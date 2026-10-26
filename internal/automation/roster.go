@@ -44,24 +44,27 @@ func (s *Service) UnadoptMany(ctx context.Context, authIndexes []string) (int, e
 	return removed, nil
 }
 
-func canRemoveMissingAccount(account repository.AutomationAccount) bool {
-	return account.NextAttemptAtMS == nil && account.State != StateDisabled && account.State != StateWaiting &&
-		account.CycleResetAtMS == nil && (account.ManualResetAtMS == nil || account.ManualResetConsumed)
-}
-
-// The counter belongs to this process and intent version. A restart, degraded read,
-// gateway reappearance or changed operator intent requires two fresh confirmations.
-func (s *Service) syncRoster(ctx context.Context, accounts []repository.AutomationAccount, credentials map[string]Credential) {
+// syncRoster confirms absence against the inventory.
+//
+// A missing credential leaves the active roster after two consecutive complete,
+// successful, authoritative inventories under the same intent version. Pending recovery,
+// retry, an automation state or a saved reset does not protect the row: none of them can
+// execute for a credential the gateway no longer has, and keeping the plan would leave a
+// placeholder that is not a current credential. The counter belongs to this process and
+// intent version: a restart, an untrusted inventory, a reappearance or a changed operator
+// intent requires two fresh confirmations. Removal itself is the repository's transaction,
+// which snapshots the plan before the tombstone and sends nothing to the gateway.
+func (s *Service) syncRoster(ctx context.Context, accounts []repository.AutomationAccount, inventory Inventory) {
 	next := map[string]missingCredential{}
 	for _, account := range accounts {
-		if _, exists := credentials[account.AuthIndex]; exists {
+		if inventory.Present(account.AuthIndex) {
 			continue
 		}
-		if !account.IsAdopted || !canRemoveMissingAccount(account) {
+		if !account.IsAdopted || account.RemovedAtMS != nil {
 			continue
 		}
 		err := s.WithAccount(ctx, account.AuthIndex, func(ctx context.Context, fresh repository.AutomationAccount) error {
-			if !canRemoveMissingAccount(fresh) {
+			if inventory.Present(fresh.AuthIndex) {
 				return nil
 			}
 			previous := s.missing[fresh.AuthIndex]

@@ -82,12 +82,46 @@ export interface AccountAutomationCandidateDTO {
   auto_disable_supported: boolean;
 }
 
+export interface AccountAutomationInventoryDTO {
+  available: boolean;
+  error?: string;
+  /** Total current credentials, disabled and unmanaged included. Unknown when unavailable. */
+  credentials?: number | null;
+  /** Current credentials with a uniquely matched active plan. */
+  managed?: number | null;
+  /** Current credentials with no plan. Adopting one creates a fresh lifecycle. */
+  unmanaged?: number | null;
+  /** Current credentials CPA itself reports disabled. */
+  disabled?: number | null;
+  /** Active plans whose credential is absent, awaiting the second complete confirmation.
+   *  Omitted when the inventory could not be read: an outage has no truthful figure. */
+  pending_absence?: number | null;
+}
+
+/** One current gateway credential joined with the plan that matched it, if any. */
+export interface AccountAutomationCredentialDTO {
+  auth_index: string;
+  provider?: string;
+  name?: string;
+  account_label?: string;
+  disabled: boolean;
+  controllable: boolean;
+  managed: boolean;
+  adoptable: boolean;
+  adoption_blocked_reason?: AutomationMonitorReason;
+  auto_disable_supported: boolean;
+  plan?: AccountAutomationAccountDTO | null;
+}
+
 export interface AccountAutomationListResponse {
   settings: AccountAutomationSettingsDTO;
+  inventory: AccountAutomationInventoryDTO;
+  /** The gateway's current credentials. This is the console's main table. */
+  credentials: AccountAutomationCredentialDTO[];
+  /** The active managed roster with each plan; last-known values when inventory is unavailable. */
   accounts: AccountAutomationAccountDTO[];
+  accounts_last_known: boolean;
   candidates: AccountAutomationCandidateDTO[];
-  candidates_degraded?: boolean;
-  candidates_error?: string;
 }
 
 export interface AccountAutomationAdoptPayload {
@@ -105,8 +139,8 @@ export interface AccountAutomationManualResetPayload {
 }
 
 export type AccountAutomationPatch =
-  | { enabled: boolean; burn_credit?: boolean }
-  | { enabled?: boolean; burn_credit: boolean };
+  | { enabled: boolean; burn_credit?: boolean; expected_intent_version?: number }
+  | { enabled?: boolean; burn_credit: boolean; expected_intent_version?: number };
 
 export interface AccountAutomationUnadoptPayload {
   auth_indexes: string[];

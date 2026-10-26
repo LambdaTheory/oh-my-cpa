@@ -17,12 +17,12 @@ import { getAppConfig } from '../../types/config';
 import dayjs, { getTimeZone } from '../../utils/time';
 import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
 import { credentialLabel } from '../../utils/credentialLabel';
-import type { AccountAutomationAccountDTO, AccountAutomationPatch } from '../../types/accountAutomation';
+import type { AccountAutomationAccountDTO, AccountAutomationCredentialDTO, AccountAutomationPatch } from '../../types/accountAutomation';
 import { automationReasonKey, automationRowReasonKey, matchesAutomationFacet, projectAutomationRoster, type AutomationFacet } from './accountAutomationModel';
 import styles from './AccountAutomationDrawer.module.css';
 
-const FACETS: AutomationFacet[] = ['all', 'controlled', 'paused', 'disabled', 'monitor_only', 'error'];
-const TONES: Record<string, StatusTone> = { monitoring: 'accent', disabled: 'warn', paused: 'neutral', credit: 'accent', monitor_only: 'neutral', error: 'danger' };
+const FACETS: AutomationFacet[] = ['all', 'managed', 'unmanaged', 'paused', 'disabled', 'monitor_only', 'error'];
+const TONES: Record<string, StatusTone> = { unmanaged: 'neutral', monitoring: 'accent', disabled: 'warn', paused: 'neutral', credit: 'accent', monitor_only: 'neutral', error: 'danger' };
 
 export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => void }> = ({ open, onClose }) => {
   const { t, lang } = useI18n();
@@ -43,13 +43,14 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
   const [resetError, setResetError] = useState('');
   const mutationLock = useRef(false);
   const listQuery = useQuery({ queryKey: ['account-automation'], queryFn: () => api.getAccountAutomation(), enabled: open, refetchInterval: 15_000 });
-  const { rows, stats } = useMemo(() => projectAutomationRoster(listQuery.data), [listQuery.data]);
+  const { rows, stats, available, lastKnownAccounts } = useMemo(() => projectAutomationRoster(listQuery.data), [listQuery.data]);
   const settings = listQuery.data?.settings;
   const candidates = listQuery.data?.candidates ?? [];
-  const canUseInventory = Boolean(listQuery.data && !listQuery.isError && !listQuery.data.candidates_degraded);
+  const isInventoryAvailable = Boolean(listQuery.data && !listQuery.isError && available);
+  const canUseInventory = isInventoryAvailable;
   const eligibleKeys = useMemo(() => batchMode === 'adopt'
-    ? canUseInventory ? (listQuery.data?.candidates ?? []).filter(c => !c.adopted && c.adoptable).map(c => c.auth_index) : []
-    : rows.map(row => row.account.auth_index), [batchMode, canUseInventory, listQuery.data, rows]);
+    ? canUseInventory ? rows.filter(row => !row.isManaged && row.credential.adoptable).map(row => row.credential.auth_index) : []
+    : rows.filter(row => row.isManaged).map(row => row.credential.auth_index), [batchMode, canUseInventory, rows]);
   const selection = selected.filter(key => eligibleKeys.includes(key));
 
   useEffect(() => {
@@ -76,8 +77,8 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
     mutationLock.current = true;
     writeMutation.mutate({ action, success, done });
   };
-  const patchAccount = (account: AccountAutomationAccountDTO, patch: AccountAutomationPatch) =>
-    write(() => api.putAccountAutomationAccount(account.auth_index, patch), t('automation.account_switch_updated'));
+  const patchAccount = (row: AccountAutomationCredentialDTO, patch: Omit<AccountAutomationPatch, 'expected_intent_version'>) =>
+    write(() => api.putAccountAutomationAccount(row.auth_index, { ...patch, expected_intent_version: row.plan?.intent_version ?? undefined } as AccountAutomationPatch), t('automation.account_switch_updated'));
   const displayName = (item: { auth_index: string; account_label?: string; name?: string; provider?: string }) => {
     const primary = credentialLabel(item.account_label, [item.auth_index]) || credentialLabel(item.name, [item.auth_index]) || t('credential.account_fallback', { provider: item.provider || '' }).trim();
     const name = credentialLabel(item.name, [item.auth_index]);
@@ -86,24 +87,30 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
   const formatTime = (value?: number | null) => value ? getDateTimeFormatter(languageLocale(lang), { timeZone: getTimeZone(), month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(value) : '—';
   const closeBatch = () => { setIsBatchOpen(false); setSelected([]); setNote(''); };
   const filtered = rows.filter(row => matchesAutomationFacet(row, facet) &&
-    (!search.trim() || [row.account.account_label, row.account.name, row.account.provider, row.account.auth_index].some(value => value?.toLowerCase().includes(search.trim().toLowerCase()))));
-  const confirmUnadopt = (account: AccountAutomationAccountDTO) => modal.confirm({
-    title: t('automation.unadopt_title'), content: displayName(account).primary + ': ' + t('automation.unadopt_desc'),
+    (!search.trim() || [row.credential.account_label, row.credential.name, row.credential.provider, row.credential.auth_index].some(value => value?.toLowerCase().includes(search.trim().toLowerCase()))));
+  const confirmUnadopt = (row: AccountAutomationCredentialDTO) => modal.confirm({
+    title: t('automation.unadopt_title'), content: displayName(row).primary + ': ' + t('automation.unadopt_desc'),
     okText: t('automation.unadopt_submit'), cancelText: t('common.cancel'),
-    onOk: () => write(() => api.postAccountAutomationUnadopt(account.auth_index), t('automation.unadopt_success')),
+    onOk: () => write(() => api.postAccountAutomationUnadopt(row.auth_index), t('automation.unadopt_success')),
   });
+  const adoptOne = (row: AccountAutomationCredentialDTO) => write(
+    () => api.postAccountAutomationAdopt({ auth_indexes: [row.auth_index], enable: true }),
+    t('automation.adopt_success', { n: 1 }));
+  const openBatch = (mode: 'adopt' | 'unadopt') => { setBatchMode(mode); setSelected([]); setShouldEnable(true); setNote(''); setIsBatchOpen(true); };
   const statItems = [
-    ['adopted', stats.adopted], ['credentials', stats.credentials ?? '—'], ['monitor_only', stats.monitorOnly],
-    ['disabled', stats.disabled], ['waiting', stats.waiting], ['backoff', stats.backoff],
-  ] as const;
+    ['credentials', stats.credentials], ['managed', stats.managed], ['unmanaged', stats.unmanaged],
+    ['disabled', stats.gatewayDisabled], ['paused', stats.paused], ['pending_absence', stats.pendingAbsence],
+  ].map(([key, value]) => [key, value ?? '—'] as const);
 
   return <AppDrawer title={t('automation.title')} width="wide" open={open} onClose={onClose}
-    footerStart={<span className={styles['muted']}>{t('automation.adoption_summary', { adopted: stats.adopted, total: stats.credentials ?? '—' })}</span>}
+    footerStart={<span className={styles['muted']}>{available
+      ? t('automation.adoption_summary', { adopted: stats.managed ?? '—', total: stats.credentials ?? '—' })
+      : t('automation.inventory_last_known', { count: lastKnownAccounts.length })}</span>}
     footer={<Button onClick={onClose}>{t('common.close')}</Button>}>
     <div className={styles['content']}>
       <p className={styles['intro']}>{t('automation.desc')}</p>
       {listQuery.isError && <Notice tone="error" title={t('automation.load_failed')} description={t('automation.refresh_help')} />}
-      {listQuery.data?.candidates_degraded && <Notice tone="warning" title={t('automation.source_unavailable')} description={t('automation.inventory_degraded')} />}
+      {listQuery.data && !listQuery.isError && !available && <Notice tone="warning" title={t('automation.inventory_unavailable')} description={t('automation.inventory_degraded_notice')} />}
       <div className={styles['master']}>
         <div><strong>{t('automation.master_switch')}</strong><p>{t('automation.master_switch_desc')}</p>
           {settings && <span className={styles['muted']}>{t(['default_off', 'web', 'env_enabled', 'env_disabled', 'demo', 'unavailable', 'error'].includes(settings.source) ? `automation.source_${settings.source}` : 'automation.source_error')}</span>}</div>
@@ -114,29 +121,33 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
       <div className={styles['toolbar']}>
         <Input className={styles['search']} aria-label={t('af.search_ph')} placeholder={t('af.search_ph')} value={search} onChange={event => setSearch(event.target.value)} allowClear />
         <Button icon={<ReloadOutlined />} aria-label={t('common.refresh')} loading={listQuery.isFetching} disabled={isBusy} onClick={() => { void listQuery.refetch(); }}>{t('common.refresh')}</Button>
-        <Button type="primary" disabled={!canWrite} onClick={() => { setBatchMode('adopt'); setSelected([]); setShouldEnable(true); setNote(''); setIsBatchOpen(true); }}>{t('automation.batch_title')}</Button>
+        <Button type="primary" disabled={!canWrite || !isInventoryAvailable} onClick={() => openBatch('adopt')}>{t('automation.batch_adopt')}</Button>
+        <Button disabled={!canWrite || !isInventoryAvailable || !stats.managed} onClick={() => openBatch('unadopt')}>{t('automation.batch_unadopt')}</Button>
       </div>
       <div className={styles['facets']} role="group" aria-label={t('automation.filter_label')}>{FACETS.map(value => <button type="button" key={value} aria-pressed={facet === value} onClick={() => setFacet(value)}>{t(`automation.facet_${value}`)}</button>)}</div>
       <div className={styles['list-header']} aria-hidden="true"><span>{t('automation.account_credential')}</span><span>{t('automation.state_reason')}</span><span>{t('automation.col_actions')}</span></div>
-      {listQuery.isPending ? <PageLoading /> : filtered.length === 0 ? <EmptyState title={t('automation.empty')} /> :
+      {listQuery.isPending ? <PageLoading /> : !available ? <EmptyState title={t('automation.inventory_unavailable')} /> : filtered.length === 0 ? <EmptyState title={t('automation.empty')} /> :
         <div className={styles['list']}>{filtered.map(row => {
+          const item = row.credential;
           const account = row.account;
-          const name = displayName(account);
-          const isExpanded = expanded.includes(account.auth_index);
-          const detailId = 'automation-details-' + encodeURIComponent(account.auth_index);
-          const reason = t(automationRowReasonKey(row), { time: formatTime(account.recovery_at_ms), count: account.attempt_count });
-          return <article key={account.auth_index} className={styles['account-card']} data-testid="automation-account" aria-label={name.primary}>
+          const name = displayName(item);
+          const isExpanded = expanded.includes(item.auth_index);
+          const detailId = 'automation-details-' + encodeURIComponent(item.auth_index);
+          const reason = t(automationRowReasonKey(row), { time: formatTime(account?.recovery_at_ms), count: String(account?.attempt_count ?? 0) });
+          return <article key={item.auth_index} className={styles['account-card']} data-testid="automation-account" aria-label={name.primary}>
             <div className={styles['account-row']}>
-              <div className={styles['identity']} data-testid="automation-identity"><ProviderBrandIcon iconId={credentialProviderIconId(account.provider || '')} size={26} />
-                <div className={styles['identity-text']}><strong title={name.primary}>{name.primary}</strong><span title={name.secondary || account.provider}>{name.secondary || account.provider || '—'}</span></div></div>
+              <div className={styles['identity']} data-testid="automation-identity"><ProviderBrandIcon iconId={credentialProviderIconId(item.provider || '')} size={26} />
+                <div className={styles['identity-text']}><strong title={name.primary}>{name.primary}</strong><span title={name.secondary || item.provider}>{name.secondary || item.provider || '—'}</span></div></div>
               <div className={styles['status']} data-testid="automation-status"><StatusLabel tone={TONES[row.state]}>{t(`automation.display_${row.state}`)}</StatusLabel><span className={styles['reason']} title={reason}>{reason}</span></div>
               <div className={styles['actions']} data-testid="automation-actions">
-                <Tooltip title={t('automation.credit_help')}><button type="button" className={styles['credit']} aria-label={t('automation.credit_account', { name: name.primary })} aria-pressed={account.burn_credit} disabled={!canWrite || row.isMonitorOnly} onClick={() => patchAccount(account, { burn_credit: !account.burn_credit })}>{t('automation.credit')}</button></Tooltip>
-                <label className={styles['switch-hit']} htmlFor={detailId + '-switch'}><Switch id={detailId + '-switch'} checked={account.is_enabled} disabled={!canWrite} aria-label={t('automation.switch_account', { name: name.primary })} onChange={enabled => patchAccount(account, { enabled })} /></label>
-                <Button type="text" aria-expanded={isExpanded} aria-controls={detailId} onClick={() => setExpanded(keys => isExpanded ? keys.filter(key => key !== account.auth_index) : [...keys, account.auth_index])}>{t('automation.details')}</Button>
+                {row.isManaged ? <>
+                  <Tooltip title={t('automation.credit_help')}><button type="button" className={styles['credit']} aria-label={t('automation.credit_account', { name: name.primary })} aria-pressed={Boolean(account?.burn_credit)} disabled={!canWrite || row.isMonitorOnly} onClick={() => patchAccount(item, { burn_credit: !account?.burn_credit })}>{t('automation.credit')}</button></Tooltip>
+                  <label className={styles['switch-hit']} htmlFor={detailId + '-switch'}><Switch id={detailId + '-switch'} checked={Boolean(account?.is_enabled)} disabled={!canWrite} aria-label={t('automation.switch_account', { name: name.primary })} onChange={enabled => patchAccount(item, { enabled })} /></label>
+                  <Button type="text" aria-expanded={isExpanded} aria-controls={detailId} onClick={() => setExpanded(keys => isExpanded ? keys.filter(key => key !== item.auth_index) : [...keys, item.auth_index])}>{t('automation.details')}</Button>
+                </> : <Button type="primary" disabled={!canWrite || !item.adoptable} aria-label={t('automation.adopt_account', { name: name.primary })} onClick={() => adoptOne(item)}>{t('automation.adopt_action')}</Button>}
               </div>
             </div>
-            {isExpanded && <div id={detailId} className={styles['details']}>
+            {row.isManaged && account && isExpanded && <div id={detailId} className={styles['details']}>
               <dl className={styles['detail-grid']}>
                 <div><dt>{t('automation.col_weekly')}</dt><dd>{account.has_weekly_evidence && account.weekly_used_percent != null ? t('automation.weekly_used', { n: account.weekly_used_percent.toFixed(1) }) : t(row.isMonitorOnly ? 'automation.no_weekly_summary' : 'automation.no_weekly')}</dd></div>
                 <div><dt>{t('automation.reset_time')}</dt><dd>{formatTime(account.weekly_reset_at_ms)}</dd></div>
@@ -147,16 +158,16 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
               {account.next_attempt_at_ms && <p>{t('automation.next_attempt', { time: formatTime(account.next_attempt_at_ms), count: account.attempt_count })}</p>}
               {account.last_error && <p className={styles['error']}>{t('automation.last_error')}: {account.last_error}</p>}
               <div className={styles['detail-actions']}>
-                <Button href={getAppConfig().basePath.replace(/[/]$/, '') + '/audit?q=' + encodeURIComponent(account.auth_index)}>{t('nav.audit')}</Button>
-                {(row.hasBackoff || account.state === 'waiting' || account.state === 'error') && <Button disabled={!canWrite} onClick={() => modal.confirm({ title: t('automation.btn_cancel_retry'), content: t('automation.cancel_confirm'), onOk: () => write(() => api.postAccountAutomationCancel(account.auth_index), t('automation.cancel_success')) })}>{t('automation.btn_cancel_retry')}</Button>}
+                <Button href={getAppConfig().basePath.replace(/[/]$/, '') + '/audit?q=' + encodeURIComponent(item.auth_index)}>{t('nav.audit')}</Button>
+                {(row.hasBackoff || account.state === 'waiting' || account.state === 'error') && <Button disabled={!canWrite} onClick={() => modal.confirm({ title: t('automation.btn_cancel_retry'), content: t('automation.cancel_confirm'), onOk: () => write(() => api.postAccountAutomationCancel(item.auth_index), t('automation.cancel_success')) })}>{t('automation.btn_cancel_retry')}</Button>}
                 {row.reason === 'missing_reset' && <Button disabled={!canWrite} onClick={() => { setResetTarget(account); setResetTime(''); setResetError(''); }}>{t('automation.btn_manual_reset')}</Button>}
-                <Button danger disabled={!canWrite} onClick={() => confirmUnadopt(account)}>{t('automation.unadopt_title')}</Button>
+                <Button danger disabled={!canWrite} onClick={() => confirmUnadopt(item)}>{t('automation.unadopt_title')}</Button>
               </div>
             </div>}
           </article>;
         })}</div>}
     </div>
-    <Modal open={isBatchOpen} title={t('automation.batch_title')} onCancel={() => { if (!isBusy) closeBatch(); }} closable={!isBusy} mask={{ closable: !isBusy }}
+    <Modal open={isBatchOpen} title={t(batchMode === 'adopt' ? 'automation.batch_adopt' : 'automation.batch_unadopt')} onCancel={() => { if (!isBusy) closeBatch(); }} closable={!isBusy} mask={{ closable: !isBusy }}
       footer={<><Button disabled={isBusy} onClick={closeBatch}>{t('common.cancel')}</Button><Button type="primary" danger={batchMode === 'unadopt'} loading={isBusy} disabled={!canWrite || !selection.length || listQuery.isFetching} onClick={() => {
         const keys = [...selection];
         if (batchMode === 'adopt') write(() => api.postAccountAutomationAdopt({ auth_indexes: keys, enable: shouldEnable, note: note.trim() || undefined }), t('automation.adopt_success', { n: keys.length }), closeBatch);
@@ -167,7 +178,7 @@ export const AccountAutomationDrawer: React.FC<{ open: boolean; onClose: () => v
         <p>{t(batchMode === 'adopt' ? 'automation.adopt_desc' : 'automation.unadopt_desc')}</p>
         <div className={styles['batch-tools']}><span>{t('automation.adopt_selected_count', { n: selection.length })}</span><Button size="small" disabled={isBusy || !eligibleKeys.length} onClick={() => setSelected(eligibleKeys)}>{t('automation.select_all')}</Button><Button size="small" disabled={isBusy || !selection.length} onClick={() => setSelected([])}>{t('automation.adopt_deselect_all')}</Button></div>
         <div className={styles['batch-list']}>
-          {(batchMode === 'adopt' ? candidates.filter(candidate => !candidate.adopted) : rows.map(row => row.account)).map(item => {
+          {(batchMode === 'adopt' ? candidates.filter(candidate => !candidate.adopted) : rows.filter(row => row.isManaged).map(row => row.credential)).map(item => {
             const name = displayName(item);
             return <Checkbox key={item.auth_index} aria-label={name.primary} checked={selection.includes(item.auth_index)} disabled={isBusy || !eligibleKeys.includes(item.auth_index)} onChange={event => setSelected(keys => event.target.checked ? [...keys, item.auth_index] : keys.filter(key => key !== item.auth_index))}>
               <span className={styles['batch-name']} title={name.primary}>{name.primary}</span>

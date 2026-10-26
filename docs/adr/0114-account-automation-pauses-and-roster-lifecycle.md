@@ -1,6 +1,6 @@
 # ADR 0114: Account automation preserves paused plans and tombstones removed roster entries
 
-- Status: Accepted; amends ADR 0105's per-account cancellation semantics and ADR 0108's roster lifecycle and missing-credential reasons.
+- Status: Superseded in part by ADR 0116 (the protected-pending-plan removal rule). Accepted as a record of the earlier decision; amends ADR 0105's per-account cancellation semantics and ADR 0108's roster lifecycle and missing-credential reasons.
 - Date: 2026-10-22
 
 ## Context

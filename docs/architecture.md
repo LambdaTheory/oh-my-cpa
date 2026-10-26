@@ -2377,18 +2377,41 @@ locked intent update. Adoption defaults to enabled when enable is omitted.
 
 Single-account POST /account-automation/accounts/{authIndex}/unadopt and batch
 POST /account-automation/unadopt remove roster membership without any CPA status write.
-The repository writes the tombstone and account_automation.unadopt audit in one
-transaction; audit failure rolls back the removal. Re-adoption clears the tombstone and
-starts a new plan while preserving the same row identity for audit association.
+The repository writes an allowlisted audit snapshot of the plan, the tombstone and the
+cleared executable plan fields in one transaction; audit failure rolls back the removal.
+Adopting the row again starts a fresh lifecycle (new adoption instant and batch, Credit
+off, no inherited plan) while the same row keeps its audit association. An idempotent
+adoption of the active credential changes nothing; the same index observed with a
+different provider or write name is refused, not relabelled. A mutation may name
+expected_intent_version so a delayed request against a re-adopted incarnation conflicts.
 
-RunOnce compares active roster rows with a complete successful Credentials inventory.
-Two consecutive missing observations under the same intent version trigger a tombstone
-and account_automation.auto_remove audit in one transaction. Inventory failure or an
-incomplete files array resets the process-local counters; a restart, reappearance or
-new operator intent also requires two fresh confirmations. Rows with next_attempt_at_ms,
-state disabled/waiting, any cycle_reset_at_ms, or an unconsumed manual reset are protected.
+RunOnce reads the live credential list once through the shared complete-inventory
+validator (`automation.ValidateInventory`). A blank, malformed or duplicated auth index
+makes the inventory unusable, and a missing files array is the one incompleteness signal
+the CPA contract exposes; either resets the process-local confirmation counters and stops
+every automatic gateway write for that pass. A credential without a write name stays in the
+inventory as present-but-unwritable. Two consecutive missing observations under the same
+intent version trigger a tombstone and account_automation.auto_remove audit in one
+transaction; a restart, reappearance or new operator intent requires two fresh
+confirmations. A pending recovery, retry, disabled/waiting state or saved reset does not
+protect the row: none of it can execute for a credential the gateway no longer has. The
+removal transaction writes an allowlisted snapshot of the plan before the tombstone, then
+clears the executable plan and action ownership; an unwritable snapshot rolls it back.
 Cleanup runs before quota decisions, so missing credentials cannot receive status writes.
-See ADR 0114.
+See ADR 0116 for the removal rule and ADR 0114 for its history.
+
+Every automatic status write runs a preflight under the account lock, after the row was
+re-read: a unique current index, the recorded write name, the same provider and the
+operator's current intent. A pass that started before a removal/re-adoption holds an older
+incarnation (intent version) and stops. An observation recorded before the current adoption
+instant is ineligible evidence for it and keeps its real timestamp. See ADR 0116.
+
+`GET /account-automation` is a pure read: it never adopts, cleans up or moves an absence
+counter. It returns the current-inventory availability, truthful counts (unknown when the
+inventory is unavailable), the current credentials each joined with its matched plan, and
+the active roster for the read-only Agent/MCP summary. The console builds its main table
+from the current credentials, so disabled and unmanaged credentials appear and a plan
+without a current credential is only a pending-absence count. See ADR 0116.
 
 The master switch, `OMCPA_ACCOUNT_AUTOMATION_ENABLED`, is tri-state: unset leaves the
 console's web switch in force (default off), an explicit `false` is an emergency off the

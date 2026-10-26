@@ -1410,12 +1410,19 @@ by `scripts/release-plan.test.mjs`; `scripts/deployment.test.mjs` holds the Comp
 service to its boundary (the socket and nothing else). Real container replacement is
 exercised only by `scripts/docker-smoke.mjs`, described above.
 
-Account-automation lifecycle coverage (ADR 0114) stays below the browser layer:
-policy tests own paused recovery projection, Credit disable exemption/recovery, and
-separate absent/missing-name reasons; repository tests own migration 054 defaults and
-plan preservation, tombstone filtering/re-adoption, and audit-failure rollback. Service
-tests own pause/resume execution, unadopt without a gateway write, two complete consecutive
-absence observations, counter reset on degraded reads/reappearance/restart/intent change,
-and pending-plan/retry exclusions. API tests own default-on adoption, enabled/burn_credit
-patches, single/batch unadopt response and error contracts, legacy reasons, and incomplete
-inventory degradation. The read-only capability remains a summary, with no new write tool.
+Account-automation lifecycle coverage (ADR 0116, which supersedes ADR 0114's protected-plan
+rule) stays below the browser layer. The shared inventory validator owns rejection of blank,
+malformed and duplicated auth indexes, a complete empty list and a present unnamed
+credential. Policy tests own paused recovery projection, Credit disable exemption/recovery,
+separate absent/missing-name reasons, and the adoption-instant evidence cutoff. Repository
+tests own migration 054 defaults, the audit snapshot written before the tombstone,
+audit-failure rollback, executable-plan clearing, fresh re-adoption of a removed row,
+idempotent identical adoption and the refused relabel. Service tests own pause/resume
+execution, unadopt during an outage without a gateway write, removal of a confirmed-absent
+row even with a pending plan and retry, counter reset on failure/incomplete/reappearance/
+restart/intent change, duplicate-inventory write blocking, and the delayed-pass incarnation
+fence. API tests own the current-credential projection, unknown counts and last-known plans
+on an unavailable inventory, side-effect-free GET, and the stale-incarnation conflict. The
+rendered suite owns two credentials with one label staying two rows, unmanaged adoption,
+the unavailable protection state and Credit's lifecycle version. The read-only capability
+remains a summary, with no new write tool.

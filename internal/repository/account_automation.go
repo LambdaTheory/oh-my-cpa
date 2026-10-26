@@ -22,6 +22,12 @@ import (
 // again rather than forcing the write.
 var ErrAutomationConflict = errors.New("automation_conflict")
 
+// ErrAutomationIdentityConflict is returned when an active roster row is re-adopted
+// with different provider or name evidence under the same auth index. Carrying the old
+// plan over to what may be a different credential would silently claim continuity OMC
+// cannot prove, so the caller must unadopt and adopt again.
+var ErrAutomationIdentityConflict = errors.New("automation_identity_conflict")
+
 // Automation state vocabulary. The strings are stored, so they are part of the
 // schema contract with migration 043.
 const (
@@ -78,6 +84,21 @@ func (a AutomationAccount) IsDisabledByAutomation() bool {
 		return true
 	}
 	return *a.LastDisableAtMS > *a.LastEnableAtMS
+}
+
+// AcceptsObservation reports whether a reading observed at observedAtMS belongs to this
+// adoption lifecycle. A fresh adoption starts a new incarnation: an observation recorded
+// before the credential was adopted again describes the previous engagement, whatever its
+// auth index, so it can never justify a disable or a recovery for the new one. The
+// observation keeps its real timestamp; it is excluded, never restamped.
+func (a AutomationAccount) AcceptsObservation(observedAtMS int64) bool {
+	if a.AdoptedAtMS == nil {
+		// Rows written before the adoption instant was recorded keep the watermark
+		// rule alone; requiring a timestamp they do not have would silently invalidate
+		// every saved plan across an upgrade.
+		return true
+	}
+	return observedAtMS >= *a.AdoptedAtMS
 }
 
 // AutomationWeeklyWindow is the newest account-level weekly quota reading for one
@@ -248,27 +269,32 @@ func (r *Repository) GetAutomationAccount(ctx context.Context, authIndex string)
 	return account, true, nil
 }
 
-// AdoptAutomationAccounts records a one-time batch adoption. A credential not
-// already on the roster gains a row and an intent_version; one already adopted
-// keeps its switch and plan, so re-adopting never resets an operator's choice.
-// Adoption alone does not enable automation unless enable is set.
-func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch AutomationBatch, accounts []AutomationAccount, enable bool, nowMS int64) error {
+// AdoptAutomationAccounts records a one-time batch adoption. Three cases are distinct:
+//
+//   - a credential with no row gains one, in a new batch, with the requested switch;
+//   - a tombstoned row (removed_at_ms set) is a fresh engagement: it takes a new adoption
+//     instant and batch, the requested switch, Credit off, and none of the old plan,
+//     recovery, retry or action ownership;
+//   - an active row is re-adopted idempotently only when its provider and write name still
+//     match. A different identity under the same auth index is refused rather than carrying
+//     the old plan over to what may be a different credential.
+//
+// Adoption alone does not enable automation unless enable is set. A batch made entirely of
+// idempotent re-adoptions records nothing.
+//
+// The returned counts describe what was persisted: adopted (rows that joined a new lifecycle)
+// and refreshed (identical active rows whose label or never-recorded addressing was filled
+// in). A batch row exists only when adopted > 0, so a caller must not audit a batch identity
+// it was not given.
+func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch AutomationBatch, accounts []AutomationAccount, enable bool, nowMS int64) (adopted int, refreshed int, err error) {
 	if r == nil || r.SQL() == nil {
-		return errors.New("repository is not initialized")
+		return 0, 0, errors.New("repository is not initialized")
 	}
 	tx, err := r.SQL().BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin account automation adoption: %w", err)
+		return 0, 0, fmt.Errorf("begin account automation adoption: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO account_automation_batches (id, created_at_ms, selected_count, selected_json, note)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO NOTHING`,
-		batch.ID, batch.CreatedAtMS, batch.SelectedCount, batch.SelectedJSON, batch.Note); err != nil {
-		return fmt.Errorf("record account automation batch: %w", err)
-	}
 
 	for _, account := range accounts {
 		authIndex := strings.TrimSpace(account.AuthIndex)
@@ -279,59 +305,125 @@ func (r *Repository) AdoptAutomationAccounts(ctx context.Context, batch Automati
 		if state == "" {
 			state = AutomationStateIdle
 		}
+		existing, found, readErr := getAutomationAccountTx(ctx, tx, authIndex)
+		if readErr != nil {
+			return 0, 0, readErr
+		}
+		if !found {
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO account_automation_accounts (
+					auth_index, provider, name, account_label, is_adopted, is_enabled, burn_credit, adopt_batch_id,
+					adopted_at_ms, state, monitor_reason,
+					cycle_reset_at_ms, cycle_key, disable_observed_at_ms, manual_reset_at_ms,
+					intent_version, created_at_ms, updated_at_ms
+				) VALUES (?, ?, ?, ?, 1, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+				authIndex, strings.TrimSpace(account.Provider), strings.TrimSpace(account.Name), strings.TrimSpace(account.AccountLabel),
+				boolToInt(enable), batch.ID, nowMS,
+				state, strings.TrimSpace(account.MonitorReason), account.CycleResetAtMS, strings.TrimSpace(account.CycleKey), account.DisableObservedAtMS, account.ManualResetAtMS,
+				nowMS, nowMS); err != nil {
+				return 0, 0, fmt.Errorf("adopt account automation account %s: %w", authIndex, err)
+			}
+			adopted++
+			continue
+		}
+		if existing.RemovedAtMS != nil {
+			// A reappearing credential is a new engagement. Every executable field is
+			// reset here rather than inherited, and the evidence watermark is cleared so
+			// an observation recorded before this adoption cannot justify an action.
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE account_automation_accounts SET
+					provider = ?, name = ?, account_label = ?,
+					is_adopted = 1, is_enabled = ?, burn_credit = 0,
+					adopt_batch_id = ?, adopted_at_ms = ?,
+					state = ?, monitor_reason = ?,
+					cycle_reset_at_ms = ?, cycle_key = ?, disable_observed_at_ms = ?,
+					manual_reset_at_ms = NULL, manual_reset_consumed = 0,
+					next_attempt_at_ms = NULL, attempt_count = 0, last_attempt_at_ms = NULL,
+					last_error = '', last_error_at_ms = NULL,
+					last_disable_at_ms = NULL, last_enable_at_ms = NULL,
+					removed_at_ms = NULL, intent_version = intent_version + 1, updated_at_ms = ?
+				WHERE auth_index = ?`,
+				strings.TrimSpace(account.Provider), strings.TrimSpace(account.Name), strings.TrimSpace(account.AccountLabel),
+				boolToInt(enable), batch.ID, nowMS,
+				state, strings.TrimSpace(account.MonitorReason), account.CycleResetAtMS, strings.TrimSpace(account.CycleKey), account.DisableObservedAtMS,
+				nowMS, authIndex); err != nil {
+				return 0, 0, fmt.Errorf("re-adopt account automation account %s: %w", authIndex, err)
+			}
+			adopted++
+			continue
+		}
+		if !sameAutomationIdentity(existing, account) {
+			return 0, 0, fmt.Errorf("%w: %s", ErrAutomationIdentityConflict, authIndex)
+		}
+		// An identical re-adoption keeps the switch and plan. Presentation and addressing
+		// evidence OMC never recorded may be filled in; neither changes what a plan executes
+		// on, so the intent version is untouched.
+		label := strings.TrimSpace(account.AccountLabel)
+		if label == "" {
+			label = existing.AccountLabel
+		}
+		provider, name := strings.TrimSpace(existing.Provider), strings.TrimSpace(existing.Name)
+		if provider == "" {
+			provider = strings.TrimSpace(account.Provider)
+		}
+		if name == "" {
+			name = strings.TrimSpace(account.Name)
+		}
+		if label != existing.AccountLabel || provider != existing.Provider || name != existing.Name {
+			if _, err := tx.ExecContext(ctx, `UPDATE account_automation_accounts SET account_label = ?, provider = ?, name = ? WHERE auth_index = ?`,
+				label, provider, name, authIndex); err != nil {
+				return 0, 0, fmt.Errorf("refresh account automation identity %s: %w", authIndex, err)
+			}
+			refreshed++
+		}
+	}
+	if adopted == 0 && refreshed == 0 {
+		// Every selection was already an identical active row: nothing changed, so there is
+		// nothing to commit and no batch to record.
+		return 0, 0, nil
+	}
+	// selected_count states how many rows this batch actually adopted; selected_json keeps
+	// the operator's full selection, including idempotent rows that changed nothing.
+	if adopted > 0 {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO account_automation_accounts (
-				auth_index, provider, name, account_label, is_adopted, is_enabled, adopt_batch_id,
-				adopted_at_ms, state, monitor_reason,
-				cycle_reset_at_ms, cycle_key, disable_observed_at_ms,
-				intent_version, created_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-			ON CONFLICT(auth_index) DO UPDATE SET
-				provider = excluded.provider,
-				name = excluded.name,
-				account_label = excluded.account_label,
-				is_adopted = 1,
-				removed_at_ms = NULL,
-				state = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.state ELSE excluded.state END,
-				monitor_reason = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.monitor_reason ELSE excluded.monitor_reason END,
-				adopt_batch_id = CASE WHEN account_automation_accounts.is_adopted = 1
-					THEN account_automation_accounts.adopt_batch_id ELSE excluded.adopt_batch_id END,
-				adopted_at_ms = COALESCE(account_automation_accounts.adopted_at_ms, excluded.adopted_at_ms),
-				-- A newly adopted account takes the batch's enable flag; one already
-				-- on the roster keeps whatever the operator last set.
-				is_enabled = CASE WHEN account_automation_accounts.is_adopted = 1
-					THEN account_automation_accounts.is_enabled ELSE excluded.is_enabled END,
-				-- A takeover's recovery plan (cycle reset and evidence watermark) is
-				-- written only on first adoption; a re-adoption never resets the plan.
-				cycle_reset_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1
-					THEN account_automation_accounts.cycle_reset_at_ms ELSE excluded.cycle_reset_at_ms END,
-				cycle_key = CASE WHEN account_automation_accounts.is_adopted = 1
-					THEN account_automation_accounts.cycle_key ELSE excluded.cycle_key END,
-				disable_observed_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1
-					THEN account_automation_accounts.disable_observed_at_ms ELSE excluded.disable_observed_at_ms END,
-				manual_reset_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.manual_reset_at_ms ELSE NULL END,
-				next_attempt_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.next_attempt_at_ms ELSE NULL END,
-				last_attempt_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_attempt_at_ms ELSE NULL END,
-				last_error_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_error_at_ms ELSE NULL END,
-				last_disable_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_disable_at_ms ELSE NULL END,
-				last_enable_at_ms = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_enable_at_ms ELSE NULL END,
-				manual_reset_consumed = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.manual_reset_consumed ELSE 0 END,
-				attempt_count = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.attempt_count ELSE 0 END,
-				last_error = CASE WHEN account_automation_accounts.is_adopted = 1 THEN account_automation_accounts.last_error ELSE '' END,
-				intent_version = CASE WHEN account_automation_accounts.is_adopted = 1
-					THEN account_automation_accounts.intent_version ELSE account_automation_accounts.intent_version + 1 END,
-				updated_at_ms = excluded.updated_at_ms`,
-			authIndex, account.Provider, account.Name, account.AccountLabel,
-			boolToInt(enable), batch.ID, batch.CreatedAtMS,
-			state, account.MonitorReason, account.CycleResetAtMS, account.CycleKey, account.DisableObservedAtMS,
-			nowMS, nowMS); err != nil {
-			return fmt.Errorf("adopt account automation account %s: %w", authIndex, err)
+			INSERT INTO account_automation_batches (id, created_at_ms, selected_count, selected_json, note)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(id) DO NOTHING`,
+			batch.ID, batch.CreatedAtMS, adopted, batch.SelectedJSON, batch.Note); err != nil {
+			return 0, 0, fmt.Errorf("record account automation batch: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit account automation adoption: %w", err)
+		return 0, 0, fmt.Errorf("commit account automation adoption: %w", err)
 	}
-	return nil
+	return adopted, refreshed, nil
+}
+
+// sameAutomationIdentity compares the addressing evidence a plan is executed on: the
+// provider and the CPA name the status patch is sent to. A value OMC has never recorded
+// may be filled in; a value that changed is a different identity. An email or display
+// label is deliberately not identity evidence (ADR 0116).
+func sameAutomationIdentity(existing AutomationAccount, offered AutomationAccount) bool {
+	if stored, next := strings.TrimSpace(existing.Provider), strings.TrimSpace(offered.Provider); stored != "" && next != "" && !strings.EqualFold(stored, next) {
+		return false
+	}
+	if stored, next := strings.TrimSpace(existing.Name), strings.TrimSpace(offered.Name); stored != "" && next != "" && stored != next {
+		return false
+	}
+	return true
+}
+
+func getAutomationAccountTx(ctx context.Context, tx *sql.Tx, authIndex string) (AutomationAccount, bool, error) {
+	account, err := scanAutomationAccount(tx.QueryRowContext(ctx, `
+		SELECT `+automationAccountColumns+` FROM account_automation_accounts WHERE auth_index = ?`,
+		strings.TrimSpace(authIndex)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return AutomationAccount{}, false, nil
+	}
+	if err != nil {
+		return AutomationAccount{}, false, fmt.Errorf("read account automation account: %w", err)
+	}
+	return account, true, nil
 }
 
 // SetAutomationSwitch pauses execution without consuming the recovery plan.
@@ -521,6 +613,18 @@ func (r *Repository) writeAutomationAccount(ctx context.Context, authIndex strin
 // provider, and the caller's admission rule decides whether that provider's
 // account-level weekly window is a verified capability before anything acts on it.
 func (r *Repository) LatestStandardWeeklyWindows(ctx context.Context, authIndexes []string) (map[string]AutomationWeeklyWindow, error) {
+	return r.latestStandardWeeklyWindows(ctx, authIndexes, 0)
+}
+
+// LatestStandardWeeklyWindowsSince bounds the timeline to readings observed after sinceMS. A
+// fresh adoption uses it so a reading from the lifecycle that ended can never shadow one
+// recorded for the current engagement: filtering after "newest per index" would hide the
+// eligible reading behind an ineligible newer query result.
+func (r *Repository) LatestStandardWeeklyWindowsSince(ctx context.Context, authIndexes []string, sinceMS int64) (map[string]AutomationWeeklyWindow, error) {
+	return r.latestStandardWeeklyWindows(ctx, authIndexes, sinceMS)
+}
+
+func (r *Repository) latestStandardWeeklyWindows(ctx context.Context, authIndexes []string, sinceMS int64) (map[string]AutomationWeeklyWindow, error) {
 	result := map[string]AutomationWeeklyWindow{}
 	if r == nil || r.SQL() == nil || len(authIndexes) == 0 {
 		return result, nil
@@ -535,17 +639,23 @@ func (r *Repository) LatestStandardWeeklyWindows(ctx context.Context, authIndexe
 		return result, nil
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(valid)), ",")
-	arguments := make([]any, 0, len(valid)+4)
+	arguments := make([]any, 0, len(valid)+5)
 	arguments = append(arguments, "standard", "weekly", automationSevenDayKind, automationWeeklyMinutes)
 	for _, authIndex := range valid {
 		arguments = append(arguments, authIndex)
+	}
+	// The bound is appended after the index list so the arguments match the SQL's order.
+	sinceClause := ""
+	if sinceMS > 0 {
+		sinceClause = " AND observed_at_ms > ?"
+		arguments = append(arguments, sinceMS)
 	}
 	rows, err := r.SQL().QueryContext(ctx, `
 		SELECT auth_index, provider, window_kind, window_minutes, used_percent, reset_at_ms, observed_at_ms, source
 		FROM quota_observations
 		WHERE scope = ? AND window_kind IN (?, ?)
 		  AND window_minutes = ?
-		  AND auth_index IN (`+placeholders+`)
+		  AND auth_index IN (`+placeholders+`)`+sinceClause+`
 		ORDER BY observed_at_ms DESC, id DESC`, arguments...)
 	if err != nil {
 		return result, fmt.Errorf("query latest standard weekly windows: %w", err)
