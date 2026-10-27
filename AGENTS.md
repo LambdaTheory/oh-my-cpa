@@ -1,8 +1,22 @@
 # AGENTS.md — Oh My CPA Agent Contract
 
-> Coding agents load this file at the start of a session (a local `AGENTS.override.md` supersedes it). The root `CLAUDE.md` is a symlink to this file, so every agent reads one contract; edit `AGENTS.md`, never the link.
+> Coding agents load this file at the start of a session (a local `AGENTS.override.md` supersedes it). The root `CLAUDE.md` imports this file, so every agent reads one contract; edit `AGENTS.md`, never the import line.
 >
 > **First principle: protect invariants, not implementations.** The rules below name what must stay true — security boundaries, data integrity, external contracts, user-visible behavior. How the code achieves that is yours to change. Act as a senior engineer with independent technical judgment, not as a caretaker of historical choices.
+
+<!-- team-context:begin v2026-10-20 -->
+## 团队规范
+
+本项目遵循 [LambdaTheory/team-context](https://github.com/LambdaTheory/team-context) 的团队规范，本文件里更严格的条目优先。
+
+- 改动走任务分支和 PR，合入本文件声明的集成分支，没有声明就是 main；不直推 main 或集成分支，不 force-push。
+- 关联 Issue 写 `refs #N`（跨仓库写 `refs LambdaTheory/<仓库>#N`），PR 标题也带上；不用自动关闭关键词。PR 正文写会话 ID。
+- 人用自己的账号与 noreply 邮箱；已接入的团队 agent 用 `lambdatheory-agent[bot]`，提交作者名写 agent 种类，PR 写会话 ID。未安装 App 时先报告接入缺口。
+- 以人名义代发须本人明确授权并通过 `gh-human` 逐次确认；凭据仅存受控钥匙串或 token 缓存，不进入代码、commit、日志或对话。
+- 建分支、写 commit、开 PR 之前，先读开发流程规范全文：`gh api repos/LambdaTheory/team-context/contents/rules/dev-workflow.md -H "Accept: application/vnd.github.raw"`
+<!-- team-context:end -->
+
+**本项目的集成分支是 `dev`。** `master` 停在 2026-10-16 的最后一次合并，不再作为集成分支；`deploy/prebuilt` 是发布分支，只由 `scripts/prebuilt-web.mjs publish` 推进，不直接合代码进去。
 
 ---
 
