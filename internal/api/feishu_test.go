@@ -87,7 +87,7 @@ func TestFeishuSettingsDTOHidesSecret(t *testing.T) {
 		"enabled":       true,
 		"app_id":        "cli_test",
 		"app_secret":    secretValue,
-		"chat_id":       "oc_test",
+		"chat_id":       "ou_test",
 		"summary_times": []string{"10:00", "17:00"},
 		"quiet_start":   "23:00",
 		"quiet_end":     "08:00",
@@ -220,7 +220,7 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 	store := feishu.NewMemoryStore()
 	secret := "fake-secret"
 	service := feishu.NewService(feishu.Options{
-		Web:     feishu.Config{Enabled: true, AppID: "fake-app", ChatID: "fake-chat", Timezone: "UTC"},
+		Web:     feishu.Config{Enabled: true, AppID: "fake-app", ChatID: "ou_fake", Timezone: "UTC"},
 		Overlay: feishu.Overlay{AppSecret: &secret}, Store: store, Now: func() time.Time { return now },
 		SenderFactory: func(feishu.Resolved) feishu.Sender { return sender },
 		SourceFactory: func(feishu.Resolved) feishu.EventSource { return nil },

@@ -34,18 +34,19 @@ type FeishuSettings struct {
 
 // FeishuPendingItem is one persisted pending item.
 type FeishuPendingItem struct {
-	ID           string
-	Kind         string
-	Provider     string
-	CredKey      string
-	Alias        string
-	SinceMS      *int64
-	LastSeenMS   *int64
-	Action       string
-	Status       string
-	NotifiedAtMS *int64
-	ResolvedAtMS *int64
-	UpdatedAtMS  int64
+	ID             string
+	Kind           string
+	Provider       string
+	CredKey        string
+	Alias          string
+	SinceMS        *int64
+	LastSeenMS     *int64
+	Action         string
+	Status         string
+	NotifiedAtMS   *int64
+	ResolvedAtMS   *int64
+	CycleResetAtMS *int64
+	UpdatedAtMS    int64
 }
 
 // FeishuNotification is one persisted outbox row: a pending/queued/sent delivery.
@@ -266,11 +267,11 @@ func (r *Repository) SaveFeishuRuntime(ctx context.Context, runtime FeishuRuntim
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO feishu_pending_items (
 				id, kind, provider, cred_key, alias, since_ms, last_seen_ms, action, status,
-				notified_at_ms, resolved_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				notified_at_ms, resolved_at_ms, updated_at_ms, cycle_reset_at_ms
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			item.ID, item.Kind, item.Provider, item.CredKey, item.Alias,
 			nullMS(item.SinceMS), nullMS(item.LastSeenMS), item.Action, defaultString(item.Status, "open"),
-			nullMS(item.NotifiedAtMS), nullMS(item.ResolvedAtMS), nowMS); err != nil {
+			nullMS(item.NotifiedAtMS), nullMS(item.ResolvedAtMS), nowMS, nullMS(item.CycleResetAtMS)); err != nil {
 			return fmt.Errorf("insert feishu pending item %q: %w", item.ID, err)
 		}
 	}
@@ -310,7 +311,7 @@ func (r *Repository) SaveFeishuRuntime(ctx context.Context, runtime FeishuRuntim
 func (r *Repository) listFeishuPendingItems(ctx context.Context) ([]FeishuPendingItem, error) {
 	rows, err := r.SQL().QueryContext(ctx, `
 		SELECT id, kind, provider, cred_key, alias, since_ms, last_seen_ms, action, status,
-		       notified_at_ms, resolved_at_ms, updated_at_ms
+		       notified_at_ms, resolved_at_ms, updated_at_ms, cycle_reset_at_ms
 		FROM feishu_pending_items ORDER BY since_ms ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list feishu pending items: %w", err)
@@ -319,15 +320,16 @@ func (r *Repository) listFeishuPendingItems(ctx context.Context) ([]FeishuPendin
 	items := []FeishuPendingItem{}
 	for rows.Next() {
 		var item FeishuPendingItem
-		var since, lastSeen, notified, resolved, updated sql.NullInt64
+		var since, lastSeen, notified, resolved, updated, cycleReset sql.NullInt64
 		if err := rows.Scan(&item.ID, &item.Kind, &item.Provider, &item.CredKey, &item.Alias,
-			&since, &lastSeen, &item.Action, &item.Status, &notified, &resolved, &updated); err != nil {
+			&since, &lastSeen, &item.Action, &item.Status, &notified, &resolved, &updated, &cycleReset); err != nil {
 			return nil, fmt.Errorf("scan feishu pending item: %w", err)
 		}
 		item.SinceMS = nullInt64Ptr(since)
 		item.LastSeenMS = nullInt64Ptr(lastSeen)
 		item.NotifiedAtMS = nullInt64Ptr(notified)
 		item.ResolvedAtMS = nullInt64Ptr(resolved)
+		item.CycleResetAtMS = nullInt64Ptr(cycleReset)
 		item.UpdatedAtMS = updated.Int64
 		items = append(items, item)
 	}

@@ -173,3 +173,25 @@ func decodeManagementJSON(writer http.ResponseWriter, request *http.Request, lim
 	}
 	return nil
 }
+
+// decodeOptionalManagementJSON behaves like decodeManagementJSON but also accepts an empty
+// body, leaving output at its zero value. A local-intent POST (cancel, unadopt) may carry the
+// lifecycle version it read; a caller that sends no body names none, so an older client keeps
+// working while the console always names the version it acted on.
+func decodeOptionalManagementJSON(writer http.ResponseWriter, request *http.Request, limit int64, output any) error {
+	request.Body = http.MaxBytesReader(writer, request.Body, limit)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(output); errors.Is(err, io.EOF) {
+		return nil
+	} else if err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid request body")
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		writeError(writer, http.StatusBadRequest, "invalid request body")
+		return errors.New("multiple JSON values")
+	}
+	return nil
+}

@@ -96,6 +96,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			continue
 		}
 		msg := Message{
+			EvaluatedAt: now,
 			Kind:        notification.Kind,
 			Alerts:      notification.Alerts,
 			Pending:     notification.Pending,

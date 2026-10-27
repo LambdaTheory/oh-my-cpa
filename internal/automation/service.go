@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strings"
@@ -210,9 +211,23 @@ func (s *Service) ListAccounts(ctx context.Context) ([]repository.AutomationAcco
 	return s.Repo.ListAutomationAccounts(ctx)
 }
 
+// readInventory reads and validates the live credential list. Any failure is an
+// unavailable inventory, never evidence about which credentials exist.
+func (s *Service) readInventory(ctx context.Context) (Inventory, error) {
+	if s == nil || s.Credentials == nil {
+		return Inventory{}, ErrInventoryUnavailable
+	}
+	credentials, err := s.Credentials(ctx)
+	if err != nil {
+		return Inventory{}, fmt.Errorf("%w: %v", ErrInventoryUnavailable, err)
+	}
+	return ValidateInventory(credentials)
+}
+
 // Adopt records the one-time batch adoption of the named credentials and returns
 // how many were adopted. A name that is not a live credential is skipped rather
-// than invented.
+// than invented. The live list must be a complete inventory: adopting from a
+// partial one could bind a plan to an ambiguous or nonexistent target.
 func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, note string) (int, error) {
 	if s == nil || s.Repo == nil {
 		return 0, errors.New("automation service is not available")
@@ -220,14 +235,11 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 	if s.Credentials == nil {
 		return 0, errors.New("automation service is not available")
 	}
-	credentials, err := s.Credentials(ctx)
+	inventory, err := s.readInventory(ctx)
 	if err != nil {
 		return 0, err
 	}
-	byIndex := make(map[string]Credential, len(credentials))
-	for _, credential := range credentials {
-		byIndex[credential.AuthIndex] = credential
-	}
+	byIndex := inventory.ByIndex
 	selected := make([]repository.AutomationAccount, 0, len(authIndexes))
 	adoptedIndexes := make([]string, 0, len(authIndexes))
 	seen := map[string]bool{}
@@ -258,21 +270,9 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 	if len(selected) == 0 {
 		return 0, nil
 	}
-	if enable {
-		// An explicit takeover with the switch on plans the direct enable for accounts
-		// that are already disabled upstream: the same weekly evidence a disable would
-		// need, recorded as a recovery plan but never as a disable.
-		s.planAdoptionRecovery(ctx, selected, byIndex)
-	}
+	// The batch snapshot records the operator's selection order; the keyed locks are taken in
+	// sorted order so concurrent batches cannot deadlock on each other.
 	selectedJSON, _ := json.Marshal(adoptedIndexes)
-	nowMS := s.now().UnixMilli()
-	batch := repository.AutomationBatch{
-		ID:            uuid.NewString(),
-		CreatedAtMS:   nowMS,
-		SelectedCount: len(selected),
-		SelectedJSON:  string(selectedJSON),
-		Note:          strings.TrimSpace(note),
-	}
 	sort.Strings(adoptedIndexes)
 	releases := make([]func(), 0, len(adoptedIndexes))
 	for _, authIndex := range adoptedIndexes {
@@ -283,14 +283,49 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 			releases[i]()
 		}
 	}()
-	if err := s.Repo.AdoptAutomationAccounts(ctx, batch, selected, enable, nowMS); err != nil {
+	// Everything the adoption derives from a previous lifecycle is read, planned and stored
+	// under those same per-account locks, which are the ones the removal paths take. A
+	// confirmed-absence removal therefore cannot commit between the bound read and the store
+	// and hand the fresh engagement a plan computed from the lifecycle that just ended.
+	// A tombstoned row is a fresh engagement: it may not plan recovery from an observation
+	// recorded for the lifecycle that ended. The bound is the removal instant, because the
+	// new adoption instant is only assigned inside the store transaction.
+	priorLifecycle := make(map[string]int64, len(selected))
+	for _, account := range selected {
+		if existing, found, err := s.Repo.GetAutomationAccount(ctx, account.AuthIndex); err == nil && found && existing.RemovedAtMS != nil {
+			priorLifecycle[account.AuthIndex] = *existing.RemovedAtMS
+		}
+	}
+	if enable {
+		// An explicit takeover with the switch on plans the direct enable for accounts
+		// that are already disabled upstream: the same weekly evidence a disable would
+		// need, recorded as a recovery plan but never as a disable.
+		s.planAdoptionRecovery(ctx, selected, byIndex, priorLifecycle)
+	}
+	nowMS := s.now().UnixMilli()
+	batch := repository.AutomationBatch{
+		ID:            uuid.NewString(),
+		CreatedAtMS:   nowMS,
+		SelectedCount: len(selected),
+		SelectedJSON:  string(selectedJSON),
+		Note:          strings.TrimSpace(note),
+	}
+	adopted, refreshed, err := s.Repo.AdoptAutomationAccounts(ctx, batch, selected, enable, nowMS)
+	if err != nil {
 		return 0, err
 	}
+	if adopted == 0 && refreshed == 0 {
+		// The store persisted nothing, so there is no batch for an audit record to name.
+		return 0, nil
+	}
 	s.audit(ctx, "account_automation.adopt", "success", batch.ID, map[string]any{
-		"selected_count": len(selected),
-		"enabled":        enable,
+		"selected_count":  len(selected),
+		"adopted_count":   adopted,
+		"refreshed_count": refreshed,
+		"batch_recorded":  adopted > 0,
+		"enabled":         enable,
 	})
-	return len(selected), nil
+	return adopted, nil
 }
 
 // planAdoptionRecovery fills in the one-time recovery plan for the accounts that are
@@ -300,12 +335,19 @@ func (s *Service) Adopt(ctx context.Context, authIndexes []string, enable bool, 
 // disable, and never reports a disable OMC did not perform. Accounts with no qualifying
 // reading are left without a plan: they stay missing_reset and the operator may hand-fill
 // a recovery time.
-func (s *Service) planAdoptionRecovery(ctx context.Context, selected []repository.AutomationAccount, credentials map[string]Credential) {
+func (s *Service) planAdoptionRecovery(ctx context.Context, selected []repository.AutomationAccount, credentials map[string]Credential, priorLifecycle map[string]int64) {
 	indexes := make([]string, 0, len(selected))
 	for _, account := range selected {
 		indexes = append(indexes, account.AuthIndex)
 	}
-	evidence, err := s.Repo.LatestStandardWeeklyWindows(ctx, indexes)
+	// A fresh adoption plans only from readings recorded after the lifecycle that ended.
+	since := int64(0)
+	for _, value := range priorLifecycle {
+		if value > since {
+			since = value
+		}
+	}
+	evidence, err := s.Repo.LatestStandardWeeklyWindowsSince(ctx, indexes, since)
 	if err != nil {
 		// Evidence is required to plan a recovery; a failed read degrades to adoption
 		// without a plan rather than inventing a reset.
@@ -320,6 +362,10 @@ func (s *Service) planAdoptionRecovery(ctx context.Context, selected []repositor
 		}
 		window, ok := evidence[selected[i].AuthIndex]
 		if !ok {
+			continue
+		}
+		if endedAt, fresh := priorLifecycle[selected[i].AuthIndex]; fresh && window.ObservedAtMS <= endedAt {
+			// Defensive: the bounded query above already excludes these.
 			continue
 		}
 		resetAtMS, cycleKey, observedAtMS, ok := AdoptionRecovery(selected[i], &window, CredentialState{
@@ -347,8 +393,19 @@ func (s *Service) SetAccountSwitch(ctx context.Context, authIndex string, enable
 
 // SetAccountOptions updates the switch and Credit exception under one intent lock.
 func (s *Service) SetAccountOptions(ctx context.Context, authIndex string, enabled, burnCredit *bool) (repository.AutomationAccount, error) {
+	return s.SetAccountOptionsExpected(ctx, authIndex, enabled, burnCredit, nil)
+}
+
+// SetAccountOptionsExpected applies one operator intent against the lifecycle the caller
+// read. A named intent version that no longer matches the row is a conflict: the request
+// described an engagement that has since ended (for example a credential removed and
+// adopted again), so it must not change the new one.
+func (s *Service) SetAccountOptionsExpected(ctx context.Context, authIndex string, enabled, burnCredit *bool, expectedIntentVersion *int64) (repository.AutomationAccount, error) {
 	var updated repository.AutomationAccount
 	err := s.WithAccount(ctx, authIndex, func(ctx context.Context, account repository.AutomationAccount) error {
+		if expectedIntentVersion != nil && *expectedIntentVersion != account.IntentVersion {
+			return repository.ErrAutomationConflict
+		}
 		next, err := s.Repo.SetAutomationOptions(ctx, account.AuthIndex, enabled, burnCredit, account.IntentVersion, s.now().UnixMilli())
 		if err != nil {
 			return err
@@ -366,7 +423,14 @@ func (s *Service) SetAccountOptions(ctx context.Context, authIndex string, enabl
 // CancelAccount pauses a pending enable or retry by turning the account switch
 // off. It never re-enables a credential OMC disabled.
 func (s *Service) CancelAccount(ctx context.Context, authIndex string) (repository.AutomationAccount, error) {
-	updated, err := s.SetAccountSwitch(ctx, authIndex, false)
+	return s.CancelAccountExpected(ctx, authIndex, nil)
+}
+
+// CancelAccountExpected applies a pause against the lifecycle the caller read. A request that
+// names a different intent version describes an engagement that has since ended, so it must
+// not act on the one now stored under the index.
+func (s *Service) CancelAccountExpected(ctx context.Context, authIndex string, expectedIntentVersion *int64) (repository.AutomationAccount, error) {
+	updated, err := s.SetAccountOptionsExpected(ctx, authIndex, boolPtr(false), nil, expectedIntentVersion)
 	if err != nil {
 		return repository.AutomationAccount{}, err
 	}
@@ -382,11 +446,21 @@ func (s *Service) CancelAccount(ctx context.Context, authIndex string) (reposito
 // rule. Because a recovery time only takes effect while the credential is disabled
 // upstream, it can never disable a live account.
 func (s *Service) SetManualReset(ctx context.Context, authIndex string, resetAtMS int64) (repository.AutomationAccount, error) {
+	return s.SetManualResetExpected(ctx, authIndex, resetAtMS, nil)
+}
+
+// SetManualResetExpected applies a recovery time against the lifecycle the caller read. A
+// delayed request that names an older incarnation conflicts instead of scheduling an enable
+// for the credential that now shares the index.
+func (s *Service) SetManualResetExpected(ctx context.Context, authIndex string, resetAtMS int64, expectedIntentVersion *int64) (repository.AutomationAccount, error) {
 	if resetAtMS <= 0 {
 		return repository.AutomationAccount{}, errors.New("invalid_parameters")
 	}
 	var updated repository.AutomationAccount
 	err := s.WithAccount(ctx, authIndex, func(ctx context.Context, account repository.AutomationAccount) error {
+		if expectedIntentVersion != nil && *expectedIntentVersion != account.IntentVersion {
+			return repository.ErrAutomationConflict
+		}
 		if !ProviderHasVerifiedWeeklyCapability(account.Provider) {
 			return ErrUnverifiedWeeklyCapability
 		}
@@ -404,8 +478,16 @@ func (s *Service) SetManualReset(ctx context.Context, authIndex string, resetAtM
 	return updated, nil
 }
 
+func boolPtr(value bool) *bool { return &value }
+
 // RunOnce evaluates every adopted account once. It is not concurrent with itself
 // and performs at most one side effect per account per pass.
+//
+// The pass begins and ends with the inventory. An unreadable or ambiguous list is not
+// evidence that a credential is absent: it resets the confirmation sequence and stops
+// every automatic gateway write for this pass. Only a complete, authoritative inventory
+// can confirm absence, and only a present, uniquely addressable credential inside it is
+// eligible for an automatic status write.
 func (s *Service) RunOnce(ctx context.Context) {
 	if s == nil || s.Repo == nil || s.Credentials == nil || s.SetDisabled == nil {
 		return
@@ -422,27 +504,23 @@ func (s *Service) RunOnce(ctx context.Context) {
 		s.logger().Warn("account automation: roster read failed", "error", err)
 		return
 	}
+	inventory, err := s.readInventory(ctx)
+	if err != nil {
+		// A failed or incomplete inventory is not a gateway with no credentials: the
+		// confirmation sequence restarts and no automatic action runs this pass.
+		s.missing = nil
+		s.logger().Warn("account automation: credential inventory is not authoritative", "error", err)
+		return
+	}
 	if len(accounts) == 0 {
 		s.missing = nil
 		return
 	}
-	credentials, err := s.Credentials(ctx)
-	if err != nil {
-		s.missing = nil
-		s.logger().Warn("account automation: credential list failed", "error", err)
-		return
-	}
-	byIndex := make(map[string]Credential, len(credentials))
-	indexes := make([]string, 0, len(credentials))
-	for _, credential := range credentials {
-		byIndex[credential.AuthIndex] = credential
-		indexes = append(indexes, credential.AuthIndex)
-	}
-	s.syncRoster(ctx, accounts, byIndex)
+	s.syncRoster(ctx, accounts, inventory)
 	if !s.masterEnabled(settings.WebEnabled) {
 		return
 	}
-	weekly, err := s.Repo.LatestStandardWeeklyWindows(ctx, indexes)
+	weekly, err := s.Repo.LatestStandardWeeklyWindows(ctx, inventory.indexes())
 	if err != nil {
 		// Evidence is required to disable, so a failed read degrades to "monitor
 		// only" rather than to an action taken on nothing.
@@ -453,8 +531,18 @@ func (s *Service) RunOnce(ctx context.Context) {
 		if !account.IsAdopted {
 			continue
 		}
-		s.runAccount(ctx, account, byIndex[account.AuthIndex], weekly[account.AuthIndex], now)
+		credential, present := inventory.ByIndex[account.AuthIndex]
+		s.runAccount(ctx, account, credentialForPass(credential, present), weekly[account.AuthIndex], now)
 	}
+}
+
+// credentialForPass projects a validated inventory entry to the decision input. An
+// absent entry keeps the zero value, which Decide reads as "not found".
+func credentialForPass(credential Credential, present bool) Credential {
+	if !present {
+		return Credential{}
+	}
+	return credential
 }
 
 func (s *Service) runAccount(ctx context.Context, account repository.AutomationAccount, credential Credential, evidence repository.AutomationWeeklyWindow, now time.Time) {
@@ -465,6 +553,17 @@ func (s *Service) runAccount(ctx context.Context, account repository.AutomationA
 	fresh, found, err := s.Repo.GetAutomationAccount(ctx, account.AuthIndex)
 	if err != nil || !found || !fresh.IsAdopted || fresh.RemovedAtMS != nil {
 		return
+	}
+	// A pass that started before a removal/re-adoption held an older incarnation. The
+	// row it was going to act for no longer exists under that version, so the delayed
+	// pass stops here instead of executing the old plan on the new credential.
+	if fresh.IntentVersion != account.IntentVersion {
+		return
+	}
+	// A fresh adoption is only actionable on evidence observed after it. An observation
+	// recorded for the previous lifecycle keeps its real timestamp and stays ineligible.
+	if evidence.ObservedAtMS > 0 && !fresh.AcceptsObservation(evidence.ObservedAtMS) {
+		evidence = repository.AutomationWeeklyWindow{}
 	}
 	var evidencePtr *repository.AutomationWeeklyWindow
 	if evidence.AuthIndex != "" {
@@ -483,10 +582,44 @@ func (s *Service) runAccount(ctx context.Context, account repository.AutomationA
 		if evidencePtr == nil {
 			return
 		}
+		if reason := s.admitAutomaticWrite(fresh, credential); reason != "" {
+			s.applyMonitor(ctx, fresh, Decision{Kind: DecisionMonitor, State: decision.State, Reason: reason}, now)
+			return
+		}
 		s.applyDisable(ctx, fresh, *evidencePtr, decision, now)
 	case DecisionEnable:
+		if reason := s.admitAutomaticWrite(fresh, credential); reason != "" {
+			s.applyMonitor(ctx, fresh, Decision{Kind: DecisionMonitor, State: decision.State, Reason: reason}, now)
+			return
+		}
 		s.applyEnable(ctx, fresh, decision, now)
 	}
+}
+
+// admitAutomaticWrite is the shared preflight before an automatic status patch: the
+// credential must be present in a complete inventory, addressed by the same name the plan
+// was recorded under, and of the same provider. It runs under the account lock, after the
+// row was re-read, so it also sees the operator's latest intent. It returns the monitor
+// reason to record when the write is refused, or "" when it may proceed: a suppressed plan
+// must explain itself rather than look healthy while it can never execute.
+func (s *Service) admitAutomaticWrite(account repository.AutomationAccount, credential Credential) string {
+	if credential.AuthIndex == "" {
+		return ReasonCredentialNotFound
+	}
+	if !credential.Controllable || strings.TrimSpace(credential.Name) == "" {
+		// CPA addresses the status patch by name. A missing name is an address OMC
+		// cannot write, which is a different fact from absence.
+		return ReasonCredentialMissingName
+	}
+	if strings.TrimSpace(account.Name) == "" || credential.Name != account.Name {
+		// The plan was recorded for a name CPA no longer reports under this index. A
+		// status patch addressed by the stale name would not be provably this credential.
+		return ReasonIdentityMismatch
+	}
+	if !sameProvider(account.Provider, credential.Provider) {
+		return ReasonIdentityMismatch
+	}
+	return ""
 }
 
 func (s *Service) applyMonitor(ctx context.Context, account repository.AutomationAccount, decision Decision, now time.Time) {

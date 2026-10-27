@@ -146,7 +146,26 @@ func (s *State) prune(now time.Time) {
 	}
 	items := s.PendingItems[:0]
 	for _, item := range s.PendingItems {
-		if item.Status == PendingResolved && !item.ResolvedAt.IsZero() && now.Sub(item.ResolvedAt) > resolvedItemRetention {
+		origin := item.ResolvedAt
+		if origin.IsZero() {
+			origin = item.LastSeen
+			if origin.IsZero() {
+				origin = item.Since
+			}
+			if origin.IsZero() {
+				origin = item.NotifiedAt
+			}
+			if origin.IsZero() {
+				origin = now
+			}
+		}
+		if item.Status == PendingResolved && item.ResolvedAt.IsZero() && item.Kind != predictionKindPrefix {
+			item.ResolvedAt = origin
+		}
+		if item.CycleResetAt.After(origin) {
+			origin = item.CycleResetAt
+		}
+		if item.Status == PendingResolved && now.Sub(origin) > resolvedItemRetention {
 			continue
 		}
 		items = append(items, item)

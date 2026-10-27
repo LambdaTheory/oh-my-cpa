@@ -33,6 +33,22 @@ type AutomationStatus struct {
 	Enabled  bool                       `json:"enabled"`
 	Source   string                     `json:"source"`
 	Accounts []AutomationAccountSummary `json:"accounts"`
+	// Inventory is the availability and truthful current-credential counts. A failed or
+	// incomplete gateway read reports Available=false and no counts: it is never an empty
+	// gateway. Accounts are then the last persisted plans, not current state.
+	Inventory AutomationInventorySummary `json:"inventory"`
+}
+
+// AutomationInventorySummary is the safe read-only inventory summary. Counts are omitted
+// when unknown so zero can only mean a complete empty gateway.
+type AutomationInventorySummary struct {
+	Available      bool   `json:"available"`
+	Error          string `json:"error,omitempty"`
+	Credentials    *int   `json:"credentials,omitempty"`
+	Managed        *int   `json:"managed,omitempty"`
+	Unmanaged      *int   `json:"unmanaged,omitempty"`
+	Disabled       *int   `json:"disabled,omitempty"`
+	PendingAbsence *int   `json:"pending_absence,omitempty"`
 }
 
 // registerAccountAutomation exposes the summary read. It is declared read/low so
@@ -40,7 +56,7 @@ type AutomationStatus struct {
 // first round; the write routes remain console-only.
 func (s *Service) registerAccountAutomation(registry *capability.Registry) error {
 	return read(registry, "account_automation_status",
-		"Read account-level auto-management: the resolved master switch and, for each adopted credential, its plan (state, why it has no automatic control, whether Credit exempts automatic disable, whether it is disabled by OMC, any active recovery instant and whether it is scheduled or overdue, and the newest standard weekly reading). Read-only summary without credential material.",
+		"Read account-level auto-management: the resolved master switch, the current gateway credential inventory (whether it could be read, and truthful total/managed/unmanaged/disabled/pending-absence counts), and, for each adopted plan, its state, why it has no automatic control, whether Credit exempts automatic disable, whether it is disabled by OMC, any active recovery instant and whether it is scheduled or overdue, and the newest standard weekly reading. Read-only summary without credential material.",
 		func(ctx context.Context, _ Empty) (AutomationStatus, error) {
 			if s.AutomationSummary == nil {
 				return AutomationStatus{}, errors.New("capability_unavailable")

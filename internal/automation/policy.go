@@ -227,6 +227,11 @@ func decideDisable(account repository.AutomationAccount, evidence *repository.Au
 	if evidence == nil || evidence.ObservedAtMS <= 0 {
 		return monitor(ReasonNoWeeklyEvidence)
 	}
+	if !account.AcceptsObservation(evidence.ObservedAtMS) {
+		// The reading predates this adoption: it describes a previous engagement of the
+		// same index, not this credential.
+		return monitor(ReasonStaleEvidence)
+	}
 	if math.IsNaN(evidence.UsedPercent) || math.IsInf(evidence.UsedPercent, 0) {
 		return monitor(ReasonNoWeeklyEvidence)
 	}
@@ -295,6 +300,10 @@ func decideDisable(account repository.AutomationAccount, evidence *repository.Au
 // Claude's "seven_day" kind.
 func AdoptionRecovery(account repository.AutomationAccount, evidence *repository.AutomationWeeklyWindow, credential CredentialState, now time.Time, cfg PolicyConfig) (resetAtMS int64, cycleKey string, observedAtMS int64, ok bool) {
 	if evidence == nil || evidence.ObservedAtMS <= 0 {
+		return 0, "", 0, false
+	}
+	if !account.AcceptsObservation(evidence.ObservedAtMS) {
+		// A fresh adoption may not reuse a reading recorded before it.
 		return 0, "", 0, false
 	}
 	if math.IsNaN(evidence.UsedPercent) || math.IsInf(evidence.UsedPercent, 0) {

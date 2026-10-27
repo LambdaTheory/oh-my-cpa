@@ -1339,15 +1339,19 @@ export const api = {
     });
   },
 
-  async postAccountAutomationCancel(authIndex: string): Promise<AccountAutomationAccountDTO> {
+  async postAccountAutomationCancel(authIndex: string, expectedIntentVersion?: number): Promise<AccountAutomationAccountDTO> {
     return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}/cancel`, {
       method: 'POST',
+      // The console names the lifecycle it read so a duplicated cancel cannot pause a
+      // replacement adopted under the same index. A caller that names none is unfenced.
+      body: expectedIntentVersion == null ? undefined : JSON.stringify({ expected_intent_version: expectedIntentVersion }),
     });
   },
 
-  async postAccountAutomationUnadopt(authIndex: string): Promise<AccountAutomationAccountDTO> {
+  async postAccountAutomationUnadopt(authIndex: string, expectedIntentVersion?: number): Promise<AccountAutomationAccountDTO> {
     return request<AccountAutomationAccountDTO>(`/account-automation/accounts/${encodeURIComponent(authIndex)}/unadopt`, {
       method: 'POST',
+      body: expectedIntentVersion == null ? undefined : JSON.stringify({ expected_intent_version: expectedIntentVersion }),
     });
   },
 

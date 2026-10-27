@@ -27,7 +27,6 @@ export const FeishuSettingsPanel: React.FC = () => {
   const [summaryTimesStr, setSummaryTimesStr] = useState('10:00, 17:00');
   const [quietStart, setQuietStart] = useState('23:00');
   const [quietEnd, setQuietEnd] = useState('08:00');
-  const [tightPercent, setTightPercent] = useState<number>(20);
   const [channelTimeoutMinutes, setChannelTimeoutMinutes] = useState<number>(30);
   const [monitorTimeoutMinutes, setMonitorTimeoutMinutes] = useState<number>(30);
 
@@ -59,9 +58,6 @@ export const FeishuSettingsPanel: React.FC = () => {
       }
       if (s.quiet_start) setQuietStart(s.quiet_start);
       if (s.quiet_end) setQuietEnd(s.quiet_end);
-      if (s.tight_remaining_percent !== undefined) {
-        setTightPercent(s.tight_remaining_percent);
-      }
       if (s.channel_unavailable_after_ms !== undefined) {
         setChannelTimeoutMinutes(Math.round(s.channel_unavailable_after_ms / 60_000));
       }
@@ -86,7 +82,6 @@ export const FeishuSettingsPanel: React.FC = () => {
         summary_times,
         quiet_start: quietStart.trim(),
         quiet_end: quietEnd.trim(),
-        tight_remaining_percent: Number(tightPercent),
         channel_unavailable_after_ms: Number(channelTimeoutMinutes) * 60_000,
         monitor_down_after_ms: Number(monitorTimeoutMinutes) * 60_000,
       };
@@ -113,6 +108,8 @@ export const FeishuSettingsPanel: React.FC = () => {
     onSuccess: (res) => {
       if (res.sent) {
         toast.success(t('feishu.test_success'));
+      } else if (res.reason === 'queued_for_retry') {
+        toast.info(t('feishu.test_queued', { attempts: res.attempts ?? 0, next: formatTime(res.next_attempt_at) }));
       } else {
         toast.error(t('feishu.test_failed', { error: res.error || 'Unknown error' }));
       }
@@ -292,7 +289,7 @@ export const FeishuSettingsPanel: React.FC = () => {
               <Input
                 value={chatId}
                 disabled={isDemo || isEnvOverridden}
-                placeholder="oc_xxxxxxxxxxxxxxxxxxxx"
+                placeholder="ou_xxxxxxxxxxxxxxxxxxxx"
                 onChange={(e) => setChatId(e.target.value)}
               />
               <span style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, display: 'block' }}>
@@ -354,9 +351,8 @@ export const FeishuSettingsPanel: React.FC = () => {
                 type="number"
                 min={1}
                 max={99}
-                value={tightPercent}
-                disabled={isDemo || isEnvOverridden}
-                onChange={(e) => setTightPercent(Number(e.target.value))}
+                value={10}
+                disabled
               />
               <span style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, display: 'block' }}>
                 {t('feishu.form_tight_percent_desc')}

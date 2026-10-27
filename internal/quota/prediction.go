@@ -77,6 +77,7 @@ type PredictionInput struct {
 }
 
 type WindowPrediction struct {
+	Accounting                PredictionAccounting
 	UsedPercent               *float64
 	ResetAtMS                 *int64
 	ObservedAtMS              int64
@@ -96,7 +97,21 @@ type WindowPrediction struct {
 	MaxGapSeconds   *int64
 }
 
+// PredictionAccounting keeps cycle arithmetic separate from the fitted forecast.
+// It is console context, not an addition to the quota_prediction wire contract.
+type PredictionAccounting struct {
+	WindowStartMS                  *int64   `json:"window_start_ms"`
+	RemainingPercent               *float64 `json:"remaining_percent"`
+	UniformProjectedPercentAtReset *float64 `json:"uniform_projected_percent_at_reset"`
+	RemainingWindowHours           *float64 `json:"remaining_window_hours"`
+	WindowErrorHours               *float64 `json:"window_error_hours"`
+	RemainingTokens                *int64   `json:"remaining_tokens"`
+	CapacityErrorPercent           *float64 `json:"capacity_error_percent"`
+	CapacityUnavailable            string   `json:"capacity_unavailable,omitempty"`
+}
+
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
+	defer func() { result.Accounting = calculatePredictionAccounting(input, result) }()
 	result = WindowPrediction{
 		UsedPercent:  nil,
 		ResetAtMS:    input.Window.ResetAtMS,
@@ -249,6 +264,76 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.Verdict = PredictionVerdictUnderUsed
 	default:
 		result.Verdict = PredictionVerdictOnTrack
+	}
+	return result
+}
+
+func calculatePredictionAccounting(input PredictionInput, prediction WindowPrediction) PredictionAccounting {
+	result := PredictionAccounting{}
+	fromMS, _, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
+	if reason == "" && input.ObservedAtMS >= fromMS {
+		result.WindowStartMS = &fromMS
+	}
+	if prediction.UsedPercent == nil {
+		return result
+	}
+	for _, reason := range prediction.Reasons {
+		if reason == PredictionReasonReadingStale || reason == PredictionReasonCycleExpired {
+			return result
+		}
+	}
+	result.RemainingPercent = floatPointer(100 - *prediction.UsedPercent)
+	if result.WindowStartMS == nil {
+		return result
+	}
+	// Percentage-point rounding affects the entire window allowance, including
+	// a fresh reading whose trend cannot yet be fitted. State that uncertainty.
+	result.RemainingWindowHours = floatPointer(*input.Window.PeriodHours * *result.RemainingPercent / 100)
+	result.WindowErrorHours = floatPointer(*input.Window.PeriodHours * usedPercentHalfStep / 100)
+	for _, reason := range prediction.Reasons {
+		if reason == PredictionReasonResetMidCycle || reason == PredictionReasonInvalidObservation || reason == PredictionReasonArithmeticUnsafe {
+			result.CapacityUnavailable = reason
+			return result
+		}
+	}
+	if input.Window.HasIncompleteHistory || input.Window.HasMidCycleReset ||
+		input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS ||
+		input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
+		return result
+	}
+	if input.UsageReason != "" {
+		result.CapacityUnavailable = input.UsageReason
+	} else if input.Usage != nil {
+		switch {
+		case *prediction.UsedPercent < CapacityMinUsedPercent:
+			result.CapacityUnavailable = PredictionReasonLowUsage
+		case input.Usage.Requests <= 0:
+			result.CapacityUnavailable = PredictionReasonNoTraffic
+		default:
+			remainingTokens, isSafe := roundedInt64(float64(input.Usage.Tokens) * *result.RemainingPercent / *prediction.UsedPercent)
+			if isSafe && input.Usage.Tokens > 0 && remainingTokens >= 0 {
+				result.RemainingTokens = &remainingTokens
+				if *result.RemainingPercent > usedPercentHalfStep {
+					result.CapacityErrorPercent = floatPointer(math.Ceil(usedPercentHalfStep*100/((*prediction.UsedPercent-usedPercentHalfStep)**result.RemainingPercent)*1000) / 10)
+				} else {
+					result.RemainingTokens = nil
+					result.CapacityUnavailable = PredictionReasonLowUsage
+				}
+			} else {
+				result.CapacityUnavailable = PredictionReasonArithmeticUnsafe
+			}
+		}
+	}
+	periodMS := *input.Window.ResetAtMS - fromMS
+	elapsedMS := input.ObservedAtMS - fromMS
+	// Reuse the existing evidence floor so a just-reset denominator cannot turn
+	// upstream rounding into a misleading full-cycle estimate.
+	if elapsedMS < max(PredictionMinimumEvidenceMS, periodMS/predictionMinimumCoverageDivisor) {
+		return result
+	}
+	projected, isSafe := roundPrediction(*prediction.UsedPercent/float64(elapsedMS)*float64(periodMS), 2)
+	if isSafe {
+		result.UniformProjectedPercentAtReset = &projected
 	}
 	return result
 }

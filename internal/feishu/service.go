@@ -30,6 +30,7 @@ const defaultEvalInterval = time.Minute
 // constructs a service that never reaches Feishu and never triggers an upstream
 // refresh.
 type Options struct {
+	ConsoleURL string
 	// Web is the stored web-configured settings.
 	Web Config
 	// Overlay is the environment override supplied by the config layer.
@@ -94,6 +95,9 @@ type Service struct {
 	// stateMu serializes replacement of the whole runtime document. External
 	// report reads and Feishu sends stay outside it.
 	stateMu sync.Mutex
+	// Recovery confirmations are deliberately forgotten on restart: cached
+	// readings must establish a new consecutive sequence before closing an item.
+	attentionRecovery map[string]recoveryProgress
 	// beforeStateTransitionLock is a test-only observation point for proving a
 	// competing document transition has reached the lock boundary.
 	beforeStateTransitionLock func()
@@ -131,6 +135,7 @@ func NewService(opts Options) *Service {
 	resolved := resolveConfig(opts.Web, opts.Overlay)
 	if renderer == nil {
 		renderer = NewPlainReportRenderer(resolved.Location)
+		renderer.(*PlainReportRenderer).consoleURL = opts.ConsoleURL
 	}
 	senderFactory := opts.SenderFactory
 	if senderFactory == nil {
@@ -313,9 +318,9 @@ func (s *Service) ensureSenderLocked(resolved Resolved) {
 // connectionChanged reports whether the long-connection identity changed, which is
 // the only thing that requires a reconnect.
 //
-// The target group is deliberately absent: the sender takes the chat id as an
+// The quota recipient is deliberately absent: the sender takes its id as an
 // argument on every send, so changing ChatID applies to the next delivery without
-// dropping and rebuilding the websocket. Rebuilding on a group change would make an
+// dropping and rebuilding the websocket. Rebuilding on a recipient change would make an
 // operator's target edit briefly deaf, and it would needlessly discard a healthy
 // connection and re-present the app secret to the SDK. Only the app identity
 // (appID, secret) and the enabled/ready state are connection identity.
@@ -349,9 +354,7 @@ func (s *Service) HandleMessage(ctx context.Context, in Inbound) error {
 	if in.FromBot || in.ChatID == "" {
 		return nil
 	}
-	// A group message needs an @-mention; a one-to-one chat is always addressed to
-	// the bot. The mention is decided from the Mentions list, never by text.
-	if !in.BotMentioned && !in.IsDirect() {
+	if !in.IsDirect() || in.SenderOpenID != s.resolvedNow().ChatID {
 		return nil
 	}
 	key := messageEventKey(in.EventID, in.MessageID)
@@ -424,20 +427,21 @@ func (s *Service) serveQuery(ctx context.Context, in Inbound, parsed intent, acc
 	defer s.releaseQuery()
 
 	if s.source == nil {
-		if err := s.replyText(ctx, in.MessageID, "尚无额度数据，请稍后再试。"); err != nil {
+		if err := s.replyText(ctx, in.MessageID, "数据缺失，请稍后再试。"); err != nil {
 			s.logger.WarnContext(ctx, "feishu reply failed", "action", "query", "result", "error", "error", err)
 		}
 		return
 	}
 	rep, has := s.source.ReadReport(ctx)
 	if !has {
-		if err := s.replyText(ctx, in.MessageID, "尚无额度数据，请等待首次采集完成。"); err != nil {
+		if err := s.replyText(ctx, in.MessageID, "数据缺失，请等待首次采集完成。"); err != nil {
 			s.logger.WarnContext(ctx, "feishu reply failed", "action", "query", "result", "error", "error", err)
 		}
 		return
 	}
 	fresh := freshnessOf(rep, defaultFreshWindow, s.now())
 	msg := queryMessage(parsed, rep, fresh)
+	msg.EvaluatedAt = s.now()
 	if err := s.replyCard(ctx, in.MessageID, msg); err != nil {
 		s.logger.WarnContext(ctx, "feishu card reply failed", "action", "query", "result", "error", "error", err)
 		return
@@ -640,15 +644,18 @@ func (s *Service) tick(ctx context.Context) {
 	state.ChannelTracks = updateTracks(state.ChannelTracks, rep, has, now)
 
 	result := evaluatePolicy(PolicyConfig{
+		EnableAttention:         true,
+		TightRemainingPercent:   resolved.TightRemainingPercent,
 		ChannelUnavailableAfter: resolved.ChannelUnavailableAfter,
 		MonitorDownAfter:        resolved.MonitorDownAfter,
 		Location:                resolved.Location,
 	}, PolicyInput{
-		Report: rep,
-		Prev:   state.PendingItems,
-		Tracks: state.ChannelTracks,
-		Now:    now,
-		Quiet:  quiet,
+		Report:   rep,
+		Prev:     state.PendingItems,
+		Tracks:   state.ChannelTracks,
+		Now:      now,
+		Quiet:    quiet,
+		recovery: s.attentionRecovery,
 	})
 	state.PendingItems = result.Items
 
@@ -657,10 +664,13 @@ func (s *Service) tick(ctx context.Context) {
 	// end; a problem that recovered in the meantime is dropped, not sent.
 	var stalled []Notification
 	for _, alert := range result.Alerts {
+		if morningMinute(resolved, now) && !sameSummaryMinute(state.LastSummaryAt, resolved, now) && (alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == AlertReadingMissing) {
+			continue
+		}
 		notification := notificationFromAlert(alert, now)
 		if quiet {
 			notification.State = NotifyQueued
-		} else if alert.Kind == AlertMonitorDown {
+		} else if alert.Kind == AlertMonitorDown || alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == AlertReadingMissing {
 			stalled = append(stalled, notification)
 			continue
 		}
@@ -694,10 +704,9 @@ func (s *Service) tick(ctx context.Context) {
 		s.logger.WarnContext(ctx, "feishu state save failed", "error", err)
 		return
 	}
+	s.attentionRecovery = result.recovery
 	s.unlockStateTransition()
-	if !quiet {
-		s.deliverOutbox(ctx, resolved)
-	}
+	s.deliverOutbox(ctx, resolved)
 }
 
 // promoteQueued collects the quiet-hours queued notifications whose problems are
@@ -794,6 +803,9 @@ func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolve
 		return
 	}
 	state.Bootstrapped = true
+	if morningMinute(resolved, now) {
+		return
+	}
 	newItems := make(map[string]bool, len(opened))
 	for _, item := range opened {
 		newItems[item.ID] = true
@@ -801,28 +813,28 @@ func (s *Service) maybeStartupSummary(ctx context.Context, state *State, resolve
 	var open []PendingItem
 	for _, item := range openItems(state.PendingItems) {
 		// This tick already queued an immediate alert for a new episode.
-		if !newItems[item.ID] {
+		if !newItems[item.ID] && item.NotifiedAt.IsZero() {
 			open = append(open, item)
 		}
 	}
 	tight := []TightChannel(nil)
 	if has {
-		tight = tightChannels(rep, resolved.TightRemainingPercent, now, summaryFreshWindow)
+		if len(open) > 0 {
+			tight = tightChannels(rep, resolved.TightRemainingPercent, now, summaryFreshWindow)
+		}
 	}
 	if len(open) == 0 && len(tight) == 0 {
 		return
 	}
 	s.logger.InfoContext(ctx, "feishu startup summary queued", "open_items", len(open), "tight_channels", len(tight))
-	state.queueNotification(summaryNotification(open, tight, now))
+	notification := summaryNotification(open, tight, now)
+	notification.Alerts = reportDecisionAlerts(rep, has, now)
+	rememberReportedAlerts(state, notification.Alerts, rep, now)
+	state.queueNotification(notification)
 }
 
-// maybeScheduledSummary sends the scheduled digest at a configured time, only
-// when there are open items or a channel is tight, and only once per minute.
-//
-// It is gated on the same reading age as the startup summary: has must be true
-// for a tight warning, and the tight judgement only counts accounts whose newest
-// reading is still fresh. A stale or absent report therefore never manufactures
-// a "nearly out" digest, while real open items are still summarized.
+// The earliest configured slot is a daily fallback even when no report exists.
+// Later slots leave delivery to new episodes and actionable prediction findings.
 func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Report, has bool, now time.Time) {
 	if !scheduledMinute(resolved, now) {
 		return
@@ -830,37 +842,45 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 	if sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return
 	}
+	isMorning := morningMinute(resolved, now)
 	state.LastSummaryAt = now
 	open := openItems(state.PendingItems)
 	tight := []TightChannel(nil)
 	if has {
 		tight = tightChannels(rep, resolved.TightRemainingPercent, now, summaryFreshWindow)
 	}
-	if len(open) == 0 && len(tight) == 0 {
-		// No to-do and nothing tight: the schedule stays silent rather than nagging.
+	if !isMorning {
+		// Open episodes already have their own persisted delivery or acknowledgement.
 		return
 	}
-	state.queueNotification(summaryNotification(open, tight, now))
+	notification := summaryNotification(open, tight, now)
+	notification.Kind = KindMorning
+	notification.Alerts = reportDecisionAlerts(rep, has, now)
+	rememberReportedAlerts(state, notification.Alerts, rep, now)
+	omitStartupEpisodes(&notification, state, resolved, now)
+	state.queueNotification(notification)
 }
 
 func (s *Service) deliverOutbox(ctx context.Context, resolved Resolved) {
-	s.deliverOutboxMatching(ctx, resolved, "")
+	if err := s.deliverOutboxMatching(ctx, resolved, ""); err != nil {
+		s.logger.WarnContext(ctx, "feishu outbox delivery failed", "error", err)
+	}
 }
 
 // deliverOutboxNotification delivers one persisted row without flushing other
 // pending notifications. A manual console action therefore sends exactly the
 // requested prediction card and leaves scheduled or retry work to the service loop.
-func (s *Service) deliverOutboxNotification(ctx context.Context, resolved Resolved, notificationID string) {
+func (s *Service) deliverOutboxNotification(ctx context.Context, resolved Resolved, notificationID string) error {
 	if notificationID == "" {
-		return
+		return errors.New("feishu notification ID is missing")
 	}
-	s.deliverOutboxMatching(ctx, resolved, notificationID)
+	return s.deliverOutboxMatching(ctx, resolved, notificationID)
 }
 
-func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, notificationID string) {
+func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, notificationID string) error {
 	dispatcher := s.currentDispatcher()
 	if dispatcher == nil || resolved.ChatID == "" {
-		return
+		return errors.New("feishu delivery is not configured")
 	}
 	// Only delivery itself is serialized. Report and prediction sources are read
 	// before this point, so a slow Feishu request cannot block either scheduler.
@@ -871,9 +891,17 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	s.unlockStateTransition()
 	if err != nil {
 		s.setLastError(err)
-		return
+		return err
 	}
 	due := state.Outbox
+	if notificationID == "" && withinQuiet(resolved, s.now()) {
+		due = nil
+		for _, notification := range state.Outbox {
+			if notification.Kind == KindMorning || notification.Kind == predictionKindPrefix+KindMorning {
+				due = append(due, notification)
+			}
+		}
+	}
 	if notificationID != "" {
 		due = nil
 		for _, notification := range state.Outbox {
@@ -889,7 +917,7 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	latest, err := s.store.Load(ctx)
 	if err != nil {
 		s.setLastError(err)
-		return
+		return err
 	}
 	byID := make(map[string]Notification, len(delivered))
 	for _, notification := range delivered {
@@ -905,8 +933,9 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	latest.UpdatedAt = now
 	if err := s.store.Save(ctx, latest); err != nil {
 		s.setLastError(err)
-		s.logger.WarnContext(ctx, "feishu outbox save failed", "error", err)
+		return err
 	}
+	return nil
 }
 
 // Status is the read-only state the console shows.
@@ -936,6 +965,7 @@ func (s *Service) StatusSnapshot(ctx context.Context) Status {
 		Source:    resolved.Source,
 		ForcedOff: resolved.ForcedOff,
 	}
+
 	s.runMu.Lock()
 	status.Connected = s.started && s.runCancel != nil
 	s.runMu.Unlock()
@@ -957,31 +987,55 @@ func (s *Service) StatusSnapshot(ctx context.Context) Status {
 	return status
 }
 
-// SendTest delivers a live status card to the configured group. The console calls
+// SendTest delivers a live status card to the configured person. The console calls
 // it only on an explicit operator action; the bot never triggers it on its own.
-func (s *Service) SendTest(ctx context.Context) error {
+type TestDelivery struct {
+	Sent           bool
+	QueuedForRetry bool
+	Attempts       int
+	NextAttemptAt  time.Time
+}
+
+func (s *Service) SendTest(ctx context.Context) (TestDelivery, error) {
 	resolved := s.resolvedNow()
 	if !resolved.Ready() {
-		return fmt.Errorf("feishu is not ready: %s", s.inactiveReason(resolved))
+		return TestDelivery{}, fmt.Errorf("feishu is not ready: %s", s.inactiveReason(resolved))
 	}
 	dispatcher := s.currentDispatcher()
 	if dispatcher == nil {
-		return errors.New("feishu sender is not configured")
+		return TestDelivery{}, errors.New("feishu sender is not configured")
 	}
 	rep, has := Report{}, false
 	if s.source != nil {
 		rep, has = s.source.ReadReport(ctx)
 	}
 	now := s.now()
-	msg := Message{Kind: KindQuery, Body: "这是一条测试消息。", GeneratedAt: now}
-	if has {
-		msg.Report = &rep
-		msg.GeneratedAt = rep.GeneratedAt
+	notification := Notification{ID: episodeID("manual", nil, now), Kind: KindQuery, Alerts: reportDecisionAlerts(rep, has, now), State: NotifyPending, CreatedAt: now, OccurredAt: now}
+	s.lockStateTransition()
+	state, err := s.store.Load(ctx)
+	if err == nil {
+		state.queueNotification(notification)
+		err = s.store.Save(ctx, state)
 	}
-	if err := dispatcher.sendWithFallback(ctx, resolved.ChatID, msg); err != nil {
-		return err
+	s.unlockStateTransition()
+	if err != nil {
+		return TestDelivery{}, err
 	}
-	return nil
+	if err := s.deliverOutboxNotification(ctx, resolved, notification.ID); err != nil {
+		return TestDelivery{}, err
+	}
+	s.lockStateTransition()
+	defer s.unlockStateTransition()
+	state, err = s.store.Load(ctx)
+	if err != nil {
+		return TestDelivery{}, err
+	}
+	for _, candidate := range state.Outbox {
+		if candidate.ID == notification.ID {
+			return TestDelivery{Sent: candidate.State == NotifySent, QueuedForRetry: candidate.State == NotifyPending, Attempts: candidate.Attempts, NextAttemptAt: candidate.NextAttemptAt}, nil
+		}
+	}
+	return TestDelivery{}, errors.New("feishu test notification was not persisted")
 }
 
 func (s *Service) setLastError(err error) {
@@ -1093,6 +1147,9 @@ func summaryNotification(open []PendingItem, tight []TightChannel, now time.Time
 
 // alertItemID is the pending-item identity an alert belongs to.
 func alertItemID(alert Alert) string {
+	if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == predictionKindPrefix {
+		return ItemID(AlertQuotaLow, alert.Provider, alert.Key, alert.Scope)
+	}
 	return ItemID(alert.Kind, alert.Provider, alert.Key, "")
 }
 
