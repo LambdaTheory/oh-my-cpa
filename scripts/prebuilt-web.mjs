@@ -125,7 +125,15 @@ export function validatePrevious(root, revision) {
   if (!SHA.test(manifest.source_revision) || (manifest.previous_deploy && !SHA.test(manifest.previous_deploy))) throw new Error('Unknown deployment history');
   const parents = git(root, ['show', '-s', '--format=%P', revision]).split(' ');
   const expectedParents = [manifest.previous_deploy, manifest.source_revision].filter(Boolean);
-  if (JSON.stringify(parents) !== JSON.stringify(expectedParents)) throw new Error('Unknown deployment commit parents');
+  if (JSON.stringify(parents) !== JSON.stringify(expectedParents)) {
+    // The deployment branch may also advance by merging a published commit through a pull request.
+    // That merge only wraps the same payload, so accept it when the wrapped commit is a valid
+    // deployment of this history and the merged tree is byte-identical to it.
+    const [previousDeploy, wrapped] = parents;
+    if (parents.length !== 2 || !manifest.previous_deploy || previousDeploy !== manifest.previous_deploy || wrapped === revision
+      || git(root, ['rev-parse', `${wrapped}^{tree}`]) !== git(root, ['rev-parse', `${revision}^{tree}`])) throw new Error('Unknown deployment commit parents');
+    validatePrevious(root, wrapped);
+  }
   const source = sourceEntries(root, manifest.source_revision);
   const modes = Object.fromEntries(source.map(({ name, mode }) => [name, mode]));
   const hashes = sourceHashes(root, source);

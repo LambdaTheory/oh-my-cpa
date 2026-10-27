@@ -115,6 +115,24 @@ test('publication refuses remote races and unknown modifications without overwri
   assert.throws(() => prepare(f.repo, f.revision, path.join(f.root, 'unknown'), '', f), /Unknown deployment commit parents/);
 });
 
+test('deployment history accepts a pull-request merge that wraps a published commit', t => {
+  const f = fixture(t); const first = path.join(f.root, 'prepared-first'); prepare(f.repo, f.revision, first, '', f);
+  const deployed = publish(first, f.transport);
+  write(f.repo, 'web/vite.config.ts', 'next source'); git(f.repo, ['add', '.']); git(f.repo, ['commit', '-m', 'next']);
+  const next = git(f.repo, ['rev-parse', 'HEAD']); const second = path.join(f.root, 'prepared-second');
+  prepare(f.repo, next, second, '', f);
+  const advanced = publish(second, f.transport);
+  const tree = git(second, ['rev-parse', advanced + '^{tree}']);
+  const merged = git(second, ['commit-tree', tree, '-p', deployed, '-p', advanced, '-m', 'Merge pull request']);
+  f.transport.push(second, merged, advanced);
+  assert.equal(validatePrevious(second, merged).source_revision, next);
+  const unrelated = git(second, ['commit-tree', git(second, ['rev-parse', deployed + '^{tree}']), '-p', deployed, '-p', advanced, '-m', 'Unrelated tree']);
+  assert.throws(() => validatePrevious(second, unrelated), /Unknown deployment commit parents/);
+  write(f.repo, 'web/vite.config.ts', 'third source'); git(f.repo, ['add', '.']); git(f.repo, ['commit', '-m', 'third']);
+  const third = git(f.repo, ['rev-parse', 'HEAD']);
+  assert.doesNotThrow(() => prepare(f.repo, third, path.join(f.root, 'prepared-third'), '', f));
+});
+
 test('publication refuses a concurrent first branch even when its tip is a source ancestor', t => {
   const f=fixture(t); const prepared=path.join(f.root,'prepared'); prepare(f.repo,f.revision,prepared,'',f);
   assert.throws(()=>publish(prepared,{...f.transport,push(cwd,commit,previous){f.transport.push(cwd,f.revision);f.transport.push(cwd,commit,previous);}}),/failed|rejected/);
