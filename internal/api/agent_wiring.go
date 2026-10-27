@@ -150,6 +150,35 @@ func (h *Handler) operationsService() *operations.Service {
 			}
 		}
 		result := operations.AutomationStatus{Enabled: status.Enabled, Source: status.Source, Accounts: []operations.AutomationAccountSummary{}}
+		inventory, inventoryErr := h.automationInventory(ctx)
+		result.Inventory = operations.AutomationInventorySummary{}
+		if inventoryErr != nil {
+			result.Inventory.Error = "credential list unavailable"
+		} else {
+			total, managed, disabled := len(inventory.Ordered), 0, 0
+			for _, credential := range inventory.Ordered {
+				if credential.Disabled {
+					disabled++
+				}
+				for _, account := range roster {
+					if account.AuthIndex == credential.AuthIndex {
+						managed++
+						break
+					}
+				}
+			}
+			unmanaged := total - managed
+			pending := 0
+			for _, account := range roster {
+				if !inventory.Present(account.AuthIndex) {
+					pending++
+				}
+			}
+			result.Inventory = operations.AutomationInventorySummary{
+				Available: true, Credentials: &total, Managed: &managed, Unmanaged: &unmanaged,
+				Disabled: &disabled, PendingAbsence: &pending,
+			}
+		}
 		for _, account := range roster {
 			summary := operations.AutomationAccountSummary{
 				AuthIndex:            account.AuthIndex,

@@ -5,7 +5,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { I18nProvider } from '../src/i18n';
 import { AccountAutomationDrawer } from '../src/components/automation/AccountAutomationDrawer';
 import { api } from '../src/api/client';
-import type { AccountAutomationAccountDTO, AccountAutomationListResponse } from '../src/types/accountAutomation';
+import type {
+  AccountAutomationAccountDTO,
+  AccountAutomationCredentialDTO,
+  AccountAutomationListResponse,
+} from '../src/types/accountAutomation';
 
 vi.mock('../src/api/client', () => ({ api: {
   getAccountAutomation: vi.fn(), putAccountAutomationSettings: vi.fn(), putAccountAutomationAccount: vi.fn(),
@@ -13,18 +17,47 @@ vi.mock('../src/api/client', () => ({ api: {
   postAccountAutomationCancel: vi.fn(), postAccountAutomationManualReset: vi.fn(),
 } }));
 
-const account = (label: string, overrides: Partial<AccountAutomationAccountDTO> = {}): AccountAutomationAccountDTO => ({
+const plan = (label: string, overrides: Partial<AccountAutomationAccountDTO> = {}): AccountAutomationAccountDTO => ({
   auth_index: 'synthetic-' + label, account_label: label, name: label + '.json', provider: 'codex',
   is_adopted: true, is_enabled: true, burn_credit: false, removed: false, state: 'monitoring',
   monitor_reason: 'not_exhausted', auto_disable_supported: true, disabled_by_automation: false,
   attempt_count: 0, intent_version: 1, has_weekly_evidence: true, weekly_used_percent: 20, ...overrides,
 });
-const snapshot = (accounts: AccountAutomationAccountDTO[] = []): AccountAutomationListResponse => ({
-  settings: { enabled: true, web_enabled: true, source: 'web', master_from_env: false, accounts: accounts.length },
-  accounts,
-  candidates: accounts.map(a => ({ auth_index: a.auth_index, account_label: a.account_label, name: a.name, provider: a.provider,
-    disabled: a.disabled_by_automation, adopted: true, adoptable: true, controllable: true, auto_disable_supported: a.auto_disable_supported })),
-});
+
+const credential = (label: string, overrides: Partial<AccountAutomationCredentialDTO> = {}): AccountAutomationCredentialDTO => {
+  const managed = overrides.managed ?? true;
+  return {
+    auth_index: 'synthetic-' + label, account_label: label, name: label + '.json', provider: 'codex',
+    disabled: false, controllable: true, managed, adoptable: true, auto_disable_supported: true,
+    plan: managed ? plan(label) : null, ...overrides,
+  };
+};
+
+const snapshot = (credentials: AccountAutomationCredentialDTO[], overrides: Partial<AccountAutomationListResponse> = {}): AccountAutomationListResponse => {
+  const available = overrides.inventory?.available ?? true;
+  const plans = credentials.filter(row => row.managed && row.plan).map(row => row.plan as AccountAutomationAccountDTO);
+  return {
+    settings: { enabled: true, web_enabled: true, source: 'web', master_from_env: false, accounts: plans.length },
+    inventory: {
+      available,
+      credentials: available ? credentials.length : null,
+      managed: available ? credentials.filter(row => row.managed).length : null,
+      unmanaged: available ? credentials.filter(row => !row.managed).length : null,
+      disabled: available ? credentials.filter(row => row.disabled).length : null,
+      pending_absence: 0,
+    },
+    credentials: available ? credentials : [],
+    accounts: plans,
+    accounts_last_known: !available,
+    candidates: credentials.map(row => ({
+      auth_index: row.auth_index, account_label: row.account_label, name: row.name, provider: row.provider,
+      disabled: row.disabled, controllable: row.controllable, adopted: row.managed, adoptable: row.adoptable,
+      adoption_blocked_reason: row.adoption_blocked_reason, auto_disable_supported: row.auto_disable_supported,
+    })),
+    ...overrides,
+  };
+};
+
 function mount(data: AccountAutomationListResponse) {
   vi.mocked(api.getAccountAutomation).mockResolvedValue(data);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -36,14 +69,14 @@ const details = (name: string) => fireEvent.click(within(row(name)).getByRole('b
 
 beforeEach(() => { vi.resetAllMocks(); localStorage.setItem('omc-lang', 'en'); });
 
-it('renders real provider artwork, accessible full labels and one state/reason per row', async () => {
+it('renders current credentials with real artwork, accessible labels and one status per row', async () => {
   const data = snapshot([
-    account('Codex account', { provider: 'codex' }),
-    account('Claude account', { provider: 'claude', is_enabled: false, recovery_at_ms: Date.now() + 100000, recovery_status: 'scheduled' }),
-    account('Antigravity account', { provider: 'antigravity', auto_disable_supported: false, monitor_reason: 'no_weekly_evidence', has_weekly_evidence: false }),
-    account('Missing name', { monitor_reason: 'credential_missing_name' }),
-    account('Missing gateway', { monitor_reason: 'credential_not_found' }),
-    account('Unknown reason', { monitor_reason: 'future_machine_code' }),
+    credential('Codex account', { provider: 'codex' }),
+    credential('Claude account', { provider: 'claude', disabled: true, plan: plan('Claude account', { provider: 'claude', is_enabled: false, recovery_at_ms: Date.now() + 100000, recovery_status: 'scheduled' }) }),
+    credential('Antigravity account', { provider: 'antigravity', auto_disable_supported: false, plan: plan('Antigravity account', { provider: 'antigravity', auto_disable_supported: false, monitor_reason: 'no_weekly_evidence', has_weekly_evidence: false }) }),
+    credential('Missing name', { managed: false, controllable: false, adoptable: false, adoption_blocked_reason: 'credential_missing_name' }),
+    credential('Unmanaged one', { managed: false, disabled: true }),
+    credential('Unknown reason', { plan: plan('Unknown reason', { monitor_reason: 'future_machine_code' }) }),
   ]);
   mount(data);
   await screen.findByText('Codex account');
@@ -55,26 +88,40 @@ it('renders real provider artwork, accessible full labels and one state/reason p
     expect(within(card).getByRole('switch', { name: 'Auto-management for ' + name })).toBeDefined();
   }
   expect(row('Claude account').textContent).toContain('Recovery plan retained');
+  expect(row('Claude account').textContent).toContain('Paused');
   expect(row('Antigravity account').textContent).toContain('Capability unverified');
-  expect(row('Antigravity account').textContent).not.toContain('No 7d evidence');
-  expect(row('Missing name').textContent).toContain('Missing name; update it in CPA');
-  expect(row('Missing gateway').textContent).toContain('Credential absent from gateway');
+  expect(row('Missing name').textContent).toContain('No name; cannot be addressed by CPA');
+  expect(row('Unmanaged one').textContent).toContain('Unmanaged');
+  expect(within(row('Unmanaged one')).getByRole('button', { name: 'Adopt Unmanaged one' })).toBeDefined();
+  expect(row('Unmanaged one').textContent).not.toContain('Paused');
   expect(row('Unknown reason').textContent).toContain('Awaiting status update');
   expect(screen.queryByText('future_machine_code')).toBeNull();
-  expect(screen.getByTestId('automation-stats').textContent).toContain('Monitor only3');
-  fireEvent.click(screen.getByRole('button', { name: 'Monitor only' }));
-  expect(screen.getAllByRole('article')).toHaveLength(3);
+  expect(screen.getByTestId('automation-stats').textContent).toContain('Managed4');
+  expect(screen.getByTestId('automation-stats').textContent).toContain('Credentials6');
+  fireEvent.click(screen.getByRole('button', { name: 'Unmanaged' }));
+  expect(screen.getAllByRole('article')).toHaveLength(2);
   fireEvent.click(screen.getByRole('button', { name: 'Paused' }));
   expect(screen.getAllByRole('article')).toHaveLength(1);
+});
+
+it('keeps two credentials with one display label as two independent rows', async () => {
+  mount(snapshot([
+    credential('ops@example.test', { auth_index: 'idx-a' }),
+    credential('ops@example.test', { auth_index: 'idx-b' }),
+    credential('ops@example.test', { auth_index: 'idx-c', managed: false }),
+  ]));
+  await waitFor(() => expect(screen.getAllByRole('article', { name: 'ops@example.test' })).toHaveLength(3));
+  fireEvent.click(screen.getByRole('button', { name: 'Unmanaged' }));
+  expect(screen.getAllByRole('article', { name: 'ops@example.test' })).toHaveLength(1);
 });
 
 it.each(['en', 'zh-CN'])('keeps active recovery distinct from historical timestamps and localizes missing evidence (%s)', async lang => {
   localStorage.setItem('omc-lang', lang);
   mount(snapshot([
-    account('Scheduled', { disabled_by_automation: true, state: 'disabled', recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' }),
-    account('Overdue', { disabled_by_automation: true, state: 'error', recovery_at_ms: Date.now() - 1000, recovery_status: 'overdue', next_attempt_at_ms: Date.now() + 1000 }),
-    account('Recovered', { recovery_at_ms: Date.now() - 1000, has_weekly_evidence: false, monitor_reason: 'no_weekly_evidence' }),
-    account('Monitor', { auto_disable_supported: false, has_weekly_evidence: false, monitor_reason: 'no_weekly_evidence' }),
+    credential('Scheduled', { disabled: true, plan: plan('Scheduled', { disabled_by_automation: true, state: 'disabled', recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' }) }),
+    credential('Overdue', { disabled: true, plan: plan('Overdue', { disabled_by_automation: true, state: 'error', recovery_at_ms: Date.now() - 1000, recovery_status: 'overdue', next_attempt_at_ms: Date.now() + 1000 }) }),
+    credential('Recovered', { plan: plan('Recovered', { recovery_at_ms: Date.now() - 1000, has_weekly_evidence: false, monitor_reason: 'no_weekly_evidence' }) }),
+    credential('Monitor', { auto_disable_supported: false, plan: plan('Monitor', { auto_disable_supported: false, has_weekly_evidence: false, monitor_reason: 'no_weekly_evidence' }) }),
   ]));
   await screen.findByText('Scheduled');
   expect(row('Scheduled').textContent).toContain(lang === 'en' ? 'Recovery at:' : '预计恢复:');
@@ -87,7 +134,7 @@ it.each(['en', 'zh-CN'])('keeps active recovery distinct from historical timesta
 
 it.each(['en', 'zh-CN'])('explains identity mismatch without pointing to empty error details (%s)', async lang => {
   localStorage.setItem('omc-lang', lang);
-  mount(snapshot([account('Mismatched evidence', { state: 'monitoring', monitor_reason: 'evidence_identity_mismatch', last_error: '' })]));
+  mount(snapshot([credential('Mismatched evidence', { plan: plan('Mismatched evidence', { state: 'monitoring', monitor_reason: 'evidence_identity_mismatch', last_error: '' }) })]));
   await screen.findByText('Mismatched evidence');
   const card = row('Mismatched evidence');
   expect(card.querySelector('.status-label')?.textContent).toBe(lang === 'en' ? 'Error' : '异常');
@@ -95,24 +142,25 @@ it.each(['en', 'zh-CN'])('explains identity mismatch without pointing to empty e
   expect(card.textContent).not.toMatch(/see details|查看详情/);
 });
 
-it('uses friendly roster and adoption labels for prefixed and standalone auth indexes', async () => {
-  const accounts = [
-    account('prefixed', { auth_index: 'aaaaaaaaaaaaaaaa', account_label: 'aaaaaaaaaaaaaaaa: Friendly Claude', name: 'aaaaaaaaaaaaaaaa' }),
-    account('standalone', { auth_index: 'bbbbbbbbbbbbbbbb', account_label: 'bbbbbbbbbbbbbbbb', name: 'Friendly Codex' }),
+it('uses friendly labels for prefixed and standalone auth indexes and adopts an unmanaged credential', async () => {
+  const credentials = [
+    credential('prefixed', { auth_index: 'aaaaaaaaaaaaaaaa', account_label: 'aaaaaaaaaaaaaaaa: Friendly Claude', name: 'aaaaaaaaaaaaaaaa', managed: false }),
+    credential('standalone', { auth_index: 'bbbbbbbbbbbbbbbb', account_label: 'bbbbbbbbbbbbbbbb', name: 'Friendly Codex', managed: false }),
   ];
-  const data = snapshot(accounts);
-  data.candidates = data.candidates.map(candidate => ({ ...candidate, adopted: false }));
-  mount(data);
+  mount(snapshot(credentials));
   await screen.findByRole('article', { name: 'Friendly Claude' });
   expect(row('Friendly Codex')).toBeDefined();
-  fireEvent.click(screen.getByRole('button', { name: 'Batch Operations' }));
+  vi.mocked(api.postAccountAutomationAdopt).mockResolvedValue({ adopted: 1 });
+  fireEvent.click(within(row('Friendly Claude')).getByRole('button', { name: 'Adopt Friendly Claude' }));
+  await waitFor(() => expect(api.postAccountAutomationAdopt).toHaveBeenCalledWith({ auth_indexes: ['aaaaaaaaaaaaaaaa'], enable: true }));
+  fireEvent.click(screen.getByRole('button', { name: 'Batch adopt' }));
   expect(screen.getByRole('checkbox', { name: 'Friendly Claude' })).toBeDefined();
   expect(screen.getByRole('checkbox', { name: 'Friendly Codex' })).toBeDefined();
-  for (const account of accounts) expect(document.body.textContent).not.toContain(account.auth_index);
+  for (const item of credentials) expect(document.body.textContent).not.toContain(item.auth_index);
 });
 
-it('Credit sends only burn_credit, retains recovery, and locks repeated mutation until refreshed', async () => {
-  let data = snapshot([account('Recovering', { state: 'disabled', disabled_by_automation: true, recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' })]);
+it('Credit sends only burn_credit with the lifecycle version, retains recovery, and locks repeated mutation until refreshed', async () => {
+  let data = snapshot([credential('Recovering', { disabled: true, plan: plan('Recovering', { state: 'disabled', disabled_by_automation: true, recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' }) })]);
   mount(data);
   let release!: (value: AccountAutomationAccountDTO) => void;
   vi.mocked(api.putAccountAutomationAccount).mockImplementation(() => new Promise(resolve => { release = resolve; }));
@@ -120,22 +168,24 @@ it('Credit sends only burn_credit, retains recovery, and locks repeated mutation
   const credit = within(row('Recovering')).getByRole('button', { name: 'Credit exemption for Recovering' });
   fireEvent.click(credit); fireEvent.click(credit);
   await waitFor(() => expect(api.putAccountAutomationAccount).toHaveBeenCalledTimes(1));
-  expect(api.putAccountAutomationAccount).toHaveBeenCalledWith('synthetic-Recovering', { burn_credit: true });
-  data = snapshot([{ ...data.accounts[0], burn_credit: true }]);
+  expect(api.putAccountAutomationAccount).toHaveBeenCalledWith('synthetic-Recovering', { burn_credit: true, expected_intent_version: 1 });
+  data = snapshot([credential('Recovering', { disabled: true, plan: { ...data.accounts[0], burn_credit: true } })]);
   vi.mocked(api.getAccountAutomation).mockResolvedValue(data);
   release(data.accounts[0]);
   await waitFor(() => expect(credit.getAttribute('aria-pressed')).toBe('true'));
   expect(row('Recovering').textContent).toContain('Auto-disabled');
+  expect(screen.getByTestId('automation-stats').textContent).toContain('Gateway disabled1');
   expect(row('Recovering').textContent).toContain('Recovery at:');
   expect(credit.textContent).toBe('Credit');
 });
 
 it('single and batch unadopt remove roster membership without a gateway toggle', async () => {
-  let data = snapshot([account('Single', { is_enabled: false, disabled_by_automation: true }), account('Batch')]);
+  let data = snapshot([credential('Single', { plan: plan('Single', { is_enabled: false, disabled_by_automation: true }) }), credential('Batch')]);
   mount(data);
   vi.mocked(api.postAccountAutomationUnadopt).mockImplementation(async () => {
     const removed = { ...data.accounts[0], is_adopted: false, removed: true };
-    data = { ...data, accounts: data.accounts.slice(1) };
+    // After unadoption the credential is still a current row, now unmanaged.
+    data = snapshot([credential('Single', { managed: false }), credential('Batch')]);
     vi.mocked(api.getAccountAutomation).mockResolvedValue(data);
     return removed;
   });
@@ -144,23 +194,22 @@ it('single and batch unadopt remove roster membership without a gateway toggle',
   fireEvent.click(within(row('Single')).getByRole('button', { name: 'Unadopt' }));
   expect(await screen.findByText(/Only removes roster membership/)).toBeDefined();
   fireEvent.click(screen.getByRole('button', { name: 'Confirm Unadopt' }));
-  await waitFor(() => expect(screen.queryByRole('article', { name: 'Single' })).toBeNull());
-  expect(api.postAccountAutomationUnadopt).toHaveBeenCalledWith('synthetic-Single');
-  fireEvent.click(screen.getByRole('button', { name: 'Batch Operations' }));
-  fireEvent.click(screen.getByRole('radio', { name: 'Unadopt' }));
+  await waitFor(() => expect(within(row('Single')).getByRole('button', { name: 'Adopt Single' })).toBeDefined());
+  expect(api.postAccountAutomationUnadopt).toHaveBeenCalledWith('synthetic-Single', 1);
+  fireEvent.click(screen.getByRole('button', { name: 'Batch unadopt' }));
   expect(screen.queryByRole('checkbox', { name: /immediately/ })).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
   fireEvent.click(within(screen.getByRole('radio', { name: 'Unadopt' }).closest('.ant-modal') as HTMLElement).getByRole('button', { name: 'Confirm Unadopt' }));
-  await waitFor(() => expect(api.postAccountAutomationUnadoptMany).toHaveBeenCalledWith({ auth_indexes: ['synthetic-Batch'] }));
+  await waitFor(() => expect(api.postAccountAutomationUnadoptMany).toHaveBeenCalledWith({ auth_indexes: ['synthetic-Batch'], targets: [{ auth_index: 'synthetic-Batch', expected_intent_version: 1 }] }));
   expect(api.putAccountAutomationAccount).not.toHaveBeenCalled();
 });
 
 it('pausing and resuming use the automation switch while keeping the retained recovery visible', async () => {
-  let data = snapshot([account('Paused plan', { state: 'disabled', disabled_by_automation: true, recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' })]);
+  let data = snapshot([credential('Paused plan', { plan: plan('Paused plan', { state: 'disabled', disabled_by_automation: true, recovery_at_ms: Date.now() + 86400000, recovery_status: 'scheduled' }) })]);
   mount(data);
   vi.mocked(api.putAccountAutomationAccount).mockImplementation(async (_, patch) => {
     const updated = { ...data.accounts[0], is_enabled: patch.enabled! };
-    data = snapshot([updated]);
+    data = snapshot([credential('Paused plan', { plan: updated })]);
     vi.mocked(api.getAccountAutomation).mockResolvedValue(data);
     return updated;
   });
@@ -172,13 +221,13 @@ it('pausing and resuming use the automation switch while keeping the retained re
   await waitFor(() => expect((control as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(control);
   await waitFor(() => expect(control.getAttribute('aria-checked')).toBe('true'));
-  expect(api.putAccountAutomationAccount).toHaveBeenNthCalledWith(1, 'synthetic-Paused plan', { enabled: false });
-  expect(api.putAccountAutomationAccount).toHaveBeenNthCalledWith(2, 'synthetic-Paused plan', { enabled: true });
+  expect(api.putAccountAutomationAccount).toHaveBeenNthCalledWith(1, 'synthetic-Paused plan', { enabled: false, expected_intent_version: 1 });
+  expect(api.putAccountAutomationAccount).toHaveBeenNthCalledWith(2, 'synthetic-Paused plan', { enabled: true, expected_intent_version: 1 });
   expect(row('Paused plan').textContent).toContain('Recovery at:');
 });
 
-it('a failed refresh preserves the last roster but blocks mutation until a successful refresh', async () => {
-  const data = snapshot([account('Last good')]);
+it('a failed refresh preserves the last rows but blocks mutation until a successful refresh', async () => {
+  const data = snapshot([credential('Last good')]);
   const { client } = mount(data);
   await screen.findByText('Last good');
   vi.mocked(api.getAccountAutomation).mockRejectedValue(new Error('Synthetic unavailable'));
@@ -192,17 +241,39 @@ it('a failed refresh preserves the last roster but blocks mutation until a succe
   expect(screen.queryByText('Could not refresh automation status')).toBeNull();
 });
 
-it('batch adoption selects only eligible live credentials, retains default-on and optional notes', async () => {
-  const data = snapshot();
-  data.candidates = [
-    { auth_index: 'a', account_label: 'a: Verified', provider: 'claude', adopted: false, adoptable: true, controllable: true, auto_disable_supported: true, disabled: true },
-    { auth_index: 'b', account_label: 'Monitor', provider: 'antigravity', adopted: false, adoptable: true, controllable: true, auto_disable_supported: false, disabled: false },
-    { auth_index: 'c', account_label: 'Blocked', adopted: false, adoptable: false, controllable: false, auto_disable_supported: false, disabled: false, adoption_blocked_reason: 'credential_missing_name' },
-  ];
+it('an unavailable inventory shows protection and last-known plans instead of an empty gateway', async () => {
+  const data = snapshot([credential('Last known')], {
+    inventory: { available: false, error: 'credential list unavailable', credentials: null, managed: null, unmanaged: null, disabled: null },
+    accounts_last_known: true,
+  });
+  mount(data);
+  expect((await screen.findAllByText('Credential inventory unavailable')).length).toBeGreaterThan(0);
+  expect(screen.queryAllByRole('article')).toHaveLength(0);
+  const outageStats = screen.getByTestId('automation-stats');
+  for (const label of ['Credentials', 'Managed', 'Unmanaged', 'Gateway disabled', 'Paused', 'Pending absence']) {
+    expect(within(outageStats).getByText(label).nextSibling?.textContent).toBe('—');
+  }
+  expect(screen.getByText('Last known plans: 1 (not current state)')).toBeDefined();
+  expect((screen.getByRole('button', { name: 'Batch adopt' }) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Batch unadopt' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(document.body.textContent).not.toMatch(/No matching accounts|暂无匹配账号/);
+  // A refresh that reports a complete empty inventory is an empty gateway, explicitly.
+  vi.mocked(api.getAccountAutomation).mockResolvedValue(snapshot([]));
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+  await screen.findByText('No matching accounts');
+  expect(screen.getByTestId('automation-stats').textContent).toContain('Credentials0');
+});
+
+it('batch adoption selects only eligible unmanaged credentials, retains default-on and optional notes', async () => {
+  const data = snapshot([
+    credential('a', { auth_index: 'a', account_label: 'a: Verified', provider: 'claude', managed: false, disabled: true }),
+    credential('b', { auth_index: 'b', account_label: 'Monitor', provider: 'antigravity', managed: false, auto_disable_supported: false }),
+    credential('c', { auth_index: 'c', account_label: 'Blocked', managed: false, controllable: false, adoptable: false, adoption_blocked_reason: 'credential_missing_name' }),
+  ]);
   mount(data);
   vi.mocked(api.postAccountAutomationAdopt).mockResolvedValue({ adopted: 2 });
-  await waitFor(() => expect((screen.getByRole('button', { name: 'Batch Operations' }) as HTMLButtonElement).disabled).toBe(false));
-  fireEvent.click(screen.getByRole('button', { name: 'Batch Operations' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Batch adopt' }) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button', { name: 'Batch adopt' }));
   expect((screen.getByRole('button', { name: 'Confirm Adoption' }) as HTMLButtonElement).disabled).toBe(true);
   expect((screen.getByRole('checkbox', { name: /immediately/ }) as HTMLInputElement).checked).toBe(true);
   expect((screen.getByRole('checkbox', { name: 'Blocked' }) as HTMLInputElement).disabled).toBe(true);
@@ -213,14 +284,13 @@ it('batch adoption selects only eligible live credentials, retains default-on an
   await waitFor(() => expect(api.postAccountAutomationAdopt).toHaveBeenCalledWith({ auth_indexes: ['a', 'b'], enable: true, note: 'synthetic batch' }));
 });
 
-it('refresh prunes stale selection, keeps cleanup silent, and refuses degraded adoption', async () => {
-  const data = snapshot([account('Absent')]);
-  data.candidates.push({ auth_index: 'new', account_label: 'New', disabled: false, controllable: true, adopted: false, adoptable: true, auto_disable_supported: true });
+it('refresh prunes stale selection, keeps cleanup silent, and refuses adoption while unavailable', async () => {
+  const data = snapshot([credential('Absent', { managed: false })]);
   const { client } = mount(data);
   await screen.findByText('Absent');
-  fireEvent.click(screen.getByRole('button', { name: 'Batch Operations' }));
-  fireEvent.click(screen.getByRole('checkbox', { name: 'New' }));
-  const refreshed = { ...data, accounts: [], candidates: [] };
+  fireEvent.click(screen.getByRole('button', { name: 'Batch adopt' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Absent' }));
+  const refreshed = snapshot([]);
   vi.mocked(api.getAccountAutomation).mockResolvedValue(refreshed);
   await client.invalidateQueries({ queryKey: ['account-automation'] });
   await waitFor(() => expect(screen.queryByRole('article', { name: 'Absent' })).toBeNull());
@@ -228,21 +298,23 @@ it('refresh prunes stale selection, keeps cleanup silent, and refuses degraded a
   expect((screen.getByRole('button', { name: 'Confirm Adoption' }) as HTMLButtonElement).disabled).toBe(true);
   expect(document.querySelector('.omc-toast')).toBeNull();
   expect(document.body.textContent).not.toMatch(/absent from gateway|cleaned|清理/);
-  vi.mocked(api.getAccountAutomation).mockResolvedValue({ ...data, candidates_degraded: true });
+  vi.mocked(api.getAccountAutomation).mockResolvedValue(snapshot([credential('Absent', { managed: false })], {
+    inventory: { available: false, credentials: null, managed: null, unmanaged: null, disabled: null },
+  }));
   await client.invalidateQueries({ queryKey: ['account-automation'] });
-  await waitFor(() => expect((screen.getByRole('checkbox', { name: 'New' }) as HTMLInputElement).disabled).toBe(true));
-  expect(screen.getByText('Adopted 1 / Gateway — credentials')).toBeDefined();
+  await waitFor(() => expect((screen.getByRole('button', { name: 'Batch adopt' }) as HTMLButtonElement).disabled).toBe(true));
+  expect(screen.getByTestId('automation-stats').textContent).toContain('Credentials—');
 });
 
 it('details retain retry cancellation and future manual-reset submission', async () => {
-  const data = snapshot([account('Retry', { state: 'error', next_attempt_at_ms: Date.now() + 1000 }), account('Reset', { monitor_reason: 'missing_reset' })]);
+  const data = snapshot([credential('Retry', { plan: plan('Retry', { state: 'error', next_attempt_at_ms: Date.now() + 1000 }) }), credential('Reset', { plan: plan('Reset', { monitor_reason: 'missing_reset' }) })]);
   mount(data);
   vi.mocked(api.postAccountAutomationCancel).mockResolvedValue(data.accounts[0]);
   vi.mocked(api.postAccountAutomationManualReset).mockResolvedValue(data.accounts[1]);
   await screen.findByText('Retry'); details('Retry'); details('Reset');
   fireEvent.click(screen.getByRole('button', { name: 'Cancel Retry' }));
   fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
-  await waitFor(() => expect(api.postAccountAutomationCancel).toHaveBeenCalledWith('synthetic-Retry'));
+  await waitFor(() => expect(api.postAccountAutomationCancel).toHaveBeenCalledWith('synthetic-Retry', 1));
   await waitFor(() => expect((screen.getByRole('button', { name: 'Set Manual Reset' }) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button', { name: 'Set Manual Reset' }));
   const field = screen.getByLabelText(/Recovery time/);
@@ -250,5 +322,5 @@ it('details retain retry cancellation and future manual-reset submission', async
   expect(screen.getByText('Recovery time must be in the future')).toBeDefined();
   fireEvent.change(field, { target: { value: '2099-01-01T10:00' } });
   fireEvent.click(within(field.closest('.ant-modal') as HTMLElement).getByRole('button', { name: 'OK' }));
-  await waitFor(() => expect(api.postAccountAutomationManualReset).toHaveBeenCalledWith('synthetic-Reset', { reset_at_ms: Date.UTC(2099, 0, 1, 10) }));
+  await waitFor(() => expect(api.postAccountAutomationManualReset).toHaveBeenCalledWith('synthetic-Reset', { reset_at_ms: Date.UTC(2099, 0, 1, 10), expected_intent_version: 1 }));
 });

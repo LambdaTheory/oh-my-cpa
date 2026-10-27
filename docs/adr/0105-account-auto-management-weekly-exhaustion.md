@@ -1,6 +1,6 @@
 # ADR 0105: Account auto-management disables only on weekly exhaustion and enables at the recorded reset
 
-- Status: Accepted
+- Status: Accepted; the list-response note about `candidates_degraded` and `candidates_error` is superseded by ADR 0116's current-inventory projection.
 - Date: 2026-10-15
 - Amends: ADR 0103's and ADR 0104's quota observation timeline (it consumes the
   standard weekly reading but adds no collection of its own).

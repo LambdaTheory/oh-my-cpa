@@ -529,20 +529,47 @@ not extend the quota_prediction capability schema.
   in memory only, so a restart clears it. Both background modes and credential warmup's
   consuming requests share the same park (ADR 0104).
 - **Account Auto-Management**: OMC's control of one credential's disabled state from
-  verified account-level weekly evidence (ADR 0105, ADR 0108 and ADR 0114). A new
-  standard seven-day reading at exactly 100% with a future reset can disable an adopted,
-  enabled credential; recovery directly enables it at the recorded reset without a probe.
-  Adoption defaults to enabled. Providers without a verified weekly capability remain
-  monitor-only; adoption does not grant action capability. The per-account switch pauses
-  execution while retaining cycle/manual resets, evidence watermarks and retry schedules.
-  Resuming continues the saved recovery if the credential is still disabled. A per-account
-  **Credit exception** (burn_credit) suppresses automatic disable only, while recovery
-  remains eligible under the same identity and provider checks. **Unadopt** removes roster
-  membership without changing the gateway's enabled/disabled state. Removed rows retain a
-  removed_at_ms tombstone and audit history; only explicit adoption restores membership.
-  Background inventory synchronization removes an absent account after two consecutive
-  complete successful reads, unless it has a pending recovery or retry. A degraded read
-  resets the absence count. The active roster and its count exclude tombstones.
+  verified account-level weekly evidence (ADR 0105, ADR 0108 and ADR 0116, which supersedes
+  ADR 0114's protected-plan removal rule). A new standard seven-day reading at exactly
+  100% with a future reset can disable an adopted, enabled credential; recovery directly
+  enables it at the recorded reset without a probe. Adoption defaults to enabled.
+  Providers without a verified weekly capability remain monitor-only; adoption does not
+  grant action capability. The per-account switch pauses execution while retaining
+  cycle/manual resets, evidence watermarks and retry schedules. Resuming continues the
+  saved recovery if the credential is still disabled. A per-account **Credit exception**
+  (burn_credit) suppresses automatic disable only, while recovery remains eligible under
+  the same identity and provider checks. **Unadopt** removes roster membership without
+  changing the gateway's enabled/disabled state. Removed rows retain a removed_at_ms
+  tombstone, a transactional audit snapshot of the plan, and their history; only explicit
+  adoption creates membership again.
+- **Current Credential Inventory** (ADR 0116): the gateway's live credential list is the
+  only statement about which credentials exist, and every path that decides something from
+  it reads the same complete-inventory validator. A blank, malformed or duplicated auth
+  index makes the whole inventory unusable - never proof of absence - and a credential
+  whose name is missing is present but not writable. A successful, complete, empty list is
+  an empty gateway; a failed or incomplete read is an unknown one and resets absence
+  confirmations and freezes automatic gateway writes. The console's main table is built from
+  this inventory, so it shows every current credential (enabled, disabled and unmanaged)
+  and two credentials with one display label stay two rows; a stored plan without a current
+  credential is a pending-absence count, not a row. Absence confirmed by two consecutive
+  complete, successful, authoritative inventories removes the plan even while it still
+  carries a pending recovery or retry, because neither can execute for a credential the
+  gateway no longer has. A reappearing credential is a **fresh adoption**: a new adoption
+  instant and batch, the requested switch, Credit off, and no inherited plan, preference,
+  retry, error, action ownership or earlier evidence. Active identical adoption is
+  idempotent; the same index observed with a different provider or write name is refused
+  rather than relabelled under the old plan. An observation recorded before the current
+  adoption keeps its real timestamp and is never eligible evidence for the new lifecycle.
+  Every console mutation names the lifecycle it read (`expected_intent_version`: switch,
+  Credit, cancel, manual reset, single and batch unadopt); a request naming an ended
+  lifecycle is refused without touching the replacement, and a batch unadopt removes
+  nothing unless every selected member's version still matches (all-or-report). The field
+  is optional on the wire for older callers, and only that omission is unfenced.
+  CPA's credential list carries no total, page or completeness field, so an unmarked
+  truncation cannot be detected and stays a documented external limit. A local identifier,
+  UUID or email match is not treated as proof of continuity: a replacement at the same path,
+  index, name and provider with no distinguishing account evidence cannot be told apart
+  from the credential it replaced by OMC alone.
   credential_not_found means absent from the gateway, while credential_missing_name means
   present but not addressable by CPA's status patch; no_controllable_credential is readable
   historical data only. An unconsumed manual reset takes precedence over a cycle reset;

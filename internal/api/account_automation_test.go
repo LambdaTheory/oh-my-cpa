@@ -130,8 +130,8 @@ func TestAccountAutomationCandidatesAreReadOnlyAndAdoptable(t *testing.T) {
 	if len(list.Accounts) != 0 {
 		t.Fatalf("an empty roster expected, got %+v", list.Accounts)
 	}
-	if list.CandidatesDegraded {
-		t.Fatalf("candidates unexpectedly degraded: %s", list.CandidatesError)
+	if !list.Inventory.Available {
+		t.Fatalf("a complete inventory must read available: %+v", list.Inventory)
 	}
 	if len(list.Candidates) != 2 {
 		t.Fatalf("candidates = %+v", list.Candidates)
@@ -315,7 +315,7 @@ func TestAccountAutomationRecoveryProjection(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: "recovery", CreatedAtMS: now.UnixMilli()}, []repository.AutomationAccount{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: "recovery", CreatedAtMS: now.UnixMilli()}, []repository.AutomationAccount{
 		{AuthIndex: "scheduled", Provider: "codex", Name: "scheduled.json"},
 		{AuthIndex: "overdue", Provider: "codex", Name: "overdue.json"},
 		{AuthIndex: "recovered", Provider: "codex", Name: "recovered.json"},
@@ -491,8 +491,8 @@ func TestAutomationIncompleteInventoryIsDegraded(t *testing.T) {
 			if err := json.Unmarshal(payload, &list); err != nil {
 				t.Fatal(err)
 			}
-			if response.StatusCode != http.StatusOK || !list.CandidatesDegraded {
-				t.Fatalf("partial inventory must be degraded: %s", payload)
+			if response.StatusCode != http.StatusOK || list.Inventory.Available {
+				t.Fatalf("a partial inventory must read unavailable: %s", payload)
 			}
 		})
 	}
