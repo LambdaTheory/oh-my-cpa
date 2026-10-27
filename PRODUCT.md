@@ -67,6 +67,9 @@ route or reading evidence stays unknown, and the advice does not choose a route.
 
 - Read-only quota prediction projects stored observations to reset, distinguishes fact,
   projection and unknown evidence, and masks credential identity for read-only MCP.
+  The dashboard combines inferred remaining allowance with endurance for Codex, Claude,
+  Antigravity, Ollama and Step, labels estimate error, folds providers and counts shortages
+  using the 10%-remaining-or-exhaust-before-reset rule. Suggestions remain manual.
 - Feishu sends one scheduled prediction digest for exhaustion or under-use findings and
   replaces the ordinary digest for that minute; prediction never changes routing,
   credentials or models.

@@ -3138,3 +3138,21 @@ Manual activation requires confirmation naming the credential and model and expl
 quota consumption. Pending and uncertain outcomes never read as activation success.
 Manual execution outcomes stay in the credential section without a duplicate toast;
 background confirmation updates that same result. The public demo cannot save or consume. Existing type, shape, spacing and semantic-feedback tokens are reused.
+
+### Quota remaining and endurance
+
+The panel pairs remaining allowance and time at the current pace within each credential
+window. Provider sections open collapsed; their headings show one sufficiency verdict,
+and the panel head counts insufficient providers once. At most 10% remaining or a
+forecast that runs out before reset yields Insufficient. Five provider families share
+this surface: Codex, Claude, Antigravity, Ollama and Step.
+
+Native details/summary retains a 44px hit area and keyboard disclosure. Each expanded
+row holds the credential/window identity, its status, the two readings, a labelled
+inferred allowance with its error when available, the reset instant and one manual
+suggestion. Quota-hours state that they are allowance rather than runtime. There is
+no separate capacity card, projected-percentage meter or cost forecast in this panel.
+Missing values say Data missing, never zero; a known exhausted reading says Exhausted.
+Unavailable forecasts show one of four categories with detailed reasons in a tooltip
+reachable by hover and keyboard focus. Existing palette, type, spacing and motion
+tokens are reused.

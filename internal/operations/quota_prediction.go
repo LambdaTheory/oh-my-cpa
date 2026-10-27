@@ -40,28 +40,29 @@ type QuotaPredictionInput struct {
 }
 
 type QuotaPredictionItem struct {
-	CredentialLabel           string   `json:"credential_label"`
-	Provider                  string   `json:"provider"`
-	WindowKind                string   `json:"window_kind"`
-	WindowID                  string   `json:"window_id"`
-	WindowScope               string   `json:"window_scope"`
-	WindowModel               string   `json:"window_model,omitempty"`
-	AuthIndex                 string   `json:"auth_index,omitempty"`
-	UsedPercent               *float64 `json:"used_percent"`
-	ResetAtMS                 *int64   `json:"reset_at_ms"`
-	ObservedAtMS              int64    `json:"observed_at_ms"`
-	DataAgeSeconds            *int64   `json:"data_age_seconds"`
-	BurnRatePerHour           *float64 `json:"burn_rate_per_hour"`
-	ProjectedPercentAtReset   *float64 `json:"projected_percent_at_reset"`
-	ProjectedTokensAtReset    *int64   `json:"projected_tokens_at_reset"`
-	ProjectedCostNanosAtReset *int64   `json:"projected_cost_nanos_at_reset"`
-	ExhaustionETAMS           *int64   `json:"exhaustion_eta_ms"`
-	Verdict                   string   `json:"verdict"`
-	Evidence                  string   `json:"evidence"`
-	Reasons                   []string `json:"reasons"`
-	SampleCount               int      `json:"sample_count"`
-	CoverageSeconds           *int64   `json:"coverage_seconds"`
-	MaxGapSeconds             *int64   `json:"max_gap_seconds"`
+	Accounting                quota.PredictionAccounting `json:"-" jsonschema:"-"`
+	CredentialLabel           string                     `json:"credential_label"`
+	Provider                  string                     `json:"provider"`
+	WindowKind                string                     `json:"window_kind"`
+	WindowID                  string                     `json:"window_id"`
+	WindowScope               string                     `json:"window_scope"`
+	WindowModel               string                     `json:"window_model,omitempty"`
+	AuthIndex                 string                     `json:"auth_index,omitempty"`
+	UsedPercent               *float64                   `json:"used_percent"`
+	ResetAtMS                 *int64                     `json:"reset_at_ms"`
+	ObservedAtMS              int64                      `json:"observed_at_ms"`
+	DataAgeSeconds            *int64                     `json:"data_age_seconds"`
+	BurnRatePerHour           *float64                   `json:"burn_rate_per_hour"`
+	ProjectedPercentAtReset   *float64                   `json:"projected_percent_at_reset"`
+	ProjectedTokensAtReset    *int64                     `json:"projected_tokens_at_reset"`
+	ProjectedCostNanosAtReset *int64                     `json:"projected_cost_nanos_at_reset"`
+	ExhaustionETAMS           *int64                     `json:"exhaustion_eta_ms"`
+	Verdict                   string                     `json:"verdict"`
+	Evidence                  string                     `json:"evidence"`
+	Reasons                   []string                   `json:"reasons"`
+	SampleCount               int                        `json:"sample_count"`
+	CoverageSeconds           *int64                     `json:"coverage_seconds"`
+	MaxGapSeconds             *int64                     `json:"max_gap_seconds"`
 }
 
 type QuotaPredictionResult struct {
@@ -75,6 +76,16 @@ func (s *Service) registerQuotaPrediction(registry *capability.Registry) error {
 }
 
 func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInput) (QuotaPredictionResult, error) {
+	return s.predictQuotas(ctx, input, true)
+}
+
+// DashboardQuotaPrediction retains the complete stored roster. Capability payload
+// limits must not hide a provider's shortage from the console summary.
+func (s *Service) DashboardQuotaPrediction(ctx context.Context) (QuotaPredictionResult, error) {
+	return s.predictQuotas(ctx, QuotaPredictionInput{}, false)
+}
+
+func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput, shouldBound bool) (QuotaPredictionResult, error) {
 	if input.Provider != "" && !quotaObservationToken.MatchString(input.Provider) {
 		return QuotaPredictionResult{}, invalidParameters{detail: "provider must be a lowercase identifier"}
 	}
@@ -95,7 +106,7 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 		return QuotaPredictionResult{}, errors.New("capability_unavailable")
 	}
 	nowMS := capability.AnchorMS(ctx)
-	readings, err := s.storedPredictionQuotas(ctx)
+	readings, err := s.storedPredictionQuotas(ctx, !shouldBound)
 	if err != nil {
 		return QuotaPredictionResult{}, err
 	}
@@ -166,7 +177,7 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 		if err := boundQuotaPredictionFindings(&result); err != nil {
 			return QuotaPredictionResult{}, err
 		}
-	} else {
+	} else if shouldBound {
 		if len(result.Items) > limit {
 			result.Omitted += len(result.Items) - limit
 			result.Items = result.Items[:limit]
@@ -180,13 +191,10 @@ func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInpu
 
 // storedPredictionQuotas assembles the prediction roster from OMC persistence.
 // It never asks CPA which credentials exist or refreshes a quota window.
-func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
+func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissing bool) ([]Quota, error) {
 	metadata, err := s.Repo.ListFeishuCredentialMetadata(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if len(metadata) == 0 {
-		return []Quota{}, nil
 	}
 	authIndexes := make([]string, 0, len(metadata))
 	for _, entry := range metadata {
@@ -203,25 +211,40 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 	result := make([]Quota, 0, len(metadata))
 	for _, entry := range metadata {
 		snapshot, ok := snapshots[entry.AuthIndex]
-		if !ok {
-			continue
-		}
-		var windows []quota.QuotaWindow
-		if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err != nil {
-			continue
-		}
 		provider := strings.TrimSpace(snapshot.Provider)
 		if provider == "" {
 			provider = quota.DetectProvider("", entry.Driver)
 		}
+		if provider == "" {
+			continue
+		}
+		var windows []quota.QuotaWindow
+		if ok {
+			if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err != nil {
+				snapshot.Status = "error"
+				windows = nil
+			}
+		}
+		hasReportedWindows := len(windows) > 0
+		// Stored windows certify plugin-provided quota without a live discovery
+		// read. An unsupported provider with no such evidence is not applicable.
+		if !quota.CapabilitiesForProvider(provider).RefreshSupported && !hasReportedWindows {
+			continue
+		}
+		matchedPassiveKinds := map[string]bool{}
 		for index := range windows {
 			window := &windows[index]
 			kind, sharesPassiveStream := quota.PassiveWindowKindFor(provider, *window)
+			if !sharesPassiveStream && provider == quota.PassiveProviderCodex && window.Scope == quota.ObservationScopeStandard && window.Model == "" &&
+				(window.ID == quota.PassiveWindowFiveHour || window.Kind == quota.PassiveWindowFiveHour) {
+				kind, sharesPassiveStream = quota.PassiveWindowFiveHour, true
+			}
 			if !sharesPassiveStream {
 				continue
 			}
+			matchedPassiveKinds[kind] = true
 			observation, found := passive[entry.AuthIndex][kind]
-			if !found || observation.ObservedAtMS <= snapshot.ObservedAtMS {
+			if !found || observation.Provider != provider || observation.ObservedAtMS <= snapshot.ObservedAtMS {
 				continue
 			}
 			usedPercent := observation.UsedPercent
@@ -229,17 +252,87 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 			window.RemainingPercent = floatPointer(max(0, 100-usedPercent))
 			if observation.ResetAtMS != nil {
 				window.ResetAtMS = observation.ResetAtMS
+				window.ResetAccuracy = "exact"
+			}
+			if observation.WindowMinutes > 0 {
+				periodHours := float64(observation.WindowMinutes) / 60
+				window.PeriodHours = &periodHours
 			}
 			observedAtMS := observation.ObservedAtMS
 			window.ObservedAtMS = &observedAtMS
 			window.Source = observation.Source
+		}
+		// A passive stream can establish a window without an active snapshot.
+		// Iterate its closed vocabulary so map order never changes row identity.
+		for _, kind := range []string{quota.PassiveWindowFiveHour, quota.PassiveWindowWeekly} {
+			observation, found := passive[entry.AuthIndex][kind]
+			if !found || matchedPassiveKinds[kind] || observation.Provider != provider {
+				continue
+			}
+			if hasReportedWindows && observation.ObservedAtMS <= snapshot.ObservedAtMS {
+				continue
+			}
+			windows = append(windows, predictionWindowFromPassive(observation))
+		}
+		// Placeholders are presentation-only. They must not spend the bounded
+		// capability payload and displace a real exhaustion finding.
+		if len(windows) == 0 && shouldIncludeMissing {
+			windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
 		}
 		result = append(result, Quota{
 			AuthIndex: entry.AuthIndex, Name: safeLabel(entry.Name), Provider: provider,
 			Status: snapshot.Status, ObservedAtMS: snapshot.ObservedAtMS, Windows: windows,
 		})
 	}
+	ollamaAccounts, err := s.Repo.ListOllamaAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, account := range ollamaAccounts {
+		reading := Quota{AuthIndex: "ollama:" + account.ID, Name: safeLabel(account.Label), Provider: "ollama"}
+		var snapshot quota.NormalizedQuota
+		if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
+			if err := json.Unmarshal([]byte(account.QuotaSnapshotJSON), &snapshot); err != nil {
+				reading.Status = "error"
+			} else {
+				reading.Windows = snapshot.Windows
+				reading.ObservedAtMS = snapshot.ObservedAtMS
+				reading.Status = snapshot.Status
+			}
+		}
+		if account.QuotaObservedAtMS != nil {
+			reading.ObservedAtMS = *account.QuotaObservedAtMS
+		}
+		if account.Status != "ok" && account.Status != "idle" && account.Status != "" {
+			reading.Status = "error"
+		}
+		if len(reading.Windows) == 0 && shouldIncludeMissing {
+			reading.Windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
+		}
+		result = append(result, reading)
+	}
 	return result, nil
+}
+
+func predictionWindowFromPassive(observation repository.QuotaObservationRecord) quota.QuotaWindow {
+	windowID := observation.WindowKind
+	if observation.Provider == quota.PassiveProviderClaude && observation.WindowKind == quota.PassiveWindowWeekly {
+		windowID = "seven_day"
+	}
+	usedPercent, observedAtMS := observation.UsedPercent, observation.ObservedAtMS
+	window := quota.QuotaWindow{
+		ID: windowID, Kind: observation.WindowKind, Scope: quota.ObservationScopeStandard,
+		UsedPercent: &usedPercent, ResetAtMS: observation.ResetAtMS,
+		ObservedAtMS: &observedAtMS, Source: quota.ObservationSourcePassive,
+	}
+	if observation.WindowMinutes > 0 {
+		periodHours := float64(observation.WindowMinutes) / 60
+		window.PeriodHours = &periodHours
+	}
+	if observation.ResetAtMS != nil {
+		window.ResetAccuracy = "exact"
+	}
+	return window
 }
 
 func predictionFindingRank(item QuotaPredictionItem) int {
@@ -330,6 +423,11 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 		observedAtMS = *window.ObservedAtMS
 	}
 	predictionInput := quota.PredictionInput{Window: window, ObservedAtMS: observedAtMS, Status: reading.Status, NowMS: nowMS}
+	if window.Source == quota.ObservationSourcePassive && observedAtMS > reading.ObservedAtMS {
+		// A newer response-header reading is independent of the failed active
+		// refresh retained on the snapshot; only that window becomes current.
+		predictionInput.Status = "healthy"
+	}
 	fromMS, toMS, boundaryReason := quota.WindowCycleRange(window, observedAtMS, nowMS)
 	if boundaryReason == "" {
 		buckets, hasMore, err := s.Repo.ListQuotaObservationBuckets(ctx, repository.QuotaObservationBucketFilter{
@@ -349,6 +447,7 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 	}
 	predicted := quota.PredictWindow(predictionInput)
 	return QuotaPredictionItem{
+		Accounting:      predicted.Accounting,
 		CredentialLabel: reading.Name, Provider: reading.Provider, WindowKind: reportedKind, AuthIndex: reading.AuthIndex,
 		WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
 		UsedPercent: predicted.UsedPercent, ResetAtMS: predicted.ResetAtMS, ObservedAtMS: predicted.ObservedAtMS,
