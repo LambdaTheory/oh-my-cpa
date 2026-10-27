@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,59 @@ func TestValidatePayload(t *testing.T) {
 		})
 	}
 }
+func TestValidatePlatformOwnedSources(t *testing.T) {
+	for _, name := range []string{"deploy/dokploy/compose.prebuilt.yml", "deploy/dokploy/nested/compose.yml"} {
+		t.Run(name, func(t *testing.T) {
+			root, m := fixture(t)
+			m.SourceFiles[name] = hashBytes([]byte("original compose"))
+			saveManifest(t, root, m)
+			writeFixture(t, root, name, "rewritten by deployment platform")
+			got, err := validate(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.SourceSHA256 != m.SourceSHA256 || got.SourceFiles[name] != m.SourceFiles[name] {
+				t.Fatal("platform-owned source was removed from the inventory")
+			}
+			m.SourceFiles[name] = hashBytes([]byte("changed inventory"))
+			data, err := json.Marshal(m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFixture(t, root, "deploy/prebuilt-manifest.json", string(data))
+			if _, err := validate(root); err == nil || err.Error() != "invalid inventory digest" {
+				t.Fatalf("expected invalid inventory digest, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateStaleSources(t *testing.T) {
+	for _, count := range []int{1, 3, 20, 21} {
+		t.Run(fmt.Sprintf("%d mismatches", count), func(t *testing.T) {
+			root, m := fixture(t)
+			names := make([]string, 0, count)
+			for i := 0; i < count; i++ {
+				name := fmt.Sprintf("cmd/stale-%02d.go", i)
+				m.SourceFiles[name] = hashBytes([]byte("original source"))
+				writeFixture(t, root, name, "changed source")
+				names = append(names, name)
+			}
+			saveManifest(t, root, m)
+			if len(names) > 20 {
+				names = names[:20]
+			}
+			expected := fmt.Sprintf("stale source (%d of %d): %s", len(names), count, strings.Join(names, ", "))
+			if count == 1 {
+				expected = "stale source: " + names[0]
+			}
+			if _, err := validate(root); err == nil || err.Error() != expected {
+				t.Fatalf("expected %q, got %v", expected, err)
+			}
+		})
+	}
+}
+
 func TestOfflineRelativeReferences(t *testing.T) {
 	for _, ref := range []string{"https://cdn.invalid/a.js", "/assets/lazy.js", "assets/missing.js", "../outside.js"} {
 		t.Run(ref, func(t *testing.T) {

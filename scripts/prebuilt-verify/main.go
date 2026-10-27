@@ -107,17 +107,38 @@ func validate(root string) (*manifest, error) {
 		return nil, fmt.Errorf("invalid inventory digest")
 	}
 	frontend := map[string]string{}
-	for name, expected := range m.SourceFiles {
+	sourceNames := make([]string, 0, len(m.SourceFiles))
+	for name := range m.SourceFiles {
+		sourceNames = append(sourceNames, name)
+	}
+	sort.Strings(sourceNames)
+	var staleSources []string
+	staleCount := 0
+	for _, name := range sourceNames {
+		// Deployment platforms rewrite compose files in this directory during deployment.
+		if strings.HasPrefix(name, "deploy/dokploy/") {
+			continue
+		}
+		expected := m.SourceFiles[name]
 		data, err := readRegular(root, name)
 		if err != nil {
 			return nil, err
 		}
 		if hashBytes(data) != expected {
-			return nil, fmt.Errorf("stale source: %s", name)
+			staleCount++
+			if len(staleSources) < 20 {
+				staleSources = append(staleSources, name)
+			}
 		}
 		if strings.HasPrefix(name, "web/") || strings.HasPrefix(name, "scripts/") || name == "package.json" || strings.HasPrefix(name, "pnpm-") {
 			frontend[name] = expected
 		}
+	}
+	if staleCount == 1 {
+		return nil, fmt.Errorf("stale source: %s", staleSources[0])
+	}
+	if staleCount > 1 {
+		return nil, fmt.Errorf("stale source (%d of %d): %s", len(staleSources), staleCount, strings.Join(staleSources, ", "))
 	}
 	if digest(frontend) != m.FrontendSHA256 {
 		return nil, fmt.Errorf("stale frontend inputs")
