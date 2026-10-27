@@ -3724,11 +3724,40 @@ the renderer.
 
 `internal/api/management_dashboard_predictions.go` exposes the same stored computation to
 the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler
-uses the operator projection (credential labels and auth indexes are retained), groups rows
+uses the complete operator projection (credential labels and auth indexes are retained), groups rows
 by provider and measures the actual computation duration. It does not refresh quota or call
 CPA. `web/src/components/dashboard/QuotaPrediction.tsx` renders that response as a
 reorderable dashboard panel, refreshes it every five minutes only while the page is visible,
 and keeps explicit empty, unknown and stale states.
+The dashboard DTO includes nullable console accounting: window start, remaining share,
+remaining quota-hours and their absolute rounding error, and optional inferred remaining
+tokens with relative rounding error. These values are computed beside the same prediction
+from its observation, period and current-cycle usage. The operations item's accounting
+field is excluded from JSON and capability schema generation. The quota_prediction wire
+contract, evidence thresholds, 100-row / 32-KiB limits and read-only masking stay intact.
+The dashboard reads the complete roster before grouping, so a later provider cannot be
+hidden by capability payload bounds. Missing-window placeholders are emitted only for
+the dashboard, so they do not consume Agent/MCP or digest payload bounds. Credentials
+without a built-in refresh capability or stored window evidence are not applicable and
+are omitted. Existing plugin-provided stored windows remain eligible. Before any
+placeholder is added, missing standard windows are reconstructed from matching-provider
+passive observations in deterministic kind order. Their period and reset come from the
+actual observation, never a label; a newer passive reading can supersede an active read
+failure for that window. Existing windows are overlaid without duplicate passive rows.
+
+The prediction roster also reads Ollama's safe account projection and persisted normalized
+snapshot; it never selects cookie ciphertext. A later failed collection invalidates a
+retained reading. Ollama duration remains unknown unless actually present in stored data.
+Step and Stepfun stored provider identities are consumed without new provider probes and
+share the console's Step group. No endpoint, upstream read or database write is added.
+
+Native details/summary controls fold each provider. A pure view function applies the
+10%-remaining-or-pre-reset-exhaustion rule and counts insufficient providers once.
+The combined row shows remaining allowance and endurance, with one of four failure
+categories and localized hover/focus details when a forecast is unavailable. A failed
+refetch keeps identities but withholds amounts, marks summaries unknown and requests
+data verification. The separate uniform-rate/reset-time projections are no longer
+rendered as competing readouts.
 
 `internal/feishu/prediction_digest.go` is the scheduled and operator-triggered prediction
 component. At configured summary minutes the Feishu loop evaluates it before the legacy

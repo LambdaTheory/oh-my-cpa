@@ -13,6 +13,92 @@ func predictionWindow(start time.Time, used float64) (QuotaWindow, int64) {
 	return QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}, reset
 }
 
+func TestPredictionAccountingUsesEachObservedWindow(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for _, periodHours := range []float64{5, 168} {
+		reset := start.Add(time.Duration(periodHours * float64(time.Hour))).UnixMilli()
+		observed := start.Add(time.Duration(periodHours / 2 * float64(time.Hour))).UnixMilli()
+		used := 30.0
+		window := QuotaWindow{ID: "window", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &periodHours, ResetAccuracy: "exact"}
+		// A later read must still use the reading's elapsed time, not wall time.
+		result := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed, NowMS: observed + int64(time.Minute/time.Millisecond)})
+		accounting := result.Accounting
+		if accounting.WindowStartMS == nil || *accounting.WindowStartMS != start.UnixMilli() ||
+			accounting.RemainingPercent == nil || *accounting.RemainingPercent != 70 ||
+			accounting.RemainingWindowHours == nil || math.Abs(*accounting.RemainingWindowHours-periodHours*0.7) > 0.000001 ||
+			accounting.WindowErrorHours == nil || *accounting.WindowErrorHours != periodHours*0.005 ||
+			accounting.UniformProjectedPercentAtReset == nil || *accounting.UniformProjectedPercentAtReset != 60 {
+			t.Fatalf("period %v accounting = %+v", periodHours, accounting)
+		}
+	}
+}
+
+func TestPredictionAccountingInfersTokensWithoutRequiringPrices(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	window, _ := predictionWindow(start, 25)
+	input := PredictionInput{Window: window, ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(), NowMS: start.Add(5 * time.Hour).UnixMilli(), Usage: &WindowUsage{Requests: 2, Tokens: 1000}}
+	result := PredictWindow(input)
+	if result.Accounting.RemainingTokens == nil || *result.Accounting.RemainingTokens != 3000 ||
+		result.Accounting.CapacityErrorPercent == nil || *result.Accounting.CapacityErrorPercent != 2.8 {
+		t.Fatalf("inferred remaining tokens = %+v", result.Accounting)
+	}
+	input.Usage.Tokens = math.MaxInt64
+	result = PredictWindow(input)
+	if result.Accounting.RemainingTokens != nil || result.Accounting.CapacityUnavailable != PredictionReasonArithmeticUnsafe {
+		t.Fatalf("unsafe token estimate = %+v", result.Accounting)
+	}
+}
+
+func TestPredictionAccountingRemainingDoesNotRequireCycleBounds(t *testing.T) {
+	now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+	for _, mode := range []string{"no_period", "no_reset", "no_bounds"} {
+		window, _ := predictionWindow(now.Add(-time.Hour), 65)
+		if mode != "no_reset" {
+			window.PeriodHours = nil
+		}
+		if mode != "no_period" {
+			window.ResetAtMS = nil
+		}
+		result := PredictWindow(PredictionInput{Window: window, ObservedAtMS: now.UnixMilli(), NowMS: now.UnixMilli()})
+		if result.Accounting.RemainingPercent == nil || *result.Accounting.RemainingPercent != 35 ||
+			result.Accounting.WindowStartMS != nil || result.Accounting.RemainingWindowHours != nil || result.ExhaustionETAMS != nil {
+			t.Fatalf("%s lost independent remaining share: %+v", mode, result)
+		}
+	}
+}
+
+func TestPredictionAccountingWithholdsUnavailableAndJustResetEstimates(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	for _, mode := range []string{"no_reading", "error", "stale", "just_reset", "mid_cycle_reset", "incomplete", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			window, _ := predictionWindow(start, 30)
+			input := PredictionInput{Window: window, ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(), NowMS: start.Add(5 * time.Hour).UnixMilli()}
+			switch mode {
+			case "no_reading":
+				input.Window.UsedPercent = nil
+			case "error", "stale":
+				input.Status = mode
+			case "just_reset":
+				input.ObservedAtMS = start.Add(time.Minute).UnixMilli()
+				input.NowMS = input.ObservedAtMS
+			case "mid_cycle_reset":
+				input.Window.HasMidCycleReset = true
+			case "incomplete":
+				input.Window.HasIncompleteHistory = true
+			case "expired":
+				input.NowMS = start.Add(11 * time.Hour).UnixMilli()
+			}
+			result := PredictWindow(input)
+			if result.Accounting.UniformProjectedPercentAtReset != nil {
+				t.Fatalf("unavailable estimate = %+v", result.Accounting)
+			}
+			if (mode == "no_reading" || mode == "error" || mode == "stale" || mode == "expired") && result.Accounting.RemainingPercent != nil {
+				t.Fatalf("unavailable remaining quota = %+v", result.Accounting)
+			}
+		})
+	}
+}
+
 func TestPredictWindowRejectsUnsafePercentages(t *testing.T) {
 	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
 	for _, used := range []float64{-1, 101, math.NaN(), math.Inf(1)} {
