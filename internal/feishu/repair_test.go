@@ -153,8 +153,10 @@ func TestMorningRecurrencePredictionFirst(t *testing.T) {
 				}
 				setReading(now, 95, now.Add(time.Hour))
 				env.service.tick(context.Background())
-				setReading(now.Add(time.Minute), 20, now.Add(time.Hour))
-				env.service.tick(context.Background())
+				for sample := 1; sample <= recoveryObservationCount; sample++ {
+					setReading(now.Add(time.Duration(sample)*time.Minute), 20, now.Add(time.Hour))
+					env.service.tick(context.Background())
+				}
 				setReading(morning, 95, boundary)
 				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 					if hasForecast {

@@ -93,9 +93,9 @@ func remainingDuration(duration time.Duration) string {
 	return fmt.Sprintf("%d 小时 %d 分钟", minutes/60, minutes%60)
 }
 
-func attentionRecovered(item PendingItem, rep Report, threshold float64, now time.Time) bool {
+func attentionRecovered(item PendingItem, rep Report, threshold float64, now time.Time) (bool, time.Time) {
 	if item.Kind != AlertQuotaLow && item.Kind != AlertQuotaExhausted && item.Kind != AlertReadingMissing {
-		return false
+		return false, time.Time{}
 	}
 	if threshold <= 0 {
 		threshold = DefaultTightRemainingPercent
@@ -105,37 +105,37 @@ func attentionRecovered(item PendingItem, rep Report, threshold float64, now tim
 			continue
 		}
 		if provider.Error != "" {
-			return false
+			return false, time.Time{}
 		}
 		for _, account := range provider.Accounts {
 			if item.Key != "" && account.Key != item.Key {
 				continue
 			}
 			if account.Disabled || account.IsUnmonitored {
-				return true
+				return true, time.Time{}
 			}
 			if !credentialRecovered(account) || !observationFresh(account, now, defaultFreshWindow) {
-				return false
+				return false, time.Time{}
 			}
 			hasReading := false
 			for _, window := range account.Windows {
-				if !validPercent(window.UsedPercent) {
-					return false
-				}
-				hasReading = true
 				if (item.Kind == AlertQuotaLow || item.Kind == AlertQuotaExhausted) && ItemID(AlertQuotaLow, provider.Provider, account.Key, quotaSignalScope(window)) != item.ID {
 					continue
 				}
+				if !validPercent(window.UsedPercent) {
+					return false, time.Time{}
+				}
+				hasReading = true
 				if item.Kind == AlertQuotaLow && 100-*window.UsedPercent <= threshold || item.Kind == AlertQuotaExhausted && *window.UsedPercent >= 100 {
-					return false
+					return false, time.Time{}
 				}
 			}
 			if hasReading {
-				return true
+				return true, account.ObservedAt
 			}
 		}
 	}
-	return false
+	return false, time.Time{}
 }
 
 func rankAlert(alert Alert) int {
@@ -255,6 +255,9 @@ func decisionAlerts(msg Message) []Alert {
 }
 
 func decisionConclusion(msg Message, alerts []Alert) string {
+	if len(alerts) == 1 && alerts[0].Kind == statusReported {
+		return "今天没有新增风险，请继续跟进已播报事项"
+	}
 	if msg.Kind == KindQuery && msg.Body != "" && len(alerts) == 0 {
 		return msg.Body
 	}
@@ -284,6 +287,75 @@ func decisionConclusion(msg Message, alerts []Alert) string {
 		return "数据缺失，今天是否调整额度尚无法判断"
 	}
 	return "今天暂不需要调整额度，未发现异常"
+}
+
+const statusReported = "status_reported"
+
+// The outbox records exactly which episode the startup digest carried. Its
+// persisted payload survives reloads without claiming the morning slot early.
+func omitStartupEpisodes(notification *Notification, state *State, resolved Resolved, now time.Time) {
+	reported := func(identity string) bool {
+		current, exists := state.pendingByID(identity)
+		if !exists {
+			return false
+		}
+		for _, earlier := range state.Outbox {
+			if earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
+				continue
+			}
+			for _, item := range earlier.Pending {
+				if item.ID == identity && item.Since.Equal(current.Since) {
+					return true
+				}
+			}
+			for _, alert := range earlier.Alerts {
+				if alertItemID(alert) == identity {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	removed := false
+	suppressedProviders := map[string]bool{}
+	pending := notification.Pending[:0]
+	for _, item := range notification.Pending {
+		if reported(item.ID) {
+			removed = true
+			suppressedProviders[item.Provider] = true
+			continue
+		}
+		pending = append(pending, item)
+	}
+	notification.Pending = pending
+	ids := notification.ItemIDs[:0]
+	for _, identity := range notification.ItemIDs {
+		if !reported(identity) {
+			ids = append(ids, identity)
+		}
+	}
+	notification.ItemIDs = ids
+	alerts := notification.Alerts[:0]
+	for _, alert := range notification.Alerts {
+		if reported(alertItemID(alert)) {
+			removed = true
+			suppressedProviders[alert.Provider] = true
+			continue
+		}
+		alerts = append(alerts, alert)
+	}
+	notification.Alerts = alerts
+	tight := notification.Tight[:0]
+	for _, channel := range notification.Tight {
+		if !suppressedProviders[channel.Provider] {
+			tight = append(tight, channel)
+		}
+	}
+	notification.Tight = tight
+	hasOnlyHealthyStatus := len(notification.Alerts) == 0 || len(notification.Alerts) == 1 && notification.Alerts[0].Kind == statusHealthy
+	if removed && hasOnlyHealthyStatus && len(notification.Pending) == 0 {
+		notification.Alerts = []Alert{{Kind: statusReported, Title: "已播报事项仍待处理", Advice: "在控制台跟进已播报事项", OccurredAt: now}}
+	}
 }
 
 func decisionPoint(alert Alert) string {

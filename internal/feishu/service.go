@@ -95,6 +95,9 @@ type Service struct {
 	// stateMu serializes replacement of the whole runtime document. External
 	// report reads and Feishu sends stay outside it.
 	stateMu sync.Mutex
+	// Recovery confirmations are deliberately forgotten on restart: cached
+	// readings must establish a new consecutive sequence before closing an item.
+	attentionRecovery map[string]recoveryProgress
 	// beforeStateTransitionLock is a test-only observation point for proving a
 	// competing document transition has reached the lock boundary.
 	beforeStateTransitionLock func()
@@ -647,11 +650,12 @@ func (s *Service) tick(ctx context.Context) {
 		MonitorDownAfter:        resolved.MonitorDownAfter,
 		Location:                resolved.Location,
 	}, PolicyInput{
-		Report: rep,
-		Prev:   state.PendingItems,
-		Tracks: state.ChannelTracks,
-		Now:    now,
-		Quiet:  quiet,
+		Report:   rep,
+		Prev:     state.PendingItems,
+		Tracks:   state.ChannelTracks,
+		Now:      now,
+		Quiet:    quiet,
+		recovery: s.attentionRecovery,
 	})
 	state.PendingItems = result.Items
 
@@ -700,6 +704,7 @@ func (s *Service) tick(ctx context.Context) {
 		s.logger.WarnContext(ctx, "feishu state save failed", "error", err)
 		return
 	}
+	s.attentionRecovery = result.recovery
 	s.unlockStateTransition()
 	s.deliverOutbox(ctx, resolved)
 }
@@ -852,6 +857,7 @@ func (s *Service) maybeScheduledSummary(state *State, resolved Resolved, rep Rep
 	notification.Kind = KindMorning
 	notification.Alerts = reportDecisionAlerts(rep, has, now)
 	rememberReportedAlerts(state, notification.Alerts, rep, now)
+	omitStartupEpisodes(&notification, state, resolved, now)
 	state.queueNotification(notification)
 }
 

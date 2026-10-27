@@ -28,6 +28,11 @@ func TestAttentionEpisodeNotifiesOnceThroughExhaustionAndRecovery(t *testing.T) 
 	}
 	report.Providers[0].Accounts[0].Windows = []Window{accountWindow(20, nil)}
 	recovered := evaluatePolicy(config, PolicyInput{Report: report, Prev: exhausted.Items, Now: now})
+	for sample := 1; sample < recoveryObservationCount; sample++ {
+		at := now.Add(time.Duration(sample) * time.Minute)
+		report.Providers[0].Accounts[0].ObservedAt = at
+		recovered = evaluatePolicy(config, PolicyInput{Report: report, Prev: recovered.Items, Now: at, recovery: recovered.recovery})
+	}
 	if len(openItems(recovered.Items)) != 0 || len(recovered.Alerts) != 0 {
 		t.Fatalf("recovery: %+v", recovered)
 	}
@@ -40,7 +45,7 @@ func TestAttentionEpisodeNotifiesOnceThroughExhaustionAndRecovery(t *testing.T) 
 		t.Fatal("recovered quota retained forever")
 	}
 	report.Providers[0].Accounts[0].Windows = []Window{accountWindow(90, nil)}
-	if recurring := evaluatePolicy(config, PolicyInput{Report: report, Prev: recovered.Items, Now: now}); len(recurring.Alerts) != 1 {
+	if recurring := evaluatePolicy(config, PolicyInput{Report: report, Prev: recovered.Items, Now: now.Add(3 * time.Minute)}); len(recurring.Alerts) != 1 {
 		t.Fatalf("recurrence: %+v", recurring)
 	}
 }

@@ -191,6 +191,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 						rememberReportedAlerts(state, []Alert{alert}, report, now)
 					}
 				}
+				omitStartupEpisodes(notification, state, resolved, now)
 			}
 		}
 	}

@@ -89,15 +89,24 @@ type PolicyConfig struct {
 // which is why a quiet-opened item is stamped notified here and its alert is still
 // returned.
 type PolicyInput struct {
-	Report Report
-	Prev   []PendingItem
-	Tracks map[string]ChannelTrack
-	Now    time.Time
-	Quiet  bool
+	Report   Report
+	Prev     []PendingItem
+	Tracks   map[string]ChannelTrack
+	Now      time.Time
+	Quiet    bool
+	recovery map[string]recoveryProgress
+}
+
+const recoveryObservationCount = 3
+
+type recoveryProgress struct {
+	count      int
+	observedAt time.Time
 }
 
 // PolicyResult is the policy's verdict for one round.
 type PolicyResult struct {
+	recovery map[string]recoveryProgress
 	// Items is the complete pending-item list after reconciliation.
 	Items []PendingItem
 	// Opened and Resolved describe this round's transitions.
@@ -115,6 +124,10 @@ type PolicyResult struct {
 // open, and not again until it resolves and recurs.
 func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	info := analyzeReport(cfg, in.Report, in.Now, in.Tracks)
+	recovery := make(map[string]recoveryProgress, len(in.recovery))
+	for id, progress := range in.recovery {
+		recovery[id] = progress
+	}
 
 	prevAll := map[string]PendingItem{}
 	for _, item := range in.Prev {
@@ -147,6 +160,7 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		seen     = map[string]bool{}
 	)
 	for id, sig := range desired {
+		delete(recovery, id)
 		seen[id] = true
 		prev, ok := prevAll[id]
 		cycleReset, cycleObserved := quotaCycleEvidence(sig, in.Report)
@@ -210,10 +224,28 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			continue
 		}
 		if prev.Status == PendingResolved {
+			delete(recovery, prev.ID)
 			items = append(items, prev)
 			continue
 		}
-		if info.resolvedByEvidence(prev) || cfg.EnableAttention && attentionRecovered(prev, in.Report, cfg.TightRemainingPercent, in.Now) {
+		isRecovered := info.resolvedByEvidence(prev)
+		if cfg.EnableAttention {
+			hasEvidence, observedAt := attentionRecovered(prev, in.Report, cfg.TightRemainingPercent, in.Now)
+			if hasEvidence && !observedAt.IsZero() {
+				progress := recovery[prev.ID]
+				if observedAt.After(progress.observedAt) {
+					progress.count++
+					progress.observedAt = observedAt
+				}
+				recovery[prev.ID] = progress
+				hasEvidence = progress.count >= recoveryObservationCount
+			} else {
+				delete(recovery, prev.ID)
+			}
+			isRecovered = isRecovered || hasEvidence
+		}
+		if isRecovered {
+			delete(recovery, prev.ID)
 			item := prev
 			item.Status = PendingResolved
 			item.ResolvedAt = in.Now
@@ -226,7 +258,7 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Since.Before(items[j].Since) })
 
-	res := PolicyResult{Items: items, Opened: opened, Resolved: resolved}
+	res := PolicyResult{Items: items, Opened: opened, Resolved: resolved, recovery: recovery}
 	// Newly opened items push once, in a stable order. This is returned whether or
 	// not quiet hours are active; the caller persists an alert as a queued
 	// notification during quiet instead of sending it.
