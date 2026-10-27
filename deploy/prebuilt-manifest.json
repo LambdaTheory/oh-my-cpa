@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "source_revision": "ddb252e7099d8b41dc8a82d2b61d83a4e84b021a",
-  "previous_deploy": "9081457c6f9617bf38b59c97c3f4f405874db14d",
+  "source_revision": "ccb5ae2e99eaf321fbf17c1177892bacc54a4e3d",
+  "previous_deploy": "bacd2730fc0ccd7773b52ffff1cf19f593eb8591",
   "build_version": "fork",
   "build_tag": "",
   "source_files": {
@@ -860,10 +860,10 @@
     "scripts/parallel-checks.test.mjs": "22f8159c45d7e3d23e99c74d8e887cf2ce41a414a29acb82e3d83b18df5e0e58",
     "scripts/plugin-host-contract.test.mjs": "daebe2142b4e3f3a27e1cfadc7f83bb7bef068bb492e0f2884dcc7aabac834a2",
     "scripts/plugin-host-shim.test.mjs": "2afc2e2fc0eb7f78bb1abe66f6288aa5adc66309543b8e697b494c8022099134",
-    "scripts/prebuilt-verify/main.go": "ee9079c88189d412d68f705d276d722744a7305ca7791139e3297e2335d7b21c",
-    "scripts/prebuilt-verify/main_test.go": "cb503fccfce180b3c4a31ceaff23e18745fe9ae0c0baeb6a5d4f08a74c9579fc",
-    "scripts/prebuilt-web.mjs": "5f3a437ed6832a3ebf7be0438f70d99a45bd67a8ba6770c96e59a2a52233c222",
-    "scripts/prebuilt-web.test.mjs": "612172d266846a765f168d00beb4bb115894ddfe71d8bd8db0032d35634c1a9e",
+    "scripts/prebuilt-verify/main.go": "75aa3352f8b570f63caa296b31f21a9dda434125c17591337ddd337ec9b63739",
+    "scripts/prebuilt-verify/main_test.go": "54737b6d7ea95b905e132c833cc0da53cee7949ebee73760015dbc3c785dd636",
+    "scripts/prebuilt-web.mjs": "5a0208d66e9140eaa96d14a1d8d000d95b2bf666407dbf03b65b5a33ccd555ea",
+    "scripts/prebuilt-web.test.mjs": "ec5f3763c9ce9516f3c51357bb051cf9edf8dd87a1a16a51e95a9b28cd7e5343",
     "scripts/preferences-contract.test.mjs": "a53a6e0909ebcf9b968ce091f6b7ace22bf3430545380cde686767f35ff5c51b",
     "scripts/probe-batches.test.mjs": "0d6e1e9d118d4491854b01da71f6b233f75f5aa127b042cc94e2db25804786c0",
     "scripts/probe-options.test.mjs": "5103bf6312f7ccd70a2de9d4260994af88f83ddf8c9841c158a4184df328dee8",
@@ -1821,8 +1821,8 @@
     "web/vite.config.ts": "d20e707996dc34d80c8f3f4eff71f8007de9ef8c69857afee9085330b2cd8c00",
     "web/vitest.config.ts": "5690a58b3807385034af0fe51e7e26ea37d67f3f4c20e4190354f94e61c07d3a"
   },
-  "source_sha256": "1377f4f8eee0fe210a9c6bfb4e16c5d46f59dfae81f41cface9c90b43796df52",
-  "frontend_sha256": "00819addd9bb34c7a8a17dbdf744c7b05dc010689912c04edd5d24c931ccb55d",
+  "source_sha256": "d838a222677917effb2a8a69ec88f42503eba111315b8b1b66e6fe2d09dc96f4",
+  "frontend_sha256": "1656ef18425692296d4a0ca92cdf96306aab34a2d5ed5601f8521ef2e00af9a9",
   "assets": {
     ".gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "assets/1c-BRXvFh-G.js": "fa4496397fc0887b7d56e793e3f9ff6e03a731f2f1b19a217d8b926ae6700765",
