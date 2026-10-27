@@ -103,6 +103,7 @@ func TestMonitorCachedSuccessAgesFromStoredInstant(t *testing.T) {
 	observed := env.clock.Add(-20 * time.Minute)
 	account := &env.source.report.Providers[0].Accounts[0]
 	account.State, account.OK = StateHealthy, true
+	account.Windows = []Window{accountWindow(25, nil)}
 	account.LastSuccessAt, account.ObservedAt = observed, observed
 	state := assertMonitorSends(t, env, 0)
 	if !state.ChannelTracks["codex"].LastValid.Equal(observed) {

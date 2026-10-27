@@ -16,9 +16,8 @@ const (
 	// DefaultSummaryTimes are the two daily digests.
 	DefaultSummaryTime1 = "10:00"
 	DefaultSummaryTime2 = "17:00"
-	// DefaultTightRemainingPercent is the account-window remaining share below
-	// which a scheduled digest is sent even with no open item.
-	DefaultTightRemainingPercent = 20.0
+	// DefaultTightRemainingPercent is the fixed inclusive remaining-share trigger.
+	DefaultTightRemainingPercent = 10.0
 	// DefaultChannelUnavailableAfter and DefaultMonitorDownAfter are the
 	// immediate-notify thresholds: an unavailable channel whose earliest
 	// recovery is later than the first, or a channel with no valid data for
@@ -96,8 +95,8 @@ type Resolved struct {
 	MonitorDownAfter        time.Duration
 	// Source is one of the Source* constants.
 	Source string
-	// Degraded reports that the configuration is unusable. The module then stays
-	// loaded but disabled: it must never fail process startup.
+	// Degraded reports an unusable quota configuration. A recipient problem
+	// leaves the independently configured OAuth transport available.
 	Degraded bool
 	// Reason names the first validation problem, empty when the configuration is
 	// usable.
@@ -108,11 +107,11 @@ type Resolved struct {
 
 // Ready reports whether the resolved configuration can run the bot.
 func (r Resolved) Ready() bool {
-	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && r.ChatID != ""
+	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && OAUTH_OPEN_ID.MatchString(r.ChatID)
 }
 
 func (r Resolved) ConnectionReady() bool {
-	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && (r.ChatID != "" || r.OAuthChatID != "")
+	return r.Enabled && r.AppID != "" && r.AppSecret != "" && (OAUTH_OPEN_ID.MatchString(r.ChatID) || r.OAuthChatID != "")
 }
 
 // clock is a wall-clock time of day in minutes since midnight.
@@ -120,8 +119,9 @@ type clock int
 
 // resolveConfig combines the web settings and the environment overlay and
 // validates the result. It never returns an error: an unusable configuration
-// yields a degraded, disabled Resolved so the caller can log and continue rather
-// than fail startup. The environment force-off is applied first and wins.
+// yields a degraded Resolved so the caller can log and continue rather than fail
+// startup. Shared transport failures disable both uses; quota recipient failures
+// leave OAuth available. The environment force-off is applied first and wins.
 func resolveConfig(web Config, overlay Overlay) Resolved {
 	out := Resolved{
 		OAuthChatID:             overlay.OAuthChatID,
@@ -132,7 +132,7 @@ func resolveConfig(web Config, overlay Overlay) Resolved {
 		Location:                resolveLocation(web.Timezone),
 		QuietStart:              clockOr(web.QuietStart, DefaultQuietStart),
 		QuietEnd:                clockOr(web.QuietEnd, DefaultQuietEnd),
-		TightRemainingPercent:   web.TightRemainingPercent,
+		TightRemainingPercent:   DefaultTightRemainingPercent,
 		ChannelUnavailableAfter: web.ChannelUnavailableAfter,
 		MonitorDownAfter:        web.MonitorDownAfter,
 		Source:                  SourceDefaultOff,
@@ -179,6 +179,11 @@ func resolveConfig(web Config, overlay Overlay) Resolved {
 		out.Degraded = true
 		out.Enabled = false
 		out.Reason = reason
+		return out
+	}
+	if out.Enabled && out.ChatID != "" && !OAUTH_OPEN_ID.MatchString(out.ChatID) {
+		out.Degraded = true
+		out.Reason = "通知接收人必须使用 Open ID（ou_ 开头）；群 chat_id 已不再支持，请在飞书设置中更换"
 	}
 	return out
 }
@@ -198,7 +203,7 @@ func validateResolved(r Resolved) string {
 		return "缺少应用 App Secret"
 	}
 	if r.ChatID == "" && r.OAuthChatID == "" {
-		return "缺少目标群 chat_id"
+		return "缺少接收人的 Open ID（ou_ 开头）"
 	}
 	return ""
 }

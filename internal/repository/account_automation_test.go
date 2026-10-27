@@ -14,7 +14,7 @@ func TestAdoptAutomationAccountsKeepsAnExistingSwitch(t *testing.T) {
 	now := time.Now().UTC().UnixMilli()
 
 	first := AutomationBatch{ID: "batch-1", CreatedAtMS: now, SelectedCount: 2, SelectedJSON: `["a","b"]`, Note: "first"}
-	if err := repo.AdoptAutomationAccounts(ctx, first, []AutomationAccount{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, first, []AutomationAccount{
 		{AuthIndex: "a", Provider: "codex", Name: "a.json", AccountLabel: "one@example.test"},
 		{AuthIndex: "b", Provider: "claude", Name: "b.json"},
 	}, false, now); err != nil {
@@ -38,7 +38,7 @@ func TestAdoptAutomationAccountsKeepsAnExistingSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := AutomationBatch{ID: "batch-2", CreatedAtMS: now, SelectedCount: 1, SelectedJSON: `["a"]`}
-	if err := repo.AdoptAutomationAccounts(ctx, second, []AutomationAccount{{AuthIndex: "a", Provider: "codex", Name: "a.json"}}, false, now); err != nil {
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, second, []AutomationAccount{{AuthIndex: "a", Provider: "codex", Name: "a.json"}}, false, now); err != nil {
 		t.Fatal(err)
 	}
 	account, found, err := repo.GetAutomationAccount(ctx, "a")
@@ -57,7 +57,7 @@ func TestSetAutomationSwitchRejectsAStaleVersion(t *testing.T) {
 	repo, _ := testRepository(t)
 	ctx := context.Background()
 	now := time.Now().UTC().UnixMilli()
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "a"}}, false, now); err != nil {
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "a"}}, false, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.SetAutomationSwitch(ctx, "a", true, 1, now); err != nil {
@@ -115,7 +115,7 @@ func TestAutomationAccountLabelIsRedactedFromOperatorQueries(t *testing.T) {
 	repo := queryTestRepository(t)
 	ctx := context.Background()
 	now := time.Now().UTC().UnixMilli()
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{
 		{AuthIndex: "a", Provider: "codex", Name: "a.json", AccountLabel: "secret@example.test"},
 	}, false, now); err != nil {
 		t.Fatal(err)
@@ -135,7 +135,7 @@ func TestRecordAutomationEnableConsumesAManualReset(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().UnixMilli()
 	cycleReset := now + 7200_000
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{
 		AuthIndex: "a", CycleResetAtMS: &cycleReset, State: AutomationStateWaiting,
 	}}, true, now); err != nil {
 		t.Fatal(err)
@@ -163,7 +163,7 @@ func TestRecordAutomationResetClearsRecoveryTimes(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().UnixMilli()
 	resetAt := now + 3600_000
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: now}, []AutomationAccount{{
 		AuthIndex: "a", CycleResetAtMS: &resetAt, State: AutomationStateWaiting,
 	}}, true, now); err != nil {
 		t.Fatal(err)
@@ -190,7 +190,7 @@ func TestAdoptAutomationAccountsPersistsTheTakeoverRecoveryPlan(t *testing.T) {
 	resetAt := now + 48*60*60*1000
 	observed := now - 1000
 	first := AutomationBatch{ID: "batch-1", CreatedAtMS: now, SelectedCount: 1, SelectedJSON: `["a"]`}
-	if err := repo.AdoptAutomationAccounts(ctx, first, []AutomationAccount{{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, first, []AutomationAccount{{
 		AuthIndex: "a", Provider: "claude", Name: "a.json",
 		CycleResetAtMS: &resetAt, CycleKey: "a:claude:reset", DisableObservedAtMS: &observed,
 	}}, true, now); err != nil {
@@ -211,7 +211,7 @@ func TestAdoptAutomationAccountsPersistsTheTakeoverRecoveryPlan(t *testing.T) {
 	// A re-adoption keeps the first plan even when offered a different one.
 	otherReset := resetAt + 1000
 	second := AutomationBatch{ID: "batch-2", CreatedAtMS: now, SelectedCount: 1, SelectedJSON: `["a"]`}
-	if err := repo.AdoptAutomationAccounts(ctx, second, []AutomationAccount{{
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, second, []AutomationAccount{{
 		AuthIndex: "a", CycleResetAtMS: &otherReset, CycleKey: "other",
 	}}, false, now); err != nil {
 		t.Fatal(err)
@@ -264,7 +264,7 @@ func TestAutomationPauseCreditAndTombstone(t *testing.T) {
 	ctx := context.Background()
 	now := int64(1000000000000)
 	reset := now + 3600000
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "pause", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "synthetic", State: AutomationStateWaiting, CycleResetAtMS: &reset, CycleKey: "synthetic-cycle", DisableObservedAtMS: &now}}, true, now); err != nil {
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "pause", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "synthetic", State: AutomationStateWaiting, CycleResetAtMS: &reset, CycleKey: "synthetic-cycle", DisableObservedAtMS: &now}}, true, now); err != nil {
 		t.Fatal(err)
 	}
 	credit := true
@@ -299,7 +299,7 @@ func TestAutomationPauseCreditAndTombstone(t *testing.T) {
 	if err != nil || !found || stored.RemovedAtMS == nil {
 		t.Fatalf("preserved row: %+v %v", stored, err)
 	}
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "readopt", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "synthetic", State: AutomationStateMonitoring}}, true, now); err != nil {
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "readopt", CreatedAtMS: now}, []AutomationAccount{{AuthIndex: "synthetic", State: AutomationStateMonitoring}}, true, now); err != nil {
 		t.Fatal(err)
 	}
 	stored, _, _ = repo.GetAutomationAccount(ctx, "synthetic")
@@ -315,7 +315,7 @@ func TestAutomationPauseCreditAndTombstone(t *testing.T) {
 func TestAutomationRemovalFailsClosedWithoutAudit(t *testing.T) {
 	repo, _ := testRepository(t)
 	ctx := context.Background()
-	if err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: 1000}, []AutomationAccount{{AuthIndex: "synthetic"}}, true, 1000); err != nil {
+	if _, _, err := repo.AdoptAutomationAccounts(ctx, AutomationBatch{ID: "b", CreatedAtMS: 1000}, []AutomationAccount{{AuthIndex: "synthetic"}}, true, 1000); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := repo.SQL().ExecContext(ctx, `CREATE TRIGGER reject_automation_audit BEFORE INSERT ON audit_events BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END`); err != nil {

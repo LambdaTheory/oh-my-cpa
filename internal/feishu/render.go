@@ -14,6 +14,8 @@ const KindQuery = "query"
 // KindSummary marks a scheduled or quiet-end digest.
 const KindSummary = "summary"
 
+const KindMorning = "morning"
+
 // KindAlertBatch carries same-cycle monitoring alerts or a quiet-end merge in a
 // single notification.
 const KindAlertBatch = "alert_batch"
@@ -22,10 +24,14 @@ const KindAlertBatch = "alert_batch"
 // its own title.
 var defaultTitles = map[string]string{
 	AlertCredential:         "凭证失效",
+	AlertQuotaLow:           "额度将耗尽",
+	AlertQuotaExhausted:     "额度已耗尽",
+	AlertReadingMissing:     "数据缺失",
 	AlertChannelUnavailable: "渠道不可用",
 	AlertMonitorDown:        "监控停摆",
 	KindQuery:               "额度查询",
 	KindSummary:             "额度汇总",
+	KindMorning:             "额度早报",
 	KindAlertBatch:          "异常提醒",
 }
 
@@ -54,10 +60,10 @@ type Message struct {
 	Tight   []TightChannel
 	// GeneratedAt is the report's observation time.
 	GeneratedAt time.Time
+	EvaluatedAt time.Time
 }
 
-// ReportRenderer renders a Message. PlainReportRenderer is the production hook;
-// a later designer can replace it with a richer card without touching the bot.
+// ReportRenderer keeps transport independent of the bounded decision card.
 type ReportRenderer interface {
 	// Text renders the plain-text form used by chat replies and logs.
 	Text(msg Message) string
@@ -67,15 +73,14 @@ type ReportRenderer interface {
 	CardSimple(msg Message) map[string]any
 }
 
-// PlainReportRenderer is a plain, i18n-neutral renderer: it prints the exact
-// numbers, window scopes, reset times and data time, and never implies freshness
-// it does not have. It sets no layout beyond Feishu's markdown elements, so the
-// later card design can replace it wholesale.
+// PlainReportRenderer draws a decision followed by at most three actionable
+// points. Text retains the diagnostic report for internal callers.
 //
 // The location is stored atomically so a settings reload can retarget the display
 // time zone while a reply is being rendered.
 type PlainReportRenderer struct {
-	loc atomic.Pointer[time.Location]
+	loc        atomic.Pointer[time.Location]
+	consoleURL string
 }
 
 // NewPlainReportRenderer builds a renderer. A nil location uses the server

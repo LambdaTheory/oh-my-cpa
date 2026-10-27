@@ -728,7 +728,7 @@ func TestServiceSyncRequiresConsecutiveCompleteInventories(t *testing.T) {
 	}
 }
 
-func TestServiceSyncPreservesPendingPlans(t *testing.T) {
+func TestServiceSyncRemovesPendingPlansOnlyAfterTwoCompleteInventories(t *testing.T) {
 	ctx := context.Background()
 	repo := automationRepo(t)
 	clock := &testClock{now: time.UnixMilli(1000000000000)}
@@ -743,21 +743,30 @@ func TestServiceSyncPreservesPendingPlans(t *testing.T) {
 		{"manual", "manual_reset_at_ms = 2000, manual_reset_consumed = 0"},
 	}
 	for _, tc := range cases {
-		if err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: tc.id}, []repository.AutomationAccount{{AuthIndex: tc.id}}, true, clock.Now().UnixMilli()); err != nil {
+		if _, _, err := repo.AdoptAutomationAccounts(ctx, repository.AutomationBatch{ID: tc.id}, []repository.AutomationAccount{{AuthIndex: tc.id}}, true, clock.Now().UnixMilli()); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := repo.SQL().ExecContext(ctx, "UPDATE account_automation_accounts SET "+tc.assignments+" WHERE auth_index = ?", tc.id); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < 3; i++ {
-		service.RunOnce(ctx)
-	}
+	service.RunOnce(ctx)
 	accounts, err := service.ListAccounts(ctx)
 	if err != nil || len(accounts) != len(cases) {
-		t.Fatalf("pending roster: %+v %v", accounts, err)
+		t.Fatalf("one complete inventory must not remove a pending plan: %+v %v", accounts, err)
+	}
+	service.RunOnce(ctx)
+	accounts, err = service.ListAccounts(ctx)
+	if err != nil || len(accounts) != 0 {
+		t.Fatalf("a confirmed absent credential leaves the roster with its plan: %+v %v", accounts, err)
 	}
 	if len(writer.snapshot()) != 0 {
 		t.Fatal("missing credentials must never receive writes")
+	}
+	for _, tc := range cases {
+		stored, found, err := repo.GetAutomationAccount(ctx, tc.id)
+		if err != nil || !found || stored.RemovedAtMS == nil || stored.CycleResetAtMS != nil || stored.ManualResetAtMS != nil || stored.NextAttemptAtMS != nil {
+			t.Fatalf("removed row %s must be tombstoned with its executable plan cleared: %+v %v", tc.id, stored, err)
+		}
 	}
 }

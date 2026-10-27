@@ -152,7 +152,7 @@ func TestFeishuStoredBaselineSurvivesServiceRestarts(t *testing.T) {
 		secret := "synthetic-app-secret"
 		service := feishu.NewService(feishu.Options{
 			Web: feishu.Config{
-				Enabled: true, AppID: "synthetic-app", ChatID: "synthetic-chat", Timezone: "UTC",
+				Enabled: true, AppID: "synthetic-app", ChatID: "ou_synthetic", Timezone: "UTC",
 				QuietStart: "23:00", QuietEnd: "08:00", MonitorDownAfter: 30 * time.Minute,
 			},
 			Overlay: feishu.Overlay{AppSecret: &secret}, Store: store,
