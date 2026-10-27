@@ -235,7 +235,7 @@ never triggers a refresh. Settings and status live under `/api/v1/feishu/setting
 | `OMCPA_FEISHU_FORCE_DISABLED` | `false` | Emergency off. Takes precedence over `OMCPA_FEISHU_ENABLED` and the web switch |
 | `OMCPA_FEISHU_APP_ID` | unset | Overrides the self-built app's App ID |
 | `OMCPA_FEISHU_APP_SECRET` | unset | Overrides the app secret. Held in memory only; never written to a response or a log |
-| `OMCPA_FEISHU_CHAT_ID` | unset | Overrides the target group `chat_id` |
+| `OMCPA_FEISHU_CHAT_ID` | unset | Overrides the quota recipient Open ID (ou_ prefix), retained under the existing chat_id field |
 | `OMCPA_FEISHU_OAUTH_CHAT_ID` | unset | Dedicated OAuth management group; enables credential recovery only together with the contact and a usable enabled bot |
 | `OMCPA_FEISHU_OAUTH_CONTACT_OPEN_ID` | unset | Fixed code contact, in `ou_...` form |
 | `OMCPA_REAUTH_RUNNER_CIDRS` | loopback, RFC 1918 IPv4 and IPv6 ULA | Comma-separated CIDR allowlist for direct runner connections; narrow this to the actual Docker network and required loopback ranges |
@@ -888,15 +888,42 @@ record an attempt audit before calling CPA. If the success audit fails after CPA
 has completed the action, the successful action remains successful; the audit
 failure is logged without tokens or uploaded key material.
 
-## Daily Feishu quota prediction
+## Feishu quota decisions
 
-The existing Feishu `SummaryTimes`, timezone, `ChatID` and quiet hours also schedule a
-read-only quota prediction digest. At a configured minute OMC sends one card only when at
-least one stored window is `will_exhaust` or `under_used`; that card replaces the ordinary
-scheduled digest for the same local minute. With no finding, the ordinary digest behaves
-as before. Disabled, incomplete or degraded Feishu configuration does not evaluate or
-send prediction. Delivery uses the existing persisted outbox and retry path, with no new
-setting, secret, table or migration.
+### Personal quota decision cards
+
+Quota notifications address one configured operator Open ID (the `ou_` prefix),
+retained in the existing `chat_id` / `OMCPA_FEISHU_CHAT_ID` setting. Group IDs cannot
+make quota delivery ready. Quota queries accept only private messages from this
+person. The dedicated OAuth code group retains its independent authorization and
+chat-id transport. Existing group notification settings require an operator change.
+
+The default times remain 10:00 / 17:00 in the configured timezone. The earliest
+configured slot always queues the daily morning fallback, including healthy or
+missing-data results. Later ordinary slots stay silent. Credential windows at or
+below 10% remaining or predicted to exhaust before reset open one persistent risk
+identity per credential/window/reset cycle. Untimed and long-stale
+readings retain the existing monitoring grace. Forecast, low quota and exhaustion
+share their identity and do not repeat within that cycle; recovery sends nothing.
+Quiet hours defer delivery through the existing retry outbox.
+The process must be running during the scheduled minute to send that day's fallback.
+
+Cards lead with whether quota allocation needs attention, then at most three
+conclusion-and-advice points, observation metadata and one console button. Model and
+group scopes remain explicit. Missing percentages say data is missing, never zero.
+A reset countdown means recovery; prediction exhaustion ETA is explicitly estimated.
+The console button uses `OMCPA_PUBLIC_URL` plus the deployment base path once;
+an absent or invalid address disables it with configuration guidance. No card write
+callback or table is emitted. Full and simplified cards have the same content bound.
+Delivery is persisted before sending; failure logs attempts and retries from 30
+seconds with exponential backoff capped at 30 minutes.
+
+Morning prediction findings share the fallback. Prediction evaluation runs once
+per minute from stored data and only
+`will_exhaust` findings trigger an event; surplus alone stays silent. Morning prediction cards also carry stored anomalies and open items. Other
+periods send only newly detected prediction risks. Explicit
+manual prediction sends retain both finding kinds, deliver only their new outbox
+row and never claim a scheduled minute. No finding returns `no_findings`.
 
 ## Public demonstration conversations
 

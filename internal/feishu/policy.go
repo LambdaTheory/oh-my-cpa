@@ -30,6 +30,8 @@ const (
 // Alert is one immediate notification unit. It is secret-free: it carries the
 // opaque credential key and the display alias, never a cookie or token.
 type Alert struct {
+	Scope      string
+	ObservedAt time.Time
 	Kind       string
 	Severity   string
 	Provider   string
@@ -49,14 +51,15 @@ type PendingItem struct {
 	Kind     string
 	Provider string
 	// Key is empty for channel-level items.
-	Key        string
-	Alias      string
-	Since      time.Time
-	LastSeen   time.Time
-	Action     string
-	Status     string
-	NotifiedAt time.Time
-	ResolvedAt time.Time
+	Key          string
+	Alias        string
+	Since        time.Time
+	LastSeen     time.Time
+	Action       string
+	Status       string
+	NotifiedAt   time.Time
+	ResolvedAt   time.Time
+	CycleResetAt time.Time
 }
 
 // ChannelTrack is the per-provider memory behind monitor_down: when the channel
@@ -70,6 +73,8 @@ type ChannelTrack struct {
 
 // PolicyConfig is the policy's immutable thresholds.
 type PolicyConfig struct {
+	EnableAttention         bool
+	TightRemainingPercent   float64
 	ChannelUnavailableAfter time.Duration
 	MonitorDownAfter        time.Duration
 	// Location only affects the renderer; it is threaded for fact formatting.
@@ -84,15 +89,24 @@ type PolicyConfig struct {
 // which is why a quiet-opened item is stamped notified here and its alert is still
 // returned.
 type PolicyInput struct {
-	Report Report
-	Prev   []PendingItem
-	Tracks map[string]ChannelTrack
-	Now    time.Time
-	Quiet  bool
+	Report   Report
+	Prev     []PendingItem
+	Tracks   map[string]ChannelTrack
+	Now      time.Time
+	Quiet    bool
+	recovery map[string]recoveryProgress
+}
+
+const recoveryObservationCount = 3
+
+type recoveryProgress struct {
+	count      int
+	observedAt time.Time
 }
 
 // PolicyResult is the policy's verdict for one round.
 type PolicyResult struct {
+	recovery map[string]recoveryProgress
 	// Items is the complete pending-item list after reconciliation.
 	Items []PendingItem
 	// Opened and Resolved describe this round's transitions.
@@ -110,6 +124,10 @@ type PolicyResult struct {
 // open, and not again until it resolves and recurs.
 func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	info := analyzeReport(cfg, in.Report, in.Now, in.Tracks)
+	recovery := make(map[string]recoveryProgress, len(in.recovery))
+	for id, progress := range in.recovery {
+		recovery[id] = progress
+	}
 
 	prevAll := map[string]PendingItem{}
 	for _, item := range in.Prev {
@@ -117,6 +135,23 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	}
 
 	desired, alertFor := policySignals(info, in.Now)
+	if cfg.EnableAttention {
+		for _, alert := range attentionSignals(in.Report, cfg.TightRemainingPercent, in.Now) {
+			if alert.Kind == AlertReadingMissing && !hasFreshAttempt(in.Report, alert, in.Now) {
+				continue
+			}
+			id := alertItemID(alert)
+			desired[id] = PendingItem{ID: id, Kind: alert.Kind, Provider: alert.Provider, Key: alert.Key, Alias: alert.Alias, Action: alert.Advice}
+			copy := alert
+			alertFor[id] = &copy
+			if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted {
+				// The credential window already explains the outage and its action.
+				channelID := ItemID(AlertChannelUnavailable, alert.Provider, "", "")
+				delete(alertFor, channelID)
+				delete(desired, channelID)
+			}
+		}
+	}
 
 	var (
 		opened   []PendingItem
@@ -125,9 +160,12 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		seen     = map[string]bool{}
 	)
 	for id, sig := range desired {
+		delete(recovery, id)
 		seen[id] = true
 		prev, ok := prevAll[id]
-		if ok && prev.Status == PendingOpen {
+		cycleReset, cycleObserved := quotaCycleEvidence(sig, in.Report)
+		isNewCycle := ok && hasNewQuotaCycle(prev, cycleReset, cycleObserved)
+		if ok && prev.Status == PendingOpen && !isNewCycle {
 			item := prev
 			item.Kind = sig.Kind
 			item.Provider = sig.Provider
@@ -136,6 +174,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			item.Action = sig.Action
 			item.LastSeen = in.Now
 			item.Status = PendingOpen
+			if item.CycleResetAt.IsZero() && !cycleReset.IsZero() {
+				item.CycleResetAt = cycleReset
+			}
 			if item.NotifiedAt.IsZero() {
 				if _, has := alertFor[id]; has {
 					item.NotifiedAt = in.Now
@@ -150,6 +191,25 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		item.Since = in.Now
 		item.LastSeen = in.Now
 		item.Status = PendingOpen
+		item.CycleResetAt = cycleReset
+		if sig.Kind == AlertMonitorDown {
+			for _, previous := range in.Prev {
+				if previous.Provider == sig.Provider && previous.Kind == AlertReadingMissing && previous.Status == PendingOpen && !previous.NotifiedAt.IsZero() {
+					item.NotifiedAt = previous.NotifiedAt
+					break
+				}
+			}
+			if !item.NotifiedAt.IsZero() {
+				items = append(items, item)
+				continue
+			}
+		}
+		if ok && !prev.NotifiedAt.IsZero() && !isNewCycle && (sig.Kind == AlertQuotaLow || sig.Kind == AlertQuotaExhausted) && (!prev.CycleResetAt.IsZero() || prev.Kind == predictionKindPrefix && prev.ResolvedAt.IsZero()) {
+			item.NotifiedAt = prev.NotifiedAt
+			item.CycleResetAt = prev.CycleResetAt
+			items = append(items, item)
+			continue
+		}
 		if alertFor[id] != nil {
 			item.NotifiedAt = in.Now
 		}
@@ -164,10 +224,28 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			continue
 		}
 		if prev.Status == PendingResolved {
+			delete(recovery, prev.ID)
 			items = append(items, prev)
 			continue
 		}
-		if info.resolvedByEvidence(prev) {
+		isRecovered := info.resolvedByEvidence(prev)
+		if cfg.EnableAttention {
+			hasEvidence, observedAt := attentionRecovered(prev, in.Report, cfg.TightRemainingPercent, in.Now)
+			if hasEvidence && !observedAt.IsZero() {
+				progress := recovery[prev.ID]
+				if observedAt.After(progress.observedAt) {
+					progress.count++
+					progress.observedAt = observedAt
+				}
+				recovery[prev.ID] = progress
+				hasEvidence = progress.count >= recoveryObservationCount
+			} else {
+				delete(recovery, prev.ID)
+			}
+			isRecovered = isRecovered || hasEvidence
+		}
+		if isRecovered {
+			delete(recovery, prev.ID)
 			item := prev
 			item.Status = PendingResolved
 			item.ResolvedAt = in.Now
@@ -180,7 +258,7 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 
 	sort.SliceStable(items, func(i, j int) bool { return items[i].Since.Before(items[j].Since) })
 
-	res := PolicyResult{Items: items, Opened: opened, Resolved: resolved}
+	res := PolicyResult{Items: items, Opened: opened, Resolved: resolved, recovery: recovery}
 	// Newly opened items push once, in a stable order. This is returned whether or
 	// not quiet hours are active; the caller persists an alert as a queued
 	// notification during quiet instead of sending it.
@@ -192,6 +270,21 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		}
 	}
 	return res
+}
+
+// Untimed or long-stale missing data retains the established monitor-down grace.
+func hasFreshAttempt(rep Report, alert Alert, now time.Time) bool {
+	for _, provider := range rep.Providers {
+		if provider.Provider != alert.Provider {
+			continue
+		}
+		for _, account := range provider.Accounts {
+			if account.Key == alert.Key {
+				return observationFresh(account, now, defaultFreshWindow)
+			}
+		}
+	}
+	return false
 }
 
 // policySignals builds the desired pending items from the report, plus the alert

@@ -98,27 +98,32 @@ func (h *Handler) BuildFeishuAPI(ctx context.Context, source feishu.ReportSource
 		return nil, err
 	}
 	api.service = feishu.NewService(feishu.Options{
-		Web: web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
+		ConsoleURL: feishu.ConsoleAddress(h.cfg.PublicURL, h.cfg.BasePath),
+		Web:        web, Overlay: overlay, Store: feishuStore{repo: h.repo}, Source: source,
 		Logger: h.logger, Now: h.now,
 	})
 	h.buildReauthService(api.service)
-	api.prediction = feishu.NewPredictionJob(api.service, func(ctx context.Context) (feishu.PredictionDigest, error) {
-		prediction, err := h.operationsService().QuotaPrediction(capability.WithAnchor(ctx, h.now().UnixMilli()), operations.QuotaPredictionInput{FindingsOnly: true})
-		if err != nil {
-			return feishu.PredictionDigest{}, err
-		}
-		items := make([]feishu.PredictionDigestItem, 0, len(prediction.Items))
-		for _, item := range prediction.Items {
-			items = append(items, feishu.PredictionDigestItem{
-				CredentialLabel: item.CredentialLabel, Provider: item.Provider, WindowKind: item.WindowKind,
-				UsedPercent: item.UsedPercent, ProjectedPercentAtReset: item.ProjectedPercentAtReset,
-				ProjectedTokensAtReset: item.ProjectedTokensAtReset, ProjectedCostNanosAtReset: item.ProjectedCostNanosAtReset,
-				ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
-			})
-		}
-		return feishu.PredictionDigest{Items: items, Omitted: prediction.Omitted}, nil
-	})
+	api.prediction = feishu.NewPredictionJob(api.service, api.readPrediction)
 	return api, nil
+}
+
+func (f *FeishuAPI) readPrediction(ctx context.Context) (feishu.PredictionDigest, error) {
+	prediction, err := f.handler.operationsService().QuotaPrediction(capability.WithAnchor(ctx, f.now().UnixMilli()), operations.QuotaPredictionInput{FindingsOnly: true, IncludeRecovery: true})
+	if err != nil {
+		return feishu.PredictionDigest{}, err
+	}
+	items := make([]feishu.PredictionDigestItem, 0, len(prediction.Items))
+	for _, item := range prediction.Items {
+		items = append(items, feishu.PredictionDigestItem{
+			CredentialLabel: item.CredentialLabel, Provider: item.Provider, WindowKind: item.WindowKind,
+			UsedPercent: item.UsedPercent, ProjectedPercentAtReset: item.ProjectedPercentAtReset,
+			ProjectedTokensAtReset: item.ProjectedTokensAtReset, ProjectedCostNanosAtReset: item.ProjectedCostNanosAtReset,
+			ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
+			ExhaustionETAMS: item.ExhaustionETAMS, WindowScope: item.WindowScope,
+			Key: item.AuthIndex, WindowID: item.WindowID, ResetAtMS: item.ResetAtMS, ResetAccuracy: item.ResetAccuracy,
+		})
+	}
+	return feishu.PredictionDigest{Items: items, Omitted: prediction.Omitted}, nil
 }
 
 // RegisterFeishuRoutes installs the Feishu routes on the authenticated v1 router.
@@ -165,9 +170,11 @@ type feishuSettingsWriteDTO struct {
 }
 
 type feishuTestResponse struct {
-	Sent   bool   `json:"sent"`
-	Reason string `json:"reason,omitempty"`
-	Error  string `json:"error,omitempty"`
+	Attempts      int        `json:"attempts,omitempty"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	Sent          bool       `json:"sent"`
+	Reason        string     `json:"reason,omitempty"`
+	Error         string     `json:"error,omitempty"`
 }
 
 func (f *FeishuAPI) getSettings(writer http.ResponseWriter, request *http.Request) {
@@ -210,7 +217,7 @@ func (f *FeishuAPI) putSettings(writer http.ResponseWriter, request *http.Reques
 			SummaryTimesJSON:        `["10:00","17:00"]`,
 			QuietStart:              "23:00",
 			QuietEnd:                "08:00",
-			TightRemainingPercent:   20,
+			TightRemainingPercent:   10,
 			ChannelUnavailableAfter: 30 * 60 * 1000,
 			MonitorDownAfterMS:      30 * 60 * 1000,
 		}
@@ -255,13 +262,19 @@ func (f *FeishuAPI) getStatus(writer http.ResponseWriter, request *http.Request)
 // the bot never triggers it on its own.
 func (f *FeishuAPI) postTest(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
-	if err := f.service.SendTest(request.Context()); err != nil {
+	delivery, err := f.service.SendTest(request.Context())
+	if err != nil {
 		f.recordAudit(request, "feishu.test", "feishu", "settings", "failure", nil)
 		writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: false, Error: err.Error()})
 		return
 	}
-	f.recordAudit(request, "feishu.test", "feishu", "settings", "success", nil)
-	writeJSON(writer, http.StatusOK, feishuTestResponse{Sent: true})
+	response := feishuTestResponse{Sent: delivery.Sent, Attempts: delivery.Attempts}
+	if delivery.QueuedForRetry {
+		response.Reason = "queued_for_retry"
+		response.NextAttemptAt = &delivery.NextAttemptAt
+	}
+	f.recordAudit(request, "feishu.test", "feishu", "settings", "success", map[string]any{"sent": delivery.Sent, "reason": response.Reason, "attempts": delivery.Attempts})
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (f *FeishuAPI) postPredictionTest(writer http.ResponseWriter, request *http.Request) {
@@ -359,7 +372,7 @@ func feishuWebConfig(settings repository.FeishuSettings) feishu.Config {
 		Timezone:                settings.Timezone,
 		QuietStart:              settings.QuietStart,
 		QuietEnd:                settings.QuietEnd,
-		TightRemainingPercent:   settings.TightRemainingPercent,
+		TightRemainingPercent:   feishu.DefaultTightRemainingPercent,
 		ChannelUnavailableAfter: time.Duration(settings.ChannelUnavailableAfter) * time.Millisecond,
 		MonitorDownAfter:        time.Duration(settings.MonitorDownAfterMS) * time.Millisecond,
 	}
@@ -370,7 +383,7 @@ func feishuSettingsFrom(settings repository.FeishuSettings, found, hasSecret boo
 		SummaryTimes:          []string{"10:00", "17:00"},
 		QuietStart:            "23:00",
 		QuietEnd:              "08:00",
-		TightRemainingPercent: 20,
+		TightRemainingPercent: 10,
 		ChannelUnavailableMS:  30 * 60 * 1000,
 		MonitorDownMS:         30 * 60 * 1000,
 		HasSecret:             hasSecret,
@@ -388,7 +401,7 @@ func feishuSettingsFrom(settings repository.FeishuSettings, found, hasSecret boo
 	dto.Timezone = settings.Timezone
 	dto.QuietStart = settings.QuietStart
 	dto.QuietEnd = settings.QuietEnd
-	dto.TightRemainingPercent = settings.TightRemainingPercent
+	dto.TightRemainingPercent = feishu.DefaultTightRemainingPercent
 	dto.ChannelUnavailableMS = settings.ChannelUnavailableAfter
 	dto.MonitorDownMS = settings.MonitorDownAfterMS
 	if settings.SummaryTimesJSON != "" {
@@ -460,10 +473,10 @@ func applyFeishuWrite(settings *repository.FeishuSettings, payload feishuSetting
 	}
 	if payload.TightRemainingPercent != nil {
 		value := *payload.TightRemainingPercent
-		if value < 0 || value > 100 {
-			return errors.New("tight_remaining_percent must be between 0 and 100")
+		if value != feishu.DefaultTightRemainingPercent {
+			return errors.New("tight_remaining_percent is read-only and fixed at 10")
 		}
-		settings.TightRemainingPercent = value
+		settings.TightRemainingPercent = feishu.DefaultTightRemainingPercent
 	}
 	if payload.ChannelUnavailableMS != nil {
 		if *payload.ChannelUnavailableMS < 0 {
@@ -548,17 +561,18 @@ func feishuStateFrom(runtime repository.FeishuRuntime) *feishu.State {
 	}
 	for _, item := range runtime.Pending {
 		state.PendingItems = append(state.PendingItems, feishu.PendingItem{
-			ID:         item.ID,
-			Kind:       item.Kind,
-			Provider:   item.Provider,
-			Key:        item.CredKey,
-			Alias:      item.Alias,
-			Since:      timeOfMS(item.SinceMS),
-			LastSeen:   timeOfMS(item.LastSeenMS),
-			Action:     item.Action,
-			Status:     item.Status,
-			NotifiedAt: timeOfMS(item.NotifiedAtMS),
-			ResolvedAt: timeOfMS(item.ResolvedAtMS),
+			ID:           item.ID,
+			Kind:         item.Kind,
+			Provider:     item.Provider,
+			Key:          item.CredKey,
+			Alias:        item.Alias,
+			Since:        timeOfMS(item.SinceMS),
+			LastSeen:     timeOfMS(item.LastSeenMS),
+			Action:       item.Action,
+			Status:       item.Status,
+			NotifiedAt:   timeOfMS(item.NotifiedAtMS),
+			ResolvedAt:   timeOfMS(item.ResolvedAtMS),
+			CycleResetAt: timeOfMS(item.CycleResetAtMS),
 		})
 	}
 	for _, notification := range runtime.Notifications {
@@ -583,17 +597,18 @@ func feishuRuntimeFrom(state *feishu.State) repository.FeishuRuntime {
 	}
 	for _, item := range state.PendingItems {
 		runtime.Pending = append(runtime.Pending, repository.FeishuPendingItem{
-			ID:           item.ID,
-			Kind:         item.Kind,
-			Provider:     item.Provider,
-			CredKey:      item.Key,
-			Alias:        item.Alias,
-			SinceMS:      msOf(item.Since),
-			LastSeenMS:   msOf(item.LastSeen),
-			Action:       item.Action,
-			Status:       item.Status,
-			NotifiedAtMS: msOf(item.NotifiedAt),
-			ResolvedAtMS: msOf(item.ResolvedAt),
+			ID:             item.ID,
+			Kind:           item.Kind,
+			Provider:       item.Provider,
+			CredKey:        item.Key,
+			Alias:          item.Alias,
+			SinceMS:        msOf(item.Since),
+			LastSeenMS:     msOf(item.LastSeen),
+			Action:         item.Action,
+			Status:         item.Status,
+			NotifiedAtMS:   msOf(item.NotifiedAt),
+			ResolvedAtMS:   msOf(item.ResolvedAt),
+			CycleResetAtMS: msOf(item.CycleResetAt),
 		})
 	}
 	for _, notification := range state.Outbox {

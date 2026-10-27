@@ -63,7 +63,7 @@ func TestCardRendersExactEvidenceWithoutImpliedFreshness(t *testing.T) {
 
 	encoded, _ := json.Marshal(renderer.Card(msg))
 	text := string(encoded)
-	for _, want := range []string{"82.0%", "work", "缓存 · 40 分钟前", "可能已过期"} {
+	for _, want := range []string{"work", "缓存 · 40 分钟前", msg.Notice} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("card is missing %q: %s", want, text)
 		}

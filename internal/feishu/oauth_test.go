@@ -25,7 +25,7 @@ func TestOAuthMessageWhitelistAndCards(t *testing.T) {
 	sender := newFakeSender()
 	var logs bytes.Buffer
 	secret := "synthetic-app-secret"
-	bot := NewService(Options{Web: Config{Enabled: true, AppID: "cli_synthetic", ChatID: "oc_alerts"}, Overlay: Overlay{AppSecret: &secret}, SenderFactory: func(Resolved) Sender { return sender }, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	bot := NewService(Options{Web: Config{Enabled: true, AppID: "cli_synthetic", ChatID: "ou_synthetic"}, Overlay: Overlay{AppSecret: &secret}, SenderFactory: func(Resolved) Sender { return sender }, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
 	now := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)
 	service := reauth.New(reauth.Options{Repo: repo, Now: func() time.Time { return now }, Enabled: bot.OAuthReady, Notify: bot.SendOAuthCard})
 	bot.ConfigureOAuth("oc_oauth", "ou_contact", service.AcceptCode)

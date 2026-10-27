@@ -26,7 +26,6 @@ export interface FeishuSettingsWriteDTO {
   timezone?: string;
   quiet_start?: string;
   quiet_end?: string;
-  tight_remaining_percent?: number;
   channel_unavailable_after_ms?: number;
   monitor_down_after_ms?: number;
 }
@@ -48,6 +47,8 @@ export interface FeishuStatusDTO {
 
 export interface FeishuTestResponse {
   sent: boolean;
-  reason?: 'no_findings';
+  reason?: 'no_findings' | 'queued_for_retry';
+  attempts?: number;
+  next_attempt_at?: string;
   error?: string;
 }
