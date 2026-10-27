@@ -95,8 +95,8 @@ func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseL
 // A transport failure is returned as a wrapped Go error (preserving
 // context.DeadlineExceeded). Auth, rate-limit and parse failures return a snapshot
 // with a structured Failure and a scrubbed Err, never an error. Success requires at
-// least one numeric window: plan and balance alone are not a quota read, or a
-// redesigned page would look permanently healthy.
+// two validated USD amounts or a legacy numeric window. Plan text alone must
+// never make a redesigned page look healthy.
 func (c *Client) Fetch(ctx context.Context, accountID, cookie string) (Snapshot, error) {
 	snapshot := Snapshot{AccountID: accountID, ObservedAt: c.now()}
 	if strings.TrimSpace(cookie) == "" {
@@ -134,10 +134,12 @@ func (c *Client) Fetch(ctx context.Context, accountID, cookie string) (Snapshot,
 	}
 	result := parse(string(body), snapshot.ObservedAt)
 	snapshot.Plan = result.plan
+	snapshot.Credits = result.credits
 	snapshot.Balance = result.balance
-	if len(result.windows) == 0 {
+	snapshot.Windows = result.windows
+	if !snapshot.IsSuccess() {
 		snapshot.Failure = FailureParse
-		snapshot.Err = "no quota window could be parsed from the Ollama settings page"
+		snapshot.Err = "no trustworthy quota reading could be parsed from the Ollama settings page"
 		return snapshot, nil
 	}
 	snapshot.Windows = result.windows

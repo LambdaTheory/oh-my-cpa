@@ -7,19 +7,21 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 )
 
 // parsed is the raw result of one settings-page scrape.
 type parsed struct {
+	credits *quota.OllamaCredits
 	windows []Window
 	plan    string
 	balance string
 }
 
 var (
-	// Markup is stripped with a small, dependency-free flattener: the module must
-	// not take a new module dependency, so the tag handling lives here rather than
-	// in an HTML package.
+	// The legacy percentage parser retains its whitespace boundaries; the current
+	// USD card is parsed separately from labelled DOM facts.
 	reScript   = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script>`)
 	reStyle    = regexp.MustCompile(`(?is)<style\b[^>]*>.*?</style>`)
 	reDataTime = regexp.MustCompile(`(?is)<(?:time|local-time)\b[^>]*?\bdata-time\s*=\s*"([^"]*)"[^>]*>`)
@@ -46,9 +48,9 @@ var (
 	reBalance     = regexp.MustCompile(`^[$€£]?\s?\d[\d.,]*$`)
 )
 
-// parse flattens the settings HTML to text and applies heuristics to recover the
-// plan, a rolling five-hour window and a weekly window. now anchors relative reset
-// text such as "Resets in 3h" to an absolute instant.
+// A recognized USD card owns the reading even when damaged: falling back to
+// legacy percentages would hide missing monetary data after a page redesign.
+// now anchors only legacy window reset hints.
 func parse(document string, now time.Time) parsed {
 	var out parsed
 	if strings.TrimSpace(document) == "" {
@@ -56,6 +58,10 @@ func parse(document string, now time.Time) parsed {
 	}
 	lines := textLines(document)
 	out.plan = extractPlan(lines)
+	out.credits = parseCredits(document)
+	if out.credits != nil {
+		return out
+	}
 	out.balance = extractBalance(lines)
 
 	used := map[int]bool{}

@@ -37,6 +37,7 @@ import { CredentialWarmup, WarmupSettingsDrawer } from '../../components/authFil
 import { OAuthModelRulesDrawer } from '../../components/authFiles/OAuthModelRulesDrawer';
 import { AccountAutomationDrawer } from '../../components/automation/AccountAutomationDrawer';
 import { OllamaManagementDrawer } from '../../components/ollama/OllamaManagementDrawer';
+import { OllamaCreditsView } from '../../components/ollama/OllamaCreditsView';
 import { OllamaDetailDrawer } from '../../components/ollama/OllamaDetailDrawer';
 import { OllamaAccountEditorModal } from '../../components/ollama/OllamaAccountEditorModal';
 import type { OllamaAccountDTO, OllamaAccountWritePayload } from '../../types/ollama';
@@ -522,29 +523,7 @@ export const OAuthManagementPage: React.FC = () => {
 
   const quotaBodyForRecord = (record: OAuthWorkspaceRecord, forRow = false): React.ReactNode => {
     if (record.source === 'ollama') {
-      if (record.quota) {
-        if (forRow) {
-          return (
-            <CompactQuotaView
-              item={record.quota}
-              nowMS={visibleNow}
-            />
-          );
-        }
-        return (
-          <CredentialQuotaBody
-            item={record.quota}
-            nowMS={visibleNow}
-            isDemo={isDemo}
-            isRefreshing={false}
-          />
-        );
-      }
-      return (
-        <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-          {t('ollama.status_unknown')}
-        </span>
-      );
+      return <OllamaCreditsView quota={record.quota} status={record.ollamaAccount?.status} />;
     }
     if (record.quota) {
       const isRefreshing = Boolean(record.authIndex && actions.busyQuotaIndexes.has(record.authIndex));

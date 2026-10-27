@@ -210,7 +210,7 @@ See ADR 0105.
 ### Ollama monitoring
 
 The Ollama collector stores several accounts and scrapes `https://ollama.com/settings`
-with each account's session cookie to read its quota. The cookie is encrypted at rest
+with each account's session cookie to read the labelled USD Usage credits card and monthly model request counts. Relative refill text stays verbatim, and a failed read displays data missing rather than zero or a depletion estimate. The cookie is encrypted at rest
 and never returned. Ollama is not in CPA's control chain: the switch below stops the
 scraper, never inference. Accounts live in the console under `/api/v1/ollama/accounts`
 and the newest reading under `/api/v1/ollama/quota`; the collector never runs in demo

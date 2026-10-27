@@ -882,7 +882,11 @@ recovery action is permitted. Paused plans retain their recovery projection, wit
 `ollama_accounts_status` and `feishu_notifications_status` are low-risk reads exposed
 to the Agent and MCP. The first reports the Ollama collector switch and, per stored
 account, its label, collection status, newest safe quota reading and retry state; the
-session cookie is never returned. The second reports the Feishu module's enabled,
+session cookie is never returned. Its normalized `ollama_credits` reading contains
+validated USD cents, their total and optional calculated share, relative refill text
+and monthly model request counts. It carries no inferred reset or depletion time;
+collection status distinguishes a retained snapshot from a current successful read.
+The second reports the Feishu module's enabled,
 ready, degraded, forced-off and connected state, where its switch comes from, open
 problems, pending and queued sends, and its last error; the app secret is never
 returned. Neither has a write path: the console's `/api/v1/ollama` and

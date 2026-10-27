@@ -17,6 +17,7 @@ import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
 import { formatTimeWithCountdown } from '../../pages/quota/quotaFormat';
 import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
 import { credentialLabel } from '../../utils/credentialLabel';
+import { OllamaCreditsView } from './OllamaCreditsView';
 import { OllamaAccountEditorModal } from './OllamaAccountEditorModal';
 import type { OllamaAccountDTO, OllamaAccountWritePayload, OllamaQuotaDTO } from '../../types/ollama';
 
@@ -364,22 +365,7 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                      {quotaData && quotaData.windows && quotaData.windows.length > 0 ? (
-                        quotaData.windows.map((win) => (
-                          <span key={win.id || win.label}>
-                            {win.label}: <strong>{win.used_percent !== undefined ? `${win.used_percent.toFixed(1)}%` : '—'}</strong>
-                            {win.reset_at_ms && (
-                              <span style={{ marginLeft: 4, color: 'var(--muted)' }}>
-                                ({formatTime(win.reset_at_ms)})
-                              </span>
-                            )}
-                          </span>
-                        ))
-                      ) : quotaData ? (
-                        <span>{quotaData.status || t('ollama.status_ok')}</span>
-                      ) : (
-                        <span style={{ color: 'var(--muted)' }}>{t('ollama.unreported')}</span>
-                      )}
+                      <OllamaCreditsView quota={quotaData} status={account.status} />
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--muted)' }}>
