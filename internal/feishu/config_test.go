@@ -3,7 +3,7 @@ package feishu
 import "testing"
 
 func TestResolveConfigEnvironmentForceOffWins(t *testing.T) {
-	web := Config{Enabled: true, AppID: "cli_x", ChatID: "oc_x"}
+	web := Config{Enabled: true, AppID: "cli_x", ChatID: "ou_x"}
 	resolved := resolveConfig(web, Overlay{ForceDisabled: true})
 	if resolved.Enabled {
 		t.Fatal("force-off must disable the module")
@@ -24,7 +24,7 @@ func TestResolveConfigEnvironmentOverridesWeb(t *testing.T) {
 	appID := "cli_env"
 	secret := "env-secret"
 	web := Config{Enabled: false, AppID: "cli_web"} // disabled and incomplete on the web side
-	resolved := resolveConfig(web, Overlay{Enabled: &enabled, AppID: &appID, AppSecret: &secret, ChatID: strPtr("oc_env")})
+	resolved := resolveConfig(web, Overlay{Enabled: &enabled, AppID: &appID, AppSecret: &secret, ChatID: strPtr("ou_env")})
 	if !resolved.Enabled || resolved.AppID != "cli_env" {
 		t.Fatalf("environment must override the web value, got %+v", resolved)
 	}
@@ -51,7 +51,7 @@ func TestResolveConfigInvalidIsDegradedNotFatal(t *testing.T) {
 }
 
 func TestResolveConfigDefaultsSummaryAndQuiet(t *testing.T) {
-	resolved := resolveConfig(Config{Enabled: true, AppID: "cli_x", ChatID: "oc_x"}, Overlay{AppSecret: strPtr("secret")})
+	resolved := resolveConfig(Config{Enabled: true, AppID: "cli_x", ChatID: "ou_x"}, Overlay{AppSecret: strPtr("secret")})
 	if len(resolved.SummaryTimes) != 2 {
 		t.Fatalf("expected two default summary times, got %v", resolved.SummaryTimes)
 	}
@@ -64,7 +64,7 @@ func TestResolveConfigDefaultsSummaryAndQuiet(t *testing.T) {
 }
 
 func TestWithinQuietWrapsMidnight(t *testing.T) {
-	resolved := resolveConfig(Config{Enabled: true, AppID: "cli_x", ChatID: "oc_x", Timezone: "UTC"}, Overlay{AppSecret: strPtr("s")})
+	resolved := resolveConfig(Config{Enabled: true, AppID: "cli_x", ChatID: "ou_x", Timezone: "UTC"}, Overlay{AppSecret: strPtr("s")})
 	if !withinQuiet(resolved, mustTime("2026-10-15T23:30:00Z")) {
 		t.Fatal("23:30 should be quiet")
 	}

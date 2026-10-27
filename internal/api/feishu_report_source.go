@@ -368,10 +368,13 @@ func feishuWindowsFromQuotaWindows(windows []quota.QuotaWindow) []feishu.Window 
 			scope = "model"
 		}
 		entry := feishu.Window{
-			Name:        window.ID,
-			Label:       window.Label,
-			Scope:       scope,
-			UsedPercent: window.UsedPercent,
+			ID:            window.ID,
+			Kind:          window.Kind,
+			ResetAccuracy: window.ResetAccuracy,
+			Name:          window.ID,
+			Label:         window.Label,
+			Scope:         scope,
+			UsedPercent:   window.UsedPercent,
 		}
 		if window.ResetAtMS != nil && *window.ResetAtMS > 0 {
 			reset := time.UnixMilli(*window.ResetAtMS).UTC()

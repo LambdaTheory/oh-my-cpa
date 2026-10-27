@@ -95,6 +95,9 @@ type AccountReport struct {
 // upstream published a numeric percentage; a missing percentage is "not
 // reported", never zero and never one hundred.
 type Window struct {
+	ID            string
+	Kind          string
+	ResetAccuracy string
 	// Name is the internal window key (e.g. "5h", "7d").
 	Name string
 	// Label is the readable window label.

@@ -3,7 +3,8 @@
 Lane C of the OMC first batch absorbs the retired CPA-buddy (cpab) Feishu bot as
 an OMC capability: it reuses the bot long connection, answers read-only queries
 from OMC's newest quota data, and denoises notifications so a problem is announced
-once and recovery is not nagged. It does **not** call a language model, hold an
+once and recovery is not nagged. The same credential/window/reset identity is notified only once, including forecast-to-low-to-exhausted
+transitions. It does **not** call a language model, hold an
 Agent session, or trigger an upstream quota refresh.
 
 This document is the lane-C contract: the interface the code exposes, the
@@ -74,16 +75,15 @@ seam is injectable so a test constructs one that never reaches Feishu:
 - `Store feishu.Store` — `Load/Save(ctx, *State)`. `feishu.NewMemoryStore()` is the
   in-memory implementation.
 - `Renderer feishu.ReportRenderer` — `Text`, `Card`, `CardSimple`.
-  `feishu.NewPlainReportRenderer(loc)` is the production hook a designer later
-  replaces.
+  `feishu.NewPlainReportRenderer(loc)` supplies the bounded decision card.
 - `SenderFactory func(Resolved) Sender` — defaults to the official SDK sender.
 - `SourceFactory func(Resolved) EventSource` — defaults to the Lark websocket.
 - `Now func() time.Time`, `EvalInterval time.Duration`.
 
 `ReportRenderer` is the card hook: the shipped `PlainReportRenderer` emits a
 header plus markdown elements in schema 2.0, and `CardSimple` is the degraded card
-the sender retries when the full card is rejected. No layout is invented here; the
-visual design is a later designer's change to that interface.
+the sender retries when the full card is rejected. Both variants preserve the
+conclusion, three-point bound and single console button.
 
 Lifecycle methods:
 
@@ -93,14 +93,15 @@ Lifecycle methods:
   in-flight query tasks. Idempotent.
 - `Reload(ctx, web Config, overlay Overlay)` — applies new settings without a
   redeploy. Only a real connection-identity change (app id, app secret, or the
-  enabled/ready state) reconnects; the target group is **not** connection identity,
+  enabled/ready state) reconnects; the recipient is **not** connection identity,
   so changing it applies to the next send on the existing connection, and a
   policy-only change (quiet hours, digest times, thresholds) applies on the next
-  pass. It never resends the one-time startup summary.
+  pass. The low-quota trigger is fixed at 10%; legacy stored thresholds do not
+  change it. It never resends the one-time startup summary.
 - `StatusSnapshot(ctx) Status` — the read-only console state (enabled, ready,
   degraded, source, forced-off, connected, open items, pending/queued sends, last
   summary, last error).
-- `SendTest(ctx) error` — sends one status card to the target group; called only on
+- `SendTest(ctx) error` — sends one status card to the configured person; called only on
   an explicit operator action.
 - `HandleMessage(ctx, Inbound) error` and `HandleCardAction(ctx, CardAction) error`
   implement `feishu.EventHandler`; the websocket source adapts SDK events onto them.
@@ -185,26 +186,12 @@ Several monitoring episodes opened in the same nonquiet cycle reuse `KindAlertBa
 for one card with separate item identities. A single episode keeps its ordinary
 notification identity; the startup digest excludes episodes opened by that same tick.
 
-Not immediate: a transient error, an ordinary threshold, a single account's 429, a
-model- or group-scoped exhaustion, and every recovery. An open problem is
-announced once (`ItemID`/`PendingItem.NotifiedAt`); it re-alerts only after it
-resolves and recurs. A credential problem resolves only on positive evidence — a
-valid reading for that credential observed after the auth failure, with no unrefuted
-auth failure remaining; a credential that merely stops reading as invalid (unknown,
-stale, or absent from the report) is not treated as recovered, so the item is
-retained rather than falsely closed. Quiet hours (default 23:00–08:00) persist immediate alerts as
-queued notifications; at the quiet end the still-open ones are merged into a single
-persisted notification (`KindAlertBatch`) and delivered as one card, dropping any
-whose problem recovered, so a fully recovered batch sends nothing. The batch keeps
-its identity across a reload or restart, so the same persisted queue cannot be sent
-twice, and a failed send is retried rather than lost. A scheduled digest (default
-10:00 and 17:00) is sent only when there are open items or a channel is tight (best
-usable account-window remaining below `TightRemainingPercent`). Tightness is judged
-only from accounts whose newest reading is still fresh, so a stale sample can neither
-warn that a channel is nearly out nor read a maxed window as "0 remaining"; when no
-report has been produced, `has` is false and no tight channel is added, but real open
-items are still summarized. The one-time startup summary is persisted across process
-restarts and settings reloads.
+Fresh credential windows with at most 10% remaining and fresh abnormal readings
+open persistent
+`quota_low`, `quota_exhausted` and `reading_missing` episodes. Scope is explicit;
+model/group exhaustion never claims whole-account unavailability. Untimed and
+long-stale missing data retains the monitoring grace above. Positive fresh numeric
+evidence resolves an episode without a recovery push. See the card contract below.
 
 Delivery is outbox-based: a notification is persisted before sending and marked
 sent only after a successful send, so a failed send is retried with a bounded
@@ -245,26 +232,66 @@ upstream quota endpoint. The process keeps the component loaded for every non-de
 it remains inert while configuration is disabled or degraded and begins evaluating after a
 ready settings reload without a restart. Tests inject both its prediction source and sender.
 
-At a scheduled minute, one or more `will_exhaust` or `under_used` windows are combined
-into one card titled `OMC 额度预测 · HH:MM`. The service records that minute in the existing
-summary timestamp, so `maybeScheduledSummary` cannot queue a second message. With no
-finding, prediction is silent and the ordinary digest runs unchanged. Quiet hours defer
-delivery through the same outbox; failed sends use the same bounded retry schedule.
 
-Each row shows the credential label, window, current used percentage, projected percentage
-at reset and verdict. Projected cost and tokens appear only when priced usage is sufficient.
-Exhaustion findings are prioritised within the card's bounded finding set. The footer states
-the newest data time, that the result is a projection rather than a guarantee, and how many
-additional findings were omitted when the bound was reached.
+### Personal quota decision cards
 
-The dashboard's “send prediction summary” action calls the prediction-test route after a
-confirmation. It evaluates current stored findings immediately and persists one notification
-before delivery through the existing sender/outbox. This explicit operator send bypasses
-quiet hours; scheduled delivery and retries still honor them. Delivery is restricted to that new row,
-so unrelated pending alerts are not flushed by the action. With no `will_exhaust` or
-`under_used` finding it returns `{sent:false, reason:"no_findings"}` and sends no card. A
-manual send never changes `LastSummaryAt`, never claims the current summary minute and cannot
-suppress the configured 10:00/17:00 prediction or ordinary digest.
+Quota notifications address one configured operator Open ID (the `ou_` prefix),
+retained in the existing `chat_id` / `OMCPA_FEISHU_CHAT_ID` setting. Group IDs cannot
+make quota delivery ready. Quota queries accept only private messages from this
+person. The dedicated OAuth code group retains its independent authorization and
+chat-id transport. Existing group notification settings require an operator change.
+
+The default times remain 10:00 / 17:00 in the configured timezone. The earliest
+configured slot always queues the daily morning fallback, including healthy or
+missing-data results. Later ordinary slots stay silent. New credential windows at
+or below 10% remaining, predicted exhaustion before reset, and abnormal readings
+open persistent episodes. Untimed and long-stale
+readings retain the existing monitoring grace. A credential/window/reset cycle is
+announced once across forecast, low-quota and exhaustion states. Window IDs (or
+window kinds when IDs are absent) stay stable across derived reset estimates.
+Only exact reset evidence establishes a cycle: a new reading at or after the
+previous boundary with a later reset opens a new cycle. Recovery sends nothing;
+without a reliable cycle, positive recovery allows a subsequent recurrence to
+notify again. Migration 055 persists the exact boundary in pending-item state.
+Resolved episodes expire after seven days; active forecast markers retain their
+last-seen time so ongoing risks stay deduplicated.
+Quiet hours defer ordinary alerts through the existing retry outbox. The morning
+fallback and morning prediction digest bypass quiet hours at the configured slot,
+including retries; startup and morning summaries share that minute's delivery.
+The process must be running during the scheduled minute to send that day's fallback.
+
+Cards lead with whether quota allocation needs attention, then at most three
+conclusion-and-advice points, observation metadata and one console button. Model and
+group scopes remain explicit. Missing percentages say data is missing, never zero.
+A reset countdown means recovery; prediction exhaustion ETA is explicitly estimated.
+The console button uses `OMCPA_PUBLIC_URL` plus the deployment base path once;
+an absent or invalid address disables it with configuration guidance. No card write
+callback or table is emitted. Full and simplified cards have the same content bound.
+Delivery is persisted before sending; failure logs attempts and retries from 30
+seconds with exponential backoff capped at 30 minutes.
+The manual status-test API returns sent=false with reason=queued_for_retry,
+attempts and next_attempt_at when delivery failed but its retry was persisted.
+The console shows this as queued for retry. Errors remain reserved for requests
+that could not establish a persisted delivery outcome.
+
+The settings response exposes tight_remaining_percent as a read-only fixed 10.
+Writes that explicitly contain 10 are accepted; conflicting values return 400.
+The console omits this field on save, while schedule, quiet hours and monitoring
+durations remain editable. Legacy group recipients surface an actionable degraded
+reason requiring a recipient Open ID. Query cards retain scoped empty-result
+answers and stale-observation notices; an empty abnormal filter means no anomalies.
+
+The earliest summary slot always supplies the morning fallback. Prediction
+evaluation runs once per minute from stored data and only
+`will_exhaust` findings trigger an event; surplus alone stays silent. Morning prediction cards also carry stored anomalies and open items. Other
+periods send only newly detected prediction risks. Explicit
+manual prediction sends retain both finding kinds, deliver only their new outbox
+row and never claim a scheduled minute. No finding returns `no_findings`.
+
+Button fields were checked against the [official JSON 2.0 button reference](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button).
+Design evidence is `pre_render_design`: structure, missing data, single-recipient
+SDK requests and retries use synthetic Go tests and fake transports. Real Feishu
+mobile rendering remains `pending_real_render`; local evidence cannot certify it.
 
 ## Remaining risk
 
@@ -281,7 +308,8 @@ suppress the configured 10:00/17:00 prediction or ordinary digest.
   never fabricates a fresh auth failure and never reaches for CPA to confirm one.
 - The web settings panel is implemented and wired: `web/src/components/feishu/FeishuSettingsPanel.tsx`
   is mounted by `web/src/pages/OmcSettingsPage.tsx` and calls the settings, status and
-  test routes. Its browser behaviour has not been exercised from this worktree.
+  test routes. The synthetic desktop and phone browser scenario passed, including
+  phone-width overflow and confirmation-before-send.
 - The live Feishu long connection and the real card rendering have not been
   exercised against Feishu from this worktree.
 - `feishu_pending_items` and `feishu_notifications` are bounded by the module's own

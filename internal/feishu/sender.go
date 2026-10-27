@@ -18,7 +18,7 @@ const receiveIDTypeChatID = "chat_id"
 // unit-tested without a network or an app credential. Production uses
 // newLarkSender; every test injects a fake.
 type Sender interface {
-	// SendCard posts an interactive card to a chat (the configured target group).
+	// SendCard posts a card to the configured person or the dedicated OAuth group.
 	SendCard(ctx context.Context, chatID string, card map[string]any) error
 	// ReplyText replies to a specific message with plain text.
 	ReplyText(ctx context.Context, messageID, text string) error
@@ -49,7 +49,7 @@ func (s *larkSender) SendCard(ctx context.Context, chatID string, card map[strin
 		Content(string(content)).
 		Build()
 	req := larkim.NewCreateMessageReqBuilder().
-		ReceiveIdType(receiveIDTypeChatID).
+		ReceiveIdType(receiveIDType(chatID)).
 		Body(body).
 		Build()
 	resp, err := s.client.Im.Message.Create(ctx, req)
@@ -60,6 +60,13 @@ func (s *larkSender) SendCard(ctx context.Context, chatID string, card map[strin
 		return fmt.Errorf("im.message.create: code=%d msg=%s log_id=%s", resp.Code, resp.Msg, resp.RequestId())
 	}
 	return nil
+}
+
+func receiveIDType(recipient string) string {
+	if OAUTH_OPEN_ID.MatchString(recipient) {
+		return "open_id"
+	}
+	return receiveIDTypeChatID
 }
 
 // ReplyText answers messageID with a text message.
