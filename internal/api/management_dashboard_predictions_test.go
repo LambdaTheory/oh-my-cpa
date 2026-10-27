@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/domain"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
@@ -86,6 +89,69 @@ func TestDashboardPredictionsReturnsExplicitEmptyShape(t *testing.T) {
 	}
 	if body.Providers == nil || len(body.Providers) != 0 || body.Omitted != 0 {
 		t.Fatalf("empty response = %+v", body)
+	}
+}
+
+func TestDashboardPredictionAccountingPreservesCapabilityWireContract(t *testing.T) {
+	handler := testHandler(t, "")
+	now := time.Date(2026, 10, 26, 6, 0, 0, 0, time.UTC)
+	handler.nowFn = func() time.Time { return now }
+	if err := handler.repo.UpsertInstance(context.Background(), domain.CPAInstance{ID: defaultInstanceID(), Name: "Fixture", BaseURL: "http://fixture.invalid", ManagementKeyCiphertext: []byte("fake"), ManagementKeyNonce: []byte("fake"), CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handler.repo.UpsertDiscoveredResources(context.Background(), defaultInstanceID(), []domain.DiscoveredResource{
+		{ResourceKey: "auth-index:codex:fixture", CPAResourceType: "auth-file", CPAAuthIndex: "fixture", CPAResourceName: "fixture@example.test", CPADriver: "codex", Status: domain.ResourceStatusUnclaimed},
+	}, now, false); err != nil {
+		t.Fatal(err)
+	}
+	period, used, reset := 10.0, 30.0, now.Add(5*time.Hour).UnixMilli()
+	windows, err := json.Marshal([]quota.QuotaWindow{{ID: "window", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: "fixture", Provider: "codex", Status: "healthy", WindowsJSON: string(windows), ObservedAtMS: now.UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := handler.operationsService().QuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()), operations.QuotaPredictionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(result.Items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var capabilityFields map[string]any
+	if err := json.Unmarshal(encoded, &capabilityFields); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	handler.dashboardPredictions(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/management/dashboard/predictions", nil))
+	var dashboard struct {
+		Providers []struct {
+			Items []map[string]any `json:"items"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &dashboard); err != nil {
+		t.Fatal(err)
+	}
+	fields := dashboard.Providers[0].Items[0]
+	for key, want := range map[string]float64{"window_start_ms": float64(now.Add(-5 * time.Hour).UnixMilli()), "remaining_percent": 70, "uniform_projected_percent_at_reset": 60, "remaining_window_hours": 7, "window_error_hours": 0.05} {
+		if fields[key] != want {
+			t.Fatalf("%s = %v, want %v", key, fields[key], want)
+		}
+		if _, exists := capabilityFields[key]; exists {
+			t.Fatalf("console accounting leaked into quota_prediction: %s", key)
+		}
+		delete(fields, key)
+	}
+	for _, key := range []string{"remaining_tokens", "capacity_error_percent", "capacity_unavailable"} {
+		if _, exists := capabilityFields[key]; exists {
+			t.Fatalf("console accounting leaked into capability: %s", key)
+		}
+		delete(fields, key)
+	}
+	if !reflect.DeepEqual(fields, capabilityFields) {
+		t.Fatalf("dashboard/capability facts differ: dashboard=%v capability=%v", fields, capabilityFields)
 	}
 }
 

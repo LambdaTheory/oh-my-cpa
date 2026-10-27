@@ -595,10 +595,20 @@ a fabricated zero; model/group usage that cannot be assigned safely reports
 `scope_unknown`. Freshness is window-aware: at least the two-hour idle
 refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
 
-The dashboard reads the same operation through
-`GET /api/v1/management/dashboard/predictions` with `findings_only=false`. This console
-projection retains operator-visible credential labels and auth indexes, groups the bounded
-items by provider, and adds prediction-call duration `duration_ms`. The existing
+The dashboard reads the same computation through
+`GET /api/v1/management/dashboard/predictions`. This console projection retains the full
+stored roster and operator-visible credential labels and auth indexes, groups items by
+provider, and adds prediction-call duration `duration_ms` plus nullable cycle accounting
+(`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`,
+`remaining_window_hours`, `window_error_hours`, `remaining_tokens`,
+`capacity_error_percent` and optional `capacity_unavailable`). These
+console fields are excluded from capability JSON and schemas. Dashboard-only unknown
+placeholders do not enter quota_prediction or digest results and cannot displace their
+actual windows. Providers without refresh support or stored window evidence are omitted.
+Matching passive observations can establish missing standard windows without a snapshot;
+ordinary and read-only callers use the same restored evidence before masking. Safe stored Ollama
+account snapshots join the same roster without reading cookies. Step and Stepfun share
+one dashboard group while retaining their stored provider identities in items. The existing
 `quota_prediction` tool keeps its name, filters and prediction semantics, with the additive
 window identity fields described above. The five-minute foreground refresh and the manual dashboard refresh
 therefore recompute only from stored evidence and never probe CPA.
