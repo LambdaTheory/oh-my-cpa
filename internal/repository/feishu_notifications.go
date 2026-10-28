@@ -70,10 +70,12 @@ type FeishuNotification struct {
 
 // FeishuChannelTrack is one provider's monitor_down memory.
 type FeishuChannelTrack struct {
-	Provider    string
-	FirstSeenMS *int64
-	LastValidMS *int64
-	UpdatedAtMS int64
+	ConsecutiveFailures int
+	LastAttemptAtMS     *int64
+	Provider            string
+	FirstSeenMS         *int64
+	LastValidMS         *int64
+	UpdatedAtMS         int64
 }
 
 // FeishuRuntime is the whole runtime document the bot loads and saves.
@@ -295,13 +297,15 @@ func (r *Repository) SaveFeishuRuntime(ctx context.Context, runtime FeishuRuntim
 	}
 	for _, track := range runtime.Tracks {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO feishu_channel_tracks (provider, first_seen_ms, last_valid_ms, updated_at_ms)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO feishu_channel_tracks (provider, first_seen_ms, last_valid_ms, updated_at_ms, consecutive_failures, last_attempt_at_ms)
+			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(provider) DO UPDATE SET
 				first_seen_ms = excluded.first_seen_ms,
 				last_valid_ms = excluded.last_valid_ms,
-				updated_at_ms = excluded.updated_at_ms`,
-			track.Provider, nullMS(track.FirstSeenMS), nullMS(track.LastValidMS), nowMS); err != nil {
+				updated_at_ms = excluded.updated_at_ms,
+				consecutive_failures = excluded.consecutive_failures,
+				last_attempt_at_ms = excluded.last_attempt_at_ms`,
+			track.Provider, nullMS(track.FirstSeenMS), nullMS(track.LastValidMS), nowMS, track.ConsecutiveFailures, nullMS(track.LastAttemptAtMS)); err != nil {
 			return fmt.Errorf("insert feishu channel track %q: %w", track.Provider, err)
 		}
 	}
@@ -369,7 +373,7 @@ func (r *Repository) listFeishuNotifications(ctx context.Context) ([]FeishuNotif
 
 func (r *Repository) listFeishuChannelTracks(ctx context.Context) ([]FeishuChannelTrack, error) {
 	rows, err := r.SQL().QueryContext(ctx, `
-		SELECT provider, first_seen_ms, last_valid_ms, updated_at_ms
+		SELECT provider, first_seen_ms, last_valid_ms, updated_at_ms, consecutive_failures, last_attempt_at_ms
 		FROM feishu_channel_tracks ORDER BY provider ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list feishu channel tracks: %w", err)
@@ -378,12 +382,13 @@ func (r *Repository) listFeishuChannelTracks(ctx context.Context) ([]FeishuChann
 	tracks := []FeishuChannelTrack{}
 	for rows.Next() {
 		var track FeishuChannelTrack
-		var firstSeen, lastValid, updated sql.NullInt64
-		if err := rows.Scan(&track.Provider, &firstSeen, &lastValid, &updated); err != nil {
+		var firstSeen, lastValid, updated, lastAttempt sql.NullInt64
+		if err := rows.Scan(&track.Provider, &firstSeen, &lastValid, &updated, &track.ConsecutiveFailures, &lastAttempt); err != nil {
 			return nil, fmt.Errorf("scan feishu channel track: %w", err)
 		}
 		track.FirstSeenMS = nullInt64Ptr(firstSeen)
 		track.LastValidMS = nullInt64Ptr(lastValid)
+		track.LastAttemptAtMS = nullInt64Ptr(lastAttempt)
 		track.UpdatedAtMS = updated.Int64
 		tracks = append(tracks, track)
 	}

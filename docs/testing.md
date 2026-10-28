@@ -1470,6 +1470,12 @@ confirmation, ordinary-save bypass refusal and audit admission using isolated SQ
 The rendered first-batch suite verifies review, cancel and confirm without a send;
 the existing Feishu settings probe checks desktop and phone integration with mocked
 endpoints. Actual Feishu delivery and the combined operator walkthrough remain manual.
+The AC-numbered compact-card and monitor suites own account merging, line budgets,
+remaining means, channel-total alternatives, three title colors, conditional console
+buttons, push/query block limits, outage merging, distinct-attempt counting,
+single-success recovery and same-sample text reduction. Migration 057 and the stored
+report integration retain counters across restarts. Historical seven-day replay
+requires an operator-provided sanitized dataset and is not certified by fixtures.
 
 ### Ollama USD credit coverage
 

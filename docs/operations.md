@@ -915,15 +915,21 @@ configured slot always queues the daily morning fallback, including healthy or
 missing-data results. Later ordinary slots stay silent. Credential windows at or
 below 10% remaining or predicted to exhaust before reset open one persistent risk
 identity per credential/window/reset cycle. Untimed and long-stale
-readings retain the existing monitoring grace. Forecast, low quota and exhaustion
-share their identity and do not repeat within that cycle; recovery sends nothing.
+readings retain the existing monitoring grace. Forecast and low quota share their
+tracked identity; reaching exhaustion triggers the first actionable push once
+within that cycle. Recovery sends nothing.
 Quiet hours defer delivery through the existing retry outbox.
 The process must be running during the scheduled minute to send that day's fallback.
 
-Cards lead with whether quota allocation needs attention, then at most three
-conclusion-and-advice points, observation metadata and one console button. Model and
-group scopes remain explicit. Missing percentages say data is missing, never zero.
-A reset countdown means recovery; prediction exhaustion ETA is explicitly estimated.
+Immediate cards contain a short conclusion, up to three two-line blocks, an
+observation footer and a console button. Only exhaustion, invalid credentials,
+unavailable channels and confirmed monitor outages trigger pushes; low quota and
+forecasts are counted in the footer. Queries allow eight blocks, include low quota
+and fold healthy channels into one line. Same-channel/state accounts are merged
+with mean remaining share and earliest recovery. Alternatives use the highest
+total remaining share among fresh healthy channels. Digest content stays unchanged.
+Monitor outages require three distinct failed collection attempts and at least the
+configured duration (default 30 minutes); one valid reading resets the counter.
 The console button uses `OMCPA_PUBLIC_URL` plus the deployment base path once;
 an absent or invalid address disables it with configuration guidance. No card write
 callback or table is emitted. Full and simplified cards have the same content bound.
@@ -932,8 +938,8 @@ seconds with exponential backoff capped at 30 minutes.
 
 Morning prediction findings share the fallback. Prediction evaluation runs once
 per minute from stored data and only
-`will_exhaust` findings trigger an event; surplus alone stays silent. Morning prediction cards also carry stored anomalies and open items. Other
-periods send only newly detected prediction risks. Explicit
+`will_exhaust` findings retain tracked episodes without triggering forecast-only
+pushes. Morning prediction cards also carry stored anomalies and open items. Explicit
 manual prediction sends retain both finding kinds, deliver only their new outbox
 row and never claim a scheduled minute. No finding returns `no_findings`.
 

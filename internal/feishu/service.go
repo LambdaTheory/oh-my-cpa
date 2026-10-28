@@ -166,6 +166,9 @@ func NewService(opts Options) *Service {
 	service.sender = senderFactory(resolved)
 	service.eventSource = sourceFactory(resolved)
 	service.dispatcher = NewDispatcher(service.sender, renderer, logger).withClock(now)
+	service.dispatcher.source = service.source
+	service.dispatcher.store = service.store
+	service.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
 	return service
 }
 
@@ -312,6 +315,9 @@ func (s *Service) ensureSenderLocked(resolved Resolved) {
 	s.mu.Lock()
 	s.sender = sender
 	s.dispatcher = NewDispatcher(sender, s.renderer, s.logger).withClock(s.now)
+	s.dispatcher.source = s.source
+	s.dispatcher.store = s.store
+	s.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
 	s.mu.Unlock()
 }
 
@@ -445,6 +451,19 @@ func (s *Service) serveQuery(ctx context.Context, in Inbound, parsed intent, acc
 	fresh := freshnessOf(rep, defaultFreshWindow, s.now())
 	msg := queryMessage(parsed, rep, fresh)
 	msg.EvaluatedAt = s.now()
+	msg.ChannelUnavailableAfter = s.resolvedNow().ChannelUnavailableAfter
+	if state, err := s.store.Load(ctx); err == nil {
+		for _, item := range openItems(state.PendingItems) {
+			if item.Kind != AlertMonitorDown {
+				continue
+			}
+			for _, provider := range msg.Report.Providers {
+				if provider.Provider == item.Provider {
+					msg.Pending = append(msg.Pending, item)
+				}
+			}
+		}
+	}
 	if err := s.replyCard(ctx, in.MessageID, msg); err != nil {
 		s.logger.WarnContext(ctx, "feishu card reply failed", "action", "query", "result", "error", "error", err)
 		return
@@ -667,13 +686,16 @@ func (s *Service) tick(ctx context.Context) {
 	// end; a problem that recovered in the meantime is dropped, not sent.
 	var stalled []Notification
 	for _, alert := range result.Alerts {
-		if morningMinute(resolved, now) && !sameSummaryMinute(state.LastSummaryAt, resolved, now) && (alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == AlertReadingMissing) {
+		if !isActionableKind(alert.Kind) {
+			continue
+		}
+		if morningMinute(resolved, now) && !sameSummaryMinute(state.LastSummaryAt, resolved, now) && alert.Kind == AlertQuotaExhausted {
 			continue
 		}
 		notification := notificationFromAlert(alert, now)
 		if quiet {
 			notification.State = NotifyQueued
-		} else if alert.Kind == AlertMonitorDown || alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == AlertReadingMissing {
+		} else {
 			stalled = append(stalled, notification)
 			continue
 		}
@@ -1101,11 +1123,29 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			track.LastValid = time.Time{}
 		}
 		isMonitored := len(p.Accounts) == 0 && p.Error != ""
+		lastAttempt := time.Time{}
+		hasFailure, hasValid := false, false
+		if len(p.Accounts) == 0 && p.Error != "" {
+			lastAttempt = rep.GeneratedAt
+			hasFailure = true
+		}
 		for _, account := range p.Accounts {
 			if account.Disabled || account.IsUnmonitored {
 				continue
 			}
 			isMonitored = true
+			attempt := account.AttemptedAt
+			if attempt.IsZero() {
+				attempt = account.ObservedAt
+			}
+			if attempt.After(lastAttempt) {
+				lastAttempt = attempt
+			}
+			isExplicitProblem := account.State == StateInvalid || account.AuthFailed || account.CooldownUntil != nil && account.CooldownUntil.After(now)
+			if !isExplicitProblem {
+				hasFailure = hasFailure || account.CollectionFailed || !account.OK
+				hasValid = hasValid || account.OK && !account.CollectionFailed && observationFresh(account, now, defaultFreshWindow)
+			}
 			lastSuccess := account.LastSuccessAt
 			if !isMonitoringTimeValid(lastSuccess) && account.OK {
 				lastSuccess = account.ObservedAt
@@ -1115,6 +1155,14 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			}
 		}
 		if isMonitored {
+			if lastAttempt.After(track.LastAttempt) {
+				track.LastAttempt = lastAttempt
+				if hasValid || !hasFailure {
+					track.ConsecutiveFailures = 0
+				} else {
+					track.ConsecutiveFailures++
+				}
+			}
 			tracks[p.Provider] = track
 		} else {
 			// Time intentionally paused or unsupported is not monitoring downtime.

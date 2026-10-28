@@ -181,9 +181,21 @@ func TestFeishuStoredBaselineSurvivesServiceRestarts(t *testing.T) {
 		}
 	}
 	runStartup(0)
-	clock = clock.Add(30 * time.Minute)
+	if err := repo.SaveFeishuAccountSignal(context.Background(), repository.FeishuAccountSignal{AuthIndex: "fixture-codex", Provider: "codex", State: repository.FeishuSignalTransport, ObservedAt: clock}); err != nil {
+		t.Fatal(err)
+	}
+	runStartup(0)
+	clock = clock.Add(20 * time.Minute)
+	if err := repo.SaveFeishuAccountSignal(context.Background(), repository.FeishuAccountSignal{AuthIndex: "fixture-codex", Provider: "codex", State: repository.FeishuSignalTransport, ObservedAt: clock}); err != nil {
+		t.Fatal(err)
+	}
+	runStartup(0)
+	clock = clock.Add(10 * time.Minute)
 	runStartup(0)
 	clock = clock.Add(time.Second)
+	if err := repo.SaveFeishuAccountSignal(context.Background(), repository.FeishuAccountSignal{AuthIndex: "fixture-codex", Provider: "codex", State: repository.FeishuSignalTransport, ObservedAt: clock}); err != nil {
+		t.Fatal(err)
+	}
 	runStartup(1)
 	clock = clock.Add(time.Minute)
 	runStartup(1)

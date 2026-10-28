@@ -605,8 +605,10 @@ func feishuStateFrom(runtime repository.FeishuRuntime) *feishu.State {
 	}
 	for _, track := range runtime.Tracks {
 		state.ChannelTracks[track.Provider] = feishu.ChannelTrack{
-			FirstSeen: timeOfMS(track.FirstSeenMS),
-			LastValid: timeOfMS(track.LastValidMS),
+			ConsecutiveFailures: track.ConsecutiveFailures,
+			LastAttempt:         timeOfMS(track.LastAttemptAtMS),
+			FirstSeen:           timeOfMS(track.FirstSeenMS),
+			LastValid:           timeOfMS(track.LastValidMS),
 		}
 	}
 	return state
@@ -661,9 +663,11 @@ func feishuRuntimeFrom(state *feishu.State) repository.FeishuRuntime {
 	for _, provider := range providers {
 		track := state.ChannelTracks[provider]
 		runtime.Tracks = append(runtime.Tracks, repository.FeishuChannelTrack{
-			Provider:    provider,
-			FirstSeenMS: msOf(track.FirstSeen),
-			LastValidMS: msOf(track.LastValid),
+			ConsecutiveFailures: track.ConsecutiveFailures,
+			LastAttemptAtMS:     msOf(track.LastAttempt),
+			Provider:            provider,
+			FirstSeenMS:         msOf(track.FirstSeen),
+			LastValidMS:         msOf(track.LastValid),
 		})
 	}
 	return runtime
