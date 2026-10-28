@@ -144,7 +144,7 @@ func TestOllamaQuotaReadIsReadOnly(t *testing.T) {
 	if err := json.Unmarshal(payload, &created); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := `{"auth_index":"ollama:` + created.ID + `","provider":"ollama","windows":[]}`
+	snapshot := `{"auth_index":"ollama:` + created.ID + `","provider":"ollama","windows":[],"unexpected_secret":"must-not-cross","ollama_credits":{"source":"settings_usage_credits","remaining_cents":29998,"used_cents":2,"total_cents":30000,"refill_text":"Monthly credits refill in 2 weeks","models":[{"model":"fake-model:1017","requests":15}],"unexpected_secret":"must-not-cross"}}`
 	if _, _, err := repo.RecordOllamaResult(context.Background(), repository.OllamaCollectionResult{
 		ID: created.ID, Status: "ok", ObservedAtMS: 5000, IsSuccess: true, SnapshotJSON: snapshot,
 	}); err != nil {
@@ -155,6 +155,17 @@ func TestOllamaQuotaReadIsReadOnly(t *testing.T) {
 		t.Fatalf("quota status = %d", status)
 	}
 	assertNoCookie(t, payload)
+	if strings.Contains(string(payload), "must-not-cross") {
+		t.Fatal("unlisted stored fields crossed DTO boundary")
+	}
+	var response ollamaQuotaResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		t.Fatal(err)
+	}
+	credits := response.Accounts[0].Quota.OllamaCredits
+	if credits == nil || *credits.RemainingCents != 29998 || *credits.UsedCents != 2 || *credits.TotalCents != 30000 || len(credits.Models) != 1 || credits.Models[0].Requests != 15 {
+		t.Fatalf("wrong USD wire: %+v", credits)
+	}
 	if !strings.Contains(string(payload), `"observed_at_ms":5000`) || !strings.Contains(string(payload), `ollama:`+created.ID) {
 		t.Fatalf("quota body = %s", payload)
 	}
@@ -277,8 +288,8 @@ func TestOllamaRefreshEndpointRunsTheScrape(t *testing.T) {
 	if refreshed.Account.ID != created.ID || refreshed.Account.Status != "ok" {
 		t.Fatalf("refresh account = %+v", refreshed.Account)
 	}
-	if len(refreshed.Quota) == 0 || !strings.Contains(string(refreshed.Quota), `"ollama:`+created.ID) {
-		t.Fatalf("refresh quota = %s", refreshed.Quota)
+	if refreshed.Quota == nil || refreshed.Quota.AuthIndex != "ollama:"+created.ID {
+		t.Fatalf("refresh quota = %+v", refreshed.Quota)
 	}
 	if fetches.Load() != 1 {
 		t.Fatalf("fetches = %d, want 1", fetches.Load())

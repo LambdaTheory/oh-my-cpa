@@ -1006,8 +1006,8 @@ IDs. Its count drives the page/filtered/all controls and the action dispatch: CP
 keeps its bounded quota batches; Ollama uses its existing per-account refresh.
 Source-aware selection also routes collection status and deletion without sending
 monitor IDs to CPA. The shared label projection removes opaque display prefixes
-without changing wire targets. Ollama monetary readings carry explicit settings-field
-evidence in the existing raw-signal map so unverified legacy balances stay hidden.
+without changing wire targets. Ollama monetary readings carry explicit Usage credits
+provenance in `ollama_credits`; legacy balance strings do not populate the USD view.
 
 Shared conversation primitives do not depend on a page at runtime: `utils/ids.ts`
 owns one fallback ID counter, `utils/thinking.ts` parses inline thinking,
@@ -2445,11 +2445,16 @@ read-only MCP key reaches the summary tool and no write route.
 scraping the fixed `https://ollama.com/settings` page with the account's session
 cookie. The cookie is AES-GCM encrypted in `ollama_accounts` (hidden from the SQL
 path) and is never returned, logged or put in an error; only `has_cookie` reaches a
-DTO. A numeric percentage is required for a window to exist: a missing value is
-"not reported", never zero, and the window duration is left unknown because the page
-does not state one. A `401`, `403`, redirect or login page is `auth_invalid` with no
+DTO. The current settings DOM's labelled Usage credits card supplies remaining and
+used USD amounts, parsed whole into integer cents. The normalized snapshot stores
+these in `ollama_credits`, with their sum, an optional positive used / total share,
+verbatim monthly refill text and monthly per-model request counts. These are not
+quota windows: no duration, reset timestamp or depletion prediction is invented.
+Legacy percentage windows remain readable by the collector; all three Ollama console
+surfaces use the shared credit view and report data missing for legacy or failed
+readings. Confirmed zero amounts use words and no zero percentage is rendered. A `401`, `403`, redirect or login page is `auth_invalid` with no
 backoff; a timeout, `429` or other transport failure is `transport_error` and backs
-off (honouring `Retry-After`); a page that parses to no window is `parse_error`. On
+off (honouring `Retry-After`); a page with neither two valid USD amounts nor a legacy numeric window is `parse_error`. On
 success the safe `quota.NormalizedQuota` is persisted with auth index `ollama:<id>`,
 and the newest reading is served by `GET /api/v1/ollama/quota` and the read-only
 `ollama_accounts_status` summary. The account routes are session- and same-origin

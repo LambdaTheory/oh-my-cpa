@@ -1459,3 +1459,16 @@ The rendered suite owns two credentials with one label staying two rows, unmanag
 the unavailable protection state, and Credit, cancel, manual reset, single unadopt and batch
 unadopt each carrying the lifecycle version they read. The read-only capability remains a
 summary, with no new write tool.
+
+### Ollama USD credit coverage
+
+`internal/ollama/credits_test.go` owns synthetic settings DOM extraction, strict
+whole-USD validation, normal/zero/fetch-failure/mixed-path cases, refusal to fall
+back to legacy windows and persisted credit facts. `internal/api/ollama_accounts_test.go`
+pins the typed wire amounts/model counts and rejects unlisted stored fields.
+`web/tests/ollama-credits.component.test.tsx` owns rendered money, missing data,
+confirmed-zero wording, labelled calculated shares, relative refill text and model
+counts. The existing `omc-ollama-accounts` browser scenario wires these facts into
+the management drawer, detail drawer and workspace row, checks phone overflow and retains desktop
+and phone screenshots under the test output directory. No real account is read;
+actual upstream DOM compatibility remains explicitly unverified.

@@ -15,10 +15,9 @@ import { isDemoMode } from '../../types/demoMode';
 import { getTimeZone } from '../../utils/time';
 import { getDateTimeFormatter } from '../../utils/dateTimeFormat';
 import { formatTimeWithCountdown } from '../../pages/quota/quotaFormat';
-import { QuotaProgressBar } from '../../pages/quota/QuotaProgressBar';
+import { OllamaCreditsView } from './OllamaCreditsView';
 import { executeOllamaAccountRefresh } from '../../utils/ollamaRefresh';
 import { credentialLabel } from '../../utils/credentialLabel';
-import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import type { OllamaAccountDTO } from '../../types/ollama';
 import type { NormalizedQuota } from '../../types/quota';
 import styles from '../authFiles/AuthFileDetailDrawer.module.css';
@@ -47,7 +46,6 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
   const queryClient = useQueryClient();
   const isDemo = isDemoMode();
   const displayLabel = credentialLabel(account?.label, [account?.id ? `ollama:${account.id}` : undefined, account?.id], t('credential.account_fallback', { provider: 'Ollama' }));
-  const credits = verifiedQuotaCredits(quota);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [, setTick] = useState(0);
@@ -152,7 +150,6 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
     });
   };
 
-  const windows = quota?.windows ?? [];
 
   return (
     <AppDrawer
@@ -240,50 +237,7 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
             extra={quota?.plan?.plan_label ? <Tag size="small">{quota.plan.plan_label}</Tag> : undefined}
           />
           <div className={styles['section-body']}>
-            <FactList
-              emphasis="quiet"
-              facts={[
-                {
-                  key: 'plan',
-                  label: t('quota.col_plan'),
-                  value: <span className="mono-num">{quota?.plan?.plan_label || '—'}</span>,
-                },
-                ...(credits?.unlimited ? [{
-                  key: 'balance',
-                  label: t('quota.col_credit_balance'),
-                  value: <span className="mono-num">{t('quota.credits_unlimited')}</span>,
-                }] : (credits?.balance !== undefined && credits?.balance !== null && credits?.balance !== '') ? [{
-                  key: 'balance',
-                  label: t('quota.col_credit_balance'),
-                  value: <span className="mono-num">{String(credits.balance)}</span>,
-                }] : []),
-              ]}
-            />
-
-            {windows.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 14 }}>
-                {windows.map((win) => {
-                  const used = win.used_percent;
-                  const remaining = win.remaining_percent ?? (used != null ? Math.max(0, 100 - used) : null);
-                  return (
-                    <QuotaProgressBar
-                      key={win.id || win.label}
-                      nowMS={now}
-                      label={win.label}
-                      usedPercent={used}
-                      remainingPercent={remaining}
-                      resetAtMS={win.reset_at_ms}
-                      resetLabel={win.reset_label}
-                      resetAccuracy={win.reset_accuracy === 'derived' ? 'derived' : 'exact'}
-                    />
-                  );
-                })}
-              </div>
-            ) : (
-              <div style={{ color: 'var(--muted)', fontSize: 13, marginTop: 10 }}>
-                {t('ollama.unreported')}
-              </div>
-            )}
+            <OllamaCreditsView quota={quota} status={account.status} />
           </div>
         </div>
 

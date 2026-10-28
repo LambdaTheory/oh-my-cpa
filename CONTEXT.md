@@ -579,11 +579,16 @@ not extend the quota_prediction capability schema.
   An externally enabled credential ends the pending recovery without re-closing the
   account from its old evidence. The read-only MCP summary cannot mutate any of this state.
 - **Ollama Account**: One Ollama Cloud account OMC monitors outside CPA's control
-  chain. Ollama publishes no quota API, so a reading is a scrape of the fixed
+  chain. The current session-cookie integration reads the fixed
   `https://ollama.com/settings` page with the account's session cookie, which is
-  encrypted at rest and never returned. A window exists only when the page states a
-  numeric percentage: a missing value is "not reported", never zero, and the window
-  duration stays unknown because the page states none. The per-account switch stops
+  encrypted at rest and never returned. The current Usage credits card reports USD
+  remaining and used this month; both are validated whole amounts stored as integer
+  cents. Their sum is the monthly total; a positive used / total share is labelled
+  as calculated. Missing or damaged amounts are data missing, never zero. A published
+  zero is described in words. Relative monthly refill text remains verbatim and never
+  becomes a reset timestamp or depletion prediction. Monthly model request counts are
+  separate upstream facts, not CPA traffic telemetry. Legacy percentage windows can
+  still be collected, but only current credit-card facts populate the Ollama UI. The per-account switch stops
   collection only; it is not a CPA credential state and never claims to stop
   inference. Adding an enabled account, changing its cookie or resuming it triggers a
   scrape at once, and the console can force one account with an explicit manual

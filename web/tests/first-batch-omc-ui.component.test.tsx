@@ -95,15 +95,9 @@ describe('First Batch OMC UI Component Tests', () => {
               disabled: false,
               status: 'healthy',
               observed_at_ms: Date.now(),
-              windows: [
-                {
-                  id: 'weekly',
-                  label: '7d',
-                  scope: 'standard',
-                  used_percent: 45.5,
-                  remaining_percent: 54.5,
-                },
-              ],
+              windows: [],
+              ollama_credits: { source: 'settings_usage_credits', remaining_cents: 29998, used_cents: 2, total_cents: 30000,
+                refill_text: 'Monthly credits refill in 2 weeks', models: [{ model: 'fake-model:1017', requests: 15 }] },
               recommendation: { status: 'healthy', priority: 'none', action: 'none', reason: '' },
               capabilities: { refresh_supported: false, clear_cooldown_supported: false, reset_credit_supported: false },
               quota_exceeded: false,
@@ -119,8 +113,8 @@ describe('First Batch OMC UI Component Tests', () => {
       renderWithClient(<OllamaManagementDrawer open={true} onClose={() => {}} />);
 
       expect(await screen.findByText('My Ollama')).toBeDefined();
-      expect(screen.getByText('7d:')).toBeDefined();
-      expect(screen.getByText('45.5%')).toBeDefined();
+      expect(screen.getByText('$299.98')).toBeDefined();
+      expect(screen.getByText('$0.02')).toBeDefined();
 
       // Click Edit button
       const editBtn = screen.getByRole('button', { name: /编辑|edit/i });

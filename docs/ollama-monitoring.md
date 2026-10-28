@@ -8,9 +8,9 @@ process. The console surface is the Ollama account drawer described under
 
 ## What it does
 
-Ollama Cloud publishes no quota API. The only known way to read an account's quota
-is to request the fixed settings page `https://ollama.com/settings` with the
-account's session cookie and parse the HTML. This feature stores several Ollama
+The cookie-based collector reads the fixed settings page
+`https://ollama.com/settings` with the
+account's session cookie and parses the HTML. This feature stores several Ollama
 accounts, each with a cookie the operator pastes in, and reports the last reading
 and the newest collection status.
 
@@ -90,28 +90,54 @@ enable generation.
 - A `401`, `403`, a redirect or a login page is an `auth_invalid` outcome with no
   backoff: only the operator can supply a new cookie.
 - A timeout, a `429` or any other transport failure is a `transport_error`; a page
-  that parses to no numeric window is a `parse_error`. Both back off. A `429`'s
+  with neither two valid USD amounts nor a legacy numeric window is a `parse_error`. Both back off. A `429`'s
   `Retry-After` is honoured when present; otherwise the wait doubles from
   `DefaultBackoffBase` (5 minutes) up to `DefaultBackoffMax` (6 hours). A manual
   refresh, or a first/update-cookie trigger, never bypasses a live backoff.
-- Only a numeric percentage makes a window real. Missing values are never filled
-  with `0` or `100`, and a value outside `[0,100]` (including a negative such as
-  `-1%`) or a non-numeric value is refused rather than clamped to a fabricated
-  reading, so the window is left unreported. A relative reset ("Resets in 3h") is
-  marked `derived`; an absolute stamp is `exact`. The window duration is left
-  unknown, because the page does not state one and it must not be inferred as "5h".
-- Monetary balances require an explicit monetary `Credit balance`, `Account balance`
-  or `Balance` field. Subscription prices, reset credits and unrelated dollar
-  amounts are not balances. New snapshots mark this evidence in
-  `raw_signals.ollama_balance_source` as `settings_balance`; the console hides
-  unverified balances in older Ollama snapshots while retaining their windows.
-  A verified zero keeps its original currency, and Codex credit standing remains
-  independent of this Ollama-specific evidence rule.
+- The current source is the response DOM's **Usage credits** card, using the
+  explicitly labelled remaining and used-this-month facts. `internal/ollama/credits.go`
+  uses the existing HTML parser dependency, not the old flattened-text balance
+  search. Only complete USD amounts are accepted; paths, mixed characters, other
+  currencies, negative values and unsupported decimal precision are refused.
+  There is no cleanup that extracts digits from damaged strings.
+- The safe snapshot's `ollama_credits` object carries `source=settings_usage_credits`,
+  `remaining_cents`, `used_cents`, `total_cents`, optional `used_percent`,
+  `refill_text`, and `models` (`model`, `requests`). The total is remaining + used;
+  a percentage requires positive total and used amounts. A known zero is stored as
+  zero, distinct from an absent field; the console describes it in words.
+- Monthly refill text such as "Monthly credits refill in 2 weeks" stays verbatim.
+  It never becomes a reset timestamp, duration, capacity or depletion prediction.
+  The separate Models used this month section supplies per-model request counts.
+- Legacy percentage parsing still supports older upstream pages, but a recognized
+  Usage credits card never falls back to it. Old snapshots and the legacy balance
+  string do not populate the current USD console view. Other providers are unchanged.
 - On success the safe snapshot and the auth index `ollama:<id>` are persisted. The
   shared observation timeline is written only when a window states a real duration,
   which Ollama does not today. A failure keeps the last good snapshot and only
-  advances `last_observed_at_ms`, so "collected and failed" is distinguishable from
+  advances `last_observed_at_ms`; the console displays data missing while the latest
+  collection status is unsuccessful, so "collected and failed" is distinguishable from
   "never collected".
+
+## Source evidence and validation limits
+
+Official Ollama documentation now describes [Balance](https://docs.ollama.com/api/balance)
+(`included.balance_usd`, `allowance_usd`, UTC period) and
+[Cloud usage](https://docs.ollama.com/api/cloud-usage) (`group_by=model`, request counts).
+These documented endpoints require a Bearer API key; this module stores a session
+cookie, and cookie authorization for those endpoints has not been established.
+The usage API offers rolling 24h/7d/30d ranges and at most ten model groups plus
+a remainder; those ranges cannot be relabelled as this month's complete model list.
+A future key-based integration should prefer these structured facts while preserving
+the included-versus-purchased distinction and the actual usage period.
+
+Issue #86 describes the current page but supplies no captured original HTML or
+verified cookie-authenticated quota endpoint. The implementation targets labelled DOM facts
+in the existing fixed settings response; it does not invent an endpoint or rely on
+plan prices. Tests use synthetic HTML, cookies, model names and loopback transports.
+No authenticated live page was fetched. Matching actual upstream markup and amounts
+therefore remains a live acceptance step; if the card is absent, client-rendered only
+or its amounts are damaged, collection reports a parse error and the UI says data
+missing. A clean live amount has not been established by these tests.
 
 ## HTTP API
 
@@ -224,7 +250,7 @@ The module is wired into the running process:
   source also includes it.
 - The console surface is implemented and unified into the main OAuth workspace:
   - Ollama accounts project directly into `OAuthManagementPage.tsx` table records,
-    filter tabs (`CREDENTIAL_PROVIDERS.ollama`), counts, search, and session/weekly quota
+    filter tabs (`CREDENTIAL_PROVIDERS.ollama`), counts, search, and USD credit
     views alongside CPA credentials.
   - Accessible row checkboxes participate in mixed-source batch refresh, deletion
     and enable/disable. Each action uses its source's existing API; Ollama IDs never
@@ -242,6 +268,11 @@ The module is wired into the running process:
     not CPA inference routing.
   - The standalone account drawer `web/src/components/ollama/OllamaManagementDrawer.tsx`
     and modal `web/src/components/ollama/OllamaAccountEditorModal.tsx` allow full management.
+  - The list, management drawer and detail drawer share
+    `web/src/components/ollama/OllamaCreditsView.tsx`: USD amounts, labelled calculated
+    usage, relative monthly refill text and monthly model requests. Stored historical
+    amounts are hidden when the newest collection failed; they are retained in storage.
+    The list/refresh routes decode stored snapshots through a typed DTO allowlist.
 
 ## Provenance and licensing
 
@@ -251,3 +282,11 @@ lineage is LGPL-3.0-only. This package is a fresh implementation that reuses onl
 the approach, not the source text. The actual obligation and its review status are
 recorded in [Third-party notices](../THIRD_PARTY_NOTICES.md); a rewrite is not
 asserted there to waive any obligation.
+
+## Synthetic browser evidence
+
+The existing Ollama browser scenario captures the shared USD view in the
+[desktop workspace](images/ollama-usd/desktop.png),
+[phone workspace](images/ollama-usd/phone.png) and
+[detail drawer](images/ollama-usd/details.png). The figures are synthetic fixture
+values, not a reading from a real account.

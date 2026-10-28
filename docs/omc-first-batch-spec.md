@@ -64,9 +64,9 @@ CPA-buddy (cpab) stops permanently as an independent service. Its assets, code a
 
 - First version reuses the cpab ollama cookie web/settings collection approach.
 - Multi-account on the web: add, update, delete, enable/disable collection, and status display.
-- Unified into the main OAuth workspace: Ollama accounts appear alongside CPA credentials with top-level provider filter tabs, search by label, status indicators, and session/weekly quota display on desktop and mobile.
+- Unified into the main OAuth workspace: Ollama accounts appear alongside CPA credentials with top-level provider filter tabs, search by label, status indicators, and USD remaining/used credit facts, relative monthly refill text and monthly model request counts on desktop and mobile.
 - Source-aware action isolation: mixed selections refresh, delete and toggle collection through each source's existing API. Enabled Ollama accounts join default unified quota refresh; disabled records are skipped with a count and reason. CPA download, model rules, cooldown clear and credit redeem never target Ollama. Row and batch enable/disable toggle periodic scraper collection only.
-- Rows, adoption candidates and managed-account lists use friendly labels without standalone indexes or opaque prefixes. Monetary balance is shown only with explicit settings-balance evidence; unrelated prices and unverified legacy snapshots never imply credit.
+- Rows, adoption candidates and managed-account lists use friendly labels without standalone indexes or opaque prefixes. USD amounts require complete validated fields in the Usage credits card; unrelated prices, damaged strings and unverified legacy snapshots never imply credit. Missing data stays explicit, and relative refill text never becomes a depletion prediction.
 - Cookie is **encrypted at rest**; the secret must not be echoed in DTOs or logs and must not enter the Agent.
 - The user **manually inputs** existing cookies; do **not** auto-read an old env or the DB.
 - First version keeps the **real used%** and a **relative reset derived mark**; missing fields must **not** be filled with 0 or 100.

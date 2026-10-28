@@ -1,8 +1,8 @@
 // Package ollama reads Ollama Cloud quota from the account settings page.
 //
-// Ollama publishes no quota API, so the only known approach is to request the
-// fixed settings URL (https://ollama.com/settings) with the account's session
-// cookie and parse the returned HTML. Any HTML redesign can silently break the
+// This integration holds a session cookie, while the documented structured APIs
+// require a Bearer key. It reads the fixed settings URL with that cookie and parses
+// the returned HTML. Any HTML redesign can silently break the
 // parser; a failure degrades to an unavailable snapshot rather than to wrong
 // numbers.
 //
@@ -116,6 +116,7 @@ type Window struct {
 // Go error instead of a Snapshot; auth and parse failures are Snapshot values
 // with OK false.
 type Snapshot struct {
+	Credits    *quota.OllamaCredits
 	AccountID  string
 	ObservedAt time.Time
 	Plan       string
@@ -129,8 +130,11 @@ type Snapshot struct {
 	HasRetryAfter bool
 }
 
-// IsSuccess reports whether the scrape produced at least one numeric window.
-func (s Snapshot) IsSuccess() bool { return s.Failure == FailureNone && len(s.Windows) > 0 }
+// IsSuccess requires two validated USD amounts or a legacy numeric window.
+func (s Snapshot) IsSuccess() bool {
+	return s.Failure == FailureNone && (len(s.Windows) > 0 ||
+		(s.Credits != nil && s.Credits.RemainingCents != nil && s.Credits.UsedCents != nil))
+}
 
 // ToQuota turns a snapshot into the console's shared quota shape.
 //
@@ -139,14 +143,15 @@ func (s Snapshot) IsSuccess() bool { return s.Failure == FailureNone && len(s.Wi
 // reading decoupled from CPA credential status: it is a monitor-only observation.
 func (s Snapshot) ToQuota(label string) *quota.NormalizedQuota {
 	value := &quota.NormalizedQuota{
-		AuthIndex:    "ollama:" + strings.TrimSpace(s.AccountID),
-		Name:         label,
-		Type:         Provider,
-		Provider:     Provider,
-		Status:       quotaStatusFor(s.Failure),
-		ObservedAtMS: s.ObservedAt.UnixMilli(),
-		Windows:      make([]quota.QuotaWindow, 0, len(s.Windows)),
-		Error:        s.Err,
+		OllamaCredits: s.Credits,
+		AuthIndex:     "ollama:" + strings.TrimSpace(s.AccountID),
+		Name:          label,
+		Type:          Provider,
+		Provider:      Provider,
+		Status:        quotaStatusFor(s.Failure),
+		ObservedAtMS:  s.ObservedAt.UnixMilli(),
+		Windows:       make([]quota.QuotaWindow, 0, len(s.Windows)),
+		Error:         s.Err,
 	}
 	if s.Plan != "" || s.Balance != "" {
 		plan := &quota.QuotaPlan{}
