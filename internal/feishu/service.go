@@ -337,6 +337,8 @@ func (s *Service) inactiveReason(resolved Resolved) string {
 		return "forced off by environment"
 	case resolved.Degraded:
 		return "configuration invalid: " + resolved.Reason
+	case resolved.NeedsRecipientConfirmation:
+		return "recipient confirmation required"
 	case !resolved.Enabled:
 		return "disabled"
 	default:
@@ -354,7 +356,8 @@ func (s *Service) HandleMessage(ctx context.Context, in Inbound) error {
 	if in.FromBot || in.ChatID == "" {
 		return nil
 	}
-	if !in.IsDirect() || in.SenderOpenID != s.resolvedNow().ChatID {
+	resolved := s.resolvedNow()
+	if !resolved.Ready() || !canAnswerRecipient(resolved.ChatID, in) {
 		return nil
 	}
 	key := messageEventKey(in.EventID, in.MessageID)
@@ -940,30 +943,41 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 
 // Status is the read-only state the console shows.
 type Status struct {
-	Enabled       bool      `json:"enabled"`
-	Ready         bool      `json:"ready"`
-	Degraded      bool      `json:"degraded"`
-	Reason        string    `json:"reason,omitempty"`
-	Source        string    `json:"source"`
-	ForcedOff     bool      `json:"forced_off"`
-	Connected     bool      `json:"connected"`
-	OpenItems     int       `json:"open_items"`
-	PendingSends  int       `json:"pending_sends"`
-	QueuedSends   int       `json:"queued_sends"`
-	LastSummaryAt time.Time `json:"last_summary_at,omitempty"`
-	LastError     string    `json:"last_error,omitempty"`
+	NextAttemptAt              *time.Time `json:"next_attempt_at,omitempty"`
+	Recipient                  string     `json:"recipient"`
+	RecipientType              string     `json:"recipient_type"`
+	RecipientFromEnv           bool       `json:"recipient_from_env"`
+	NeedsRecipientConfirmation bool       `json:"needs_recipient_confirmation"`
+	OAuthGroupConflict         bool       `json:"oauth_group_conflict"`
+	Enabled                    bool       `json:"enabled"`
+	Ready                      bool       `json:"ready"`
+	Degraded                   bool       `json:"degraded"`
+	Reason                     string     `json:"reason,omitempty"`
+	Source                     string     `json:"source"`
+	ForcedOff                  bool       `json:"forced_off"`
+	Connected                  bool       `json:"connected"`
+	OpenItems                  int        `json:"open_items"`
+	PendingSends               int        `json:"pending_sends"`
+	QueuedSends                int        `json:"queued_sends"`
+	LastSummaryAt              time.Time  `json:"last_summary_at,omitempty"`
+	LastError                  string     `json:"last_error,omitempty"`
 }
 
 // StatusSnapshot reads the current status. It is read-only and never sends.
 func (s *Service) StatusSnapshot(ctx context.Context) Status {
 	resolved := s.resolvedNow()
 	status := Status{
-		Enabled:   resolved.Enabled,
-		Ready:     resolved.Ready(),
-		Degraded:  resolved.Degraded,
-		Reason:    resolved.Reason,
-		Source:    resolved.Source,
-		ForcedOff: resolved.ForcedOff,
+		Recipient:                  resolved.ChatID,
+		RecipientType:              RecipientKind(resolved.ChatID),
+		RecipientFromEnv:           resolved.RecipientFromEnv,
+		NeedsRecipientConfirmation: resolved.NeedsRecipientConfirmation,
+		OAuthGroupConflict:         resolved.ChatID != "" && resolved.ChatID == resolved.OAuthChatID,
+		Enabled:                    resolved.Enabled,
+		Ready:                      resolved.Ready(),
+		Degraded:                   resolved.Degraded,
+		Reason:                     resolved.Reason,
+		Source:                     resolved.Source,
+		ForcedOff:                  resolved.ForcedOff,
 	}
 
 	s.runMu.Lock()
@@ -978,6 +992,13 @@ func (s *Service) StatusSnapshot(ctx context.Context) Status {
 			switch notification.State {
 			case NotifyPending:
 				status.PendingSends++
+				if notification.LastError != "" {
+					status.LastError = notification.LastError
+				}
+				if !notification.NextAttemptAt.IsZero() && (status.NextAttemptAt == nil || notification.NextAttemptAt.Before(*status.NextAttemptAt)) {
+					next := notification.NextAttemptAt
+					status.NextAttemptAt = &next
+				}
 			case NotifyQueued:
 				status.QueuedSends++
 			}

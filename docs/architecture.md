@@ -2510,7 +2510,9 @@ out does not make an account unavailable. The denoise rules announce a credentia
 problem, a whole-channel outage, or a long-running no-data condition once per
 episode and hold immediate alerts during quiet hours. The earliest daily slot
 always queues a morning fallback; later ordinary slots stay silent. Credential windows with at most 10% remaining and fresh abnormal readings also open denoised episodes. Quota
-delivery uses one operator Open ID; private queries accept only that person. The
+delivery uses one group ID or personal Open ID. Group recipients permit direct
+queries and mentions in joined groups; personal recipients permit only that person's
+private queries. Migration 056 stores exact-target confirmation for legacy groups. The
 separate OAuth code group retains its existing boundary. The renderer limits cards
 to three advice points and one console button, using the public URL and base path. Channel tracks start only for monitored, enabled
 credentials (or an explicit collector-level failure); disabled or unsupported-only
@@ -3820,7 +3822,7 @@ public fields. Morning delivery bypasses quiet hours while ordinary alerts wait.
 prediction cards also carry stored anomalies and open items. Explicit manual sends deliver only their newly persisted row, never claim
 a scheduled minute, and return `no_findings` when empty. The card is limited to
 three advice points and discloses omitted content. See `docs/feishu-notifications.md`
-for the personal recipient, missing-data and console-button contract.
+for the recipient, missing-data and console-button contract.
 
 ## 15. Where to look next
 

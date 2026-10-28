@@ -130,7 +130,7 @@ func TestLegacyGroupRecipientShowsActionableDegradation(t *testing.T) {
 	web, overlay := readyConfig()
 	web.ChatID = "oc_synthetic"
 	cfg := resolveConfig(web, overlay)
-	if !cfg.Degraded || cfg.Ready() || !strings.Contains(cfg.Reason, "Open ID") || !strings.Contains(cfg.Reason, "ou_") {
+	if cfg.Degraded || cfg.Ready() || !cfg.NeedsRecipientConfirmation || cfg.ChatID != web.ChatID {
 		t.Fatalf("config=%+v", cfg)
 	}
 }
@@ -263,8 +263,8 @@ func TestLegacyQuotaRecipientPreservesOAuthTransport(t *testing.T) {
 				t.Fatalf("quota/OAuth readiness=%v/%v/%v, want false/%v/%v", cfg.Ready(), cfg.ConnectionReady(), bot.OAuthReady(), wantReady, wantReady)
 			}
 			if wantReady {
-				if !cfg.Degraded || !strings.Contains(cfg.Reason, "Open ID") {
-					t.Fatalf("quota degradation missing: %q", cfg.Reason)
+				if cfg.Degraded || !cfg.NeedsRecipientConfirmation || cfg.ChatID != web.ChatID {
+					t.Fatal("legacy group must remain unchanged and await confirmation")
 				}
 				if err := bot.Start(context.Background()); err != nil {
 					t.Fatal(err)

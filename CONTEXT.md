@@ -599,15 +599,17 @@ not extend the quota_prediction capability schema.
   not a generation: a label edit does not invalidate a reading, and a disable plus a
   quick resume under one in-flight scrape is an accepted race, not a security boundary.
   Ollama is the deliberate exception to the CPA data sources.
-- **Feishu Notification**: A stored-only decision card for one configured operator.
+- **Feishu Notification**: A stored-only decision card for one configured group or person.
   It states whether quota allocation needs attention, with at most three advice
   points and one console link. Low/exhausted credential windows and fresh abnormal
   readings open denoised episodes. The earliest daily summary slot always supplies
   a morning fallback, including healthy or missing-data results; later ordinary
-  slots remain silent. Private queries accept only the configured operator Open ID;
+  slots remain silent. Group recipients permit direct queries and mentions in joined
+  groups; personal recipients permit only that person's private queries. Existing
+  group targets require explicit confirmation before notifications or queries resume;
   the separate OAuth code group retains its authorization. Delivery is persisted
   and retried, and recovery is not nagged. The same credential/window/reset identity is notified only once, including forecast-to-low-to-exhausted
-  transitions. See the personal card contract in
+  transitions. See the notification contract in
   `docs/feishu-notifications.md`.
 
 - **Unpublished Quota Reading**: A quota observation a provider answered without

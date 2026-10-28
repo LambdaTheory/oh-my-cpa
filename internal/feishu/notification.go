@@ -26,10 +26,11 @@ type Notification struct {
 	Alerts  []Alert
 	// Pending and Tight carry a scheduled or quiet-end digest, which has no single
 	// alert. They are empty for an immediate alert notification.
-	Pending  []PendingItem
-	Tight    []TightChannel
-	State    string
-	Attempts int
+	Pending   []PendingItem
+	Tight     []TightChannel
+	State     string
+	Attempts  int
+	LastError string
 	// NextAttemptAt is when a failed send may be retried.
 	NextAttemptAt time.Time
 	SentAt        time.Time
@@ -104,6 +105,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			GeneratedAt: notification.OccurredAt,
 		}
 		if err := d.sendWithFallback(ctx, chatID, msg); err != nil {
+			notification.LastError = err.Error()
 			notification.Attempts++
 			notification.NextAttemptAt = now.Add(backoffDelay(notification.Attempts, d.backoffBase, d.backoffMax))
 			d.logger.WarnContext(ctx, "feishu notification send failed",
@@ -112,6 +114,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			continue
 		}
 		notification.State = NotifySent
+		notification.LastError = ""
 		notification.SentAt = now
 		out[i] = notification
 	}

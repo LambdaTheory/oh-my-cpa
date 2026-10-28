@@ -233,13 +233,13 @@ it remains inert while configuration is disabled or degraded and begins evaluati
 ready settings reload without a restart. Tests inject both its prediction source and sender.
 
 
-### Personal quota decision cards
+### Quota decision cards
 
-Quota notifications address one configured operator Open ID (the `ou_` prefix),
-retained in the existing `chat_id` / `OMCPA_FEISHU_CHAT_ID` setting. Group IDs cannot
-make quota delivery ready. Quota queries accept only private messages from this
-person. The dedicated OAuth code group retains its independent authorization and
-chat-id transport. Existing group notification settings require an operator change.
+Quota notifications address one configured group ID (`oc_`) or personal Open ID
+(`ou_`), retained in `chat_id` / `OMCPA_FEISHU_CHAT_ID`. Existing groups require
+confirmation of their exact target before sending or answering queries. Group
+recipients permit direct queries and mentions in joined groups; personal recipients
+permit only that person's private messages. The OAuth group remains independent.
 
 The default times remain 10:00 / 17:00 in the configured timezone. The earliest
 configured slot always queues the daily morning fallback, including healthy or
@@ -277,8 +277,13 @@ that could not establish a persisted delivery outcome.
 The settings response exposes tight_remaining_percent as a read-only fixed 10.
 Writes that explicitly contain 10 are accepted; conflicting values return 400.
 The console omits this field on save, while schedule, quiet hours and monitoring
-durations remain editable. Legacy group recipients surface an actionable degraded
-reason requiring a recipient Open ID. Query cards retain scoped empty-result
+durations remain editable. Recipients accept a group ID (`oc_`) or personal Open ID
+(`ou_`). Migration 056 stores confirmation of the exact recipient: existing groups
+remain silent until the console's review and confirmation step. Newly saved web
+recipients take effect immediately. Deployment recipients are read-only; invalid
+values degrade quota delivery while leaving the dedicated OAuth path independent.
+Group recipients permit direct queries and mentions in any joined group; personal
+recipients permit only that person's private queries. Query cards retain scoped empty-result
 answers and stale-observation notices; an empty abnormal filter means no anomalies.
 
 The earliest summary slot always supplies the morning fallback. Prediction
