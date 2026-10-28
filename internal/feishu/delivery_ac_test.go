@@ -38,6 +38,23 @@ func TestAC09DeliveryFailurePersistsRetryAndClearsOnSuccess(t *testing.T) {
 	}
 }
 
+func TestAC10QueuedRetryUsesNewRecipient(t *testing.T) {
+	env := newTestEnv(t, Report{}, false)
+	env.sender.failSends = 2
+	delivery, err := env.service.SendTest(context.Background())
+	if err != nil || !delivery.QueuedForRetry {
+		t.Fatalf("delivery=%+v err=%v", delivery, err)
+	}
+	web, overlay := readyConfig()
+	web.ChatID, web.ConfirmedRecipient = "oc_new-target", "oc_new-target"
+	env.service.Reload(context.Background(), web, overlay)
+	*env.clock = delivery.NextAttemptAt
+	env.service.deliverOutbox(context.Background(), env.service.resolvedNow())
+	if sends, _ := env.sender.counts(); sends != 1 || env.sender.lastChatID() != web.ChatID {
+		t.Fatal("queued retry did not follow the new recipient")
+	}
+}
+
 func TestAC09RecipientFailureGuidanceDoesNotEchoNativeMessage(t *testing.T) {
 	for _, test := range []struct{ message, want string }{
 		{"bot is not in chat synthetic-private-value", "把机器人拉进群"},
