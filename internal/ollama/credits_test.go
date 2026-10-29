@@ -240,3 +240,31 @@ func TestFetchUSDCreditsWithUsedOutsideTheCard(t *testing.T) {
 		t.Fatalf("used = %v, want 2", credits.UsedCents)
 	}
 }
+
+// On the current page the title sits in a header strip and the figures live in
+// sibling blocks, so a card-scoped lookup finds nothing. "Total" is read
+// document-wide, but only because it is a label that resolves to one value; the
+// sibling-refusal test keeps that honest.
+func TestFetchUSDCreditsWithTotalOutsideTheCard(t *testing.T) {
+	page := `<html><body>
+<section><h2>Usage credits max</h2></section>
+<section><p>Monthly credits $250.00</p><p>Added credits $0</p><p>Total $250.00</p></section>
+<section><h2>Usage breakdown</h2><p>Monthly credits used <span>$0.02</span></p></section>
+</body></html>`
+
+	client := fixtureServer(t, 200, page)
+	snapshot, err := client.Fetch(context.Background(), "synthetic", "fake-session")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !snapshot.IsSuccess() || snapshot.Credits == nil {
+		t.Fatalf("no credits when Total sits outside the card: %+v", snapshot)
+	}
+	credits := snapshot.Credits
+	if credits.RemainingCents == nil || *credits.RemainingCents != 25000 {
+		t.Fatalf("remaining = %v, want 25000", credits.RemainingCents)
+	}
+	if credits.UsedCents == nil || *credits.UsedCents != 2 {
+		t.Fatalf("used = %v, want 2", credits.UsedCents)
+	}
+}
