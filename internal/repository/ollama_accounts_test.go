@@ -442,3 +442,178 @@ func TestOllamaAccountsAreNotReadableByOperatorQueries(t *testing.T) {
 		t.Fatal("the encrypted cookie must never be readable through the operator query path")
 	}
 }
+
+// TestOllamaAccountAPIKeyRoundTripsWithoutMetadataExposure pins the key's storage
+// contract: it is encrypted at rest, surfaced only as a boolean to metadata readers,
+// and returned as ciphertext only to the collector.
+func TestOllamaAccountAPIKeyRoundTripsWithoutMetadataExposure(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	cookieCiphertext, cookieNonce, err := cipher.Encrypt([]byte("session-cookie"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const apiKey = "ollama-api-key-secret-value"
+	keyCiphertext, keyNonce, err := cipher.Encrypt([]byte(apiKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Label:            "with-key",
+		Enabled:          true,
+		Ciphertext:       cookieCiphertext,
+		Nonce:            cookieNonce,
+		APIKeyCiphertext: keyCiphertext,
+		APIKeyNonce:      keyNonce,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !account.HasCookie || !account.HasAPIKey {
+		t.Fatalf("create result = %+v, want both presence flags", account)
+	}
+
+	var storedKey []byte
+	if err := repo.SQL().QueryRowContext(ctx, `SELECT api_key_ciphertext FROM ollama_accounts WHERE id = ?`, account.ID).Scan(&storedKey); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(storedKey), apiKey) {
+		t.Fatal("the API key was stored in plaintext")
+	}
+
+	listed, err := repo.ListOllamaAccounts(ctx)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("list = %+v %v", listed, err)
+	}
+	if !listed[0].HasAPIKey {
+		t.Fatal("the metadata list must expose has_api_key")
+	}
+	read, found, err := repo.GetOllamaAccount(ctx, account.ID)
+	if err != nil || !found || !read.HasAPIKey {
+		t.Fatalf("metadata read = %+v found=%v err=%v", read, found, err)
+	}
+
+	secret, found, err := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if err != nil || !found {
+		t.Fatalf("secret read = %v %v", found, err)
+	}
+	decrypted, err := cipher.Decrypt(secret.APIKeyCiphertext, secret.APIKeyNonce)
+	if err != nil || string(decrypted) != apiKey {
+		t.Fatalf("decrypt = %q %v", decrypted, err)
+	}
+	if secret.APIKeyUpdatedAtMS == 0 {
+		t.Fatal("a stored key must carry a version")
+	}
+}
+
+// TestOllamaAccountAPIKeyUpdateReplacesAndKeepsCookie pins that a key update replaces
+// only the key, raising its version, while the cookie material stays untouched.
+func TestOllamaAccountAPIKeyUpdateReplacesAndKeepsCookie(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	cookieCiphertext, cookieNonce, _ := cipher.Encrypt([]byte("the-cookie"))
+	firstKey, firstNonce, _ := cipher.Encrypt([]byte("first-key"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Enabled: true, Ciphertext: cookieCiphertext, Nonce: cookieNonce,
+		APIKeyCiphertext: firstKey, APIKeyNonce: firstNonce, NowMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+
+	const secondKey = "second-key"
+	secondCiphertext, secondNonce, _ := cipher.Encrypt([]byte(secondKey))
+	updated, found, err := repo.UpdateOllamaAccount(ctx, account.ID, OllamaAccountUpdate{
+		SetAPIKey: true, APIKeyCiphertext: secondCiphertext, APIKeyNonce: secondNonce, NowMS: 2000,
+	})
+	if err != nil || !found {
+		t.Fatalf("update = %v %v", found, err)
+	}
+	if !updated.HasAPIKey || !updated.HasCookie {
+		t.Fatalf("update result = %+v", updated)
+	}
+	after, _, _ := repo.GetOllamaAccountSecret(ctx, account.ID)
+	if after.APIKeyUpdatedAtMS <= before.APIKeyUpdatedAtMS {
+		t.Fatalf("key version did not advance: %d -> %d", before.APIKeyUpdatedAtMS, after.APIKeyUpdatedAtMS)
+	}
+	decrypted, err := cipher.Decrypt(after.APIKeyCiphertext, after.APIKeyNonce)
+	if err != nil || string(decrypted) != secondKey {
+		t.Fatalf("key replacement = %q %v", decrypted, err)
+	}
+	decryptedCookie, err := cipher.Decrypt(after.Ciphertext, after.Nonce)
+	if err != nil || string(decryptedCookie) != "the-cookie" {
+		t.Fatalf("an omitted cookie must be preserved, got %q %v", decryptedCookie, err)
+	}
+	if after.CookieUpdatedAtMS != before.CookieUpdatedAtMS {
+		t.Fatalf("a key update moved the cookie version: %d -> %d", before.CookieUpdatedAtMS, after.CookieUpdatedAtMS)
+	}
+}
+
+// TestDeleteOllamaAccountRemovesAPIKeyWithRow pins that the key columns disappear with
+// the row rather than surviving as an orphan.
+func TestDeleteOllamaAccountRemovesAPIKeyWithRow(t *testing.T) {
+	repo, cipher := testRepository(t)
+	ctx := context.Background()
+	cookieCiphertext, cookieNonce, _ := cipher.Encrypt([]byte("cookie"))
+	keyCiphertext, keyNonce, _ := cipher.Encrypt([]byte("key"))
+	account, err := repo.CreateOllamaAccount(ctx, OllamaAccountCreate{
+		Enabled: true, Ciphertext: cookieCiphertext, Nonce: cookieNonce,
+		APIKeyCiphertext: keyCiphertext, APIKeyNonce: keyNonce,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed, err := repo.DeleteOllamaAccount(ctx, account.ID)
+	if err != nil || !removed {
+		t.Fatalf("delete = %v %v", removed, err)
+	}
+	var keyCount int
+	if err := repo.SQL().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM ollama_accounts WHERE id = ? AND api_key_ciphertext IS NOT NULL`, account.ID).Scan(&keyCount); err != nil {
+		t.Fatal(err)
+	}
+	if keyCount != 0 {
+		t.Fatalf("the deleted account still carries a key: %d", keyCount)
+	}
+}
+
+// TestOllamaAPIKeyMigrationAddsNullableColumns pins the forward-only migration shape:
+// the three key columns exist, are nullable and carry no default, so existing rows
+// are untouched and "never had a key" stays distinguishable.
+func TestOllamaAPIKeyMigrationAddsNullableColumns(t *testing.T) {
+	repo, _ := testRepository(t)
+	rows, err := repo.SQL().QueryContext(context.Background(), `SELECT name, "notnull", dflt_value FROM pragma_table_info('ollama_accounts')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns := map[string]struct {
+		notNull    bool
+		hasDefault bool
+	}{}
+	for rows.Next() {
+		var name string
+		var notNull int
+		var dflt any
+		if err := rows.Scan(&name, &notNull, &dflt); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = struct {
+			notNull    bool
+			hasDefault bool
+		}{notNull: notNull != 0, hasDefault: dflt != nil}
+	}
+	for _, name := range []string{"api_key_ciphertext", "api_key_nonce", "api_key_updated_at_ms"} {
+		column, ok := columns[name]
+		if !ok {
+			t.Fatalf("column %s was not added", name)
+		}
+		if column.notNull {
+			t.Fatalf("column %s must be nullable", name)
+		}
+		if column.hasDefault {
+			t.Fatalf("column %s must have no default", name)
+		}
+	}
+}

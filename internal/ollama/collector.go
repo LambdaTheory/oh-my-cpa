@@ -21,16 +21,26 @@ type Account struct {
 	AttemptCount    int
 }
 
-// StoredAccount adds the encrypted cookie the collector must decrypt. It is only
-// ever held inside the collector; it is never serialized into a DTO or a log.
+// StoredAccount adds the encrypted credentials the collector must decrypt. It is
+// only ever held inside the collector; it is never serialized into a DTO or a log.
+//
+// The API key is optional and preferred when present; the session cookie stays
+// mandatory because it is the fallback for every account, including ones that
+// predate the key.
 type StoredAccount struct {
 	Account
 	Ciphertext []byte
 	Nonce      []byte
-	// CookieUpdatedAtMS is the version of the stored cookie. A collection result
-	// is written back only while the stored version still matches, so a scrape
-	// that read an older cookie can never overwrite the reading of a newer one.
+	// APIKeyCiphertext and APIKeyNonce are nil when the account has no key. They are
+	// never written anywhere except through Decrypt.
+	APIKeyCiphertext []byte
+	APIKeyNonce      []byte
+	// CookieUpdatedAtMS and APIKeyUpdatedAtMS are the versions of the stored
+	// credentials. A collection result is written back only while the stored
+	// version still matches, so a scrape that read replaced material can never
+	// overwrite the reading of the newer one.
 	CookieUpdatedAtMS int64
+	APIKeyUpdatedAtMS int64
 }
 
 // CollectionResult is what the collector writes back for one account. It carries a
@@ -45,10 +55,11 @@ type CollectionResult struct {
 	ErrorAtMS       int64
 	NextAttemptAtMS *int64
 	AttemptCount    int
-	// CookieUpdatedAtMS, when set, guards the write: a result whose cookie version
-	// no longer matches the stored one is dropped rather than applied. It is nil
-	// for callers that do not track a version.
+	// CookieUpdatedAtMS and APIKeyUpdatedAtMS, when set, guard the write: a result
+	// whose credential version no longer matches the stored one is dropped rather
+	// than applied. Either is nil for callers that do not track that credential.
 	CookieUpdatedAtMS *int64
+	APIKeyUpdatedAtMS *int64
 	// Auto marks a result the periodic pass or a create/update trigger produced. An
 	// automatic result never writes to a disabled account; a manual refresh of a
 	// paused account passes Auto false and still lands.
@@ -69,17 +80,19 @@ type RefreshResult struct {
 	RetryAtMS *int64
 }
 
-// refreshCall is one in-flight scrape for one account. Every entry point - the
-// periodic pass, a create/update trigger and a manual refresh - joins the call
-// that is already running instead of starting a second one, so the same cookie is
-// never scraped twice at once.
+// refreshCall is one in-flight collection for one account. Every entry point - the
+// periodic pass, a create/update trigger and a manual refresh - joins the call that is
+// already running instead of starting a second one, so the same credential is never
+// fetched twice at once.
 type refreshCall struct {
 	done chan struct{}
 	// result is written before done is closed; readers only observe it after
 	// receiving from done.
 	result RefreshResult
-	// cookieVersion is the stored cookie version the running scrape read.
+	// cookieVersion and apiKeyVersion are the stored credential versions the
+	// running scrape read.
 	cookieVersion int64
+	apiKeyVersion int64
 	// auto records whether the running scrape is automatic, so a manual waiter can
 	// tell that a dropped automatic result (a paused account) is not its own reading.
 	auto bool
@@ -94,23 +107,28 @@ type refreshCall struct {
 //
 // Besides the periodic pass it is also the one per-account refresh entry point
 // (`RefreshAccount`) and the trigger queue (`Trigger`): the console's manual
-// button, a newly created account and a changed cookie all go through the same
+// button, a newly created account and a changed credential all go through the same
 // lock, concurrency cap and backoff, so no path can bypass another's rate limit.
 type Collector struct {
 	// Accounts returns the collection-eligible accounts with their encrypted
-	// cookies. The store is asked for enabled accounts only.
+	// credentials. The store is asked for enabled accounts only.
 	Accounts func(ctx context.Context) ([]StoredAccount, error)
 	// AccountByID loads one account's newest stored secret, enabled or not. Manual
 	// and triggered refreshes read through it so a queued scrape always uses the
-	// latest cookie rather than one captured before an update. Nil disables the
+	// latest credential rather than one captured before an update. Nil disables the
 	// per-account entry points.
 	AccountByID func(ctx context.Context, id string) (StoredAccount, bool, error)
 	// Save persists one account's collection result.
 	Save func(ctx context.Context, result CollectionResult) error
-	// Decrypt decrypts a stored cookie.
+	// Decrypt decrypts one stored credential.
 	Decrypt func(ciphertext, nonce []byte) ([]byte, error)
-	// Fetch performs one scrape. It is the client's Fetch in production.
+	// Fetch performs one settings-page fetch with the session cookie. It is Fetch in
+	// production and the fallback path whenever a stored API key fails.
 	Fetch func(ctx context.Context, account Account, cookie string) (Snapshot, error)
+	// FetchBalance performs one API-key balance scrape. It is the client's
+	// FetchBalance in production. Nil disables the preferred path, so an account
+	// with a stored key falls back to the cookie instead of failing outright.
+	FetchBalance func(ctx context.Context, account Account, apiKey string) (Snapshot, error)
 	// Observations, when set, records windows that carry a known duration into the
 	// shared observation timeline. Ollama publishes no window duration today, so it
 	// is not called by the first version; it is a wiring seam for when it does.
@@ -296,13 +314,15 @@ func (c *Collector) RefreshAccount(ctx context.Context, id string) (RefreshResul
 		// stale result to report, so answer as suppressed rather than success.
 		return last, nil
 	}
-	// A cookie change under the scrape makes the store refuse a result that read the
-	// old cookie, and an automatic scrape on an account that is now paused is refused
+	// A credential change under the collection makes the store refuse a result that
+	// read the old version, and an automatic scrape on an account that is now paused is refused
 	// too. In either case the reading was not persisted, so report the call as
 	// incomplete rather than returning an old success. There is no retry loop: the
 	// next click or the next cadence picks the new state up.
 	if reloaded, stillThere, reloadErr := c.AccountByID(opCtx, id); reloadErr == nil && stillThere {
-		if reloaded.CookieUpdatedAtMS != call.cookieVersion || (call.auto && !reloaded.Enabled) {
+		if reloaded.CookieUpdatedAtMS != call.cookieVersion ||
+			reloaded.APIKeyUpdatedAtMS != call.apiKeyVersion ||
+			(call.auto && !reloaded.Enabled) {
 			return RefreshResult{}, ErrRefreshSuperseded
 		}
 	}
@@ -310,7 +330,7 @@ func (c *Collector) RefreshAccount(ctx context.Context, id string) (RefreshResul
 }
 
 // Trigger queues one account for a scrape soon, without blocking the caller and
-// without reading a request context. It is what a create, a cookie update and a
+// without reading a request context. It is what a create, a credential update and a
 // resume call: the actual scrape happens on the service's long-lived context and
 // disappears when the process shuts down. The queue is a bounded set keyed by id, so
 // repeated triggers collapse into one pending marker and do not become one scrape per
@@ -324,7 +344,7 @@ func (c *Collector) Trigger(id string) {
 
 // enqueue records one pending account and wakes the worker. It is the one place a
 // marker is set, so a change that arrives while the worker is busy (including one
-// noticed after a scrape finished with a stale cookie) survives to the next round.
+// noticed after a collection finished with a stale credential) survives to the next round.
 func (c *Collector) enqueue(id string) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -420,6 +440,7 @@ func (c *Collector) performRefresh(ctx context.Context, seed StoredAccount, auto
 	}
 	call.auto = auto
 	call.cookieVersion = account.CookieUpdatedAtMS
+	call.apiKeyVersion = account.APIKeyUpdatedAtMS
 	if !c.acquire(ctx) {
 		call.result = RefreshResult{Suppressed: true}
 		return
@@ -430,7 +451,7 @@ func (c *Collector) performRefresh(ctx context.Context, seed StoredAccount, auto
 }
 
 // refreshTriggered runs one scrape round for an enabled, non-backed-off account. When
-// the round coalesced onto a scrape that read a cookie the operator has since replaced,
+// the round coalesced onto a collection that read a credential the operator has since replaced,
 // the trigger's change was not collected; the account is left as one pending marker so
 // the worker takes the newest configuration in the next round, instead of the change
 // waiting for the cadence. It never chases inside the call, so a repeated change still
@@ -451,7 +472,7 @@ func (c *Collector) refreshTriggered(ctx context.Context, id string) {
 		c.performRefresh(ctx, account, true, call)
 	} else {
 		// A scrape for this account is already running; wait for it so the result can be
-		// compared with the cookie the account now has.
+		// compared with the credential the account now has.
 		select {
 		case <-call.done:
 		case <-ctx.Done():
@@ -461,7 +482,7 @@ func (c *Collector) refreshTriggered(ctx context.Context, id string) {
 	if ctx.Err() != nil || call.result.Suppressed {
 		return
 	}
-	// A 429, a pause or a shutdown all stop the follow-up: only a live cookie change
+	// A 429, a pause or a shutdown all stop the follow-up: only a live credential change
 	// re-queues. The reload is the account's current state, never a generation.
 	current, found, err := c.AccountByID(ctx, id)
 	if err != nil || !found || !current.Enabled {
@@ -470,7 +491,7 @@ func (c *Collector) refreshTriggered(ctx context.Context, id string) {
 	if _, blocked := backoffUntil(current, c.now()); blocked {
 		return
 	}
-	if call.cookieVersion != current.CookieUpdatedAtMS {
+	if call.cookieVersion != current.CookieUpdatedAtMS || call.apiKeyVersion != current.APIKeyUpdatedAtMS {
 		c.enqueue(id)
 	}
 }
@@ -635,19 +656,42 @@ func backoffUntil(account StoredAccount, now time.Time) (int64, bool) {
 	return 0, false
 }
 
-// collectAccount decrypts one account's cookie, scrapes it and persists the
-// outcome. The plaintext cookie is cleared before returning. auto is recorded on the
-// result so the store can refuse an automatic write to an account that has been
+// collectAccount resolves one account's preferred credential, scrapes it and
+// persists the outcome. A stored API key uses the balance endpoint; the session
+// cookie is the fallback when the key is absent or fails. Plaintext credentials are
+// cleared before returning and no error text ever carries them. auto is recorded on
+// the result so the store can refuse an automatic write to an account that has been
 // disabled since the scrape began; a manual refresh passes false.
 func (c *Collector) collectAccount(ctx context.Context, account StoredAccount, auto bool, now time.Time) {
+	base := Account{ID: account.ID, Label: account.Label, Enabled: account.Enabled}
 	cookieVersion := versionPtr(account.CookieUpdatedAtMS)
+	apiKeyVersion := versionPtr(account.APIKeyUpdatedAtMS)
+
+	// The key path is tried first whenever the account has one. Its failure is kept
+	// only as context for the fallback's own verdict, never merged into a success.
+	keyFailure := ""
+	if len(account.APIKeyCiphertext) > 0 {
+		apiKey, err := c.decrypt(account.APIKeyCiphertext, account.APIKeyNonce)
+		if err != nil {
+			keyFailure = "stored Ollama API key could not be decrypted; re-enter it"
+		} else {
+			snapshot, fetchErr := c.fetchBalance(ctx, base, string(apiKey))
+			clearBytes(apiKey)
+			if fetchErr == nil && snapshot.IsSuccess() {
+				c.persistSuccess(ctx, account, snapshot, nil, apiKeyVersion, auto)
+				return
+			}
+			keyFailure = pathFailure(snapshot, fetchErr, "the API key balance path produced no reading")
+		}
+	}
+
 	cookie, err := c.decrypt(account.Ciphertext, account.Nonce)
 	if err != nil {
 		c.persist(ctx, CollectionResult{
 			ID:                account.ID,
 			Status:            StatusAuthInvalid,
 			ObservedAtMS:      now.UnixMilli(),
-			Error:             "stored Ollama cookie could not be decrypted; re-enter it",
+			Error:             combinePathErrors(keyFailure, "stored Ollama cookie could not be decrypted; re-enter it"),
 			ErrorAtMS:         now.UnixMilli(),
 			CookieUpdatedAtMS: cookieVersion,
 			Auto:              auto,
@@ -656,14 +700,14 @@ func (c *Collector) collectAccount(ctx context.Context, account StoredAccount, a
 	}
 	defer clearBytes(cookie)
 
-	snapshot, err := c.fetch(ctx, Account{ID: account.ID, Label: account.Label, Enabled: account.Enabled}, string(cookie))
+	snapshot, err := c.fetch(ctx, base, string(cookie))
 	if err != nil {
 		// A transport failure carries no Retry-After; the backoff grows by attempt.
 		c.persist(ctx, CollectionResult{
 			ID:                account.ID,
 			Status:            StatusTransportError,
 			ObservedAtMS:      now.UnixMilli(),
-			Error:             scrubError(err),
+			Error:             combinePathErrors(keyFailure, scrubError(err)),
 			ErrorAtMS:         now.UnixMilli(),
 			NextAttemptAtMS:   epochMSPtr(c.nextAttempt(now, account.AttemptCount, snapshot.RetryAfter, snapshot.HasRetryAfter)),
 			AttemptCount:      account.AttemptCount + 1,
@@ -675,26 +719,7 @@ func (c *Collector) collectAccount(ctx context.Context, account StoredAccount, a
 	}
 
 	if snapshot.IsSuccess() {
-		value := snapshot.ToQuota(account.Label)
-		encoded, marshalErr := json.Marshal(value)
-		if marshalErr != nil {
-			encoded = nil
-		}
-		c.persist(ctx, CollectionResult{
-			ID:                account.ID,
-			Status:            StatusOK,
-			ObservedAtMS:      snapshot.ObservedAt.UnixMilli(),
-			IsSuccess:         true,
-			SnapshotJSON:      string(encoded),
-			CookieUpdatedAtMS: cookieVersion,
-			Auto:              auto,
-		})
-		if c.Observations != nil && hasKnownDurations(value) {
-			if err := c.Observations(ctx, value); err != nil {
-				c.logger().Warn("ollama quota observation write failed", "account", account.ID, "error", err)
-			}
-		}
-		c.audit(ctx, "ollama.collect.success", "success", account.ID)
+		c.persistSuccess(ctx, account, snapshot, cookieVersion, nil, auto)
 		return
 	}
 
@@ -703,20 +728,73 @@ func (c *Collector) collectAccount(ctx context.Context, account StoredAccount, a
 		ID:                account.ID,
 		Status:            status,
 		ObservedAtMS:      snapshot.ObservedAt.UnixMilli(),
-		Error:             snapshot.Err,
+		Error:             combinePathErrors(keyFailure, snapshot.Err),
 		ErrorAtMS:         snapshot.ObservedAt.UnixMilli(),
 		CookieUpdatedAtMS: cookieVersion,
 		Auto:              auto,
 	}
-	// Auth is not retried with a backoff: only the operator can supply a new cookie.
-	// Every other failure backs off so a broken page or an upstream limit is not
-	// hammered.
+	// Auth is not retried with a backoff: only the operator can supply a new key or
+	// cookie. Every other failure backs off so a broken page or an upstream limit is
+	// not hammered.
 	if snapshot.Failure != FailureAuth {
 		result.NextAttemptAtMS = epochMSPtr(c.nextAttempt(now, account.AttemptCount, snapshot.RetryAfter, snapshot.HasRetryAfter))
 		result.AttemptCount = account.AttemptCount + 1
 	}
 	c.persist(ctx, result)
 	c.audit(ctx, "ollama.collect."+status, "failure", account.ID)
+}
+
+// persistSuccess stores one safe snapshot. Exactly one credential version is set:
+// APIKeyUpdatedAtMS when the balance endpoint produced the reading, CookieUpdatedAtMS
+// when the settings-page fallback did.
+func (c *Collector) persistSuccess(ctx context.Context, account StoredAccount, snapshot Snapshot, cookieVersion, apiKeyVersion *int64, auto bool) {
+	value := snapshot.ToQuota(account.Label)
+	encoded, marshalErr := json.Marshal(value)
+	if marshalErr != nil {
+		encoded = nil
+	}
+	c.persist(ctx, CollectionResult{
+		ID:                account.ID,
+		Status:            StatusOK,
+		ObservedAtMS:      snapshot.ObservedAt.UnixMilli(),
+		IsSuccess:         true,
+		SnapshotJSON:      string(encoded),
+		CookieUpdatedAtMS: cookieVersion,
+		APIKeyUpdatedAtMS: apiKeyVersion,
+		Auto:              auto,
+	})
+	if c.Observations != nil && hasKnownDurations(value) {
+		if err := c.Observations(ctx, value); err != nil {
+			c.logger().Warn("ollama quota observation write failed", "account", account.ID, "error", err)
+		}
+	}
+	c.audit(ctx, "ollama.collect.success", "success", account.ID)
+}
+
+// pathFailure turns one fetch outcome into the short reason recorded for it.
+func pathFailure(snapshot Snapshot, err error, empty string) string {
+	if err != nil {
+		return scrubError(err)
+	}
+	if message := strings.TrimSpace(snapshot.Err); message != "" {
+		return message
+	}
+	return empty
+}
+
+// combinePathErrors names the path that produced the final verdict and, when the
+// preferred key path was tried first, why it did not decide the outcome itself. It
+// never receives or returns credential material.
+func combinePathErrors(keyFailure, cookieFailure string) string {
+	cookieFailure = strings.TrimSpace(cookieFailure)
+	if cookieFailure == "" {
+		cookieFailure = "no reading was produced"
+	}
+	if strings.TrimSpace(keyFailure) == "" {
+		return "Ollama session cookie settings path failed: " + cookieFailure
+	}
+	return "Ollama API key balance path failed (" + strings.TrimSpace(keyFailure) +
+		"); session cookie settings path failed (" + cookieFailure + ")"
 }
 
 // nextAttempt computes the next allowed attempt. A Retry-After the upstream gave is
@@ -769,6 +847,13 @@ func (c *Collector) fetch(ctx context.Context, account Account, cookie string) (
 	return c.Fetch(ctx, account, cookie)
 }
 
+func (c *Collector) fetchBalance(ctx context.Context, account Account, apiKey string) (Snapshot, error) {
+	if c.FetchBalance == nil {
+		return Snapshot{}, errNoBalanceFetcher
+	}
+	return c.FetchBalance(ctx, account, apiKey)
+}
+
 func (c *Collector) persist(ctx context.Context, result CollectionResult) {
 	if c.Save == nil {
 		return
@@ -800,7 +885,7 @@ func hasKnownDurations(value *quota.NormalizedQuota) bool {
 	return false
 }
 
-// scrubError bounds a transport error message. The client never embeds the cookie
+// scrubError bounds a transport error message. The client never embeds a credential
 // in an error, so this only guards against an unbounded transport string.
 func scrubError(err error) string {
 	if err == nil {
@@ -836,6 +921,14 @@ func versionPtr(version int64) *int64 {
 
 type missingDecryptorError struct{}
 
-func (missingDecryptorError) Error() string { return "ollama: no cookie decryptor configured" }
+func (missingDecryptorError) Error() string { return "ollama: no credential decryptor configured" }
 
 var errNoDecryptor = missingDecryptorError{}
+
+type missingBalanceFetcherError struct{}
+
+func (missingBalanceFetcherError) Error() string {
+	return "ollama: no API-key balance fetcher configured"
+}
+
+var errNoBalanceFetcher = missingBalanceFetcherError{}

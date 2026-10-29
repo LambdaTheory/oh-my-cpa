@@ -73,7 +73,7 @@ describe('First Batch OMC UI Component Tests', () => {
             id: 'ollama_1',
             label: 'My Ollama',
             enabled: true,
-            has_cookie: true,
+            has_cookie: true, has_api_key: false,
             status: 'ok',
             created_at_ms: Date.now(),
             updated_at_ms: Date.now(),
@@ -121,9 +121,10 @@ describe('First Batch OMC UI Component Tests', () => {
       const editBtn = screen.getByRole('button', { name: /编辑|edit/i });
       fireEvent.click(editBtn);
 
-      // Verify cookie input has empty value
-      const cookieInput = document.querySelector('input[type="password"]') as HTMLInputElement;
+      // Verify the cookie input has an empty value and the API key field is present.
+      const cookieInput = screen.getByTestId('ollama-cookie-input') as HTMLInputElement;
       expect(cookieInput.value).toBe('');
+      expect(screen.getByTestId('ollama-api-key-input')).toBeDefined();
 
       // Save without touching cookie -> cookie payload should be undefined
       const saveBtn = screen.getByRole('button', { name: /保\s*存/ });
@@ -133,6 +134,7 @@ describe('First Batch OMC UI Component Tests', () => {
         expect(api.updateOllamaAccount).toHaveBeenCalledWith('ollama_1', {
           label: 'My Ollama',
           cookie: undefined,
+          api_key: undefined,
           enabled: true,
         });
       });
@@ -153,11 +155,10 @@ describe('First Batch OMC UI Component Tests', () => {
       );
 
       // Create new account: fill label and cookie
-      const textInputs = document.querySelectorAll('input[type="text"]');
-      const labelInput = textInputs[0] as HTMLInputElement;
+      const labelInput = screen.getByTestId('ollama-label-input') as HTMLInputElement;
       fireEvent.change(labelInput, { target: { value: 'New Account' } });
 
-      const cookieInput = document.querySelector('input[type="password"]') as HTMLInputElement;
+      const cookieInput = screen.getByTestId('ollama-cookie-input') as HTMLInputElement;
       fireEvent.change(cookieInput, { target: { value: 'user_session=def456' } });
 
       const saveBtn = screen.getByRole('button', { name: /保\s*存/ });
@@ -166,6 +167,7 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(onSave).toHaveBeenCalledWith({
         label: 'New Account',
         cookie: 'user_session=def456',
+        api_key: undefined,
         enabled: true,
       });
 
@@ -173,7 +175,7 @@ describe('First Batch OMC UI Component Tests', () => {
       const existingAccount: OllamaAccountDTO = {
         id: 'ollama_2',
         label: 'Existing Acc',
-        has_cookie: true,
+        has_cookie: true, has_api_key: false,
         enabled: false,
         attempt_count: 0,
         created_at_ms: 1000,
@@ -200,7 +202,79 @@ describe('First Batch OMC UI Component Tests', () => {
       expect(onSave).toHaveBeenCalledWith({
         label: 'Existing Acc',
         cookie: undefined,
+        api_key: undefined,
         enabled: false,
+      });
+    });
+
+    it('renders a password-style API key field and masks a stored key without prefilling it', () => {
+      const onSave = vi.fn();
+      const account: OllamaAccountDTO = {
+        id: 'ollama_key',
+        label: 'Keyed Ollama',
+        has_cookie: true,
+        has_api_key: true,
+        enabled: true,
+        attempt_count: 0,
+        created_at_ms: 1000,
+        updated_at_ms: 2000,
+      };
+      renderWithClient(
+        <OllamaAccountEditorModal
+          open={true}
+          account={account}
+          isSaving={false}
+          onClose={() => {}}
+          onSave={onSave}
+        />
+      );
+
+      const apiKeyInput = screen.getByTestId('ollama-api-key-input') as HTMLInputElement;
+      expect(apiKeyInput.type).toBe('password');
+      expect(apiKeyInput.value).toBe('');
+      expect(screen.getByText('API Key 已加密存储')).toBeDefined();
+      expect(screen.getByText('••••••••')).toBeDefined();
+    });
+
+    it('sends a typed API key and omits an untouched key on save', () => {
+      const onSave = vi.fn();
+      const account: OllamaAccountDTO = {
+        id: 'ollama_key_save',
+        label: 'Keyed Ollama',
+        has_cookie: true,
+        has_api_key: true,
+        enabled: true,
+        attempt_count: 0,
+        created_at_ms: 1000,
+        updated_at_ms: 2000,
+      };
+      renderWithClient(
+        <OllamaAccountEditorModal
+          open={true}
+          account={account}
+          isSaving={false}
+          onClose={() => {}}
+          onSave={onSave}
+        />
+      );
+
+      // An untouched field is omitted, so the stored key is preserved.
+      fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+      expect(onSave).toHaveBeenLastCalledWith({
+        label: 'Keyed Ollama',
+        cookie: undefined,
+        api_key: undefined,
+        enabled: true,
+      });
+
+      const apiKeyInput = screen.getByTestId('ollama-api-key-input') as HTMLInputElement;
+      fireEvent.change(apiKeyInput, { target: { value: 'typed-ollama-key' } });
+      fireEvent.click(screen.getByRole('button', { name: /保\s*存/ }));
+      expect(onSave).toHaveBeenLastCalledWith({
+        label: 'Keyed Ollama',
+        cookie: undefined,
+        api_key: 'typed-ollama-key',
+        enabled: true,
       });
     });
 
@@ -224,7 +298,7 @@ describe('First Batch OMC UI Component Tests', () => {
           id: 'ollama-iso-1',
           label: 'Ollama Acc',
           enabled: true,
-          has_cookie: true,
+          has_cookie: true, has_api_key: false,
           status: 'ok',
           attempt_count: 0,
           created_at_ms: 1000,

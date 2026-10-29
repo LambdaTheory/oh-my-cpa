@@ -209,22 +209,28 @@ See ADR 0105.
 
 ### Ollama monitoring
 
-The Ollama collector stores several accounts and scrapes `https://ollama.com/settings`
-with each account's session cookie to read the labelled USD Usage credits card and monthly model request counts. Relative refill text stays verbatim, and a failed read displays data missing rather than zero or a depletion estimate. The cookie is encrypted at rest
-and never returned. Ollama is not in CPA's control chain: the switch below stops the
-scraper, never inference. Accounts live in the console under `/api/v1/ollama/accounts`
-and the newest reading under `/api/v1/ollama/quota`; the collector never runs in demo
-mode. Adding an enabled account, or changing its cookie, or bringing a paused account
-back on, triggers a scrape at once instead of waiting for the cadence, and the console
-can force one account with `POST /api/v1/ollama/accounts/{id}/refresh`. Every one of
-those paths shares the same per-account lock, global concurrency cap and persisted
-backoff, so none can bypass another's rate limit.
+The Ollama collector stores several accounts and reads each one's quota from the
+official balance endpoint `https://ollama.com/api/balance` when the account has an API
+key, falling back to `https://ollama.com/settings` with the account's session cookie
+when the key is absent or its path fails. The balance endpoint reports included
+remaining and allowance amounts; the settings page supplies the labelled USD Usage
+credits card and monthly model request counts. Relative refill text stays verbatim, and
+a failed read displays data missing rather than zero or a depletion estimate. The API
+key and cookie are both encrypted at rest and never returned; only presence flags reach
+the console. Ollama is not in CPA's control chain: the switch below stops the collector,
+never inference. Accounts live in the console under `/api/v1/ollama/accounts` and the
+newest reading under `/api/v1/ollama/quota`; the collector never runs in demo mode.
+Adding an enabled account, or changing its API key or cookie, or bringing a paused
+account back on, triggers a scrape at once instead of waiting for the cadence, and the
+console can force one account with `POST /api/v1/ollama/accounts/{id}/refresh`. Every
+one of those paths shares the same per-account lock, global concurrency cap and
+persisted backoff, so none can bypass another's rate limit.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OMCPA_OLLAMA_COLLECTOR_ENABLED` | `true` | Run the background Ollama scraper. Off in demo mode |
+| `OMCPA_OLLAMA_COLLECTOR_ENABLED` | `true` | Run the background Ollama collector. Off in demo mode |
 | `OMCPA_OLLAMA_COLLECTOR_INTERVAL` | `15m` | Cadence between collection passes |
-| `OMCPA_OLLAMA_TIMEOUT` | `20s` | Per-scrape HTTP timeout |
+| `OMCPA_OLLAMA_TIMEOUT` | `20s` | Per-fetch HTTP timeout |
 | `OMCPA_OLLAMA_BACKOFF_BASE` | `5m` | First wait after a transport failure or 429; it doubles up to the maximum |
 | `OMCPA_OLLAMA_BACKOFF_MAX` | `6h` | Ceiling on the collection backoff. Must be at least the base |
 

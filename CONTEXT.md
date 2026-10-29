@@ -579,27 +579,32 @@ not extend the quota_prediction capability schema.
   An externally enabled credential ends the pending recovery without re-closing the
   account from its old evidence. The read-only MCP summary cannot mutate any of this state.
 - **Ollama Account**: One Ollama Cloud account OMC monitors outside CPA's control
-  chain. The current session-cookie integration reads the fixed
-  `https://ollama.com/settings` page with the account's session cookie, which is
-  encrypted at rest and never returned. The current Usage credits wallet reports a
-  USD balance and the monthly credits used inside the card's own slice of the page;
-  both are validated whole amounts stored as integer cents. Their sum is the monthly
-  total; a positive used / total share is labelled as calculated. Missing or damaged
-  amounts are data missing, never zero. A published
-  zero is described in words. Relative monthly refill text remains verbatim and never
-  becomes a reset timestamp or depletion prediction. Monthly model request counts are
-  separate upstream facts, not CPA traffic telemetry. Legacy percentage windows can
-  still be collected, but only current credit-card facts populate the Ollama UI. The per-account switch stops
-  collection only; it is not a CPA credential state and never claims to stop
-  inference. Adding an enabled account, changing its cookie or resuming it triggers a
-  scrape at once, and the console can force one account with an explicit manual
-  refresh; the switch gates the periodic pass, so a single manual refresh still works
-  on a paused account. A scrape carries the cookie version it read, so a result from a
-  cookie the operator has since replaced is dropped; an automatic result never writes to
-  a disabled account, while a manual refresh of a paused account does. Enable state is
-  not a generation: a label edit does not invalidate a reading, and a disable plus a
-  quick resume under one in-flight scrape is an accepted race, not a security boundary.
-  Ollama is the deliberate exception to the CPA data sources.
+  chain. A stored API key is preferred and reads the fixed
+  `https://ollama.com/api/balance` endpoint with a Bearer header; `included.balance_usd`
+  is remaining and `allowance_usd - included.balance_usd`, clamped at zero, is used.
+  When the key is absent or its path fails, the account's session cookie reads the fixed
+  `https://ollama.com/settings` page and the current Usage credits wallet supplies a USD
+  balance and the monthly credits used inside the card's own slice. A key failure is
+  never folded into a cookie success, and a final failure names the path that produced it.
+  Both credentials are encrypted at rest and never returned; only `has_api_key` and
+  `has_cookie` are metadata. Validated whole amounts are stored as integer cents. Their
+  sum is the monthly total; a positive used / total share is labelled as calculated.
+  Missing or damaged amounts are data missing, never zero. A published zero is described
+  in words. Relative monthly refill text remains verbatim and never becomes a reset
+  timestamp or depletion prediction. Monthly model request counts are separate upstream
+  facts, not CPA traffic telemetry. Legacy percentage windows can still be collected,
+  but only current credit-card facts populate the Ollama UI. The per-account switch stops
+  collection only; it is not a CPA credential state and never claims to stop inference.
+  Adding an enabled account, changing its API key or cookie, or resuming it triggers a
+  collection at once, and the console can force one account with an explicit manual
+  refresh; the switch gates the periodic pass, so a single manual refresh still works on
+  a paused account. A collection carries the version of the credential its winning path
+  read, so a result from a credential the operator has since replaced is dropped; an
+  automatic result never writes to a disabled account, while a manual refresh of a paused
+  account does. Enable state is not a generation: a label edit does not invalidate a
+  reading, and a disable plus a quick resume under one in-flight collection is an
+  accepted race, not a security boundary. Ollama is the deliberate exception to the CPA
+  data sources.
 - **Feishu Notification**: A stored-only decision card for one configured group or person.
   Immediate cards contain at most three two-line blocks and a console link; queries
   allow eight blocks and fold healthy channels. Only exhausted windows, invalid

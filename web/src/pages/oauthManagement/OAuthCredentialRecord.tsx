@@ -153,7 +153,10 @@ export const OAuthCredentialRecord: React.FC<OAuthCredentialRecordProps> = ({
               </span>
             )}
             {isOllama && (
-              <Tag size="small">{ollamaAccount?.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
+              <>
+                <Tag size="small">{ollamaAccount?.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
+                <Tag size="small">{ollamaAccount?.has_api_key ? t('ollama.api_key_saved') : t('ollama.api_key_missing')}</Tag>
+              </>
             )}
             {!isOllama && file.runtime_only && <Tag size="small">{t('af.status_virtual_badge')}</Tag>}
             {file.priority !== undefined && (

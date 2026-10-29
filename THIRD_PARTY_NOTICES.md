@@ -51,13 +51,19 @@ distribution of this project is **not settled by this notice** and must be revie
 before the feature is merged for distribution. A rewrite that reuses only the
 approach is not, by itself, asserted here to waive any obligation.
 
-### CodexBar Ollama wallet parsing
+### CodexBar Ollama wallet parsing and balance derivation
 
 `internal/ollama/credits.go` ports the wallet-slice parsing shape from the
 **MIT**-licensed `steipete/CodexBar`
 (`Sources/CodexBarCore/Providers/Ollama/OllamaUsageParser.swift`): the heading
 pattern, the slice end condition and the balance/used span patterns. The
 surrounding Go parser and its tests are this project's own.
+
+`internal/ollama/balance.go` derives the balance reading from the same project's
+`Plugins/ollama-api.ts`: remaining is `included.balance_usd`, used is
+`allowance_usd - included.balance_usd`, and `purchased.balance_usd` is kept as a
+separate credit balance. The Go client, validation and wire mapping are this
+project's own.
 
 ### Feishu card and notification structure
 
