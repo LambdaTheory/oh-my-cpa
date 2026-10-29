@@ -581,10 +581,11 @@ not extend the quota_prediction capability schema.
 - **Ollama Account**: One Ollama Cloud account OMC monitors outside CPA's control
   chain. The current session-cookie integration reads the fixed
   `https://ollama.com/settings` page with the account's session cookie, which is
-  encrypted at rest and never returned. The current Usage credits card reports USD
-  remaining and used this month; both are validated whole amounts stored as integer
-  cents. Their sum is the monthly total; a positive used / total share is labelled
-  as calculated. Missing or damaged amounts are data missing, never zero. A published
+  encrypted at rest and never returned. The current Usage credits wallet reports a
+  USD balance and the monthly credits used inside the card's own slice of the page;
+  both are validated whole amounts stored as integer cents. Their sum is the monthly
+  total; a positive used / total share is labelled as calculated. Missing or damaged
+  amounts are data missing, never zero. A published
   zero is described in words. Relative monthly refill text remains verbatim and never
   becomes a reset timestamp or depletion prediction. Monthly model request counts are
   separate upstream facts, not CPA traffic telemetry. Legacy percentage windows can

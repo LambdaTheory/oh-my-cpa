@@ -2445,8 +2445,9 @@ read-only MCP key reaches the summary tool and no write route.
 scraping the fixed `https://ollama.com/settings` page with the account's session
 cookie. The cookie is AES-GCM encrypted in `ollama_accounts` (hidden from the SQL
 path) and is never returned, logged or put in an error; only `has_cookie` reaches a
-DTO. The current settings DOM's labelled Usage credits card supplies remaining and
-used USD amounts, parsed whole into integer cents. The normalized snapshot stores
+DTO. The current settings page's Usage credits wallet — the slice between its
+heading and the first section close or next heading — supplies remaining and used
+USD amounts, parsed whole into integer cents. The normalized snapshot stores
 these in `ollama_credits`, with their sum, an optional positive used / total share,
 verbatim monthly refill text and monthly per-model request counts. These are not
 quota windows: no duration, reset timestamp or depletion prediction is invented.

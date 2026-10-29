@@ -7,6 +7,7 @@ import (
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // headingQualifierLimit bounds the trailing word a card heading may add to a
@@ -14,46 +15,53 @@ import (
 const headingQualifierLimit = 12
 
 var (
-	USD_AMOUNT       = regexp.MustCompile(`^(?:USD\s*\$?|\$)\s*(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.([0-9]{1,2}))?$`)
-	REMAINING_AMOUNT = regexp.MustCompile(`(?i)^(?:remaining(?: credits)?|balance remaining)\s*:?\s*(.+)$|^(.+?)\s+(?:remaining(?: credits)?|balance remaining)$`)
-	// BALANCE_AMOUNT is the label the page uses now: the credits card prints a
-	// single "Total" line for the balance (monthly allowance plus added credits)
-	// where it used to print "... remaining". Without it the collector reports no
-	// trustworthy reading even though the page is intact and the session is valid.
-	BALANCE_AMOUNT = regexp.MustCompile(`(?i)^total\s*:?\s*(.+)$|^(.+?)\s+total$`)
+	USD_AMOUNT     = regexp.MustCompile(`^(?:USD\s*\$?|\$)\s*(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.([0-9]{1,2}))?$`)
 	USED_AMOUNT    = regexp.MustCompile(`(?i)^(?:used this month|this month used|monthly usage|monthly credits used)\s*:?\s*(.+)$|^(.+?)\s+(?:used this month|monthly credits used)$`)
 	MODEL_REQUESTS = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s+([0-9]+(?:,[0-9]{3})*)\s+requests?$`)
+
+	// Parsing shape ported from CodexBar (MIT), OllamaUsageParser.swift.
+	//
+	// The live settings page splits the card across sibling containers: the
+	// heading sits in a header strip while the amounts sit beside it. The wallet
+	// is therefore a text slice bounded by the heading and the card's end tag, not
+	// a DOM subtree, so no ancestor can widen or narrow the scope.
+	CREDITS_HEADING = regexp.MustCompile(`(?is)<h[1-6][^>]*>\s*Usage credits(?:\s*<span[^>]*>[^<]*</span\s*>)?\s*</h[1-6]\s*>`)
+	CREDITS_END     = regexp.MustCompile(`(?i)</section\s*>|<h[1-6]\b`)
+	// CREDIT_BALANCE is the first span after the heading, optionally wrapped in
+	// divs; its text must be a complete USD amount. A page that prints a bare
+	// "Total" line instead stays unreadable rather than borrowing a number the
+	// wallet never stated as its balance.
+	CREDIT_BALANCE = regexp.MustCompile(`(?is)^\s*(?:<div\b[^>]*>\s*)*<span\b[^>]*>([^<]*)</span\s*>`)
+	CREDIT_USED    = regexp.MustCompile(`(?is)<span\b[^>]*>\s*Monthly credits used\s*</span\s*>\s*<span\b[^>]*>([^<]*)</span\s*>`)
+	// SCRIPT_STYLE is stripped before the slice is measured so a tag inside a
+	// script or style body cannot move the card boundary.
+	SCRIPT_STYLE = regexp.MustCompile(`(?is)<script\b[^>]*>.*?</script\s*>|<style\b[^>]*>.*?</style\s*>`)
 )
 
-// Read the labelled credit card in the response DOM. Searching flattened page
-// text for a dollar sign can turn unrelated prices or damaged text into balances.
+// Read the wallet figures from the credits card. Searching flattened page text
+// for a dollar sign can turn unrelated prices or damaged text into balances.
 func parseCredits(document string) *quota.OllamaCredits {
+	wallet, ok := creditsWallet(document)
+	if !ok {
+		return nil
+	}
 	root, err := html.Parse(strings.NewReader(document))
 	if err != nil {
 		return nil
 	}
-	var heading *html.Node
-	walkElements(root, func(node *html.Node) {
-		if heading == nil && matchesHeading(node, "Usage credits") {
-			heading = node
-		}
-	})
-	if heading == nil {
-		return nil
-	}
+	walletNodes := parseWalletFragment(wallet)
+
 	credits := &quota.OllamaCredits{Source: "settings_usage_credits"}
-	card := headingContainer(heading)
-	if card != nil {
-		credits.RemainingCents, _ = labelledAmount(card, REMAINING_AMOUNT)
-		if credits.RemainingCents == nil {
-			// The card no longer says "remaining": it prints one "Total" line for the
-			// balance. Read that instead of failing, but keep requiring the used figure
-			// below, so a page that lost both labels still reads as no reading rather
-			// than as a zero balance.
-			credits.RemainingCents, _ = labelledAmount(card, BALANCE_AMOUNT)
-		}
-		credits.UsedCents, _ = labelledAmount(card, USED_AMOUNT)
-		walkElements(card, func(node *html.Node) {
+	credits.RemainingCents = creditBalance(wallet)
+	if credits.RemainingCents != nil {
+		// Only read the spend next to a balance from the same slice. A slice without
+		// one has no proven card boundary (div-only markup offers none), so a "used
+		// this month" string further down may belong to a sibling section; leaving the
+		// figure absent keeps the reading unreadable instead of borrowing that spend.
+		credits.UsedCents = creditUsed(wallet, walletNodes)
+	}
+	if walletNodes != nil {
+		walkElements(walletNodes, func(node *html.Node) {
 			text := nodeText(node)
 			if strings.HasPrefix(strings.ToLower(text), "monthly credits refill") && len(text) <= 160 {
 				if credits.RefillText == "" || len(text) < len(credits.RefillText) {
@@ -61,24 +69,6 @@ func parseCredits(document string) *quota.OllamaCredits {
 				}
 			}
 		})
-	}
-
-	if credits.UsedCents == nil {
-		// The spent figure no longer sits in the credits card: the page prints it in
-		// the "Usage breakdown" section below. The label is unique on the page, so read
-		// it document-wide rather than reporting the account as having no reading at
-		// all. A page that lost the label entirely still ends up with no used figure,
-		// which keeps the "no trustworthy reading" verdict honest.
-		credits.UsedCents, _ = labelledAmount(root, USED_AMOUNT)
-	}
-
-	if credits.RemainingCents == nil {
-		// The balance line is not always inside the heading's container: with div-only
-		// markup the title sits in a header strip while the figures live in a sibling
-		// block. "Total" appears once on the page and labelledAmount refuses a label that
-		// resolves to more than one value, so this stays as strict as the card lookup and
-		// cannot borrow another card's figure.
-		credits.RemainingCents, _ = labelledAmount(root, BALANCE_AMOUNT)
 	}
 
 	if credits.RemainingCents != nil && credits.UsedCents != nil {
@@ -99,6 +89,64 @@ func parseCredits(document string) *quota.OllamaCredits {
 		}
 	})
 	return credits
+}
+
+// creditsWallet returns the credits card as a text slice: everything after the
+// "Usage credits" heading up to the first section close, the next heading, or the
+// end of the document.
+func creditsWallet(document string) (string, bool) {
+	page := SCRIPT_STYLE.ReplaceAllString(document, "")
+	page = strings.ReplaceAll(page, "&nbsp;", " ")
+	heading := CREDITS_HEADING.FindStringIndex(page)
+	if heading == nil {
+		return "", false
+	}
+	wallet := page[heading[1]:]
+	if end := CREDITS_END.FindStringIndex(wallet); end != nil {
+		wallet = wallet[:end[0]]
+	}
+	return wallet, true
+}
+
+func creditBalance(wallet string) *int64 {
+	match := CREDIT_BALANCE.FindStringSubmatch(wallet)
+	if match == nil {
+		return nil
+	}
+	return parseUSDCents(match[1])
+}
+
+func creditUsed(wallet string, nodes *html.Node) *int64 {
+	if match := CREDIT_USED.FindStringSubmatch(wallet); match != nil {
+		if cents := parseUSDCents(match[1]); cents != nil {
+			return cents
+		}
+	}
+	// Older cards print "$0.02 used this month" with the amount first and no label
+	// element, which USED_AMOUNT still recognizes on the slice's own text.
+	if nodes == nil {
+		return nil
+	}
+	cents, _ := labelledAmount(nodes, USED_AMOUNT)
+	return cents
+}
+
+// parseWalletFragment parses the slice in a div context, so tags left open by the
+// cut stay inside the returned tree instead of escaping into a wider document.
+func parseWalletFragment(fragment string) *html.Node {
+	nodes, err := html.ParseFragment(strings.NewReader(fragment), &html.Node{
+		Type:     html.ElementNode,
+		Data:     "div",
+		DataAtom: atom.Div,
+	})
+	if err != nil {
+		return nil
+	}
+	root := &html.Node{Type: html.ElementNode, Data: "div", DataAtom: atom.Div}
+	for _, node := range nodes {
+		root.AppendChild(node)
+	}
+	return root
 }
 
 func labelledAmount(root *html.Node, pattern *regexp.Regexp) (*int64, bool) {
