@@ -63,6 +63,15 @@ func parseCredits(document string) *quota.OllamaCredits {
 		})
 	}
 
+	if credits.UsedCents == nil {
+		// The spent figure no longer sits in the credits card: the page prints it in
+		// the "Usage breakdown" section below. The label is unique on the page, so read
+		// it document-wide rather than reporting the account as having no reading at
+		// all. A page that lost the label entirely still ends up with no used figure,
+		// which keeps the "no trustworthy reading" verdict honest.
+		credits.UsedCents, _ = labelledAmount(root, USED_AMOUNT)
+	}
+
 	if credits.RemainingCents != nil && credits.UsedCents != nil {
 		total := *credits.RemainingCents + *credits.UsedCents
 		credits.TotalCents = &total
