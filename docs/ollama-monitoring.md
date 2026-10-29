@@ -94,12 +94,17 @@ enable generation.
   `Retry-After` is honoured when present; otherwise the wait doubles from
   `DefaultBackoffBase` (5 minutes) up to `DefaultBackoffMax` (6 hours). A manual
   refresh, or a first/update-cookie trigger, never bypasses a live backoff.
-- The current source is the response DOM's **Usage credits** card, using the
-  explicitly labelled remaining and used-this-month facts. `internal/ollama/credits.go`
-  uses the existing HTML parser dependency, not the old flattened-text balance
-  search. Only complete USD amounts are accepted; paths, mixed characters, other
+- The current source is the response DOM's **Usage credits** wallet. The parser
+  cuts a text slice from the heading — an optional plan badge such as `max` is
+  allowed — to the first section close or next heading, and reads only inside it;
+  DOM ancestors never widen the scope. The balance is the first amount-only span
+  in the slice, and the used figure is either a "Monthly credits used" span pair
+  or the older "used this month" wording. `internal/ollama/credits.go` uses the
+  existing HTML parser dependency, not the old flattened-text balance search.
+  Only complete USD amounts are accepted; paths, mixed characters, other
   currencies, negative values and unsupported decimal precision are refused.
-  There is no cleanup that extracts digits from damaged strings.
+  There is no cleanup that extracts digits from damaged strings, and a missing
+  used figure stays absent instead of becoming zero.
 - The safe snapshot's `ollama_credits` object carries `source=settings_usage_credits`,
   `remaining_cents`, `used_cents`, `total_cents`, optional `used_percent`,
   `refill_text`, and `models` (`model`, `requests`). The total is remaining + used;

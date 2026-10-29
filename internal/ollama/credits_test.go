@@ -146,11 +146,11 @@ func TestUSDCreditsAcceptsHeadingBadgeAndMonthlyLabel(t *testing.T) {
 	}
 }
 
-// The credits card dropped the "remaining" wording and now prints one "Total"
-// line for the balance, under a heading that carries a "max" qualifier. Both
-// facts are read from a live capture of the settings page, and either one alone
-// used to make the collector report no trustworthy reading.
-func TestFetchUSDCreditsWithTotalLabel(t *testing.T) {
+// The live page prints a bare amount span for the balance and its own "Total"
+// line underneath. The balance is the first bare span, never the page's own
+// arithmetic, and the used figure still arrives through the older bare-label
+// wording inside the same wallet slice.
+func TestFetchUSDCreditsIgnoresTotalLineForBalance(t *testing.T) {
 	page := `<html><body>
 <section><h2>Usage credits <span>max</span></h2>
 <div><span>$249.98</span></div>
@@ -171,14 +171,17 @@ func TestFetchUSDCreditsWithTotalLabel(t *testing.T) {
 		t.Fatalf("no credits from the current card shape: %+v", snapshot)
 	}
 	credits := snapshot.Credits
-	if credits.RemainingCents == nil || *credits.RemainingCents != 25000 {
-		t.Fatalf("remaining = %v, want 25000", credits.RemainingCents)
+	if credits.RemainingCents == nil || *credits.RemainingCents != 24998 {
+		t.Fatalf("remaining = %v, want 24998 from the bare span", credits.RemainingCents)
 	}
 	if credits.UsedCents == nil || *credits.UsedCents != 2 {
 		t.Fatalf("used = %v, want 2", credits.UsedCents)
 	}
-	if credits.TotalCents == nil || *credits.TotalCents != 25002 {
-		t.Fatalf("total = %v, want 25002", credits.TotalCents)
+	if credits.TotalCents == nil || *credits.TotalCents != 25000 {
+		t.Fatalf("total = %v, want 25000", credits.TotalCents)
+	}
+	if credits.RefillText != "Monthly credits refill in 2 weeks" {
+		t.Fatalf("refill = %q", credits.RefillText)
 	}
 }
 
@@ -211,13 +214,53 @@ func TestHeadingQualifierIsBounded(t *testing.T) {
 	}
 }
 
-// The spent figure moved out of the credits card into the "Usage breakdown"
-// section below it. Reading only the card made the whole account look unreadable
-// even though both labelled facts were on the page.
-func TestFetchUSDCreditsWithUsedOutsideTheCard(t *testing.T) {
+// The live settings page splits the card across sibling containers: the heading
+// carries a "max" badge, the balance is the first bare amount span, and the
+// wallet rows follow inside the same section. The "Usage breakdown" section
+// repeats the used label and a $900 remaining decoy, both of which stay outside
+// the reading.
+func TestFetchUSDCreditsFromLivePageShape(t *testing.T) {
 	page := `<html><body>
-<section><h2>Usage credits max</h2>
-<p>Total $250.00</p>
+<section>
+<div><h2>Usage credits <span>max</span></h2>
+<div><span>$249.98</span></div>
+<div><p>Monthly credits $250.00</p><p>Added credits $0</p><p>Total $250.00</p></div>
+<div><span>Monthly credits used</span><span>$0.02</span></div>
+</section>
+<section>
+<h2>Usage breakdown</h2>
+<p>$900 remaining</p>
+<p>Monthly credits used <span>$900.00</span></p>
+</section>
+</body></html>`
+
+	client := fixtureServer(t, 200, page)
+	snapshot, err := client.Fetch(context.Background(), "synthetic", "fake-session")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !snapshot.IsSuccess() || snapshot.Credits == nil {
+		t.Fatalf("no credits from the live page shape: %+v", snapshot)
+	}
+	credits := snapshot.Credits
+	if credits.RemainingCents == nil || *credits.RemainingCents != 24998 {
+		t.Fatalf("balance = %v, want 24998 from the first bare span", credits.RemainingCents)
+	}
+	if credits.UsedCents == nil || *credits.UsedCents != 2 {
+		t.Fatalf("used = %v, want 2", credits.UsedCents)
+	}
+	if credits.TotalCents == nil || *credits.TotalCents != 25000 {
+		t.Fatalf("total = %v, want 25000", credits.TotalCents)
+	}
+}
+
+// A used pair beyond the card's closing section tag is outside the wallet slice.
+// Reading it would borrow another section's spend, so the reading stays
+// unreadable instead.
+func TestFetchUSDCreditsIgnoresUsedBeyondWalletSlice(t *testing.T) {
+	page := `<html><body>
+<section><h2>Usage credits <span>max</span></h2>
+<div><span>$249.98</span></div>
 </section>
 <section><h2>Usage breakdown</h2>
 <p>Monthly credits used <span>$0.02</span></p>
@@ -229,42 +272,13 @@ func TestFetchUSDCreditsWithUsedOutsideTheCard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
-	if !snapshot.IsSuccess() || snapshot.Credits == nil {
-		t.Fatalf("no credits when the used label sits outside the card: %+v", snapshot)
+	if snapshot.IsSuccess() {
+		t.Fatalf("borrowed a used figure outside the wallet slice: %+v", snapshot.Credits)
 	}
-	credits := snapshot.Credits
-	if credits.RemainingCents == nil || *credits.RemainingCents != 25000 {
-		t.Fatalf("remaining = %v, want 25000", credits.RemainingCents)
+	if snapshot.Credits == nil || snapshot.Credits.RemainingCents == nil || *snapshot.Credits.RemainingCents != 24998 {
+		t.Fatalf("balance inside the slice was lost: %+v", snapshot.Credits)
 	}
-	if credits.UsedCents == nil || *credits.UsedCents != 2 {
-		t.Fatalf("used = %v, want 2", credits.UsedCents)
-	}
-}
-
-// On the current page the title sits in a header strip and the figures live in
-// sibling blocks, so a card-scoped lookup finds nothing. "Total" is read
-// document-wide, but only because it is a label that resolves to one value; the
-// sibling-refusal test keeps that honest.
-func TestFetchUSDCreditsWithTotalOutsideTheCard(t *testing.T) {
-	page := `<html><body>
-<section><h2>Usage credits max</h2></section>
-<section><p>Monthly credits $250.00</p><p>Added credits $0</p><p>Total $250.00</p></section>
-<section><h2>Usage breakdown</h2><p>Monthly credits used <span>$0.02</span></p></section>
-</body></html>`
-
-	client := fixtureServer(t, 200, page)
-	snapshot, err := client.Fetch(context.Background(), "synthetic", "fake-session")
-	if err != nil {
-		t.Fatalf("fetch: %v", err)
-	}
-	if !snapshot.IsSuccess() || snapshot.Credits == nil {
-		t.Fatalf("no credits when Total sits outside the card: %+v", snapshot)
-	}
-	credits := snapshot.Credits
-	if credits.RemainingCents == nil || *credits.RemainingCents != 25000 {
-		t.Fatalf("remaining = %v, want 25000", credits.RemainingCents)
-	}
-	if credits.UsedCents == nil || *credits.UsedCents != 2 {
-		t.Fatalf("used = %v, want 2", credits.UsedCents)
+	if snapshot.Credits.UsedCents != nil {
+		t.Fatalf("used = %v, want it absent", snapshot.Credits.UsedCents)
 	}
 }
