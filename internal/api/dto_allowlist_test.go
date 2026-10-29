@@ -186,6 +186,9 @@ func TestBrowserDTOAllowlistAndSecretExclusion(t *testing.T) {
 		// has_cookie and never the encrypted cookie.
 		"/api/v1/ollama/accounts",
 		"/api/v1/ollama/quota",
+		// The temporary page-structure diagnosis. It returns redacted counts and
+		// masked sample lines only, so it must clear the same secret assertions.
+		"/api/v1/ollama/accounts/some-id/diagnose",
 	}
 
 	for _, endpoint := range endpoints {

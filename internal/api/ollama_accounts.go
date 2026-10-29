@@ -102,6 +102,7 @@ func RegisterOllamaRoutes(router chi.Router, h *Handler) {
 	router.Put("/ollama/accounts/{id}", h.updateOllamaAccount)
 	router.Delete("/ollama/accounts/{id}", h.deleteOllamaAccount)
 	router.Post("/ollama/accounts/{id}/refresh", h.refreshOllamaAccount)
+	router.Get("/ollama/accounts/{id}/diagnose", h.diagnoseOllamaAccount)
 	router.Get("/ollama/quota", h.getOllamaQuota)
 }
 
@@ -642,4 +643,103 @@ func decodeOllamaQuota(encoded string) *quota.NormalizedQuota {
 		return nil
 	}
 	return &value
+}
+
+// ollamaDiagnosisDTO is the redacted structure behind one settings-page fetch:
+// status, counts, word presence, masked sample lines and same-origin links. It
+// carries no page body and no credential.
+type ollamaDiagnosisDTO struct {
+	Status           int      `json:"status"`
+	ContentType      string   `json:"content_type"`
+	RedirectLocation string   `json:"redirect_location"`
+	BodyBytes        int      `json:"body_bytes"`
+	LooksLikeLogin   bool     `json:"looks_like_login"`
+	LineCount        int      `json:"line_count"`
+	ScriptCount      int      `json:"script_count"`
+	PercentCount     int      `json:"percent_count"`
+	MoneyCount       int      `json:"money_count"`
+	HasSessionWord   bool     `json:"has_session_word"`
+	HasWeeklyWord    bool     `json:"has_weekly_word"`
+	HasBalanceWord   bool     `json:"has_balance_word"`
+	HasCreditWord    bool     `json:"has_credit_word"`
+	HasQuotaWord     bool     `json:"has_quota_word"`
+	Headings         []string `json:"headings"`
+	InterestingLines []string `json:"interesting_lines"`
+	HrefPaths        []string `json:"href_paths"`
+}
+
+// diagnoseOllamaAccount reports why a stored cookie no longer yields a quota
+// reading, without revealing the page or the credential.
+//
+// The upstream settings page can answer 200 with a live session and still carry
+// no parseable window, and the operator cannot share the page because the
+// account belongs to someone else. This route therefore performs one bounded
+// same-origin fetch and returns only masked structure, so the parser can be
+// repaired against evidence instead of guesses. It reads no state, writes none,
+// and deliberately does not record an audit entry or a scrape result: a
+// diagnostic must not look like a quota observation.
+//
+// Temporary. Remove this route, its DTO and its tests once the parser tracks the
+// current page.
+func (h *Handler) diagnoseOllamaAccount(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	id, ok := ollamaAccountID(writer, request)
+	if !ok {
+		return
+	}
+	if h.repo == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ollama account storage is unavailable")
+		return
+	}
+	if h.cipher == nil {
+		writeError(writer, http.StatusServiceUnavailable, "ollama account cipher is unavailable")
+		return
+	}
+	secret, found, err := h.ollamaAccountSecretByID(request.Context(), id)
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	if !found {
+		writeError(writer, http.StatusNotFound, "ollama account not found")
+		return
+	}
+	cookie, err := h.cipher.Decrypt(secret.Ciphertext, secret.Nonce)
+	if err != nil {
+		writeError(writer, http.StatusServiceUnavailable, "ollama cookie could not be decrypted")
+		return
+	}
+	timeout := h.cfg.Ollama.Timeout
+	if timeout <= 0 {
+		timeout = ollama.DefaultTimeout
+	}
+	if timeout > ollamaRefreshTimeout {
+		timeout = ollamaRefreshTimeout
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), timeout)
+	defer cancel()
+	diagnosis, err := ollama.NewClient(timeout).Diagnose(ctx, string(cookie))
+	if err != nil {
+		writeError(writer, http.StatusBadGateway, "ollama settings page could not be fetched")
+		return
+	}
+	writeJSON(writer, http.StatusOK, ollamaDiagnosisDTO{
+		Status:           diagnosis.Status,
+		ContentType:      diagnosis.ContentType,
+		RedirectLocation: diagnosis.RedirectLocation,
+		BodyBytes:        diagnosis.BodyBytes,
+		LooksLikeLogin:   diagnosis.LooksLikeLogin,
+		LineCount:        diagnosis.LineCount,
+		ScriptCount:      diagnosis.ScriptCount,
+		PercentCount:     diagnosis.PercentCount,
+		MoneyCount:       diagnosis.MoneyCount,
+		HasSessionWord:   diagnosis.HasSessionWord,
+		HasWeeklyWord:    diagnosis.HasWeeklyWord,
+		HasBalanceWord:   diagnosis.HasBalanceWord,
+		HasCreditWord:    diagnosis.HasCreditWord,
+		HasQuotaWord:     diagnosis.HasQuotaWord,
+		Headings:         diagnosis.Headings,
+		InterestingLines: diagnosis.InterestingLines,
+		HrefPaths:        diagnosis.HrefPaths,
+	})
 }
