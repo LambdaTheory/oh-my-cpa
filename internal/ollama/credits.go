@@ -9,9 +9,17 @@ import (
 	"golang.org/x/net/html"
 )
 
+// headingQualifierLimit bounds the trailing word a card heading may add to a
+// known label. A longer remainder is a different section, not a badge.
+const headingQualifierLimit = 12
+
 var (
-	USD_AMOUNT       = regexp.MustCompile(`^(?:USD\s*\$?|\$)\s*(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.([0-9]{1,2}))?$`)
-	REMAINING_AMOUNT = regexp.MustCompile(`(?i)^(?:remaining(?: credits)?|balance remaining)\s*:?\s*(.+)$|^(.+?)\s+(?:remaining(?: credits)?|balance remaining)$`)
+	USD_AMOUNT       = regexp.MustCompile(`^(?:USD\s*\$?|\$)\s*(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.([0-9]{1,2}))?$`)	REMAINING_AMOUNT = regexp.MustCompile(`(?i)^(?:remaining(?: credits)?|balance remaining)\s*:?\s*(.+)$|^(.+?)\s+(?:remaining(?: credits)?|balance remaining)$`)
+	// BALANCE_AMOUNT is the label the page uses now: the credits card prints a
+	// single "Total" line for the balance (monthly allowance plus added credits)
+	// where it used to print "... remaining". Without it the collector reports no
+	// trustworthy reading even though the page is intact and the session is valid.
+	BALANCE_AMOUNT = regexp.MustCompile(`(?i)^total\s*:?\s*(.+)$|^(.+?)\s+total$`)
 	USED_AMOUNT      = regexp.MustCompile(`(?i)^(?:used this month|this month used|monthly usage|monthly credits used)\s*:?\s*(.+)$|^(.+?)\s+(?:used this month|monthly credits used)$`)
 	MODEL_REQUESTS   = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s+([0-9]+(?:,[0-9]{3})*)\s+requests?$`)
 )
@@ -36,6 +44,13 @@ func parseCredits(document string) *quota.OllamaCredits {
 	card := headingContainer(heading)
 	if card != nil {
 		credits.RemainingCents, _ = labelledAmount(card, REMAINING_AMOUNT)
+		if credits.RemainingCents == nil {
+			// The card no longer says "remaining": it prints one "Total" line for the
+			// balance. Read that instead of failing, but keep requiring the used figure
+			// below, so a page that lost both labels still reads as no reading rather
+			// than as a zero balance.
+			credits.RemainingCents, _ = labelledAmount(card, BALANCE_AMOUNT)
+		}
 		credits.UsedCents, _ = labelledAmount(card, USED_AMOUNT)
 		walkElements(card, func(node *html.Node) {
 			text := nodeText(node)
@@ -177,7 +192,27 @@ func matchesHeading(node *html.Node, label string) bool {
 			return true
 		}
 	}
+	// The card heading carries a short qualifier now ("Usage credits max"). Accept it
+	// only on a heading and only when the remainder is a badge, so an unrelated
+	// section that merely begins with the same words cannot be mistaken for it.
+	if qualifier, ok := headingQualifier(nodeText(node), label); ok {
+		return len([]rune(qualifier)) <= headingQualifierLimit
+	}
 	return false
+}
+
+// headingQualifier returns the trailing word a heading adds to a known label.
+func headingQualifier(text, label string) (string, bool) {
+	lowered := strings.ToLower(strings.TrimSpace(text))
+	target := strings.ToLower(label)
+	if !strings.HasPrefix(lowered, target) {
+		return "", false
+	}
+	rest := strings.TrimSpace(lowered[len(target):"])
+	if rest == "" {
+		return "", false
+	}
+	return rest, true
 }
 
 // Semantic sections bound a fact's ownership. With div-only markup, only the
