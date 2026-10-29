@@ -29,6 +29,14 @@ and relative HTML/CSS references plus the emitted Rollup dependency graph. `scri
 protects the Go-only prebuilt graph and inherited runtime/Compose contracts while
 retaining ordinary source-build assertions. No browser claim moved to those tests.
 
+`scripts/sync-lobe-icons.test.mjs` owns the dev-server ordering behind generated provider
+artwork. It starts a real Vite server over a fresh temporary public directory with `lobe-icons`
+absent and requires the middleware to return SVG bytes for all five provider marks under
+`/omc/`; the old `buildStart`-only lifecycle is pinned as the exact SPA-fallback negative
+case, and repeated builds keep regeneration and output copying. The `omc-account-automation` and
+`dashboard-quota-prediction` probes keep the browser decode claim; the self-test needs no
+Chromium.
+
 Build-chain changes require `pnpm verify:full`. Before first publication, prepare
 the reviewed immutable SHA on the Mac, build `Dockerfile.prebuilt` for the Linux
 target and smoke-test `/omc/`, lazy assets, fonts, provider artwork and source

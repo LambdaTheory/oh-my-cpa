@@ -2,6 +2,7 @@ import { fulfillFixture } from '../browser-guard.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { until, settleLayout } from '../harness.mjs';
+import { editorDocumentStartKey, editorShortcutKey } from '../shortcuts.mjs';
 import { probeRoot } from '../probe.mjs';
 
 /**
@@ -160,13 +161,13 @@ export async function configSourceEditor({ base, page, check }) {
   // The editor takes focus on a click in its text, exactly as a reader does before
   // reaching for the keyboard.
   await page.locator('.monaco-editor .view-lines').first().click();
-  await page.keyboard.press('Control+f');
+  await page.keyboard.press(editorShortcutKey('f'));
   await until(
     async () => (await page.locator('.monaco-editor .find-widget.visible').count()) > 0,
     { label: 'the find box to open' },
   );
   check(
-    'Ctrl+F opens the editor find box',
+    'the platform find shortcut opens the editor find box',
     (await page.locator('.monaco-editor .find-widget.visible .codicon-widget-close').count()) > 0,
   );
 
@@ -234,7 +235,7 @@ async function configSourceMobile({ base, page, check }) {
   check('wrap can be disabled without widening the page', await wrap.getAttribute('aria-pressed') === 'false' && await page.locator('.app-content').evaluate((pane) => pane.scrollWidth <= pane.clientWidth + 1));
   await until(async () => await page.locator('.monaco-editor .view-lines').evaluate((lines) => lines.getBoundingClientRect().width > lines.closest('.monaco-editor').getBoundingClientRect().width), { label: 'unwrapped URL scrolls inside the editor' });
   await page.locator('.monaco-editor .view-lines').click();
-  await page.keyboard.press('Control+Home');
+  await page.keyboard.press(editorDocumentStartKey());
   await page.keyboard.insertText('# mobile-draft ');
   await page.locator('.config-dirty-bar').waitFor({ state: 'visible' });
   await page.evaluate(() => { window.editorBeforeFocus = document.querySelector('.monaco-editor'); });
@@ -307,16 +308,16 @@ async function configSourceMobile({ base, page, check }) {
   check('focus returns to the focused-edit trigger', await page.getByRole('button', { name: 'Focus editor', exact: true }).evaluate((button) => button === document.activeElement));
   await page.locator('.monaco-editor .view-lines').click();
   const draftBeforeUndo = await page.locator('.view-lines').innerText();
-  await page.keyboard.press('Control+z');
+  await page.keyboard.press(editorShortcutKey('z'));
   await until(async () => (await page.locator('.view-lines').innerText()) !== draftBeforeUndo, { label: 'undo across focused editing' });
   check('the undo stack survives both focus transitions', await page.locator('.config-dirty-bar').count() === 1);
-  await page.keyboard.press('Control+Shift+z');
+  await page.keyboard.press(editorShortcutKey('Shift+z'));
   await until(async () => (await page.locator('.view-lines').innerText()) === draftBeforeUndo, { label: 'redo across focused editing' });
   check('redo recovers the same pre-focus edit', true);
   await page.locator('.config-dirty-btn-discard').click();
   await page.locator('.config-dirty-bar').waitFor({ state: 'hidden' });
   await page.locator('.monaco-editor .view-lines').click();
-  await page.keyboard.press('Control+Home');
+  await page.keyboard.press(editorDocumentStartKey());
   await page.keyboard.insertText('invalid: [');
   await save.waitFor({ state: 'visible' });
   await save.click();
@@ -324,7 +325,7 @@ async function configSourceMobile({ base, page, check }) {
   await page.locator('.config-dirty-btn-discard').click();
   await page.locator('.config-dirty-bar').waitFor({ state: 'hidden' });
   await page.locator('.monaco-editor .view-lines').click();
-  await page.keyboard.press('Control+Home');
+  await page.keyboard.press(editorDocumentStartKey());
   await page.keyboard.insertText('# successful-mobile-save ');
   await save.waitFor({ state: 'visible' });
   responseMode = 'success';
@@ -333,7 +334,7 @@ async function configSourceMobile({ base, page, check }) {
   check('one confirmed phone save writes the draft and adopts its baseline', writes.length === 3 && writes[2].yaml.includes('successful-mobile-save') && await page.locator('.ant-modal:visible').count() === 0);
   // Flow delimiter spacing distinguishes the worker's provider from the serializer fallback.
   await page.locator('.monaco-editor .view-lines').click();
-  await page.keyboard.press('Control+Home');
+  await page.keyboard.press(editorDocumentStartKey());
   await page.keyboard.insertText('native-format-proof: [1,2,3]\n');
   await page.getByRole('button', { name: 'Source tools', exact: true }).click();
   await page.locator('.action-menu-content:visible').getByRole('button', { name: 'Format', exact: true }).click();

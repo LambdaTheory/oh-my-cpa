@@ -12,11 +12,14 @@ const require = createRequire(path.join(root, 'web', 'package.json'));
  * of modules and a multi-megabyte eager chunk. The package ships the same marks
  * as plain SVG assets, so the app copies them into its public directory and
  * resolves them by URL instead.
+ *
+ * `target` is a test seam: regression coverage runs the real copy into an
+ * isolated public directory under an actual Vite server. Production callers use
+ * the repository path.
  */
-export function syncLobeIcons({ quiet = false } = {}) {
+export function syncLobeIcons({ quiet = false, target = path.join(root, 'web', 'public', 'lobe-icons') } = {}) {
   const packageRoot = path.dirname(require.resolve('@lobehub/icons-static-svg/package.json'));
   const source = path.join(packageRoot, 'icons');
-  const target = path.join(root, 'web', 'public', 'lobe-icons');
   const catalog = JSON.parse(fs.readFileSync(path.join(root, 'web', 'src', 'generated', 'lobeIconCatalog.json'), 'utf8'));
   const slug = (iconId) => iconId.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
@@ -41,7 +44,32 @@ export function syncLobeIcons({ quiet = false } = {}) {
   fs.rmSync(target, { recursive: true, force: true });
   fs.renameSync(staging, target);
 
-  if (!quiet) console.log(`synced ${count} Lobe icons to web/public/lobe-icons`);
+  if (!quiet) console.log(`synced ${count} Lobe icons to ${path.relative(root, target)}`);
+}
+
+/**
+ * Vite snapshots its public-file inventory while creating a dev server, before
+ * `buildStart` runs. A dev server that generates the icons in `buildStart` has
+ * already decided they are absent, so requests for them fall through to the SPA
+ * shell and return HTML with a 200. Generate during config resolution instead.
+ *
+ * Builds have no such snapshot. Their watcher calls `buildStart` again on every
+ * rebuild, so builds keep regenerating there. Repeating that in dev would race
+ * the public-directory watcher with the generation rename.
+ */
+export function lobeIconsPlugin({ quiet = false, sync = syncLobeIcons } = {}) {
+  let command;
+  return {
+    name: 'sync-lobe-icons',
+    enforce: 'pre',
+    configResolved(config) {
+      command = config.command;
+      if (command === 'serve') sync({ quiet });
+    },
+    buildStart() {
+      if (command === 'build') sync({ quiet });
+    },
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

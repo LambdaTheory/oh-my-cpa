@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 import { resolveApiTarget } from '../scripts/api-target.mjs';
-import { syncLobeIcons } from '../scripts/sync-lobe-icons.mjs';
+import { lobeIconsPlugin } from '../scripts/sync-lobe-icons.mjs';
 import { bundleGraphPlugin } from '../scripts/bundle-graph.mjs';
 import { bareBaseRedirectPlugin } from '../scripts/dev-base-redirect.mjs';
 
@@ -11,13 +11,7 @@ const repoRoot = path.resolve(__dirname, '..');
 // https://vitejs.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [
-    {
-      name: 'sync-lobe-icons',
-      enforce: 'pre',
-      buildStart() {
-        syncLobeIcons({ quiet: true });
-      },
-    },
+    lobeIconsPlugin({ quiet: true }),
     react(),
     bundleGraphPlugin(repoRoot),
     bareBaseRedirectPlugin(),
