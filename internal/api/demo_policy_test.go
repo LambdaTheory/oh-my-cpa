@@ -118,9 +118,9 @@ func TestDemoPolicyRefusesTheDangerousSurface(t *testing.T) {
 		{http.MethodPost, "/api/v1/management/providers/pull-models"},
 		{http.MethodPost, "/api/v1/management/providers/probe"},
 		{http.MethodPost, "/api/v1/pricing/sync"},
-		// A manual Ollama refresh would scrape ollama.com with a stored cookie.
+		// A manual Ollama refresh would call ollama.com with a stored API key or cookie.
 		{http.MethodPost, "/api/v1/ollama/accounts/some-id/refresh"},
-		// The page-structure diagnosis would scrape ollama.com the same way.
+		// The page-structure diagnosis would call ollama.com with the stored cookie.
 		{http.MethodGet, "/api/v1/ollama/accounts/some-id/diagnose"},
 	}
 	for _, route := range refused {

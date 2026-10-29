@@ -11,17 +11,19 @@ import (
 	"time"
 )
 
-// maxBodyBytes bounds how much of the settings page is read, so a hostile or
-// runaway response cannot exhaust memory.
+// maxBodyBytes bounds how much of either Ollama response is read, so a hostile or
+// runaway body cannot exhaust memory.
 const maxBodyBytes = 4 << 20
 
-// Client fetches and parses the Ollama settings page. The target URL is a fixed
-// constant unless a test overrides it; there is no path by which an operator can
-// point it at an arbitrary address.
+// Client fetches the Ollama balance endpoint and settings page. Both target URLs are
+// fixed constants unless a test overrides them; there is no path by which an operator
+// can point either at an arbitrary address.
 type Client struct {
-	http *http.Client
-	url  string
-	host string
+	http        *http.Client
+	url         string
+	host        string
+	balanceURL  string
+	balanceHost string
 	// now is injectable so a reset can be anchored without reading the wall clock.
 	now func() time.Time
 }
@@ -42,9 +44,22 @@ func WithSettingsURL(rawURL string) ClientOption {
 	}
 }
 
+// WithBalanceURL points the client at a test fixture server for the balance
+// endpoint. Production leaves it unset so the fixed balance URL is used.
+func WithBalanceURL(rawURL string) ClientOption {
+	return func(c *Client) {
+		trimmed := strings.TrimSpace(rawURL)
+		if trimmed == "" {
+			return
+		}
+		c.balanceURL = trimmed
+		c.balanceHost = hostOf(trimmed)
+	}
+}
+
 // WithHTTPClient injects a transport. The injected client is copied and its
-// redirect policy replaced, so even a test client never follows a redirect off the
-// settings origin with the cookie attached.
+// redirect policy replaced, so even a test client never carries a credential through
+// a redirect.
 func WithHTTPClient(client *http.Client) ClientOption {
 	return func(c *Client) {
 		if client == nil {
@@ -71,9 +86,11 @@ func NewClient(timeout time.Duration, options ...ClientOption) *Client {
 		timeout = DefaultTimeout
 	}
 	client := &Client{
-		url:  SettingsURL,
-		host: hostOf(SettingsURL),
-		now:  time.Now,
+		url:         SettingsURL,
+		host:        hostOf(SettingsURL),
+		balanceURL:  BalanceURL,
+		balanceHost: hostOf(BalanceURL),
+		now:         time.Now,
 		http: &http.Client{
 			Timeout:       timeout,
 			CheckRedirect: refuseRedirects,
@@ -86,8 +103,8 @@ func NewClient(timeout time.Duration, options ...ClientOption) *Client {
 }
 
 // refuseRedirects stops the transport from following a 3xx. A redirect to the login
-// page must be observed as an auth failure, and a redirect off the settings origin
-// must never receive the cookie.
+// page must be observed as an auth failure, and a credential must never follow a
+// redirect away from its fixed origin.
 func refuseRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // Fetch retrieves one account's quota view.
@@ -146,8 +163,8 @@ func (c *Client) Fetch(ctx context.Context, accountID, cookie string) (Snapshot,
 	return snapshot, nil
 }
 
-// get performs the request with the cookie header. The returned error never
-// contains the cookie value.
+// get performs the settings request with the cookie header. The returned error never
+// contains the credential value.
 func (c *Client) get(ctx context.Context, cookie string) ([]byte, int, http.Header, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, c.url, nil)
 	if err != nil {
@@ -169,11 +186,17 @@ func (c *Client) get(ctx context.Context, cookie string) ([]byte, int, http.Head
 		return nil, 0, nil, fmt.Errorf("ollama: GET settings: %w", err)
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
+	body, err := boundedBody(response)
 	if err != nil {
 		return nil, response.StatusCode, response.Header, fmt.Errorf("ollama: read settings: %w", err)
 	}
 	return body, response.StatusCode, response.Header, nil
+}
+
+// boundedBody reads at most maxBodyBytes so a hostile or runaway response cannot
+// exhaust memory. Every fetch of the Ollama origin goes through it.
+func boundedBody(response *http.Response) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(response.Body, maxBodyBytes))
 }
 
 // looksLikeLogin detects the login page without relying on a single marker.

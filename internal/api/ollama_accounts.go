@@ -18,14 +18,15 @@ import (
 //
 // The routes are session-authenticated and same-origin guarded exactly like every
 // other management write; the read-only MCP key reaches none of them. The DTOs are
-// a deliberate allowlist: they carry a has_cookie flag and no secret, and the cookie
-// is accepted on write only. The cookie never appears in DTOs, logs, errors or audit
-// details.
+// a deliberate allowlist: they carry has_cookie and has_api_key flags and no secret,
+// and both credentials are accepted on write only. Neither credential ever appears in
+// a DTO, a log, an error or an audit detail.
 
 const (
 	ollamaRequestLimit = 32 << 10
 	ollamaLabelLimit   = 120
 	ollamaCookieLimit  = 8 << 10
+	ollamaAPIKeyLimit  = 8 << 10
 	// ollamaRefreshTimeout bounds how long the synchronous manual refresh waits. The
 	// underlying scrape already carries its own client timeout; this only stops a
 	// caller from being held open indefinitely behind an in-flight periodic pass.
@@ -41,6 +42,7 @@ type ollamaAccountDTO struct {
 	Label            string `json:"label,omitempty"`
 	Enabled          bool   `json:"enabled"`
 	HasCookie        bool   `json:"has_cookie"`
+	HasAPIKey        bool   `json:"has_api_key"`
 	Status           string `json:"status,omitempty"`
 	LastSuccessAtMS  *int64 `json:"last_success_at_ms,omitempty"`
 	LastObservedAtMS *int64 `json:"last_observed_at_ms,omitempty"`
@@ -61,6 +63,7 @@ type ollamaAccountDTO struct {
 type ollamaAccountWriteDTO struct {
 	Label   *string `json:"label"`
 	Cookie  *string `json:"cookie"`
+	APIKey  *string `json:"api_key"`
 	Enabled *bool   `json:"enabled"`
 }
 
@@ -146,6 +149,9 @@ func (h *Handler) BuildOllamaService() *ollama.Collector {
 		Fetch: func(ctx context.Context, account ollama.Account, cookie string) (ollama.Snapshot, error) {
 			return client.Fetch(ctx, account.ID, cookie)
 		},
+		FetchBalance: func(ctx context.Context, account ollama.Account, apiKey string) (ollama.Snapshot, error) {
+			return client.FetchBalance(ctx, account.ID, apiKey)
+		},
 		Observations: h.recordOllamaObservations,
 		Audit: func(ctx context.Context, action, result, targetID string, details map[string]any) {
 			h.recordAuditWithoutRequest(action, "ollama_account", targetID, result, details)
@@ -180,7 +186,10 @@ func (h *Handler) ollamaAccountsForCollection(ctx context.Context) ([]ollama.Sto
 			},
 			Ciphertext:        secret.Ciphertext,
 			Nonce:             secret.Nonce,
+			APIKeyCiphertext:  secret.APIKeyCiphertext,
+			APIKeyNonce:       secret.APIKeyNonce,
 			CookieUpdatedAtMS: secret.CookieUpdatedAtMS,
+			APIKeyUpdatedAtMS: secret.APIKeyUpdatedAtMS,
 		})
 	}
 	return accounts, nil
@@ -207,7 +216,10 @@ func (h *Handler) ollamaAccountSecretByID(ctx context.Context, id string) (ollam
 		},
 		Ciphertext:        secret.Ciphertext,
 		Nonce:             secret.Nonce,
+		APIKeyCiphertext:  secret.APIKeyCiphertext,
+		APIKeyNonce:       secret.APIKeyNonce,
 		CookieUpdatedAtMS: secret.CookieUpdatedAtMS,
+		APIKeyUpdatedAtMS: secret.APIKeyUpdatedAtMS,
 	}, true, nil
 }
 
@@ -226,6 +238,7 @@ func (h *Handler) saveOllamaResult(ctx context.Context, result ollama.Collection
 		NextAttemptAtMS:   result.NextAttemptAtMS,
 		AttemptCount:      result.AttemptCount,
 		CookieUpdatedAtMS: result.CookieUpdatedAtMS,
+		APIKeyUpdatedAtMS: result.APIKeyUpdatedAtMS,
 		Auto:              result.Auto,
 	})
 	return err
@@ -314,21 +327,41 @@ func (h *Handler) createOllamaAccount(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusBadRequest, "label is too long")
 		return
 	}
-	ciphertext, nonce, err := h.encryptOllamaCookie(*payload.Cookie)
+	ciphertext, nonce, err := h.encryptOllamaSecret(*payload.Cookie)
 	if err != nil {
-		h.writeOllamaCipherError(writer, err)
+		h.writeOllamaCipherError(writer, err, "cookie")
 		return
+	}
+	// The API key is optional; an omitted key leaves the account on the cookie path.
+	var apiKeyCiphertext, apiKeyNonce []byte
+	if payload.APIKey != nil {
+		rawAPIKey := strings.TrimSpace(*payload.APIKey)
+		if rawAPIKey == "" {
+			writeError(writer, http.StatusBadRequest, "api_key must not be empty")
+			return
+		}
+		if len(rawAPIKey) > ollamaAPIKeyLimit {
+			writeError(writer, http.StatusBadRequest, "api_key is too long")
+			return
+		}
+		apiKeyCiphertext, apiKeyNonce, err = h.encryptOllamaSecret(rawAPIKey)
+		if err != nil {
+			h.writeOllamaCipherError(writer, err, "API key")
+			return
+		}
 	}
 	enabled := true
 	if payload.Enabled != nil {
 		enabled = *payload.Enabled
 	}
 	account, err := h.repo.CreateOllamaAccount(request.Context(), repository.OllamaAccountCreate{
-		Label:      label,
-		Enabled:    enabled,
-		Ciphertext: ciphertext,
-		Nonce:      nonce,
-		NowMS:      h.now().UnixMilli(),
+		Label:            label,
+		Enabled:          enabled,
+		Ciphertext:       ciphertext,
+		Nonce:            nonce,
+		APIKeyCiphertext: apiKeyCiphertext,
+		APIKeyNonce:      apiKeyNonce,
+		NowMS:            h.now().UnixMilli(),
 	})
 	if err != nil {
 		writeInternalError(writer, err)
@@ -380,14 +413,35 @@ func (h *Handler) updateOllamaAccount(writer http.ResponseWriter, request *http.
 			writeError(writer, http.StatusBadRequest, "cookie is too long")
 			return
 		}
-		ciphertext, nonce, err := h.encryptOllamaCookie(*payload.Cookie)
+		ciphertext, nonce, err := h.encryptOllamaSecret(*payload.Cookie)
 		if err != nil {
-			h.writeOllamaCipherError(writer, err)
+			h.writeOllamaCipherError(writer, err, "cookie")
 			return
 		}
 		update.SetCookie = true
 		update.Ciphertext = ciphertext
 		update.Nonce = nonce
+	}
+	// An omitted API key keeps the stored one; a present but blank key is refused
+	// rather than silently clearing the credential.
+	if payload.APIKey != nil {
+		rawAPIKey := strings.TrimSpace(*payload.APIKey)
+		if rawAPIKey == "" {
+			writeError(writer, http.StatusBadRequest, "api_key must not be empty")
+			return
+		}
+		if len(rawAPIKey) > ollamaAPIKeyLimit {
+			writeError(writer, http.StatusBadRequest, "api_key is too long")
+			return
+		}
+		apiKeyCiphertext, apiKeyNonce, err := h.encryptOllamaSecret(rawAPIKey)
+		if err != nil {
+			h.writeOllamaCipherError(writer, err, "API key")
+			return
+		}
+		update.SetAPIKey = true
+		update.APIKeyCiphertext = apiKeyCiphertext
+		update.APIKeyNonce = apiKeyNonce
 	}
 	// The previous state decides whether the update warrants a scrape: a cookie
 	// change or a resume does, a label-only edit and a pause do not.
@@ -409,24 +463,27 @@ func (h *Handler) updateOllamaAccount(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusNotFound, "ollama account not found")
 		return
 	}
-	h.recordAuditWithoutRequest("ollama.account.update", "ollama_account", id, "success", map[string]any{"cookie_changed": update.SetCookie})
-	// A new cookie, or a paused account brought back on, is scraped as soon as the
+	h.recordAuditWithoutRequest("ollama.account.update", "ollama_account", id, "success", map[string]any{
+		"cookie_changed":  update.SetCookie,
+		"api_key_changed": update.SetAPIKey,
+	})
+	// A new credential, or a paused account brought back on, is scraped as soon as the
 	// current backoff - if any - allows it. A label-only edit sends no request.
-	if shouldRefreshOllamaAccount(previous.Enabled, account.Enabled, update.SetCookie) {
+	if shouldRefreshOllamaAccount(previous.Enabled, account.Enabled, update.SetCookie, update.SetAPIKey) {
 		h.triggerOllamaRefresh(account.ID)
 	}
 	writeJSON(writer, http.StatusOK, h.ollamaAccountToDTO(account))
 }
 
 // shouldRefreshOllamaAccount decides whether an update warrants an immediate
-// scrape. Only an enabled account is scraped; a resume or a cookie change does, a
+// scrape. Only an enabled account is scraped; a resume or a credential change does, a
 // label-only edit or a pause does not. It is a pure function so the truth table is
 // tested directly rather than through timing.
-func shouldRefreshOllamaAccount(previousEnabled, enabled, cookieChanged bool) bool {
+func shouldRefreshOllamaAccount(previousEnabled, enabled, cookieChanged, apiKeyChanged bool) bool {
 	if !enabled {
 		return false
 	}
-	return cookieChanged || !previousEnabled
+	return cookieChanged || apiKeyChanged || !previousEnabled
 }
 
 func (h *Handler) deleteOllamaAccount(writer http.ResponseWriter, request *http.Request) {
@@ -564,18 +621,18 @@ func refreshAuditResult(status string) string {
 	return "failure"
 }
 
-func (h *Handler) encryptOllamaCookie(cookie string) ([]byte, []byte, error) {
+func (h *Handler) encryptOllamaSecret(secret string) ([]byte, []byte, error) {
 	if h.cipher == nil {
 		return nil, nil, errOllamaCipherUnavailable
 	}
-	return h.cipher.Encrypt([]byte(cookie))
+	return h.cipher.Encrypt([]byte(secret))
 }
 
-// writeOllamaCipherError refuses a cookie write when no master key is configured. It
-// logs the reason but never the cookie.
-func (h *Handler) writeOllamaCipherError(writer http.ResponseWriter, err error) {
-	h.logger.Warn("ollama cookie could not be encrypted", "error", err)
-	writeError(writer, http.StatusServiceUnavailable, "master key is not configured; the cookie cannot be stored")
+// writeOllamaCipherError refuses a credential write when no master key is
+// configured. It logs the reason but never the credential.
+func (h *Handler) writeOllamaCipherError(writer http.ResponseWriter, err error, credential string) {
+	h.logger.Warn("ollama credential could not be encrypted", "credential", credential, "error", err)
+	writeError(writer, http.StatusServiceUnavailable, "master key is not configured; the "+credential+" cannot be stored")
 }
 
 func ollamaAccountID(writer http.ResponseWriter, request *http.Request) (string, bool) {
@@ -597,6 +654,7 @@ func (h *Handler) ollamaAccountToDTO(account repository.OllamaAccount) ollamaAcc
 		Label:            account.Label,
 		Enabled:          account.Enabled,
 		HasCookie:        account.HasCookie,
+		HasAPIKey:        account.HasAPIKey,
 		Status:           account.Status,
 		LastSuccessAtMS:  account.LastSuccessAtMS,
 		LastObservedAtMS: account.LastObservedAtMS,
@@ -668,8 +726,10 @@ type ollamaDiagnosisDTO struct {
 	HrefPaths        []string `json:"href_paths"`
 }
 
-// diagnoseOllamaAccount reports why a stored cookie no longer yields a quota
-// reading, without revealing the page or the credential.
+// diagnoseOllamaAccount reports why the stored cookie fallback no longer yields a
+// quota reading, without revealing the page or the credential. It deliberately
+// inspects only the settings-page path; an account on the API-key path needs no
+// page diagnosis, and a failing key path is reported by its own scrubbed error.
 //
 // The upstream settings page can answer 200 with a live session and still carry
 // no parseable window, and the operator cannot share the page because the

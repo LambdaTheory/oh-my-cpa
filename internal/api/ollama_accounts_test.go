@@ -20,7 +20,10 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
-const ollamaTestCookie = "super-secret-ollama-cookie-value"
+const (
+	ollamaTestCookie = "super-secret-ollama-cookie-value"
+	ollamaTestAPIKey = "super-secret-ollama-api-key-value"
+)
 
 func startOllamaTestServer(t *testing.T) (*httptest.Server, *repository.Repository, *crypto.Cipher) {
 	t.Helper()
@@ -71,22 +74,22 @@ func ollamaRequest(t *testing.T, method, url, body string) (int, []byte) {
 }
 
 // TestOllamaAccountResponsesNeverLeakCookie pins that create, list, detail and update
-// responses carry has_cookie but never the cookie text, and that an update without a
-// cookie preserves the stored one.
+// responses carry only presence flags and never the cookie or API key text, and that an
+// update omitting both credentials preserves them.
 func TestOllamaAccountResponsesNeverLeakCookie(t *testing.T) {
 	server, repo, cipher := startOllamaTestServer(t)
 
 	status, payload := ollamaRequest(t, http.MethodPost, server.URL+"/ollama/accounts",
-		`{"label":"work","cookie":"`+ollamaTestCookie+`","enabled":true}`)
+		`{"label":"work","cookie":"`+ollamaTestCookie+`","api_key":"`+ollamaTestAPIKey+`","enabled":true}`)
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", status, payload)
 	}
-	assertNoCookie(t, payload)
+	assertNoOllamaSecrets(t, payload)
 	var created ollamaAccountDTO
 	if err := json.Unmarshal(payload, &created); err != nil {
 		t.Fatal(err)
 	}
-	if !created.HasCookie || created.ID == "" {
+	if !created.HasCookie || !created.HasAPIKey || created.ID == "" {
 		t.Fatalf("create dto = %+v", created)
 	}
 
@@ -94,25 +97,27 @@ func TestOllamaAccountResponsesNeverLeakCookie(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("list status = %d", status)
 	}
-	assertNoCookie(t, payload)
-	if !strings.Contains(string(payload), `"has_cookie":true`) {
-		t.Fatalf("list must report has_cookie: %s", payload)
+	assertNoOllamaSecrets(t, payload)
+	if !strings.Contains(string(payload), `"has_cookie":true`) ||
+		!strings.Contains(string(payload), `"has_api_key":true`) {
+		t.Fatalf("list must report both presence flags: %s", payload)
 	}
 
 	status, payload = ollamaRequest(t, http.MethodGet, server.URL+"/ollama/accounts/"+created.ID, "")
 	if status != http.StatusOK {
 		t.Fatalf("detail status = %d", status)
 	}
-	assertNoCookie(t, payload)
+	assertNoOllamaSecrets(t, payload)
 
-	// An update with no cookie keeps the stored one.
+	// An update with no credentials keeps both stored ones.
 	status, payload = ollamaRequest(t, http.MethodPut, server.URL+"/ollama/accounts/"+created.ID, `{"label":"renamed"}`)
 	if status != http.StatusOK {
 		t.Fatalf("update status = %d: %s", status, payload)
 	}
-	assertNoCookie(t, payload)
-	if !strings.Contains(string(payload), `"has_cookie":true`) {
-		t.Fatalf("update must keep has_cookie: %s", payload)
+	assertNoOllamaSecrets(t, payload)
+	if !strings.Contains(string(payload), `"has_cookie":true`) ||
+		!strings.Contains(string(payload), `"has_api_key":true`) {
+		t.Fatalf("update must keep both presence flags: %s", payload)
 	}
 	secrets, err := repo.ListEnabledOllamaAccountSecrets(context.Background())
 	if err != nil || len(secrets) != 1 {
@@ -122,10 +127,17 @@ func TestOllamaAccountResponsesNeverLeakCookie(t *testing.T) {
 	if err != nil || string(decrypted) != ollamaTestCookie {
 		t.Fatalf("an omitted cookie must be preserved: %q %v", decrypted, err)
 	}
+	decryptedKey, err := cipher.Decrypt(secrets[0].APIKeyCiphertext, secrets[0].APIKeyNonce)
+	if err != nil || string(decryptedKey) != ollamaTestAPIKey {
+		t.Fatalf("an omitted API key must be preserved: %q %v", decryptedKey, err)
+	}
 
-	// A present but blank cookie is refused rather than clearing the credential.
+	// Present but blank credentials are refused rather than clearing them.
 	if status, _ := ollamaRequest(t, http.MethodPut, server.URL+"/ollama/accounts/"+created.ID, `{"cookie":""}`); status != http.StatusBadRequest {
 		t.Fatalf("blank cookie update status = %d, want 400", status)
+	}
+	if status, _ := ollamaRequest(t, http.MethodPut, server.URL+"/ollama/accounts/"+created.ID, `{"api_key":""}`); status != http.StatusBadRequest {
+		t.Fatalf("blank API key update status = %d, want 400", status)
 	}
 
 	if status, _ := ollamaRequest(t, http.MethodDelete, server.URL+"/ollama/accounts/"+created.ID, ""); status != http.StatusNoContent {
@@ -173,8 +185,25 @@ func TestOllamaQuotaReadIsReadOnly(t *testing.T) {
 
 func assertNoCookie(t *testing.T, payload []byte) {
 	t.Helper()
-	if strings.Contains(string(payload), ollamaTestCookie) {
-		t.Fatalf("the cookie leaked into a response: %s", payload)
+	assertNoOllamaSecrets(t, payload)
+}
+
+// assertNoOllamaSecrets covers every ordinary account response: neither plaintext
+// credential, nor a ciphertext or nonce field, may cross the DTO boundary.
+func assertNoOllamaSecrets(t *testing.T, payload []byte) {
+	t.Helper()
+	text := string(payload)
+	for _, secret := range []string{
+		ollamaTestCookie,
+		ollamaTestAPIKey,
+		"cookie_ciphertext",
+		"cookie_nonce",
+		"api_key_ciphertext",
+		"api_key_nonce",
+	} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("secret material %q leaked into a response: %s", secret, text)
+		}
 	}
 }
 
@@ -205,27 +234,29 @@ func ollamaWrite(t *testing.T, client *http.Client, base, method, path, body str
 }
 
 // TestOllamaRefreshTriggerDecision pins the truth table the update route uses: only
-// an enabled account is scraped, and only a cookie change or a resume warrants it.
+// an enabled account is scraped, and only a credential change or a resume warrants it.
 func TestOllamaRefreshTriggerDecision(t *testing.T) {
 	cases := []struct {
-		name              string
-		previous, enabled bool
-		cookieChanged     bool
-		want              bool
+		name                      string
+		previous, enabled         bool
+		cookieChanged, keyChanged bool
+		want                      bool
 	}{
-		{"resume", false, true, false, true},
-		{"cookie change", true, true, true, true},
-		{"resume and cookie change", false, true, true, true},
-		{"label only", true, true, false, false},
-		{"pause", true, false, false, false},
-		{"paused cookie change", false, false, true, false},
-		{"no change", true, true, false, false},
+		{"resume", false, true, false, false, true},
+		{"cookie change", true, true, true, false, true},
+		{"api key change", true, true, false, true, true},
+		{"resume and cookie change", false, true, true, false, true},
+		{"label only", true, true, false, false, false},
+		{"pause", true, false, false, false, false},
+		{"paused cookie change", false, false, true, false, false},
+		{"paused api key change", false, false, false, true, false},
+		{"no change", true, true, false, false, false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			if got := shouldRefreshOllamaAccount(testCase.previous, testCase.enabled, testCase.cookieChanged); got != testCase.want {
-				t.Fatalf("shouldRefreshOllamaAccount(%v, %v, %v) = %v, want %v",
-					testCase.previous, testCase.enabled, testCase.cookieChanged, got, testCase.want)
+			if got := shouldRefreshOllamaAccount(testCase.previous, testCase.enabled, testCase.cookieChanged, testCase.keyChanged); got != testCase.want {
+				t.Fatalf("shouldRefreshOllamaAccount(%v, %v, %v, %v) = %v, want %v",
+					testCase.previous, testCase.enabled, testCase.cookieChanged, testCase.keyChanged, got, testCase.want)
 			}
 		})
 	}

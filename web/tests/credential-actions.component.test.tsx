@@ -23,7 +23,7 @@ const QUOTAS: QuotaItem[] = FILES.map((file) => ({
   recommendation: { status: 'healthy', priority: 'none', action: 'none', reason: '' },
 }));
 const ACCOUNT: OllamaAccountDTO = {
-  id: 'opaque-monitor', label: 'ollama:opaque-monitor: Legacy account', enabled: true, has_cookie: true,
+  id: 'opaque-monitor', label: 'ollama:opaque-monitor: Legacy account', enabled: true, has_cookie: true, has_api_key: false,
   status: 'ok', attempt_count: 0, created_at_ms: 1, updated_at_ms: 1,
 };
 const RECORDS = buildOAuthWorkspaceProjection(FILES, QUOTAS, [], [ACCOUNT]).records;

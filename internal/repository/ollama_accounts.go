@@ -11,19 +11,20 @@ import (
 	"github.com/google/uuid"
 )
 
-// Ollama account persistence (migration 044).
+// Ollama account persistence (migrations 044 and 058).
 //
-// The encrypted cookie and the safe quota snapshot live in separate columns so an
-// ordinary metadata read never selects the secret. Reads project an explicit column
-// list rather than SELECT *; the cookie ciphertext is returned only to the collector
-// through ListEnabledOllamaAccountSecrets.
+// The encrypted credentials and the safe quota snapshot live in separate columns so an
+// ordinary metadata read never selects a secret. Reads project an explicit column list
+// rather than SELECT *; credential ciphertext is returned only to the collector through
+// ListEnabledOllamaAccountSecrets.
 
-// OllamaAccount is one configured Ollama account's metadata, without its cookie.
+// OllamaAccount is one configured Ollama account's metadata, without its credentials.
 type OllamaAccount struct {
 	ID                string
 	Label             string
 	Enabled           bool
 	HasCookie         bool
+	HasAPIKey         bool
 	Status            string
 	LastSuccessAtMS   *int64
 	LastObservedAtMS  *int64
@@ -40,16 +41,24 @@ type OllamaAccount struct {
 // OllamaAccountSecret pairs an account's metadata with the encrypted cookie the
 // collector must decrypt. It is never serialized into an API response.
 type OllamaAccountSecret struct {
-	ID              string
-	Label           string
-	Enabled         bool
-	Ciphertext      []byte
-	Nonce           []byte
-	NextAttemptAtMS *int64
-	AttemptCount    int
-	// CookieUpdatedAtMS is the version of this cookie. A collection result carries
-	// it back so a scrape that read an older cookie cannot overwrite a newer one.
+	ID      string
+	Label   string
+	Enabled bool
+	// Ciphertext and Nonce are the encrypted session cookie. The cookie stays
+	// mandatory, so an account that predates the API key keeps working unchanged.
+	Ciphertext []byte
+	Nonce      []byte
+	// APIKeyCiphertext and APIKeyNonce are nil when no key is stored. The balance
+	// endpoint is preferred whenever a key exists, and the cookie is the fallback.
+	APIKeyCiphertext []byte
+	APIKeyNonce      []byte
+	NextAttemptAtMS  *int64
+	AttemptCount     int
+	// CookieUpdatedAtMS and APIKeyUpdatedAtMS are credential versions. A collection
+	// result carries them back so a scrape that read older material cannot overwrite
+	// a reading of material the operator has since replaced.
 	CookieUpdatedAtMS int64
+	APIKeyUpdatedAtMS int64
 }
 
 // OllamaAccountCreate is the input to CreateOllamaAccount. An empty ID mints a
@@ -61,7 +70,10 @@ type OllamaAccountCreate struct {
 	Enabled    bool
 	Ciphertext []byte
 	Nonce      []byte
-	NowMS      int64
+	// APIKeyCiphertext and APIKeyNonce are optional; nil stores no key.
+	APIKeyCiphertext []byte
+	APIKeyNonce      []byte
+	NowMS            int64
 }
 
 // OllamaAccountUpdate is the input to UpdateOllamaAccount. A nil Label or Enabled
@@ -72,7 +84,11 @@ type OllamaAccountUpdate struct {
 	SetCookie  bool
 	Ciphertext []byte
 	Nonce      []byte
-	NowMS      int64
+	// SetAPIKey replaces the stored key; nil ciphertext would store no key.
+	SetAPIKey        bool
+	APIKeyCiphertext []byte
+	APIKeyNonce      []byte
+	NowMS            int64
 }
 
 // OllamaCollectionResult is what RecordOllamaResult writes back after a scrape.
@@ -86,10 +102,12 @@ type OllamaCollectionResult struct {
 	ErrorAtMS       int64
 	NextAttemptAtMS *int64
 	AttemptCount    int
-	// CookieUpdatedAtMS, when set, gates the write: a result whose cookie version no
-	// longer matches the stored one is dropped instead of overwriting a reading of
-	// the newer cookie. Nil writes unconditionally.
+	// CookieUpdatedAtMS and APIKeyUpdatedAtMS, when set, gate the write: a result
+	// whose credential versions no longer match the stored ones is dropped instead of
+	// overwriting a reading of material the operator has since replaced. Nil skips
+	// that half of the guard.
 	CookieUpdatedAtMS *int64
+	APIKeyUpdatedAtMS *int64
 	// Auto marks a result produced by the periodic pass or a create/update trigger.
 	// An automatic result is dropped while the account is disabled; a manual refresh
 	// of a paused account passes Auto false and is still written.
@@ -98,7 +116,8 @@ type OllamaCollectionResult struct {
 
 // ollamaAccountColumns is the explicit metadata projection. It never names the
 // cookie ciphertext or nonce; has_cookie is derived without reading the blob.
-const ollamaAccountColumns = `id, label, enabled, LENGTH(cookie_ciphertext) > 0, status,
+const ollamaAccountColumns = `id, label, enabled, LENGTH(cookie_ciphertext) > 0,
+	COALESCE(LENGTH(api_key_ciphertext), 0) > 0, status,
 	last_success_at_ms, last_observed_at_ms, newest_error, newest_error_at_ms,
 	next_attempt_at_ms, attempt_count, quota_snapshot_json, quota_observed_at_ms,
 	created_at_ms, updated_at_ms`
@@ -109,10 +128,10 @@ type ollamaAccountScanner interface {
 
 func scanOllamaAccount(scanner ollamaAccountScanner) (OllamaAccount, error) {
 	var account OllamaAccount
-	var enabled, hasCookie int
+	var enabled, hasCookie, hasAPIKey int
 	var lastSuccess, lastObserved, newestErrorAt, nextAttempt, quotaObserved sql.NullInt64
 	if err := scanner.Scan(
-		&account.ID, &account.Label, &enabled, &hasCookie, &account.Status,
+		&account.ID, &account.Label, &enabled, &hasCookie, &hasAPIKey, &account.Status,
 		&lastSuccess, &lastObserved, &account.NewestError, &newestErrorAt,
 		&nextAttempt, &account.AttemptCount, &account.QuotaSnapshotJSON, &quotaObserved,
 		&account.CreatedAtMS, &account.UpdatedAtMS,
@@ -121,6 +140,7 @@ func scanOllamaAccount(scanner ollamaAccountScanner) (OllamaAccount, error) {
 	}
 	account.Enabled = enabled != 0
 	account.HasCookie = hasCookie != 0
+	account.HasAPIKey = hasAPIKey != 0
 	account.LastSuccessAtMS = nullInt64Ptr(lastSuccess)
 	account.LastObservedAtMS = nullInt64Ptr(lastObserved)
 	account.NewestErrorAtMS = nullInt64Ptr(newestErrorAt)
@@ -129,7 +149,8 @@ func scanOllamaAccount(scanner ollamaAccountScanner) (OllamaAccount, error) {
 	return account, nil
 }
 
-// CreateOllamaAccount stores a new Ollama account with its encrypted cookie.
+// CreateOllamaAccount stores a new Ollama account with its encrypted cookie and an
+// optional encrypted API key.
 func (r *Repository) CreateOllamaAccount(ctx context.Context, input OllamaAccountCreate) (OllamaAccount, error) {
 	if r == nil || r.SQL() == nil {
 		return OllamaAccount{}, errors.New("repository is not initialized")
@@ -145,13 +166,21 @@ func (r *Repository) CreateOllamaAccount(ctx context.Context, input OllamaAccoun
 	if nowMS <= 0 {
 		nowMS = time.Now().UnixMilli()
 	}
+	// A nil API key ciphertext is stored as NULL and leaves the row on the cookie path.
+	var apiKeyCiphertext, apiKeyNonce, apiKeyUpdatedAt any
+	if len(input.APIKeyCiphertext) > 0 {
+		apiKeyCiphertext = input.APIKeyCiphertext
+		apiKeyNonce = input.APIKeyNonce
+		apiKeyUpdatedAt = nowMS
+	}
 	if _, err := r.SQL().ExecContext(ctx, `
 		INSERT INTO ollama_accounts (
 			id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms,
+			api_key_ciphertext, api_key_nonce, api_key_updated_at_ms,
 			created_at_ms, updated_at_ms
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, strings.TrimSpace(input.Label), boolToInt(input.Enabled), input.Ciphertext, input.Nonce,
-		nowMS, nowMS, nowMS); err != nil {
+		nowMS, apiKeyCiphertext, apiKeyNonce, apiKeyUpdatedAt, nowMS, nowMS); err != nil {
 		return OllamaAccount{}, fmt.Errorf("insert ollama account: %w", err)
 	}
 	account, found, err := r.GetOllamaAccount(ctx, id)
@@ -165,7 +194,7 @@ func (r *Repository) CreateOllamaAccount(ctx context.Context, input OllamaAccoun
 }
 
 // ListOllamaAccounts returns every configured account, oldest first, without any
-// cookie material.
+// credential material.
 func (r *Repository) ListOllamaAccounts(ctx context.Context) ([]OllamaAccount, error) {
 	if r == nil || r.SQL() == nil {
 		return nil, errors.New("repository is not initialized")
@@ -239,6 +268,13 @@ func (r *Repository) UpdateOllamaAccount(ctx context.Context, id string, input O
 		assignments = append(assignments, "cookie_ciphertext = ?", "cookie_nonce = ?", "cookie_updated_at_ms = MAX(cookie_updated_at_ms + 1, ?)")
 		arguments = append(arguments, input.Ciphertext, input.Nonce, nowMS)
 	}
+	if input.SetAPIKey {
+		// The key mirrors the cookie's versioning: replacing it invalidates a reading
+		// that was fetched with the previous key.
+		assignments = append(assignments, "api_key_ciphertext = ?", "api_key_nonce = ?",
+			"api_key_updated_at_ms = MAX(COALESCE(api_key_updated_at_ms, 0) + 1, ?)")
+		arguments = append(arguments, input.APIKeyCiphertext, input.APIKeyNonce, nowMS)
+	}
 	arguments = append(arguments, id)
 	result, err := r.SQL().ExecContext(ctx, `UPDATE ollama_accounts SET `+strings.Join(assignments, ", ")+` WHERE id = ?`, arguments...)
 	if err != nil {
@@ -272,7 +308,8 @@ func (r *Repository) ListEnabledOllamaAccountSecrets(ctx context.Context) ([]Oll
 		return nil, errors.New("repository is not initialized")
 	}
 	rows, err := r.SQL().QueryContext(ctx, `
-		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms, next_attempt_at_ms, attempt_count
+		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms,
+			api_key_ciphertext, api_key_nonce, api_key_updated_at_ms, next_attempt_at_ms, attempt_count
 		FROM ollama_accounts WHERE enabled = 1 ORDER BY created_at_ms ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list ollama account secrets: %w", err)
@@ -282,12 +319,16 @@ func (r *Repository) ListEnabledOllamaAccountSecrets(ctx context.Context) ([]Oll
 	for rows.Next() {
 		var secret OllamaAccountSecret
 		var enabled int
-		var nextAttempt sql.NullInt64
+		var nextAttempt, apiKeyUpdatedAt sql.NullInt64
 		if err := rows.Scan(&secret.ID, &secret.Label, &enabled, &secret.Ciphertext, &secret.Nonce,
-			&secret.CookieUpdatedAtMS, &nextAttempt, &secret.AttemptCount); err != nil {
+			&secret.CookieUpdatedAtMS, &secret.APIKeyCiphertext, &secret.APIKeyNonce, &apiKeyUpdatedAt,
+			&nextAttempt, &secret.AttemptCount); err != nil {
 			return nil, fmt.Errorf("scan ollama account secret: %w", err)
 		}
 		secret.Enabled = enabled != 0
+		if apiKeyUpdatedAt.Valid {
+			secret.APIKeyUpdatedAtMS = apiKeyUpdatedAt.Int64
+		}
 		secret.NextAttemptAtMS = nullInt64Ptr(nextAttempt)
 		secrets = append(secrets, secret)
 	}
@@ -303,12 +344,14 @@ func (r *Repository) GetOllamaAccountSecret(ctx context.Context, id string) (Oll
 	}
 	var secret OllamaAccountSecret
 	var enabled int
-	var nextAttempt sql.NullInt64
+	var nextAttempt, apiKeyUpdatedAt sql.NullInt64
 	err := r.SQL().QueryRowContext(ctx, `
-		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms, next_attempt_at_ms, attempt_count
+		SELECT id, label, enabled, cookie_ciphertext, cookie_nonce, cookie_updated_at_ms,
+			api_key_ciphertext, api_key_nonce, api_key_updated_at_ms, next_attempt_at_ms, attempt_count
 		FROM ollama_accounts WHERE id = ?`, strings.TrimSpace(id)).
 		Scan(&secret.ID, &secret.Label, &enabled, &secret.Ciphertext, &secret.Nonce,
-			&secret.CookieUpdatedAtMS, &nextAttempt, &secret.AttemptCount)
+			&secret.CookieUpdatedAtMS, &secret.APIKeyCiphertext, &secret.APIKeyNonce, &apiKeyUpdatedAt,
+			&nextAttempt, &secret.AttemptCount)
 	if errors.Is(err, sql.ErrNoRows) {
 		return OllamaAccountSecret{}, false, nil
 	}
@@ -316,6 +359,9 @@ func (r *Repository) GetOllamaAccountSecret(ctx context.Context, id string) (Oll
 		return OllamaAccountSecret{}, false, fmt.Errorf("read ollama account secret: %w", err)
 	}
 	secret.Enabled = enabled != 0
+	if apiKeyUpdatedAt.Valid {
+		secret.APIKeyUpdatedAtMS = apiKeyUpdatedAt.Int64
+	}
 	secret.NextAttemptAtMS = nullInt64Ptr(nextAttempt)
 	return secret, true, nil
 }
@@ -358,6 +404,10 @@ func (r *Repository) RecordOllamaResult(ctx context.Context, result OllamaCollec
 	if result.CookieUpdatedAtMS != nil {
 		cookieVersion = *result.CookieUpdatedAtMS
 	}
+	apiKeyVersion := any(nil)
+	if result.APIKeyUpdatedAtMS != nil {
+		apiKeyVersion = *result.APIKeyUpdatedAtMS
+	}
 	// An automatic result never writes to a disabled account. A manual refresh of a
 	// paused account passes Auto false and still lands, because reading a paused
 	// account once is exactly what that path is for.
@@ -379,13 +429,15 @@ func (r *Repository) RecordOllamaResult(ctx context.Context, result OllamaCollec
 			updated_at_ms = ?
 		WHERE id = ?
 			AND (? = 0 OR enabled = 1)
-			AND (? IS NULL OR cookie_updated_at_ms = ?)`,
+			AND (? IS NULL OR cookie_updated_at_ms = ?)
+			AND (? IS NULL OR COALESCE(api_key_updated_at_ms, 0) = ?)`,
 		result.Status, observedAt, result.IsSuccess, observedAt,
 		newestError, newestErrorAt,
 		hasSnapshot, result.SnapshotJSON,
 		hasSnapshot, observedAt,
 		nextAttempt, result.AttemptCount, nowMS, id,
-		autoFlag, cookieVersion, cookieVersion); err != nil {
+		autoFlag, cookieVersion, cookieVersion,
+		apiKeyVersion, apiKeyVersion); err != nil {
 		return OllamaAccount{}, false, fmt.Errorf("record ollama result: %w", err)
 	}
 	return r.GetOllamaAccount(ctx, id)

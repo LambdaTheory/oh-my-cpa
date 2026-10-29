@@ -296,6 +296,7 @@ export const OllamaManagementDrawer: React.FC<OllamaManagementDrawerProps> = ({ 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ fontWeight: 600 }}>{displayLabel}</span>
                       <Tag size="small">{account.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
+                      <Tag size="small">{account.has_api_key ? t('ollama.api_key_saved') : t('ollama.api_key_missing')}</Tag>
                       <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
                     </div>
 
