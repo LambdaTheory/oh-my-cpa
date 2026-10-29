@@ -35,8 +35,9 @@ type Config struct {
 	AppID   string
 	// HasSecret reports whether an encrypted secret is stored; it is never the
 	// secret itself.
-	HasSecret bool
-	ChatID    string
+	HasSecret          bool
+	ChatID             string
+	ConfirmedRecipient string
 	// SummaryTimes are the daily digest times in "HH:MM".
 	SummaryTimes []string
 	// Timezone is an IANA name; empty means the server location.
@@ -102,16 +103,18 @@ type Resolved struct {
 	// usable.
 	Reason string
 	// ForcedOff reports that the emergency off is in effect.
-	ForcedOff bool
+	ForcedOff                  bool
+	RecipientFromEnv           bool
+	NeedsRecipientConfirmation bool
 }
 
 // Ready reports whether the resolved configuration can run the bot.
 func (r Resolved) Ready() bool {
-	return r.Enabled && !r.Degraded && r.AppID != "" && r.AppSecret != "" && OAUTH_OPEN_ID.MatchString(r.ChatID)
+	return r.Enabled && !r.Degraded && !r.NeedsRecipientConfirmation && r.AppID != "" && r.AppSecret != "" && RecipientKind(r.ChatID) != ""
 }
 
 func (r Resolved) ConnectionReady() bool {
-	return r.Enabled && r.AppID != "" && r.AppSecret != "" && (OAUTH_OPEN_ID.MatchString(r.ChatID) || r.OAuthChatID != "")
+	return r.Enabled && r.AppID != "" && r.AppSecret != "" && (RecipientKind(r.ChatID) != "" || r.OAuthChatID != "")
 }
 
 // clock is a wall-clock time of day in minutes since midnight.
@@ -149,7 +152,9 @@ func resolveConfig(web Config, overlay Overlay) Resolved {
 	}
 	if overlay.ChatID != nil {
 		out.ChatID = strings.TrimSpace(*overlay.ChatID)
+		out.RecipientFromEnv = true
 	}
+	out.NeedsRecipientConfirmation = RecipientKind(out.ChatID) == RecipientGroup && web.ConfirmedRecipient != out.ChatID
 
 	// Source is resolved before validation so a force-off reads as its own
 	// source even when the rest of the configuration is incomplete.
@@ -181,9 +186,12 @@ func resolveConfig(web Config, overlay Overlay) Resolved {
 		out.Reason = reason
 		return out
 	}
-	if out.Enabled && out.ChatID != "" && !OAUTH_OPEN_ID.MatchString(out.ChatID) {
+	if out.Enabled && out.ChatID != "" && RecipientKind(out.ChatID) == "" {
 		out.Degraded = true
-		out.Reason = "通知接收人必须使用 Open ID（ou_ 开头）；群 chat_id 已不再支持，请在飞书设置中更换"
+		out.Reason = "接收人格式不对：群号以 oc_ 开头，个人以 ou_ 开头"
+		if out.RecipientFromEnv {
+			out.Reason = "部署设置里的接收人格式不对：群号以 oc_ 开头，个人以 ou_ 开头；改部署设置后重新部署"
+		}
 	}
 	return out
 }
@@ -201,9 +209,6 @@ func validateResolved(r Resolved) string {
 	}
 	if r.AppSecret == "" {
 		return "缺少应用 App Secret"
-	}
-	if r.ChatID == "" && r.OAuthChatID == "" {
-		return "缺少接收人的 Open ID（ou_ 开头）"
 	}
 	return ""
 }

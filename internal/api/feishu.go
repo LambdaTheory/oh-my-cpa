@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -44,6 +45,7 @@ var errFeishuCipherUnavailable = errors.New("feishu: master-key cipher is not co
 
 // FeishuAPI owns the Feishu service and its settings routes.
 type FeishuAPI struct {
+	settingsMu sync.Mutex
 	handler    *Handler
 	repo       *repository.Repository
 	cipher     *appcrypto.Cipher
@@ -134,6 +136,7 @@ func RegisterFeishuRoutes(router chi.Router, api *FeishuAPI) {
 	router.Get("/feishu/status", api.getStatus)
 	router.Post("/feishu/test", api.postTest)
 	router.Post("/feishu/prediction-test", api.postPredictionTest)
+	router.Post("/feishu/recipient-confirmation", api.postRecipientConfirmation)
 }
 
 type feishuSettingsDTO struct {
@@ -199,6 +202,8 @@ func (f *FeishuAPI) getSettings(writer http.ResponseWriter, request *http.Reques
 }
 
 func (f *FeishuAPI) putSettings(writer http.ResponseWriter, request *http.Request) {
+	f.settingsMu.Lock()
+	defer f.settingsMu.Unlock()
 	if f.repo == nil {
 		writeError(writer, http.StatusServiceUnavailable, "feishu storage is unavailable")
 		return
@@ -222,8 +227,24 @@ func (f *FeishuAPI) putSettings(writer http.ResponseWriter, request *http.Reques
 			MonitorDownAfterMS:      30 * 60 * 1000,
 		}
 	}
+	previousRecipient := settings.ChatID
 	if err := applyFeishuWrite(&settings, payload); err != nil {
 		writeError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
+	if payload.ChatID != nil {
+		if f.overlay.ChatID != nil && strings.TrimSpace(*payload.ChatID) != strings.TrimSpace(*f.overlay.ChatID) {
+			writeError(writer, http.StatusConflict, "recipient is provided by deployment settings")
+			return
+		}
+		// Saving a web target is an explicit choice. An environment-owned target
+		// must pass the separate confirmation flow even when echoed by a form.
+		if f.overlay.ChatID == nil && (!found || previousRecipient != settings.ChatID) {
+			settings.ConfirmedRecipient = settings.ChatID
+		}
+	}
+	if f.handler == nil || f.handler.recordAudit(request, "feishu.settings.update", "feishu", "settings", "attempt", nil) != nil {
+		writeError(writer, http.StatusServiceUnavailable, "audit storage is unavailable")
 		return
 	}
 	settings.UpdatedAtMS = f.now().UnixMilli()
@@ -368,6 +389,7 @@ func feishuWebConfig(settings repository.FeishuSettings) feishu.Config {
 		Enabled:                 settings.Enabled,
 		AppID:                   settings.AppID,
 		ChatID:                  settings.ChatID,
+		ConfirmedRecipient:      settings.ConfirmedRecipient,
 		SummaryTimes:            times,
 		Timezone:                settings.Timezone,
 		QuietStart:              settings.QuietStart,
@@ -433,6 +455,9 @@ func applyFeishuWrite(settings *repository.FeishuSettings, payload feishuSetting
 		value := strings.TrimSpace(*payload.ChatID)
 		if len(value) > feishuChatIDLimit {
 			return errors.New("chat_id is too long")
+		}
+		if value != "" && feishu.RecipientKind(value) == "" {
+			return errors.New("invalid recipient: use a group ID (oc_) or personal Open ID (ou_)")
 		}
 		settings.ChatID = value
 	}
@@ -580,8 +605,10 @@ func feishuStateFrom(runtime repository.FeishuRuntime) *feishu.State {
 	}
 	for _, track := range runtime.Tracks {
 		state.ChannelTracks[track.Provider] = feishu.ChannelTrack{
-			FirstSeen: timeOfMS(track.FirstSeenMS),
-			LastValid: timeOfMS(track.LastValidMS),
+			ConsecutiveFailures: track.ConsecutiveFailures,
+			LastAttempt:         timeOfMS(track.LastAttemptAtMS),
+			FirstSeen:           timeOfMS(track.FirstSeenMS),
+			LastValid:           timeOfMS(track.LastValidMS),
 		}
 	}
 	return state
@@ -613,6 +640,7 @@ func feishuRuntimeFrom(state *feishu.State) repository.FeishuRuntime {
 	}
 	for _, notification := range state.Outbox {
 		runtime.Notifications = append(runtime.Notifications, repository.FeishuNotification{
+			LastError:       notification.LastError,
 			ID:              notification.ID,
 			Kind:            notification.Kind,
 			ItemIDsJSON:     marshalJSON(notification.ItemIDs),
@@ -635,9 +663,11 @@ func feishuRuntimeFrom(state *feishu.State) repository.FeishuRuntime {
 	for _, provider := range providers {
 		track := state.ChannelTracks[provider]
 		runtime.Tracks = append(runtime.Tracks, repository.FeishuChannelTrack{
-			Provider:    provider,
-			FirstSeenMS: msOf(track.FirstSeen),
-			LastValidMS: msOf(track.LastValid),
+			ConsecutiveFailures: track.ConsecutiveFailures,
+			LastAttemptAtMS:     msOf(track.LastAttempt),
+			Provider:            provider,
+			FirstSeenMS:         msOf(track.FirstSeen),
+			LastValidMS:         msOf(track.LastValid),
 		})
 	}
 	return runtime
@@ -645,6 +675,7 @@ func feishuRuntimeFrom(state *feishu.State) repository.FeishuRuntime {
 
 func feishuNotificationFrom(notification repository.FeishuNotification) feishu.Notification {
 	out := feishu.Notification{
+		LastError:     notification.LastError,
 		ID:            notification.ID,
 		Kind:          notification.Kind,
 		State:         notification.State,

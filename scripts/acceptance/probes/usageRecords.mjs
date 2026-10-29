@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 import { sleep } from '../probe.mjs';
 import { pastDeadline, settleLayout, until } from '../harness.mjs';
+import { isRequestGroupingReady } from '../requestGrouping.mjs';
 
 /**
  * Probes for the request-record console: the column geometry and truncation, the
@@ -748,9 +749,25 @@ export async function requestListInteractions({ base, page, check }) {
     await groupingSelect.click();
     await page.locator('.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option')
       .filter({ hasText: label }).click();
-    await until(async () => (await page.locator('.request-group-title').count()) > 0 &&
-      (await page.locator('.request-row .req-time-sub-id').first().innerText()) === interactionRecords[0].request_id,
-    { label: `first row after ${label}` });
+    // The first row id is unchanged by grouping, so the header has to prove the
+    // new grouping committed: the stale source-grouped DOM satisfies a first-row
+    // check before the list remounts. The shared fixtures configure no provider
+    // names, so the source header prints record 0's raw provider key, and record 0
+    // has no user agent, which the English probe context (`omc-lang=en`) renders
+    // from `events.unknown_ua`.
+    const expectedFirstGroupTitle = label === 'By source' ? interactionRecords[0].provider : 'Client not recorded';
+    await until(async () => {
+      const groupTitleCount = await page.locator('.request-group-title').count();
+      if (groupTitleCount === 0) return false;
+      return isRequestGroupingReady(
+        {
+          groupTitleCount,
+          firstGroupTitle: await page.locator('.request-group-title strong').first().innerText(),
+          firstRowId: await page.locator('.request-row .req-time-sub-id').first().innerText(),
+        },
+        { groupTitle: expectedFirstGroupTitle, firstRowId: interactionRecords[0].request_id },
+      );
+    }, { label: `first group and row after ${label}` });
     const holder = page.locator('.request-list [class*="-holder"]').first();
     await holder.evaluate((element) => { element.scrollTop = element.scrollHeight; });
     const hasReachedLast = await until(async () => (await page.locator('.request-row .req-time-sub-id').last().innerText()) === lastRequestId,

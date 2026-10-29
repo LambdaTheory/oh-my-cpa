@@ -31,6 +31,11 @@ export interface FeishuSettingsWriteDTO {
 }
 
 export interface FeishuStatusDTO {
+  recipient?: string;
+  recipient_type?: 'group' | 'person' | '';
+  recipient_from_env?: boolean;
+  needs_recipient_confirmation?: boolean;
+  oauth_group_conflict?: boolean;
   enabled: boolean;
   ready: boolean;
   degraded: boolean;
@@ -43,6 +48,7 @@ export interface FeishuStatusDTO {
   queued_sends: number;
   last_summary_at?: string;
   last_error?: string;
+  next_attempt_at?: string;
 }
 
 export interface FeishuTestResponse {

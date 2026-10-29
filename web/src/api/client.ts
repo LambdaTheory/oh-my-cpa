@@ -1424,6 +1424,13 @@ export const api = {
     return request<FeishuStatusDTO>('/feishu/status');
   },
 
+  async confirmFeishuRecipient(recipient: string): Promise<FeishuStatusDTO> {
+    return request<FeishuStatusDTO>('/feishu/recipient-confirmation', {
+      method: 'POST',
+      body: JSON.stringify({ recipient }),
+    });
+  },
+
   async postFeishuTest(): Promise<FeishuTestResponse> {
     return request<FeishuTestResponse>('/feishu/test', {
       method: 'POST',

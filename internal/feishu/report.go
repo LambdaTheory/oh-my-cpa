@@ -48,6 +48,8 @@ type ProviderReport struct {
 
 // AccountReport is one credential's reading within a channel.
 type AccountReport struct {
+	AttemptedAt      time.Time
+	CollectionFailed bool
 	// Key is the opaque credential identity (the auth index). It is a
 	// persistence key, not text for a person.
 	Key string

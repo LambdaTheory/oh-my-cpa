@@ -23,8 +23,11 @@ func TestAttentionEpisodeNotifiesOnceThroughExhaustionAndRecovery(t *testing.T) 
 	}
 	report.Providers[0].Accounts[0].Windows = []Window{accountWindow(100, nil)}
 	exhausted := evaluatePolicy(config, PolicyInput{Report: report, Prev: second.Items, Now: now})
-	if len(exhausted.Alerts) != 0 {
+	if len(exhausted.Alerts) != 1 || exhausted.Alerts[0].Kind != AlertQuotaExhausted {
 		t.Fatalf("escalation: %+v", exhausted)
+	}
+	if repeated := evaluatePolicy(config, PolicyInput{Report: report, Prev: exhausted.Items, Now: now}); len(repeated.Alerts) != 0 {
+		t.Fatal("exhaustion repeated within its episode")
 	}
 	report.Providers[0].Accounts[0].Windows = []Window{accountWindow(20, nil)}
 	recovered := evaluatePolicy(config, PolicyInput{Report: report, Prev: exhausted.Items, Now: now})
@@ -178,8 +181,8 @@ func TestPredictionEpisodePersistsAndSharesLowQuotaIdentity(t *testing.T) {
 	item.ObservedAtMS = now.UnixMilli()
 	job := &PredictionJob{service: NewService(Options{})}
 	state := EmptyState()
-	if !job.queueFindings(state, readyPredictionConfig(), now, PredictionDigest{Items: []PredictionDigestItem{item}}) {
-		t.Fatal("event outside schedule was lost")
+	if job.queueFindings(state, readyPredictionConfig(), now, PredictionDigest{Items: []PredictionDigestItem{item}}) || len(state.PendingItems) != 1 || len(state.Outbox) != 0 {
+		t.Fatal("forecast must be tracked without an immediate push")
 	}
 	store := NewMemoryStore()
 	if err := store.Save(context.Background(), state); err != nil {
@@ -202,8 +205,11 @@ func TestPredictionEpisodePersistsAndSharesLowQuotaIdentity(t *testing.T) {
 	nextReset := reset + int64((7*24*time.Hour)/time.Millisecond)
 	item.ResetAtMS = &nextReset
 	item.ObservedAtMS = reset + 1
-	if !job.queueFindings(reloaded, readyPredictionConfig(), time.UnixMilli(reset+1), PredictionDigest{Items: []PredictionDigestItem{item}}) {
-		t.Fatal("new reset cycle was suppressed")
+	if job.queueFindings(reloaded, readyPredictionConfig(), time.UnixMilli(reset+1), PredictionDigest{Items: []PredictionDigestItem{item}}) {
+		t.Fatal("forecast-only rollover pushed")
+	}
+	if !reloaded.PendingItems[0].CycleResetAt.Equal(time.UnixMilli(nextReset)) {
+		t.Fatal("new reset cycle was not tracked")
 	}
 }
 

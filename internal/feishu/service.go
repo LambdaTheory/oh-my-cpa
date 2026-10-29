@@ -166,6 +166,9 @@ func NewService(opts Options) *Service {
 	service.sender = senderFactory(resolved)
 	service.eventSource = sourceFactory(resolved)
 	service.dispatcher = NewDispatcher(service.sender, renderer, logger).withClock(now)
+	service.dispatcher.source = service.source
+	service.dispatcher.store = service.store
+	service.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
 	return service
 }
 
@@ -312,6 +315,9 @@ func (s *Service) ensureSenderLocked(resolved Resolved) {
 	s.mu.Lock()
 	s.sender = sender
 	s.dispatcher = NewDispatcher(sender, s.renderer, s.logger).withClock(s.now)
+	s.dispatcher.source = s.source
+	s.dispatcher.store = s.store
+	s.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
 	s.mu.Unlock()
 }
 
@@ -337,6 +343,8 @@ func (s *Service) inactiveReason(resolved Resolved) string {
 		return "forced off by environment"
 	case resolved.Degraded:
 		return "configuration invalid: " + resolved.Reason
+	case resolved.NeedsRecipientConfirmation:
+		return "recipient confirmation required"
 	case !resolved.Enabled:
 		return "disabled"
 	default:
@@ -354,7 +362,8 @@ func (s *Service) HandleMessage(ctx context.Context, in Inbound) error {
 	if in.FromBot || in.ChatID == "" {
 		return nil
 	}
-	if !in.IsDirect() || in.SenderOpenID != s.resolvedNow().ChatID {
+	resolved := s.resolvedNow()
+	if !resolved.Ready() || !canAnswerRecipient(resolved.ChatID, in) {
 		return nil
 	}
 	key := messageEventKey(in.EventID, in.MessageID)
@@ -442,6 +451,19 @@ func (s *Service) serveQuery(ctx context.Context, in Inbound, parsed intent, acc
 	fresh := freshnessOf(rep, defaultFreshWindow, s.now())
 	msg := queryMessage(parsed, rep, fresh)
 	msg.EvaluatedAt = s.now()
+	msg.ChannelUnavailableAfter = s.resolvedNow().ChannelUnavailableAfter
+	if state, err := s.store.Load(ctx); err == nil {
+		for _, item := range openItems(state.PendingItems) {
+			if item.Kind != AlertMonitorDown {
+				continue
+			}
+			for _, provider := range msg.Report.Providers {
+				if provider.Provider == item.Provider {
+					msg.Pending = append(msg.Pending, item)
+				}
+			}
+		}
+	}
 	if err := s.replyCard(ctx, in.MessageID, msg); err != nil {
 		s.logger.WarnContext(ctx, "feishu card reply failed", "action", "query", "result", "error", "error", err)
 		return
@@ -664,13 +686,16 @@ func (s *Service) tick(ctx context.Context) {
 	// end; a problem that recovered in the meantime is dropped, not sent.
 	var stalled []Notification
 	for _, alert := range result.Alerts {
-		if morningMinute(resolved, now) && !sameSummaryMinute(state.LastSummaryAt, resolved, now) && (alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == AlertReadingMissing) {
+		if !isActionableKind(alert.Kind) {
+			continue
+		}
+		if morningMinute(resolved, now) && !sameSummaryMinute(state.LastSummaryAt, resolved, now) && alert.Kind == AlertQuotaExhausted {
 			continue
 		}
 		notification := notificationFromAlert(alert, now)
 		if quiet {
 			notification.State = NotifyQueued
-		} else if alert.Kind == AlertMonitorDown || alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || alert.Kind == AlertReadingMissing {
+		} else {
 			stalled = append(stalled, notification)
 			continue
 		}
@@ -940,30 +965,41 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 
 // Status is the read-only state the console shows.
 type Status struct {
-	Enabled       bool      `json:"enabled"`
-	Ready         bool      `json:"ready"`
-	Degraded      bool      `json:"degraded"`
-	Reason        string    `json:"reason,omitempty"`
-	Source        string    `json:"source"`
-	ForcedOff     bool      `json:"forced_off"`
-	Connected     bool      `json:"connected"`
-	OpenItems     int       `json:"open_items"`
-	PendingSends  int       `json:"pending_sends"`
-	QueuedSends   int       `json:"queued_sends"`
-	LastSummaryAt time.Time `json:"last_summary_at,omitempty"`
-	LastError     string    `json:"last_error,omitempty"`
+	NextAttemptAt              *time.Time `json:"next_attempt_at,omitempty"`
+	Recipient                  string     `json:"recipient"`
+	RecipientType              string     `json:"recipient_type"`
+	RecipientFromEnv           bool       `json:"recipient_from_env"`
+	NeedsRecipientConfirmation bool       `json:"needs_recipient_confirmation"`
+	OAuthGroupConflict         bool       `json:"oauth_group_conflict"`
+	Enabled                    bool       `json:"enabled"`
+	Ready                      bool       `json:"ready"`
+	Degraded                   bool       `json:"degraded"`
+	Reason                     string     `json:"reason,omitempty"`
+	Source                     string     `json:"source"`
+	ForcedOff                  bool       `json:"forced_off"`
+	Connected                  bool       `json:"connected"`
+	OpenItems                  int        `json:"open_items"`
+	PendingSends               int        `json:"pending_sends"`
+	QueuedSends                int        `json:"queued_sends"`
+	LastSummaryAt              time.Time  `json:"last_summary_at,omitempty"`
+	LastError                  string     `json:"last_error,omitempty"`
 }
 
 // StatusSnapshot reads the current status. It is read-only and never sends.
 func (s *Service) StatusSnapshot(ctx context.Context) Status {
 	resolved := s.resolvedNow()
 	status := Status{
-		Enabled:   resolved.Enabled,
-		Ready:     resolved.Ready(),
-		Degraded:  resolved.Degraded,
-		Reason:    resolved.Reason,
-		Source:    resolved.Source,
-		ForcedOff: resolved.ForcedOff,
+		Recipient:                  resolved.ChatID,
+		RecipientType:              RecipientKind(resolved.ChatID),
+		RecipientFromEnv:           resolved.RecipientFromEnv,
+		NeedsRecipientConfirmation: resolved.NeedsRecipientConfirmation,
+		OAuthGroupConflict:         resolved.ChatID != "" && resolved.ChatID == resolved.OAuthChatID,
+		Enabled:                    resolved.Enabled,
+		Ready:                      resolved.Ready(),
+		Degraded:                   resolved.Degraded,
+		Reason:                     resolved.Reason,
+		Source:                     resolved.Source,
+		ForcedOff:                  resolved.ForcedOff,
 	}
 
 	s.runMu.Lock()
@@ -978,6 +1014,13 @@ func (s *Service) StatusSnapshot(ctx context.Context) Status {
 			switch notification.State {
 			case NotifyPending:
 				status.PendingSends++
+				if notification.LastError != "" {
+					status.LastError = notification.LastError
+				}
+				if !notification.NextAttemptAt.IsZero() && (status.NextAttemptAt == nil || notification.NextAttemptAt.Before(*status.NextAttemptAt)) {
+					next := notification.NextAttemptAt
+					status.NextAttemptAt = &next
+				}
 			case NotifyQueued:
 				status.QueuedSends++
 			}
@@ -1080,11 +1123,29 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			track.LastValid = time.Time{}
 		}
 		isMonitored := len(p.Accounts) == 0 && p.Error != ""
+		lastAttempt := time.Time{}
+		hasFailure, hasValid := false, false
+		if len(p.Accounts) == 0 && p.Error != "" {
+			lastAttempt = rep.GeneratedAt
+			hasFailure = true
+		}
 		for _, account := range p.Accounts {
 			if account.Disabled || account.IsUnmonitored {
 				continue
 			}
 			isMonitored = true
+			attempt := account.AttemptedAt
+			if attempt.IsZero() {
+				attempt = account.ObservedAt
+			}
+			if attempt.After(lastAttempt) {
+				lastAttempt = attempt
+			}
+			isExplicitProblem := account.State == StateInvalid || account.AuthFailed || account.CooldownUntil != nil && account.CooldownUntil.After(now)
+			if !isExplicitProblem {
+				hasFailure = hasFailure || account.CollectionFailed || !account.OK
+				hasValid = hasValid || account.OK && !account.CollectionFailed && observationFresh(account, now, defaultFreshWindow)
+			}
 			lastSuccess := account.LastSuccessAt
 			if !isMonitoringTimeValid(lastSuccess) && account.OK {
 				lastSuccess = account.ObservedAt
@@ -1094,6 +1155,14 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			}
 		}
 		if isMonitored {
+			if lastAttempt.After(track.LastAttempt) {
+				track.LastAttempt = lastAttempt
+				if hasValid || !hasFailure {
+					track.ConsecutiveFailures = 0
+				} else {
+					track.ConsecutiveFailures++
+				}
+			}
 			tracks[p.Provider] = track
 		} else {
 			// Time intentionally paused or unsupported is not monitoring downtime.

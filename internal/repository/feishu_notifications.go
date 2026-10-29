@@ -22,6 +22,7 @@ type FeishuSettings struct {
 	Enabled                 bool
 	AppID                   string
 	ChatID                  string
+	ConfirmedRecipient      string
 	SummaryTimesJSON        string
 	Timezone                string
 	QuietStart              string
@@ -51,6 +52,7 @@ type FeishuPendingItem struct {
 
 // FeishuNotification is one persisted outbox row: a pending/queued/sent delivery.
 type FeishuNotification struct {
+	LastError       string
 	ID              string
 	Kind            string
 	ItemIDsJSON     string
@@ -68,10 +70,12 @@ type FeishuNotification struct {
 
 // FeishuChannelTrack is one provider's monitor_down memory.
 type FeishuChannelTrack struct {
-	Provider    string
-	FirstSeenMS *int64
-	LastValidMS *int64
-	UpdatedAtMS int64
+	ConsecutiveFailures int
+	LastAttemptAtMS     *int64
+	Provider            string
+	FirstSeenMS         *int64
+	LastValidMS         *int64
+	UpdatedAtMS         int64
 }
 
 // FeishuRuntime is the whole runtime document the bot loads and saves.
@@ -92,12 +96,12 @@ func (r *Repository) LoadFeishuSettings(ctx context.Context) (FeishuSettings, bo
 	var settings FeishuSettings
 	err := r.SQL().QueryRowContext(ctx, `
 		SELECT enabled, app_id, chat_id, summary_times_json, timezone, quiet_start, quiet_end,
-		       tight_remaining_percent, channel_unavailable_after_ms, monitor_down_after_ms, updated_at_ms
+		       tight_remaining_percent, channel_unavailable_after_ms, monitor_down_after_ms, updated_at_ms, confirmed_recipient
 		FROM feishu_settings WHERE id = 1`).Scan(
 		&settings.Enabled, &settings.AppID, &settings.ChatID, &settings.SummaryTimesJSON,
 		&settings.Timezone, &settings.QuietStart, &settings.QuietEnd,
 		&settings.TightRemainingPercent, &settings.ChannelUnavailableAfter, &settings.MonitorDownAfterMS,
-		&settings.UpdatedAtMS,
+		&settings.UpdatedAtMS, &settings.ConfirmedRecipient,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return FeishuSettings{}, false, nil
@@ -120,8 +124,8 @@ func (r *Repository) SaveFeishuSettings(ctx context.Context, settings FeishuSett
 	_, err := r.SQL().ExecContext(ctx, `
 		INSERT INTO feishu_settings (
 			id, enabled, app_id, chat_id, summary_times_json, timezone, quiet_start, quiet_end,
-			tight_remaining_percent, channel_unavailable_after_ms, monitor_down_after_ms, updated_at_ms
-		) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			tight_remaining_percent, channel_unavailable_after_ms, monitor_down_after_ms, updated_at_ms, confirmed_recipient
+		) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			enabled = excluded.enabled,
 			app_id = excluded.app_id,
@@ -133,11 +137,12 @@ func (r *Repository) SaveFeishuSettings(ctx context.Context, settings FeishuSett
 			tight_remaining_percent = excluded.tight_remaining_percent,
 			channel_unavailable_after_ms = excluded.channel_unavailable_after_ms,
 			monitor_down_after_ms = excluded.monitor_down_after_ms,
-			updated_at_ms = excluded.updated_at_ms`,
+			updated_at_ms = excluded.updated_at_ms,
+			confirmed_recipient = excluded.confirmed_recipient`,
 		boolToInt(settings.Enabled), strings.TrimSpace(settings.AppID), strings.TrimSpace(settings.ChatID),
 		defaultJSON(settings.SummaryTimesJSON, "[]"), strings.TrimSpace(settings.Timezone),
 		strings.TrimSpace(settings.QuietStart), strings.TrimSpace(settings.QuietEnd),
-		settings.TightRemainingPercent, settings.ChannelUnavailableAfter, settings.MonitorDownAfterMS, nowMS)
+		settings.TightRemainingPercent, settings.ChannelUnavailableAfter, settings.MonitorDownAfterMS, nowMS, settings.ConfirmedRecipient)
 	if err != nil {
 		return fmt.Errorf("save feishu settings: %w", err)
 	}
@@ -279,26 +284,28 @@ func (r *Repository) SaveFeishuRuntime(ctx context.Context, runtime FeishuRuntim
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO feishu_notifications (
 				id, kind, item_ids_json, alerts_json, pending_json, tight_json, state, attempts,
-				next_attempt_at_ms, sent_at_ms, occurred_at_ms, created_at_ms, updated_at_ms
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				next_attempt_at_ms, sent_at_ms, occurred_at_ms, created_at_ms, updated_at_ms, last_error
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			notification.ID, notification.Kind,
 			defaultJSON(notification.ItemIDsJSON, "[]"), defaultJSON(notification.AlertsJSON, "[]"),
 			defaultJSON(notification.PendingJSON, "[]"), defaultJSON(notification.TightJSON, "[]"),
 			defaultString(notification.State, "pending"), notification.Attempts,
 			nullMS(notification.NextAttemptAtMS), nullMS(notification.SentAtMS), nullMS(notification.OccurredAtMS),
-			notification.CreatedAtMS, nowMS); err != nil {
+			notification.CreatedAtMS, nowMS, notification.LastError); err != nil {
 			return fmt.Errorf("insert feishu notification %q: %w", notification.ID, err)
 		}
 	}
 	for _, track := range runtime.Tracks {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO feishu_channel_tracks (provider, first_seen_ms, last_valid_ms, updated_at_ms)
-			VALUES (?, ?, ?, ?)
+			INSERT INTO feishu_channel_tracks (provider, first_seen_ms, last_valid_ms, updated_at_ms, consecutive_failures, last_attempt_at_ms)
+			VALUES (?, ?, ?, ?, ?, ?)
 			ON CONFLICT(provider) DO UPDATE SET
 				first_seen_ms = excluded.first_seen_ms,
 				last_valid_ms = excluded.last_valid_ms,
-				updated_at_ms = excluded.updated_at_ms`,
-			track.Provider, nullMS(track.FirstSeenMS), nullMS(track.LastValidMS), nowMS); err != nil {
+				updated_at_ms = excluded.updated_at_ms,
+				consecutive_failures = excluded.consecutive_failures,
+				last_attempt_at_ms = excluded.last_attempt_at_ms`,
+			track.Provider, nullMS(track.FirstSeenMS), nullMS(track.LastValidMS), nowMS, track.ConsecutiveFailures, nullMS(track.LastAttemptAtMS)); err != nil {
 			return fmt.Errorf("insert feishu channel track %q: %w", track.Provider, err)
 		}
 	}
@@ -339,7 +346,7 @@ func (r *Repository) listFeishuPendingItems(ctx context.Context) ([]FeishuPendin
 func (r *Repository) listFeishuNotifications(ctx context.Context) ([]FeishuNotification, error) {
 	rows, err := r.SQL().QueryContext(ctx, `
 		SELECT id, kind, item_ids_json, alerts_json, pending_json, tight_json, state, attempts,
-		       next_attempt_at_ms, sent_at_ms, occurred_at_ms, created_at_ms, updated_at_ms
+		       next_attempt_at_ms, sent_at_ms, occurred_at_ms, created_at_ms, updated_at_ms, last_error
 		FROM feishu_notifications ORDER BY created_at_ms ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list feishu notifications: %w", err)
@@ -352,7 +359,7 @@ func (r *Repository) listFeishuNotifications(ctx context.Context) ([]FeishuNotif
 		if err := rows.Scan(&notification.ID, &notification.Kind, &notification.ItemIDsJSON,
 			&notification.AlertsJSON, &notification.PendingJSON, &notification.TightJSON,
 			&notification.State, &notification.Attempts, &nextAttempt, &sentAt, &occurred,
-			&notification.CreatedAtMS, &updated); err != nil {
+			&notification.CreatedAtMS, &updated, &notification.LastError); err != nil {
 			return nil, fmt.Errorf("scan feishu notification: %w", err)
 		}
 		notification.NextAttemptAtMS = nullInt64Ptr(nextAttempt)
@@ -366,7 +373,7 @@ func (r *Repository) listFeishuNotifications(ctx context.Context) ([]FeishuNotif
 
 func (r *Repository) listFeishuChannelTracks(ctx context.Context) ([]FeishuChannelTrack, error) {
 	rows, err := r.SQL().QueryContext(ctx, `
-		SELECT provider, first_seen_ms, last_valid_ms, updated_at_ms
+		SELECT provider, first_seen_ms, last_valid_ms, updated_at_ms, consecutive_failures, last_attempt_at_ms
 		FROM feishu_channel_tracks ORDER BY provider ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("list feishu channel tracks: %w", err)
@@ -375,12 +382,13 @@ func (r *Repository) listFeishuChannelTracks(ctx context.Context) ([]FeishuChann
 	tracks := []FeishuChannelTrack{}
 	for rows.Next() {
 		var track FeishuChannelTrack
-		var firstSeen, lastValid, updated sql.NullInt64
-		if err := rows.Scan(&track.Provider, &firstSeen, &lastValid, &updated); err != nil {
+		var firstSeen, lastValid, updated, lastAttempt sql.NullInt64
+		if err := rows.Scan(&track.Provider, &firstSeen, &lastValid, &updated, &track.ConsecutiveFailures, &lastAttempt); err != nil {
 			return nil, fmt.Errorf("scan feishu channel track: %w", err)
 		}
 		track.FirstSeenMS = nullInt64Ptr(firstSeen)
 		track.LastValidMS = nullInt64Ptr(lastValid)
+		track.LastAttemptAtMS = nullInt64Ptr(lastAttempt)
 		track.UpdatedAtMS = updated.Int64
 		tracks = append(tracks, track)
 	}

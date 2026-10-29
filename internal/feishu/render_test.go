@@ -59,11 +59,11 @@ func TestCardIsValidSchema(t *testing.T) {
 func TestCardRendersExactEvidenceWithoutImpliedFreshness(t *testing.T) {
 	renderer := NewPlainReportRenderer(time.UTC)
 	report := renderReport()
-	msg := Message{Kind: KindQuery, Report: &report, Freshness: "缓存 · 40 分钟前", Notice: "以下为 40 分钟前的观察数据，可能已过期。", GeneratedAt: report.GeneratedAt}
+	msg := Message{Kind: KindQuery, Report: &report, Freshness: "缓存 · 40 分钟前", Notice: "以下为 40 分钟前的观察数据，可能已过期。", GeneratedAt: report.GeneratedAt, EvaluatedAt: report.GeneratedAt.Add(40 * time.Minute)}
 
 	encoded, _ := json.Marshal(renderer.Card(msg))
 	text := string(encoded)
-	for _, want := range []string{"work", "缓存 · 40 分钟前", msg.Notice} {
+	for _, want := range []string{"数据待确认，额度状态暂不可信", "数据 40 分钟前", "另有 1 项见控制台"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("card is missing %q: %s", want, text)
 		}

@@ -1,0 +1,12 @@
+.credits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.model {
+  display: block;
+}

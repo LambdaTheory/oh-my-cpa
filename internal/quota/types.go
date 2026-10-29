@@ -192,6 +192,7 @@ const (
 
 // NormalizedQuota is the unified DTO representing all quota dimensions for a credential.
 type NormalizedQuota struct {
+	OllamaCredits        *OllamaCredits        `json:"ollama_credits,omitempty"`
 	Cooldowns            []CredentialCooldown  `json:"cooldowns,omitempty"`
 	Failure              *authfailure.Evidence `json:"-"`
 	HasAuthenticatedRead bool                  `json:"-"`
@@ -221,6 +222,23 @@ type NormalizedQuota struct {
 	Capabilities      QuotaCapabilities   `json:"capabilities"`
 	RawSignals        map[string]string   `json:"raw_signals,omitempty"`
 	Error             string              `json:"error,omitempty"`
+}
+
+// OllamaCredits carries USD facts from the settings credit card without turning
+// a relative monthly refill into a metered window or a predicted reset.
+type OllamaCredits struct {
+	Source         string             `json:"source"`
+	RemainingCents *int64             `json:"remaining_cents,omitempty"`
+	UsedCents      *int64             `json:"used_cents,omitempty"`
+	TotalCents     *int64             `json:"total_cents,omitempty"`
+	UsedPercent    *float64           `json:"used_percent,omitempty"`
+	RefillText     string             `json:"refill_text,omitempty"`
+	Models         []OllamaModelUsage `json:"models,omitempty"`
+}
+
+type OllamaModelUsage struct {
+	Model    string `json:"model"`
+	Requests int64  `json:"requests"`
 }
 
 // QuotaOverviewSummary provides fleet-wide counts and stats.

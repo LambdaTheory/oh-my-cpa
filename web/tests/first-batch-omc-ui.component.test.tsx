@@ -36,6 +36,7 @@ vi.mock('../src/api/client', () => ({
     putFeishuSettings: vi.fn(),
     getFeishuStatus: vi.fn(),
     postFeishuTest: vi.fn(),
+    confirmFeishuRecipient: vi.fn(),
   },
 }));
 
@@ -95,15 +96,9 @@ describe('First Batch OMC UI Component Tests', () => {
               disabled: false,
               status: 'healthy',
               observed_at_ms: Date.now(),
-              windows: [
-                {
-                  id: 'weekly',
-                  label: '7d',
-                  scope: 'standard',
-                  used_percent: 45.5,
-                  remaining_percent: 54.5,
-                },
-              ],
+              windows: [],
+              ollama_credits: { source: 'settings_usage_credits', remaining_cents: 29998, used_cents: 2, total_cents: 30000,
+                refill_text: 'Monthly credits refill in 2 weeks', models: [{ model: 'fake-model:1017', requests: 15 }] },
               recommendation: { status: 'healthy', priority: 'none', action: 'none', reason: '' },
               capabilities: { refresh_supported: false, clear_cooldown_supported: false, reset_credit_supported: false },
               quota_exceeded: false,
@@ -119,8 +114,8 @@ describe('First Batch OMC UI Component Tests', () => {
       renderWithClient(<OllamaManagementDrawer open={true} onClose={() => {}} />);
 
       expect(await screen.findByText('My Ollama')).toBeDefined();
-      expect(screen.getByText('7d:')).toBeDefined();
-      expect(screen.getByText('45.5%')).toBeDefined();
+      expect(screen.getByText('$299.98')).toBeDefined();
+      expect(screen.getByText('$0.02')).toBeDefined();
 
       // Click Edit button
       const editBtn = screen.getByRole('button', { name: /编辑|edit/i });
@@ -260,6 +255,23 @@ describe('First Batch OMC UI Component Tests', () => {
   });
 
   describe('Lane C: Feishu Notification Settings', () => {
+    it('AC-8 reviews the exact group and supports returning without enabling delivery', async () => {
+      vi.mocked(api.getFeishuSettings).mockResolvedValue({ enabled: true, has_secret: true, chat_id: 'oc_synthetic', summary_times: ['10:00'], quiet_start: '23:00', quiet_end: '08:00', tight_remaining_percent: 10, channel_unavailable_after_ms: 1800000, monitor_down_after_ms: 1800000, source: 'web', degraded: false, forced_off: false });
+      vi.mocked(api.getFeishuStatus).mockResolvedValue({ enabled: true, ready: false, degraded: false, source: 'web', forced_off: false, connected: true, open_items: 0, pending_sends: 0, queued_sends: 0, recipient: 'oc_synthetic', needs_recipient_confirmation: true });
+      vi.mocked(api.confirmFeishuRecipient).mockResolvedValue({ enabled: true, ready: true, degraded: false, source: 'web', forced_off: false, connected: true, open_items: 0, pending_sends: 0, queued_sends: 0 });
+      renderWithClient(<FeishuSettingsPanel />);
+      fireEvent.click(await screen.findByRole('button', { name: '确认恢复发送' }));
+      expect(await screen.findByRole('dialog')).toBeDefined();
+      expect(api.confirmFeishuRecipient).not.toHaveBeenCalled();
+      expect((screen.getByRole('button', { name: '发送测试卡片' }) as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: /取\s*消/ }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(api.confirmFeishuRecipient).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: '确认恢复发送' }));
+      fireEvent.click(await screen.findByRole('button', { name: '群号无误，恢复发送' }));
+      await waitFor(() => expect(api.confirmFeishuRecipient).toHaveBeenCalledExactlyOnceWith('oc_synthetic'));
+    });
+
     it('saves settings without sending empty app_secret and enforces confirmation on test card', async () => {
       const mockSettings: FeishuSettingsDTO = {
         enabled: true,
@@ -320,7 +332,7 @@ describe('First Batch OMC UI Component Tests', () => {
       fireEvent.click(testBtn);
 
       expect(api.postFeishuTest).not.toHaveBeenCalled();
-      expect(await screen.findByText('向配置的本人 Open ID 发送一条真实测试卡片。')).toBeDefined();
+      expect(await screen.findByText('向当前接收人发送一条真实测试卡片。')).toBeDefined();
 
       // Click confirm inside test modal
       const confirmTestBtn = screen.getByRole('button', { name: /确\s*定/ });

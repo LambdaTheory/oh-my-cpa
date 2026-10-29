@@ -44,8 +44,12 @@ func TestQuotaThresholdJitterKeepsOneEpisode(t *testing.T) {
 				env.source.report = Report{GeneratedAt: observed, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "synthetic", State: StateHealthy, OK: true, ObservedAt: observed, Windows: []Window{window}}}}}}
 				env.service.tick(context.Background())
 			}
-			if sends, _ := env.sender.counts(); sends != 1 {
-				t.Fatalf("jitter sent %d cards, want 1", sends)
+			if sends, _ := env.sender.counts(); sends != 0 {
+				t.Fatalf("low quota jitter sent %d cards, want 0", sends)
+			}
+			state, err := env.store.Load(context.Background())
+			if err != nil || len(state.PendingItems) != 1 {
+				t.Fatal("jitter must retain exactly one tracked episode")
 			}
 		})
 	}
@@ -102,7 +106,7 @@ func TestQuotaMissingEvidenceDoesNotResolveWindow(t *testing.T) {
 					}
 				}
 			}
-			if count != 1 {
+			if count != 0 {
 				t.Fatalf("returning low window announced %d times", count)
 			}
 		})
@@ -145,8 +149,8 @@ func TestQuotaRecoveryRequiresConsecutiveNewObservations(t *testing.T) {
 	}
 	tick(8, 91, base.Add(8*time.Minute))
 	checkOpen(true)
-	if sends, _ := env.sender.counts(); sends != 2 {
-		t.Fatalf("stable recovery then recurrence sends=%d, want 2", sends)
+	if sends, _ := env.sender.counts(); sends != 0 {
+		t.Fatalf("low quota recurrence sends=%d, want 0", sends)
 	}
 }
 

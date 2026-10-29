@@ -213,6 +213,12 @@ func applyQuotaSignal(account *feishu.AccountReport, signal repository.FeishuAcc
 	if account == nil {
 		return
 	}
+	account.AttemptedAt = signal.ObservedAt
+	account.CollectionFailed = signal.State == repository.FeishuSignalTransport || signal.State == repository.FeishuSignalParse || signal.State == repository.FeishuSignalUnknown
+	if account.ObservedAt.After(account.AttemptedAt) {
+		account.AttemptedAt = account.ObservedAt
+		account.CollectionFailed = false
+	}
 	switch strings.TrimSpace(signal.State) {
 	case repository.FeishuSignalAuthInvalid:
 		// A successful reading newer than the auth failure is positive recovery.
@@ -265,6 +271,10 @@ func ollamaAccountReport(account repository.OllamaAccount) feishu.AccountReport 
 		Windows:  windows,
 	}
 	report.State = ollamaStateFor(account.Status, windows)
+	if account.LastObservedAtMS != nil && *account.LastObservedAtMS > 0 {
+		report.AttemptedAt = time.UnixMilli(*account.LastObservedAtMS).UTC()
+	}
+	report.CollectionFailed = account.Status == ollama.StatusTransportError || account.Status == ollama.StatusParseError
 	report.OK = strings.EqualFold(strings.TrimSpace(account.Status), ollama.StatusOK) && hasNumericWindow(windows)
 	if account.LastSuccessAtMS != nil && *account.LastSuccessAtMS > 0 {
 		report.LastSuccessAt = time.UnixMilli(*account.LastSuccessAtMS).UTC()

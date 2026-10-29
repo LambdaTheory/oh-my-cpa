@@ -507,7 +507,9 @@ function ollamaQuota() {
           disabled: false,
           status: 'healthy',
           observed_at_ms: Date.now() - 60_000,
-          windows: [{ id: 'weekly', label: '7d', scope: 'standard', used_percent: 45.5, remaining_percent: 54.5 }],
+          windows: [],
+          plan: { plan_type: 'max', plan_label: 'Max', tier: 'unknown' },
+          ollama_credits: { source: 'settings_usage_credits', remaining_cents: 29998, used_cents: 2, total_cents: 30000, refill_text: 'Monthly credits refill in 2 weeks', models: [{ model: 'fake-model:1017', requests: 15 }] },
           recommendation: { status: 'healthy', priority: 'none', action: 'none', reason: '' },
           capabilities: { refresh_supported: false, clear_cooldown_supported: false, reset_credit_supported: false },
           quota_exceeded: false,
@@ -581,8 +583,8 @@ export async function ollamaAccounts({ base, page, check }) {
 
   check('a stored cookie is reported as encrypted and never as its value',
     await drawer.getByText('Encrypted', { exact: true }).count() === 2 && !(await drawer.innerText()).includes(OLLAMA_COOKIE));
-  check('a collected account shows its real used percent', (await drawer.innerText()).includes('45.5%'));
-  check('a paused account with no snapshot reads as an unknown quota', await drawer.getByText('Not reported', { exact: true }).count() >= 1);
+  check('a collected account shows exact USD amounts and labelled derived usage', (await drawer.innerText()).includes('$299.98') && (await drawer.innerText()).includes('$0.02') && (await drawer.innerText()).includes('Calculated from used / total'));
+  check('a paused account with no snapshot reads as an unknown quota', await drawer.getByText('Data missing', { exact: true }).count() >= 1);
 
   // Edit: the cookie field starts blank, and saving without touching it omits it entirely.
   await drawer.getByRole('button', { name: 'Edit', exact: true }).first().click();
@@ -626,7 +628,26 @@ export async function ollamaAccounts({ base, page, check }) {
   const ollamaRow = page.locator('[data-identity^="ollama:"]').first();
   await ollamaRow.waitFor({ state: 'visible' });
   check('Ollama account renders as a unified credential record in the workspace', await ollamaRow.count() > 0);
-  check('Ollama row shows real 55% remaining weekly quota derived from 45.5% used', (await ollamaRow.innerText()).includes('55%'));
+  check('Ollama row shows USD facts, relative refill and monthly model requests', (await ollamaRow.innerText()).includes('$299.98') && (await ollamaRow.innerText()).includes('in 2 weeks') && (await ollamaRow.innerText()).includes('fake-model:1017') && (await ollamaRow.innerText()).includes('15 requests'));
+  check('Ollama row makes no depletion prediction', !/depletion|exhaustion|reset at/i.test(await ollamaRow.innerText()));
+  await until(async () => await page.locator('.omc-toast').count() === 0, { label: 'Ollama save feedback cleared before capture' });
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/ollama-usd-desktop.png' });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await settleLayout(page);
+  await ollamaRow.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: 'tmp/ollama-usd-phone.png' });
+  check('USD credits fit the phone row', await ollamaRow.getByTestId('ollama-credits').evaluate(node => node.scrollWidth <= node.clientWidth));
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  await settleLayout(page);
+  await ollamaRow.getByRole('button', { name: 'Details: My Ollama', exact: true }).click();
+  const creditDetails = page.locator('.ant-drawer-open');
+  await until(async () => (await creditDetails.getByTestId('ollama-credits').count()) === 1, { label: 'Ollama USD details' });
+  check('Ollama detail drawer shows the same USD amounts and monthly requests', (await creditDetails.innerText()).includes('$299.98') && (await creditDetails.innerText()).includes('$0.02') && (await creditDetails.innerText()).includes('15 requests'));
+  await settleLayout(page);
+  await page.screenshot({ path: 'tmp/ollama-usd-details.png' });
+  await creditDetails.locator('.ant-drawer-close').click();
+  await page.locator('.ant-drawer-open').waitFor({ state: 'hidden' });
 
   check('Ollama row has an accessible batch checkbox', await ollamaRow.getByRole('checkbox', { name: 'Select My Ollama' }).count() === 1);
 
@@ -671,6 +692,7 @@ export async function ollamaAccounts({ base, page, check }) {
   const monitorQuota = {
     ...ollamaQuota().accounts[0].quota,
     plan: { plan_type: 'legacy', plan_label: 'Legacy subscription', tier: 'standard', credits: { balance: '$0' } },
+    ollama_credits: undefined,
   };
   await page.route('**/ollama/quota', (route) => route.fulfill({ json: { accounts: [{ account_id: monitor.id, enabled: true, quota: monitorQuota }] } }));
   await page.route('**/management/quota/refresh', (route) => {

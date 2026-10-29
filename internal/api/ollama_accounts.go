@@ -69,12 +69,12 @@ type ollamaAccountListResponse struct {
 }
 
 type ollamaQuotaDTO struct {
-	AccountID    string          `json:"account_id"`
-	Label        string          `json:"label,omitempty"`
-	Enabled      bool            `json:"enabled"`
-	Status       string          `json:"status,omitempty"`
-	ObservedAtMS *int64          `json:"observed_at_ms,omitempty"`
-	Quota        json.RawMessage `json:"quota,omitempty"`
+	AccountID    string                 `json:"account_id"`
+	Label        string                 `json:"label,omitempty"`
+	Enabled      bool                   `json:"enabled"`
+	Status       string                 `json:"status,omitempty"`
+	ObservedAtMS *int64                 `json:"observed_at_ms,omitempty"`
+	Quota        *quota.NormalizedQuota `json:"quota,omitempty"`
 }
 
 type ollamaQuotaResponse struct {
@@ -87,10 +87,10 @@ type ollamaQuotaResponse struct {
 // and refreshed says whether a scrape actually ran for this request. retry_at_ms is
 // set when the request was suppressed by a backoff or the manual gap.
 type ollamaRefreshResponse struct {
-	Account   ollamaAccountDTO `json:"account"`
-	Quota     json.RawMessage  `json:"quota,omitempty"`
-	Refreshed bool             `json:"refreshed"`
-	RetryAtMS *int64           `json:"retry_at_ms,omitempty"`
+	Account   ollamaAccountDTO       `json:"account"`
+	Quota     *quota.NormalizedQuota `json:"quota,omitempty"`
+	Refreshed bool                   `json:"refreshed"`
+	RetryAtMS *int64                 `json:"retry_at_ms,omitempty"`
 }
 
 // RegisterOllamaRoutes installs the Ollama account routes on the authenticated v1
@@ -473,7 +473,7 @@ func (h *Handler) getOllamaQuota(writer http.ResponseWriter, request *http.Reque
 			ObservedAtMS: account.QuotaObservedAtMS,
 		}
 		if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
-			dto.Quota = json.RawMessage(account.QuotaSnapshotJSON)
+			dto.Quota = decodeOllamaQuota(account.QuotaSnapshotJSON)
 		}
 		dtos = append(dtos, dto)
 	}
@@ -537,7 +537,7 @@ func (h *Handler) refreshOllamaAccount(writer http.ResponseWriter, request *http
 		Refreshed: result.Refreshed,
 	}
 	if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
-		response.Quota = json.RawMessage(account.QuotaSnapshotJSON)
+		response.Quota = decodeOllamaQuota(account.QuotaSnapshotJSON)
 	}
 	if result.Suppressed {
 		response.RetryAtMS = result.RetryAtMS
@@ -634,4 +634,12 @@ func (h *Handler) ollamaRetryAt(account repository.OllamaAccount) *int64 {
 		}
 	}
 	return best
+}
+
+func decodeOllamaQuota(encoded string) *quota.NormalizedQuota {
+	var value quota.NormalizedQuota
+	if err := json.Unmarshal([]byte(encoded), &value); err != nil {
+		return nil
+	}
+	return &value
 }

@@ -19,7 +19,7 @@ func TestMovingResetTicksNotifyOnceAndAbsoluteRollover(t *testing.T) {
 				for i := 0; i < 5; i++ {
 					*env.clock = now.Add(time.Duration(i) * time.Minute)
 					reset := boundary.Add(time.Duration(i) * time.Minute)
-					w := accountWindow(93, &reset)
+					w := accountWindow(100, &reset)
 					w.ID = "7d"
 					w.Kind = "weekly"
 					w.ResetAccuracy = accuracy
@@ -62,8 +62,8 @@ func TestPredictionRecoveryRecurrenceAndPruning(t *testing.T) {
 			state := EmptyState()
 			job := &PredictionJob{service: NewService(Options{})}
 			cfg := readyPredictionConfig()
-			if !job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}}) {
-				t.Fatal("first risk lost")
+			if job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}}) || len(state.PendingItems) != 1 || len(state.Outbox) != 0 {
+				t.Fatal("forecast must be tracked without pushing")
 			}
 			for i := 1; i <= 5; i++ {
 				now = now.Add(time.Minute)
@@ -88,8 +88,11 @@ func TestPredictionRecoveryRecurrenceAndPruning(t *testing.T) {
 			}
 			item.Verdict = "will_exhaust"
 			got := job.queueFindings(state, cfg, now.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}})
-			if got != (accuracy != "exact") {
+			if got {
 				t.Fatalf("recurrence queued=%v accuracy=%q", got, accuracy)
+			}
+			if accuracy != "exact" && !state.PendingItems[0].ResolvedAt.IsZero() {
+				t.Fatal("recurrence did not reopen tracked forecast")
 			}
 			item.Verdict = "on_track"
 			job.queueFindings(state, cfg, now.Add(2*time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}})
@@ -130,7 +133,7 @@ func TestLegacyGroupRecipientShowsActionableDegradation(t *testing.T) {
 	web, overlay := readyConfig()
 	web.ChatID = "oc_synthetic"
 	cfg := resolveConfig(web, overlay)
-	if !cfg.Degraded || cfg.Ready() || !strings.Contains(cfg.Reason, "Open ID") || !strings.Contains(cfg.Reason, "ou_") {
+	if cfg.Degraded || cfg.Ready() || !cfg.NeedsRecipientConfirmation || cfg.ChatID != web.ChatID {
 		t.Fatalf("config=%+v", cfg)
 	}
 }
@@ -151,13 +154,13 @@ func TestMorningRecurrencePredictionFirst(t *testing.T) {
 					}
 					env.source.report = Report{GeneratedAt: at, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "synthetic", State: StateHealthy, OK: true, ObservedAt: at, Windows: []Window{w}}}}}}
 				}
-				setReading(now, 95, now.Add(time.Hour))
+				setReading(now, 100, now.Add(time.Hour))
 				env.service.tick(context.Background())
 				for sample := 1; sample <= recoveryObservationCount; sample++ {
 					setReading(now.Add(time.Duration(sample)*time.Minute), 20, now.Add(time.Hour))
 					env.service.tick(context.Background())
 				}
-				setReading(morning, 95, boundary)
+				setReading(morning, 100, boundary)
 				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 					if hasForecast {
 						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "7d", Verdict: "will_exhaust"}}}, nil
@@ -189,12 +192,12 @@ func TestMorningRecurrencePredictionFirst(t *testing.T) {
 					t.Fatalf("unseen risk later in the summary minute suppressed: %d", sends)
 				}
 				if hasReset {
-					setReading(morning.Add(time.Minute), 95, boundary.Add(time.Minute))
+					setReading(morning.Add(time.Minute), 100, boundary.Add(time.Minute))
 					env.service.tick(context.Background())
 					if sends, _ := env.sender.counts(); sends != 3 {
 						t.Fatalf("revised future reset repeated risk: %d", sends)
 					}
-					setReading(boundary, 95, boundary.Add(24*time.Hour))
+					setReading(boundary, 100, boundary.Add(24*time.Hour))
 					env.service.tick(context.Background())
 					if sends, _ := env.sender.counts(); sends != 4 {
 						t.Fatalf("observed new cycle suppressed: %d", sends)
@@ -215,8 +218,8 @@ func TestForecastLearnsLaterExactCycle(t *testing.T) {
 			state := EmptyState()
 			job := &PredictionJob{service: NewService(Options{})}
 			cfg := readyPredictionConfig()
-			if !job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}}) {
-				t.Fatal("first risk absent")
+			if job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}}) || len(state.PendingItems) != 1 {
+				t.Fatal("forecast tracking absent or unexpectedly pushed")
 			}
 			item.ResetAccuracy = "exact"
 			item.ObservedAtMS = now.Add(time.Minute).UnixMilli()
@@ -232,8 +235,8 @@ func TestForecastLearnsLaterExactCycle(t *testing.T) {
 				t.Fatal("cached pre-boundary observation opened a cycle")
 			}
 			item.ObservedAtMS = boundary.Add(time.Minute).UnixMilli()
-			if !job.queueFindings(state, cfg, boundary.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}}) {
-				t.Fatalf("observed new exact cycle suppressed: %+v", state.PendingItems)
+			if job.queueFindings(state, cfg, boundary.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}}) || !state.PendingItems[0].CycleResetAt.Equal(time.UnixMilli(nextReset)) {
+				t.Fatalf("observed new exact cycle not tracked silently: %+v", state.PendingItems)
 			}
 		})
 	}
@@ -263,8 +266,8 @@ func TestLegacyQuotaRecipientPreservesOAuthTransport(t *testing.T) {
 				t.Fatalf("quota/OAuth readiness=%v/%v/%v, want false/%v/%v", cfg.Ready(), cfg.ConnectionReady(), bot.OAuthReady(), wantReady, wantReady)
 			}
 			if wantReady {
-				if !cfg.Degraded || !strings.Contains(cfg.Reason, "Open ID") {
-					t.Fatalf("quota degradation missing: %q", cfg.Reason)
+				if cfg.Degraded || !cfg.NeedsRecipientConfirmation || cfg.ChatID != web.ChatID {
+					t.Fatal("legacy group must remain unchanged and await confirmation")
 				}
 				if err := bot.Start(context.Background()); err != nil {
 					t.Fatal(err)
@@ -338,7 +341,7 @@ func TestSendTestPropagatesDeliveryPersistenceFailure(t *testing.T) {
 func TestMorningPredictionPreservesObservedQuotaCycle(t *testing.T) {
 	now := mustTime("2026-10-26T10:00:00Z")
 	reset := now.Add(time.Hour)
-	env := newTestEnv(t, Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "claude", Accounts: []AccountReport{{Key: "low", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(95, &reset)}}}}}}, true)
+	env := newTestEnv(t, Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "claude", Accounts: []AccountReport{{Key: "low", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(100, &reset)}}}}}}, true)
 	*env.clock = now
 	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 		return PredictionDigest{Items: []PredictionDigestItem{{Provider: "codex", Key: "forecast", WindowID: "7d", Verdict: "will_exhaust"}}}, nil
@@ -362,7 +365,7 @@ func TestQueryHandlerPreservesScopedAnswerAndStaleNotice(t *testing.T) {
 	for _, tc := range []struct {
 		text, want string
 		stale      bool
-	}{{"异常", "当前没有异常项。", false}, {"gemini", "未找到该渠道的数据。", false}, {"额度", "以下为", true}} {
+	}{{"异常", "当前没有异常项。", false}, {"gemini", "未找到该渠道的数据。", false}, {"额度", "数据 60 分钟前", true}} {
 		t.Run(tc.text, func(t *testing.T) {
 			observed := now
 			if tc.stale {

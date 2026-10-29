@@ -67,8 +67,10 @@ type PendingItem struct {
 // an outage be timed from its real beginning across restarts, including a
 // collector-level failure that yields no account reading at all.
 type ChannelTrack struct {
-	FirstSeen time.Time
-	LastValid time.Time
+	ConsecutiveFailures int
+	LastAttempt         time.Time
+	FirstSeen           time.Time
+	LastValid           time.Time
 }
 
 // PolicyConfig is the policy's immutable thresholds.
@@ -183,6 +185,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 				}
 			}
 			items = append(items, item)
+			if sig.Kind == AlertQuotaExhausted && prev.Kind != AlertQuotaExhausted {
+				opened = append(opened, item)
+			}
 			continue
 		}
 		// New, or a recurrence of a resolved item: fresh Since and no previous
@@ -192,19 +197,7 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		item.LastSeen = in.Now
 		item.Status = PendingOpen
 		item.CycleResetAt = cycleReset
-		if sig.Kind == AlertMonitorDown {
-			for _, previous := range in.Prev {
-				if previous.Provider == sig.Provider && previous.Kind == AlertReadingMissing && previous.Status == PendingOpen && !previous.NotifiedAt.IsZero() {
-					item.NotifiedAt = previous.NotifiedAt
-					break
-				}
-			}
-			if !item.NotifiedAt.IsZero() {
-				items = append(items, item)
-				continue
-			}
-		}
-		if ok && !prev.NotifiedAt.IsZero() && !isNewCycle && (sig.Kind == AlertQuotaLow || sig.Kind == AlertQuotaExhausted) && (!prev.CycleResetAt.IsZero() || prev.Kind == predictionKindPrefix && prev.ResolvedAt.IsZero()) {
+		if ok && !prev.NotifiedAt.IsZero() && !isNewCycle && (sig.Kind == AlertQuotaLow || sig.Kind == AlertQuotaExhausted && prev.Kind == AlertQuotaExhausted) && (!prev.CycleResetAt.IsZero() || prev.Kind == predictionKindPrefix && prev.ResolvedAt.IsZero()) {
 			item.NotifiedAt = prev.NotifiedAt
 			item.CycleResetAt = prev.CycleResetAt
 			items = append(items, item)
@@ -374,6 +367,7 @@ func monitorAlert(p providerInfo, now time.Time) Alert {
 	facts := []string{"最后有效数据: " + displayTime(p.latestSuccess)}
 	return Alert{
 		Kind:       AlertMonitorDown,
+		ObservedAt: p.latestSuccess,
 		Severity:   SeverityWarn,
 		Provider:   p.provider,
 		Title:      providerName(p.provider) + " 监控停摆",
@@ -464,7 +458,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 				pi.latestSuccess = account.LastSuccessAt
 			}
 			enabled++
-			if account.OK && observationFresh(account, now, defaultFreshWindow) {
+			if account.OK && !account.CollectionFailed && observationFresh(account, now, defaultFreshWindow) {
 				pi.hasValid = true
 			} else {
 				sawFailure = true
@@ -500,9 +494,8 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 			pi.earliestRecovery = earliest
 		}
 
-		// monitor_down: no valid data, a non-auth failure, and the reference
-		// reading is old enough. Use the newest real success (stored or reported),
-		// falling back to the first applicable observation only before any success.
+		// Distinct collection failures and elapsed time must both reach their
+		// thresholds. Cached reads cannot manufacture a failure sequence.
 		track := tracks[p.Provider]
 		if isMonitoringTimeValid(track.LastValid) && track.LastValid.After(pi.latestSuccess) {
 			pi.latestSuccess = track.LastValid
@@ -513,7 +506,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		}
 		tracked := enabled > 0 || (len(p.Accounts) == 0 && p.Error != "")
 		if tracked && !pi.hasValid && sawFailure && !authOnly && isMonitoringTimeValid(ref) &&
-			now.Sub(ref) > cfg.MonitorDownAfter {
+			now.Sub(ref) >= cfg.MonitorDownAfter && track.ConsecutiveFailures >= 3 {
 			pi.monitorDown = true
 		}
 
