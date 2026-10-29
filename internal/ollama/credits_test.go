@@ -145,3 +145,68 @@ func TestUSDCreditsAcceptsHeadingBadgeAndMonthlyLabel(t *testing.T) {
 		t.Fatalf("missing labelled facts: %+v", credits)
 	}
 }
+
+// The credits card dropped the "remaining" wording and now prints one "Total"
+// line for the balance, under a heading that carries a "max" qualifier. Both
+// facts are read from a live capture of the settings page, and either one alone
+// used to make the collector report no trustworthy reading.
+func TestFetchUSDCreditsWithTotalLabel(t *testing.T) {
+	page := `<html><body>
+<section><h2>Usage credits <span>max</span></h2>
+<div><span>$249.98</span></div>
+<p>Monthly credits refill <time>in 2 weeks</time></p>
+<p>Monthly credits $250.00</p>
+<p>Added credits $0</p>
+<p>Total $250.00</p>
+<div>Monthly credits used <span>$0.02</span></div>
+</section>
+</body></html>`
+
+	client := fixtureServer(t, 200, page)
+	snapshot, err := client.Fetch(context.Background(), "synthetic", "fake-session")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if !snapshot.IsSuccess() || snapshot.Credits == nil {
+		t.Fatalf("no credits from the current card shape: %+v", snapshot)
+	}
+	credits := snapshot.Credits
+	if credits.RemainingCents == nil || *credits.RemainingCents != 25000 {
+		t.Fatalf("remaining = %v, want 25000", credits.RemainingCents)
+	}
+	if credits.UsedCents == nil || *credits.UsedCents != 2 {
+		t.Fatalf("used = %v, want 2", credits.UsedCents)
+	}
+	if credits.TotalCents == nil || *credits.TotalCents != 25002 {
+		t.Fatalf("total = %v, want 25002", credits.TotalCents)
+	}
+}
+
+// A page that kept the balance line but lost the used line must still read as no
+// reading. Reporting the balance as if nothing had been spent would be a claim the
+// page never made.
+func TestFetchUSDCreditsWithoutUsedStaysUnreadable(t *testing.T) {
+	page := `<html><body><section><h2>Usage credits max</h2>
+<p>Total $250.00</p></section></body></html>`
+
+	client := fixtureServer(t, 200, page)
+	snapshot, err := client.Fetch(context.Background(), "synthetic", "fake-session")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if snapshot.IsSuccess() {
+		t.Fatalf("a card without a used figure read as a success: %+v", snapshot.Credits)
+	}
+}
+
+// A heading that merely shares the words is a different section, not this card.
+func TestHeadingQualifierIsBounded(t *testing.T) {
+	qualifier, ok := headingQualifier("Usage credits max", "Usage credits")
+	if !ok || len([]rune(qualifier)) > headingQualifierLimit {
+		t.Fatalf("short badge = %q ok = %v, want it inside the limit", qualifier, ok)
+	}
+	qualifier, ok = headingQualifier("Usage credits history and refunds", "Usage credits")
+	if ok && len([]rune(qualifier)) <= headingQualifierLimit {
+		t.Fatalf("long remainder = %q was accepted as a badge", qualifier)
+	}
+}
