@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "source_revision": "0817585a4ea3dc8afa7caca2513588f01b4bfd71",
-  "previous_deploy": "9895674b689f2dbb571891114dc2d8f36072001f",
+  "source_revision": "ed261aeed1c16dd025caca02a90ca3ff407eac29",
+  "previous_deploy": "815db3bcb0affa33a5048261c54ea528c39dd057",
   "build_version": "fork",
   "build_tag": "",
   "source_files": {
@@ -387,8 +387,8 @@
     "internal/ollama/client_test.go": "a133a465598f027c1e198e24ee7728e0774c4905d7621ffe4ba05828f3932845",
     "internal/ollama/collector.go": "ab35e499466588890acb1579ced42d33089592622c19962ba2905c4a107074c3",
     "internal/ollama/collector_test.go": "53d8a1eca1a42aa2178880d513b4b3d7b312204f9927d2082145bc618a7e54d9",
-    "internal/ollama/credits.go": "2b001da264cd32ffbbe59d92058fef7302c2b8d9d092e393f5b883b9d10dbb0e",
-    "internal/ollama/credits_test.go": "7280e1e07e09fce9f4352739c50809db582c64b9c77d7c7b450603f667bbc638",
+    "internal/ollama/credits.go": "721ee79de559c75218d36409207fb1a8959901c28126c4361f9927c71aac5bde",
+    "internal/ollama/credits_test.go": "1e3ee6496685ef6252e29d07129f7197392498367f0598e271262fad0dd32309",
     "internal/ollama/diagnose.go": "fe897fd36d30dea86c8e4439b878d331ea4317855b803f9b1081167eb11f0bc4",
     "internal/ollama/diagnose_test.go": "19fdd8c7ddcb75d4d291a824bc00c805a4c6091fed2d2d1711417bfb926df54c",
     "internal/ollama/ollama.go": "bfa37c7266a39b6afa831ed3ce3ba84339b9b911afb76411c415124ce16863d7",
@@ -1845,7 +1845,7 @@
     "web/vite.config.ts": "3f50064ae243692f82ee42550741a3aba329229a7f35fc3f88d9a1ae7054d10b",
     "web/vitest.config.ts": "5690a58b3807385034af0fe51e7e26ea37d67f3f4c20e4190354f94e61c07d3a"
   },
-  "source_sha256": "277072d956838e3d89f4947d5b4df2ad664b3d7bf9d5f05da1423780b8fd785a",
+  "source_sha256": "2d0945aab434892c0d4f3d8c25ef250f789cbd2a31c5b3eb07f53732aec75474",
   "frontend_sha256": "151f996095262c425fe7e09d662701e252c9e713ff76bee13a1b4077582690d5",
   "assets": {
     ".gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
