@@ -14,14 +14,15 @@ import (
 const headingQualifierLimit = 12
 
 var (
-	USD_AMOUNT       = regexp.MustCompile(`^(?:USD\s*\$?|\$)\s*(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.([0-9]{1,2}))?$`)	REMAINING_AMOUNT = regexp.MustCompile(`(?i)^(?:remaining(?: credits)?|balance remaining)\s*:?\s*(.+)$|^(.+?)\s+(?:remaining(?: credits)?|balance remaining)$`)
+	USD_AMOUNT       = regexp.MustCompile(`^(?:USD\s*\$?|\$)\s*(0|[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)(?:\.([0-9]{1,2}))?$`)
+	REMAINING_AMOUNT = regexp.MustCompile(`(?i)^(?:remaining(?: credits)?|balance remaining)\s*:?\s*(.+)$|^(.+?)\s+(?:remaining(?: credits)?|balance remaining)$`)
 	// BALANCE_AMOUNT is the label the page uses now: the credits card prints a
 	// single "Total" line for the balance (monthly allowance plus added credits)
 	// where it used to print "... remaining". Without it the collector reports no
 	// trustworthy reading even though the page is intact and the session is valid.
 	BALANCE_AMOUNT = regexp.MustCompile(`(?i)^total\s*:?\s*(.+)$|^(.+?)\s+total$`)
-	USED_AMOUNT      = regexp.MustCompile(`(?i)^(?:used this month|this month used|monthly usage|monthly credits used)\s*:?\s*(.+)$|^(.+?)\s+(?:used this month|monthly credits used)$`)
-	MODEL_REQUESTS   = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s+([0-9]+(?:,[0-9]{3})*)\s+requests?$`)
+	USED_AMOUNT    = regexp.MustCompile(`(?i)^(?:used this month|this month used|monthly usage|monthly credits used)\s*:?\s*(.+)$|^(.+?)\s+(?:used this month|monthly credits used)$`)
+	MODEL_REQUESTS = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._:/-]*)\s+([0-9]+(?:,[0-9]{3})*)\s+requests?$`)
 )
 
 // Read the labelled credit card in the response DOM. Searching flattened page
@@ -208,7 +209,7 @@ func headingQualifier(text, label string) (string, bool) {
 	if !strings.HasPrefix(lowered, target) {
 		return "", false
 	}
-	rest := strings.TrimSpace(lowered[len(target):"])
+	rest := strings.TrimSpace(lowered[len(target):])
 	if rest == "" {
 		return "", false
 	}
