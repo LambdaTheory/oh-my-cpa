@@ -267,7 +267,7 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
 	{http.MethodDelete, "/api/v1/ollama/accounts/{id}", demoAllow, ""},
 	// The collector is never started in a demo, so an explicit refresh would be the
-	// one route here that scrapes ollama.com with a stored cookie.
+	// one route here that calls ollama.com with a stored API key or session cookie.
 	{http.MethodPost, "/api/v1/ollama/accounts/{id}/refresh", demoRefuse, "refreshing an Ollama account is disabled: it would call ollama.com"},
 	{http.MethodGet, "/api/v1/ollama/accounts/{id}/diagnose", demoRefuse, "diagnosing an Ollama account is disabled: it would call ollama.com"},
 	{http.MethodGet, "/api/v1/ollama/quota", demoAllow, ""},

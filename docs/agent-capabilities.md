@@ -881,8 +881,9 @@ recovery action is permitted. Paused plans retain their recovery projection, wit
 
 `ollama_accounts_status` and `feishu_notifications_status` are low-risk reads exposed
 to the Agent and MCP. The first reports the Ollama collector switch and, per stored
-account, its label, collection status, newest safe quota reading and retry state; the
-session cookie is never returned. Its normalized `ollama_credits` reading contains
+account, its label, collection status, newest safe quota reading, retry state and the
+`has_api_key` / `has_cookie` presence flags; neither the API key nor the session cookie
+is ever returned. Its normalized `ollama_credits` reading contains
 validated USD cents, their total and optional calculated share, relative refill text
 and monthly model request counts. It carries no inferred reset or depletion time;
 collection status distinguishes a retained snapshot from a current successful read.

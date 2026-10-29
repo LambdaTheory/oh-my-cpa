@@ -469,7 +469,7 @@ function ollamaAccountList() {
       id: OLLAMA_ACCOUNT_ID,
       label: 'My Ollama',
       enabled: true,
-      has_cookie: true,
+      has_cookie: true, has_api_key: false,
       status: 'ok',
       last_success_at_ms: Date.now() - 60_000,
       attempt_count: 0,
@@ -480,7 +480,7 @@ function ollamaAccountList() {
       id: OLLAMA_PAUSED_ID,
       label: 'Paused Ollama',
       enabled: false,
-      has_cookie: true,
+      has_cookie: true, has_api_key: false,
       status: 'unknown',
       attempt_count: 1,
       created_at_ms: Date.now() - 3_600_000,
@@ -539,7 +539,7 @@ export function ollamaAccountFixtures() {
           id: 'ollama-fixture-3',
           label: ollamaState.created.label,
           enabled: ollamaState.created.enabled ?? true,
-          has_cookie: true,
+          has_cookie: true, has_api_key: false,
           status: 'ok',
           attempt_count: 0,
           created_at_ms: Date.now(),
@@ -590,7 +590,7 @@ export async function ollamaAccounts({ base, page, check }) {
   await drawer.getByRole('button', { name: 'Edit', exact: true }).first().click();
   const editModal = page.locator('.ant-modal:visible').filter({ hasText: 'Edit Ollama Account' });
   await editModal.waitFor({ state: 'visible' });
-  const editCookie = editModal.locator('input[type="password"]');
+  const editCookie = editModal.locator('[data-testid="ollama-cookie-input"]');
   check('editing an account never prefills the stored cookie', await editCookie.inputValue() === '');
   await editModal.getByRole('button', { name: 'Save', exact: true }).click();
   await until(() => ollamaState.updated !== null, { label: 'the untouched-edit save to reach the gateway' });
@@ -603,7 +603,7 @@ export async function ollamaAccounts({ base, page, check }) {
   const addModal = page.locator('.ant-modal:visible').filter({ hasText: 'Add Ollama Account' });
   await addModal.waitFor({ state: 'visible' });
   const addLabel = addModal.locator('input[type="text"]');
-  const addCookie = addModal.locator('input[type="password"]');
+  const addCookie = addModal.locator('[data-testid="ollama-cookie-input"]');
   check('a new account cannot be saved without both a label and a cookie',
     await addLabel.inputValue() === '' && await addModal.getByRole('button', { name: 'Save', exact: true }).isDisabled());
   await addLabel.fill('New Ollama');

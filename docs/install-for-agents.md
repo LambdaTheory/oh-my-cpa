@@ -172,8 +172,8 @@ Then adjust `deploy/.env`:
   cannot be determined, use `off` and say so. Another management panel that does not collect
   usage needs nothing; leave it running.
 - **Optional modules.** Ollama quota monitoring and Feishu notifications make outbound
-  requests, so neither is enabled for the user. The Ollama scraper only runs for accounts
-  the operator adds in the console; Feishu is off until `OMCPA_FEISHU_ENABLED=true` or the
+  requests, so neither is enabled for the user. The Ollama collector only runs for
+  accounts the operator adds in the console; Feishu is off until `OMCPA_FEISHU_ENABLED=true` or the
   console switch is turned on. Do not turn either on during installation. Leave
   `OMCPA_FEISHU_ENABLED` unset so the console's own switch stays authoritative, and see
   `docs/operations.md` for `OMCPA_OLLAMA_COLLECTOR_ENABLED`, the Feishu connection

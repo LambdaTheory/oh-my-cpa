@@ -29,6 +29,7 @@ func TestBrowserDTOAllowlistAndSecretExclusion(t *testing.T) {
 		"super-secret-user:super-secret-pass",
 		"secret-bearer-token-12345678",
 		"secret-query-param=confidential",
+		"ollama-api-key-fixture-secret",
 	}
 
 	fakeCPA := newFakeCPA(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -107,6 +108,27 @@ func TestBrowserDTOAllowlistAndSecretExclusion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := repo.UpsertDiscoveredResources(context.Background(), "default", resources, now, true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed an Ollama account carrying both a cookie and an API key. The metadata
+	// endpoint must expose the key only as has_api_key, never as value or ciphertext.
+	ollamaCookieCiphertext, ollamaCookieNonce, err := cipher.Encrypt([]byte("ollama-session-cookie-fixture"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ollamaKeyCiphertext, ollamaKeyNonce, err := cipher.Encrypt([]byte("ollama-api-key-fixture-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.CreateOllamaAccount(context.Background(), repository.OllamaAccountCreate{
+		Label:            "fixture-key",
+		Enabled:          true,
+		Ciphertext:       ollamaCookieCiphertext,
+		Nonce:            ollamaCookieNonce,
+		APIKeyCiphertext: ollamaKeyCiphertext,
+		APIKeyNonce:      ollamaKeyNonce,
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -222,6 +244,29 @@ func TestBrowserDTOAllowlistAndSecretExclusion(t *testing.T) {
 					if _, exists := file[forbidden]; exists {
 						t.Fatalf("auth-files DTO exposed forbidden field %q: %#v", forbidden, file)
 					}
+				}
+			}
+		}
+
+		// Specifically verify DTO shape for /api/v1/ollama/accounts: the presence
+		// flag is present, and neither the key nor its ciphertext is.
+		if endpoint == "/api/v1/ollama/accounts" {
+			var parsed struct {
+				Accounts []map[string]any `json:"accounts"`
+			}
+			if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+				t.Fatalf("parse ollama accounts: %v", err)
+			}
+			if len(parsed.Accounts) != 1 {
+				t.Fatalf("ollama accounts = %#v", parsed.Accounts)
+			}
+			account := parsed.Accounts[0]
+			if hasAPIKey, ok := account["has_api_key"].(bool); !ok || !hasAPIKey {
+				t.Fatalf("ollama account must expose has_api_key=true: %#v", account)
+			}
+			for _, forbidden := range []string{"api_key", "api_key_ciphertext", "api_key_nonce"} {
+				if _, exists := account[forbidden]; exists {
+					t.Fatalf("ollama account DTO exposed forbidden field %q: %#v", forbidden, account)
 				}
 			}
 		}

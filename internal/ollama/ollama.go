@@ -1,21 +1,29 @@
-// Package ollama reads Ollama Cloud quota from the account settings page.
+// Package ollama reads Ollama Cloud quota from the documented balance endpoint,
+// falling back to the account settings page.
 //
-// This integration holds a session cookie, while the documented structured APIs
-// require a Bearer key. It reads the fixed settings URL with that cookie and parses
-// the returned HTML. Any HTML redesign can silently break the
-// parser; a failure degrades to an unavailable snapshot rather than to wrong
-// numbers.
+// An account may store an API key, a session cookie, or both. When a key exists the
+// client reads the fixed https://ollama.com/api/balance JSON endpoint with a Bearer
+// header; if that path fails it reads the fixed settings URL with the cookie and
+// parses the returned HTML. The JSON path is authoritative when it succeeds, and a
+// key failure is never folded into a cookie reading. Either upstream can change, so
+// a failure degrades to an unavailable snapshot rather than to wrong numbers.
 //
-// This is a fresh implementation for Oh My CPA. Its parsing approach is informed
-// by the retired CPA-buddy (cpab) Ollama collector, which in turn credits
+// This is a fresh implementation for Oh My CPA. The settings-page parsing approach
+// is informed by the retired CPA-buddy (cpab) Ollama collector, which in turn credits
 // jacklee-code/ollama-cloud-quota-monitor and Wei-Shaw/sub2api. That lineage is
 // LGPL-3.0-only; before this package is merged for distribution, its licensing
 // and the repository's THIRD_PARTY_NOTICES obligation must be reviewed. Only the
 // approach was reused, not the source text.
 //
-// SECURITY: the session cookie is a high-value secret. It must never appear in
-// logs, error strings, snapshots or any returned value, and it is never sent to a
-// host other than the fixed Ollama settings origin.
+// The balance-endpoint mapping is derived from the MIT-licensed CodexBar
+// (Plugins/ollama-api.ts): remaining is included.balance_usd, used is
+// allowance_usd minus included.balance_usd, and purchased.balance_usd is a
+// separate credit balance rather than part of the included allowance. The Go
+// client, validation and wire mapping here are this project's own.
+//
+// SECURITY: the session cookie and API key are high-value secrets. Neither may
+// appear in logs, error strings, snapshots or any returned value, and each is sent
+// only to its fixed Ollama origin.
 package ollama
 
 import (
@@ -35,8 +43,8 @@ var ErrAccountNotFound = errors.New("ollama: account not found")
 // arrives before Start; it is never a reason to fall back to the request context.
 var ErrServiceNotStarted = errors.New("ollama: collector is not started")
 
-// ErrRefreshSuperseded is returned by a manual refresh when the scrape read a cookie
-// the operator replaced while it was running, or coalesced onto an automatic scrape
+// ErrRefreshSuperseded is returned by a manual refresh when the scrape read a
+// credential the operator replaced while it was running, or coalesced onto an automatic scrape
 // whose reading was refused because the account is now paused. The reading was not
 // persisted, so the console reports the refresh as incomplete rather than as an old
 // success; it is not retried automatically.

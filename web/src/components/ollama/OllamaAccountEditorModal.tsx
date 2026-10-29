@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button, Modal } from 'antd';
+import { Tag } from '../common/Tag';
 import { Switch } from '../common/Switch';
 import { useT } from '../../i18n';
 import { credentialLabel } from '../../utils/credentialLabel';
@@ -13,6 +14,29 @@ interface OllamaAccountEditorModalProps {
   onSave: (payload: OllamaAccountWritePayload) => void;
 }
 
+const FIELD_STYLE: React.CSSProperties = {
+  width: '100%',
+  padding: '6px 10px',
+  background: 'var(--surface)',
+  color: 'var(--fg)',
+  border: '1px solid var(--border)',
+  borderRadius: 'var(--radius)',
+};
+
+const LABEL_STYLE: React.CSSProperties = {
+  display: 'block',
+  marginBottom: 4,
+  fontSize: 13,
+  fontWeight: 500,
+};
+
+const NOTE_STYLE: React.CSSProperties = {
+  display: 'block',
+  fontSize: 12,
+  color: 'var(--muted)',
+  marginTop: 4,
+};
+
 export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> = ({
   open,
   account,
@@ -23,6 +47,7 @@ export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> =
   const t = useT();
   const [formLabel, setFormLabel] = useState('');
   const [formCookie, setFormCookie] = useState('');
+  const [formAPIKey, setFormAPIKey] = useState('');
   const [formEnabled, setFormEnabled] = useState(true);
 
   useEffect(() => {
@@ -30,10 +55,12 @@ export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> =
       if (account) {
         setFormLabel(credentialLabel(account.label, [`ollama:${account.id}`, account.id]));
         setFormCookie(''); // Never prefill stored cookie
+        setFormAPIKey(''); // Never prefill stored API key
         setFormEnabled(account.enabled);
       } else {
         setFormLabel('');
         setFormCookie('');
+        setFormAPIKey('');
         setFormEnabled(true);
       }
     }
@@ -43,6 +70,7 @@ export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> =
     onSave({
       label: formLabel.trim(),
       cookie: formCookie.trim() || undefined,
+      api_key: formAPIKey.trim() || undefined,
       enabled: formEnabled,
     });
   };
@@ -69,19 +97,11 @@ export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> =
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 500 }}>
-            {t('ollama.field_label')}
-          </label>
+          <label style={LABEL_STYLE}>{t('ollama.field_label')}</label>
           <input
             type="text"
-            style={{
-              width: '100%',
-              padding: '6px 10px',
-              background: 'var(--surface)',
-              color: 'var(--fg)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)',
-            }}
+            data-testid="ollama-label-input"
+            style={FIELD_STYLE}
             placeholder={t('ollama.field_label_placeholder')}
             value={formLabel}
             onChange={(e) => setFormLabel(e.target.value)}
@@ -89,27 +109,37 @@ export const OllamaAccountEditorModal: React.FC<OllamaAccountEditorModalProps> =
         </div>
 
         <div>
-          <label style={{ display: 'block', marginBottom: 4, fontSize: 13, fontWeight: 500 }}>
-            {t('ollama.field_cookie')}
-          </label>
+          <label style={LABEL_STYLE}>{t('ollama.field_cookie')}</label>
           <input
             type="password"
+            data-testid="ollama-cookie-input"
             autoComplete="new-password"
-            style={{
-              width: '100%',
-              padding: '6px 10px',
-              background: 'var(--surface)',
-              color: 'var(--fg)',
-              border: '1px solid var(--border)',
-              borderRadius: 'var(--radius)',
-            }}
+            style={FIELD_STYLE}
             placeholder={account ? t('ollama.field_cookie_edit_placeholder') : t('ollama.field_cookie_placeholder')}
             value={formCookie}
             onChange={(e) => setFormCookie(e.target.value)}
           />
-          <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)', marginTop: 4 }}>
-            {t('ollama.cookie_security_note')}
-          </span>
+          <span style={NOTE_STYLE}>{t('ollama.cookie_security_note')}</span>
+        </div>
+
+        <div>
+          <label style={LABEL_STYLE}>{t('ollama.field_api_key')}</label>
+          <input
+            type="password"
+            data-testid="ollama-api-key-input"
+            autoComplete="new-password"
+            style={FIELD_STYLE}
+            placeholder={account ? t('ollama.field_api_key_edit_placeholder') : t('ollama.field_api_key_placeholder')}
+            value={formAPIKey}
+            onChange={(e) => setFormAPIKey(e.target.value)}
+          />
+          {account?.has_api_key && (
+            <span style={{ ...NOTE_STYLE, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Tag size="small">{t('ollama.api_key_saved')}</Tag>
+              <span className="mono-num" aria-hidden="true">••••••••</span>
+            </span>
+          )}
+          <span style={NOTE_STYLE}>{t('ollama.api_key_security_note')}</span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

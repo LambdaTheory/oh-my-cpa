@@ -245,7 +245,7 @@ test('mixed refresh: thirteen entries mean eleven targets and two disabled skips
   }));
   const quotas = files.map((entry) => quota({ auth_index: entry.auth_index! }));
   const account = {
-    id: 'opaque-monitor', label: 'ollama:opaque-monitor: Legacy account', enabled: true, has_cookie: true,
+    id: 'opaque-monitor', label: 'ollama:opaque-monitor: Legacy account', enabled: true, has_cookie: true, has_api_key: false,
     attempt_count: 0, created_at_ms: 1, updated_at_ms: 1,
   };
   const projection = buildOAuthWorkspaceProjection(files, quotas, choices, [account], []);
@@ -645,7 +645,7 @@ test('ollama: accounts project as distinct non-CPA records with strict action is
     id: 'ollama-test-1',
     label: 'Team Ollama',
     enabled: true,
-    has_cookie: true,
+    has_cookie: true, has_api_key: false,
     status: 'ok',
     attempt_count: 0,
     created_at_ms: 1000,
@@ -710,7 +710,7 @@ test('ollama request telemetry: requests-desc sort orders known CPA ahead of unk
     id: 'ollama-acc-1',
     label: 'Same Label',
     enabled: true,
-    has_cookie: true,
+    has_cookie: true, has_api_key: false,
     attempt_count: 0,
     created_at_ms: 1000,
     updated_at_ms: 1000,
@@ -719,7 +719,7 @@ test('ollama request telemetry: requests-desc sort orders known CPA ahead of unk
     id: 'ollama-acc-2',
     label: 'Same Label',
     enabled: false,
-    has_cookie: true,
+    has_cookie: true, has_api_key: false,
     attempt_count: 0,
     created_at_ms: 1000,
     updated_at_ms: 1000,

@@ -5,6 +5,7 @@ export interface OllamaAccountDTO {
   label?: string;
   enabled: boolean;
   has_cookie: boolean;
+  has_api_key: boolean;
   status?: string;
   last_success_at_ms?: number | null;
   last_observed_at_ms?: number | null;
@@ -21,6 +22,7 @@ export interface OllamaAccountDTO {
 export interface OllamaAccountWritePayload {
   label?: string;
   cookie?: string;
+  api_key?: string;
   enabled?: boolean;
 }
 

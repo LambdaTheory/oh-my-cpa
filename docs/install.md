@@ -351,7 +351,7 @@ These are the variables the two release Compose files accept. Compose reads
 | `OMCPA_NETWORK_EXTERNAL` | `false` | OMC only: `true` joins a network that already exists |
 | `OMCPA_UPDATE_CHECK_ENABLED`, `OMCPA_UPDATE_CHECK_ON_PAGE_LOAD` | `true` | Set both to `false` on a machine with no internet |
 | `OMCPA_UPDATER_ENABLED` | `false` | Set to `true` only when explicitly opting into the socket-holding updater |
-| `OMCPA_OLLAMA_COLLECTOR_ENABLED` | `true` | Set to `false` to stop the Ollama quota scraper without removing accounts |
+| `OMCPA_OLLAMA_COLLECTOR_ENABLED` | `true` | Set to `false` to stop the Ollama quota collector without removing accounts |
 | `OMCPA_FEISHU_ENABLED` | unset | Leave unset so the console's own switch is in force; `false` forces the bot off, with `OMCPA_FEISHU_FORCE_DISABLED` taking precedence |
 
 Everything else OMC reads is in `docs/operations.md`.

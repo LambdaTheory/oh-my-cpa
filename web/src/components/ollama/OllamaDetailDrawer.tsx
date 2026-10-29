@@ -202,6 +202,7 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <Tag tone="accent">Ollama</Tag>
             <Tag size="small">{account.has_cookie ? t('ollama.cookie_saved') : t('ollama.cookie_missing')}</Tag>
+            <Tag size="small">{account.has_api_key ? t('ollama.api_key_saved') : t('ollama.api_key_missing')}</Tag>
             <StatusLabel tone={statusInfo.tone}>{statusInfo.label}</StatusLabel>
           </div>
 
@@ -354,6 +355,15 @@ export const OllamaDetailDrawer: React.FC<OllamaDetailDrawerProps> = ({
                   label: t('ollama.col_account'),
                   value: displayLabel,
                 }] : []),
+                {
+                  key: 'api_key',
+                  label: t('ollama.col_api_key'),
+                  value: (
+                    <Tag size="small">
+                      {account.has_api_key ? t('ollama.api_key_saved') : t('ollama.api_key_missing')}
+                    </Tag>
+                  ),
+                },
                 {
                   key: 'cookie',
                   label: t('ollama.col_cookie'),

@@ -143,7 +143,7 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/usage/ingest` | Collector loop, decode processor, usage-fact fold, passive-observation backfill and data-lifecycle maintenance | `repository`, `management`, `security`, `usage` |
 | `internal/quota` | Per-provider quota probes, normalization, balance and warmup evidence, the passive response-header parser, the active-observation projection, and the per-account refresh scheduler with its 429 backoff | `management`, `security`, `usage` |
 | `internal/automation` | Account-level auto-management: the pure weekly-exhaustion decision, the persisted plan and retry schedule, and the background pass that disables and enables a credential through the shared operations write path | `repository`, `security` |
-| `internal/ollama` | Ollama quota monitoring: the fixed-settings-page scraper, the cookie decrypt seam, the persisted safe snapshot and the collection loop | `quota` |
+| `internal/ollama` | Ollama quota monitoring: the documented balance-API client, the fixed-settings-page cookie fallback, the credential decrypt seam, the persisted safe snapshot and the collection loop | `quota` |
 | `internal/feishu` | The Feishu notification bot: the read-only report DTO, denoise policy, card renderer, sender/source seams, dedup store, module lifecycle (long connection plus classification loop), and `prediction_digest.go` scheduled quota prediction job | — |
 | `internal/release` | Published-version observation: version comparison, the release feed client, the stored index, and the project's star count for the header link | `repository` |
 | `internal/updater` | The updater role of the binary (`oh-my-cpa updater serve\|install\|healthcheck`, ADR 0099): a Docker Engine API client over the unix socket, container replacement with rollback, signed-manifest verification, the two-request control service, the one-command installer, and the client the console uses to reach it | `release` |
@@ -2441,23 +2441,32 @@ read-only MCP key reaches the summary tool and no write route.
 
 ### Ollama quota monitoring
 
-`internal/ollama` stores several Ollama accounts and reads each one's quota by
-scraping the fixed `https://ollama.com/settings` page with the account's session
-cookie. The cookie is AES-GCM encrypted in `ollama_accounts` (hidden from the SQL
-path) and is never returned, logged or put in an error; only `has_cookie` reaches a
-DTO. The current settings page's Usage credits wallet — the slice between its
-heading and the first section close or next heading — supplies remaining and used
-USD amounts, parsed whole into integer cents. The normalized snapshot stores
-these in `ollama_credits`, with their sum, an optional positive used / total share,
-verbatim monthly refill text and monthly per-model request counts. These are not
-quota windows: no duration, reset timestamp or depletion prediction is invented.
-Legacy percentage windows remain readable by the collector; all three Ollama console
-surfaces use the shared credit view and report data missing for legacy or failed
-readings. Confirmed zero amounts use words and no zero percentage is rendered. A `401`, `403`, redirect or login page is `auth_invalid` with no
-backoff; a timeout, `429` or other transport failure is `transport_error` and backs
-off (honouring `Retry-After`); a page with neither two valid USD amounts nor a legacy numeric window is `parse_error`. On
-success the safe `quota.NormalizedQuota` is persisted with auth index `ollama:<id>`,
-and the newest reading is served by `GET /api/v1/ollama/quota` and the read-only
+`internal/ollama` stores several Ollama accounts and reads each one's quota from one
+of two credential paths. An account may store an API key, a session cookie, or both.
+A stored API key is preferred: the client calls the fixed
+`https://ollama.com/api/balance` endpoint with a Bearer header and maps
+`included.balance_usd` to remaining and `allowance_usd - included.balance_usd`
+(clamped at zero) to used, both parsed whole into integer cents;
+`included.period.until` is read but not persisted, and `purchased.balance_usd` is a
+separate credit balance that is deliberately excluded from these figures. When the
+key is absent or its path fails, the client falls back to scraping the fixed
+`https://ollama.com/settings` page with the session cookie and reading the Usage
+credits wallet. A key failure is never folded into a cookie success, and a final
+failure names the path that produced the verdict. Both the API key and the cookie are
+AES-GCM encrypted in `ollama_accounts` (hidden from the SQL path) and are never
+returned, logged or put in an error; only `has_api_key` and `has_cookie` reach a DTO.
+The normalized snapshot stores the credits in `ollama_credits`, with their sum, an
+optional positive used / total share, verbatim monthly refill text and monthly
+per-model request counts. These are not quota windows: no duration, reset timestamp
+or depletion prediction is invented. Legacy percentage windows remain readable by the
+collector; all three Ollama console surfaces use the shared credit view and report
+data missing for legacy or failed readings. Confirmed zero amounts use words and no
+zero percentage is rendered. A `401`, `403`, redirect or login page is `auth_invalid`
+with no backoff; a timeout, `429` or other transport failure is `transport_error` and
+backs off (honouring `Retry-After`); a malformed balance body or a page with neither
+two valid USD amounts nor a legacy numeric window is `parse_error`. On success the safe
+`quota.NormalizedQuota` is persisted with auth index `ollama:<id>`, and the newest
+reading is served by `GET /api/v1/ollama/quota` and the read-only
 `ollama_accounts_status` summary. The account routes are session- and same-origin
 authenticated; the collector is never started in demo mode.
 
@@ -2465,26 +2474,26 @@ One `ollama.Collector` is the single per-account refresh entry point, shared by 
 periodic pass, the create/update triggers and the console's
 `POST /api/v1/ollama/accounts/{id}/refresh`. The periodic pass and a manual refresh
 coalesce onto a scrape already in flight rather than starting a second one; the
-automatic triggers (a create, a cookie change, a resume) queue on the service's
+automatic triggers (a create, a credential change, a resume) queue on the service's
 long-lived context, so a trigger that outlives its request is not cancelled and no
 goroutine is unbounded. A trigger runs one round; when that round coalesced onto a
-scrape that read a cookie the operator has since replaced, the account is left as one
-pending marker and the worker takes the newest cookie in one more round, so the change
-never waits for the cadence. Every scrape takes a global concurrency permit (two),
-honours a persisted backoff and only then runs. A result carries the cookie version it
-read, and the store writes it only while the cookie still matches and - for an
-automatic result - the account is still enabled; a manual refresh of a paused account
-is written and a manual that read a replaced cookie reports incomplete. There is no
-enable generation, so a label edit never invalidates a reading and a disable plus a
-quick resume under one in-flight scrape may let that scrape's reading land - an accepted
-race for a self-hosted tool reading quota, not a security boundary. `app.Run`
-installs the collector's process context before the listener accepts its first
-request, and a manual refresh is bounded end to end by one timeout rooted in that
-context - never the request context - so a disconnected client cannot truncate a
-scrape and a saturated service cannot hold a request open. A manual refresh may read a
-paused account once without changing `enabled`; `enabled` gates only the periodic
-pass. With the collector off - or in a demo - the manual route answers `503` and the
-triggers are inert, and no fallback collector is started.
+scrape that read a credential the operator has since replaced, the account is left as
+one pending marker and the worker takes the newest credential in one more round, so
+the change never waits for the cadence. Every scrape takes a global concurrency permit
+(two), honours a persisted backoff and only then runs. A result carries the version of
+the credential its winning path read, and the store writes it only while that
+credential still matches and - for an automatic result - the account is still enabled;
+a manual refresh of a paused account is written and a manual that read a replaced
+credential reports incomplete. There is no enable generation, so a label edit never
+invalidates a reading and a disable plus a quick resume under one in-flight scrape may
+let that scrape's reading land - an accepted race for a self-hosted tool reading quota,
+not a security boundary. `app.Run` installs the collector's process context before the
+listener accepts its first request, and a manual refresh is bounded end to end by one
+timeout rooted in that context - never the request context - so a disconnected client
+cannot truncate a scrape and a saturated service cannot hold a request open. A manual
+refresh may read a paused account once without changing `enabled`; `enabled` gates only
+the periodic pass. With the collector off - or in a demo - the manual route answers
+`503` and the triggers are inert, and no fallback collector is started.
 
 ### Feishu notifications
 
@@ -2651,7 +2660,7 @@ transient codes and pending notifications, and preserves every job and historica
 | Operations | `audit_events`, `ui_preferences`, `quota_snapshots`, `schema_migrations` | Audit has no update or delete path — only `RecordAuditEvent` writes and read queries (`ListAuditEvents`, `QueryAuditEvents`) exist, and export itself is audited; the schema carries no enforcement trigger, so the guarantee lives in the repository API. Migration 027 adds `idx_audit_events_request_action`, which the trail's attempt folding looks up |
 | CPA configuration | `cpa_config_backups`, `cpa_config_backup_settings` | Encrypted copies of the stored CPA configuration file, kept before every configuration write (migration 030, ADR 0037; migration 033 adds each copy's `layout` and `reason` and the single-row retention table, ADR 0051). v8 copies are kept to the operator's retention (default 20, 5–100), pre-v8 copies to the latest ten; `cpa_config_backups` is hidden from `database_query` |
 | Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migrations 043 and 054. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`, plus burn_credit and the removed_at_ms tombstone); active lists exclude tombstones and pause preserves recovery/retry state. `cycle_reset_at_ms` is execution history unless the current state still owns a recovery plan, and confirmed or external enable paths clear the consumed value. `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
-| Ollama monitoring | `ollama_accounts` | Migration 044. One row per operator account: AES-GCM encrypted session cookie, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries the cookie |
+| Ollama monitoring | `ollama_accounts` | Migrations 044 and 058. One row per operator account: an AES-GCM encrypted session cookie, an optional AES-GCM encrypted API key with its own version, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries both credentials |
 | Credential recovery | `reauth_jobs` | Migration 053. Safe metadata, invalid-cycle ownership, state, deadlines, notification intent, device display metadata and accepted message identity; no email OTP or token. Hidden from operator queries; receipts are retained |
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
 | Release observation | `release_index`, `release_check_state` | Migrations 024 and 025; `truncated` is added by 025, so a database that applied 024 before it existed still gains the column. `release_index` holds one row per published version (tag, name, publication time, prerelease flag) and is **replaced as a unit per product** by `PublishReleaseSnapshot`, because a feed that stops listing a withdrawn release must stop the console claiming it exists. `release_check_state` holds one row per product — the last attempt and success times, the redacted failure reason, the latest tag, the ETag and the truncation flag — and is written by `RecordReleaseCheckAttempt`/`PublishReleaseSnapshot`/`RecordReleaseCheckFailure`, read by `ListReleases` and `GetReleaseCheckState(ForRepository)`. A release's prose body is **never stored**: it lives in bounded process memory for the life of the process, so an index without notes still names the versions and links to the source (see §10) |
@@ -2734,7 +2743,7 @@ versions. Versions 010–014 were never part of this repository's migration hist
 | Pricing sync | `app.Run` → `pricing.Service` | Best effort; prices go stale, capture continues |
 | Quota refresh | `app.Run` → `api.Handler.RunQuotaAutoRefresh` or `quota.Scheduler` | Best effort; `OMCPA_QUOTA_SCHEDULER_MODE` selects exactly one interval or adaptive loop. Readings go stale if it stops, while capture and the HTTP server continue. Disabled in demo mode and by `OMCPA_QUOTA_SCHEDULER_ENABLED=false`; a 429 parks the credential and its provider (ADR 0094, ADR 0104) |
 | Account auto-management | `app.Run` → `automation.Manager` | Best effort; active plans stay in the database for the next pass, an overdue recovery remains retry work, and completed or abandoned timestamps are not projected or executed. It performs a CPA write, so it is disabled in demo mode; `OMCPA_ACCOUNT_AUTOMATION_ENABLED=false` forbids the loop and `OMCPA_ACCOUNT_AUTOMATION_ENABLED=true` forces it on regardless of the web switch (ADR 0105) |
-| Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. The same instance also drains the create/update trigger queue and answers the console's manual refresh, so all three share one lock, one two-scrape concurrency cap and one persisted backoff. It scrapes `ollama.com`, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
+| Ollama collection | `app.Run` → `ollama.Collector` | Best effort; a failed pass leaves the previous reading and a persisted backoff behind. The same instance also drains the create/update trigger queue and answers the console's manual refresh, so all three share one lock, one two-scrape concurrency cap and one persisted backoff. It prefers the balance API with a stored key and falls back to the settings page with the cookie, so it is disabled in demo mode and by `OMCPA_OLLAMA_COLLECTOR_ENABLED=false` |
 | Feishu notifications | `app.Run` → `feishu.Service` | Best effort; the long connection and the classification loop are started with the process and stopped before the database closes. A disabled, forced-off or degraded configuration is inert and never fails startup; it is never started in demo mode |
 | Feishu quota prediction | `app.Run` → `feishu.PredictionJob` | Best effort; the job remains loaded but inert while Feishu is disabled or degraded, becomes active after a ready settings reload, and falls back to the ordinary summary when prediction has no finding or cannot be read. It is never built in demo mode |
 | Release sweep | `app.Run` → `release.Service` | Best effort; the stored index and its timestamps go stale, and the page says so. Every six hours, first run delayed by one interval so a restart loop cannot become a request loop |
@@ -3801,7 +3810,7 @@ actual observation, never a label; a newer passive reading can supersede an acti
 failure for that window. Existing windows are overlaid without duplicate passive rows.
 
 The prediction roster also reads Ollama's safe account projection and persisted normalized
-snapshot; it never selects cookie ciphertext. A later failed collection invalidates a
+snapshot; it never selects credential ciphertext. A later failed collection invalidates a
 retained reading. Ollama duration remains unknown unless actually present in stored data.
 Step and Stepfun stored provider identities are consumed without new provider probes and
 share the console's Step group. No endpoint, upstream read or database write is added.
