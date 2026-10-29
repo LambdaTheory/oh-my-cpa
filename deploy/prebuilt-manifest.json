@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "source_revision": "ed454c1c2751a89607396722b9f3dbecbf7da88f",
-  "previous_deploy": "ebf7e57ae66524a9e13e58137cddb3312e3f9f88",
+  "source_revision": "0817585a4ea3dc8afa7caca2513588f01b4bfd71",
+  "previous_deploy": "9895674b689f2dbb571891114dc2d8f36072001f",
   "build_version": "fork",
   "build_tag": "",
   "source_files": {
@@ -64,8 +64,8 @@
     "internal/api/custom_icons_test.go": "9da7bb3de293cbab565bee6f3d9207cce5a1cbd56562c647efdd5cb52dc20aac",
     "internal/api/dashboard_test.go": "7d8838b0c27147abae381eed7de56086cb220e90bf4922d243bab5e6bd89c2d9",
     "internal/api/demo_export_test.go": "f08dae9d4c3796e9aee10b99e63744dffd7a682c5fbd4d2fc446fc63563717b1",
-    "internal/api/demo_policy.go": "b2daec26578abae1cc8eff4e87f083bfe005131e453b82b0091dc5586f53ce8e",
-    "internal/api/demo_policy_test.go": "7f1809204056f29448fb5f2a9db2dc568355d69754fc50d3b7564cc8590d05cb",
+    "internal/api/demo_policy.go": "bffb02eb19667e6e5c64f2221eaf1efd0b3b6bde90ccc8a33037c695582f4e56",
+    "internal/api/demo_policy_test.go": "a367d4b7f8042baec2fbfc28b73fa843894ea63fb691c6151f02080d099060f2",
     "internal/api/dto_allowlist_test.go": "700c47de3dc9ccb595dd080a91ad7ec4c53959eee8b69a7e4eb1f30b6fcdfddf",
     "internal/api/feishu.go": "a4d919ace6146580bde2eda923eef1a1f80c76b4a024dc0c7932e1f0ebae4e58",
     "internal/api/feishu_monitor_ac_test.go": "05aaf058cafa4412bce3f881a51a9c016a5a1c9caf7d5277cc1bfc78640d2bbf",
@@ -187,7 +187,7 @@
     "internal/api/model_directory_parse_test.go": "2fd82f4fc7f7f193a29b8623dbcacb9f392f0630d175351d0017fc01a402297a",
     "internal/api/model_square.go": "2fd3518539284fbe9eb2212e0bf93e8f6b4811eddd90e9d23e8048dd3c315dee",
     "internal/api/model_square_test.go": "ac87ce67b5578582d402b74875e42aba9869c8a316a37a1ff4e3d397bffb2457",
-    "internal/api/ollama_accounts.go": "ff5e8e77e8003b4bd4ad17d58f7bed60aeea07e6a7e229d4eaf6ac0c77a21770",
+    "internal/api/ollama_accounts.go": "30d5c169c9312edcda4c2c07e78011de5f57074d1215e6831992f107555d3c75",
     "internal/api/ollama_accounts_test.go": "d9e5288a09176571c3ad3d7a9406d04872b0065626a03220c74cccdff231500d",
     "internal/api/outbound_fetch.go": "2567bb6f4da112b1f036b4cb2cde772a8ac296021d2cc9c664d2bcf165553704",
     "internal/api/playground.go": "a1b8dea5cc4d85a65c45ee7a24b273bdf79594c9fb3511535f2af15e6de32dc1",
@@ -389,6 +389,8 @@
     "internal/ollama/collector_test.go": "53d8a1eca1a42aa2178880d513b4b3d7b312204f9927d2082145bc618a7e54d9",
     "internal/ollama/credits.go": "2b001da264cd32ffbbe59d92058fef7302c2b8d9d092e393f5b883b9d10dbb0e",
     "internal/ollama/credits_test.go": "7280e1e07e09fce9f4352739c50809db582c64b9c77d7c7b450603f667bbc638",
+    "internal/ollama/diagnose.go": "fe897fd36d30dea86c8e4439b878d331ea4317855b803f9b1081167eb11f0bc4",
+    "internal/ollama/diagnose_test.go": "19fdd8c7ddcb75d4d291a824bc00c805a4c6091fed2d2d1711417bfb926df54c",
     "internal/ollama/ollama.go": "bfa37c7266a39b6afa831ed3ce3ba84339b9b911afb76411c415124ce16863d7",
     "internal/ollama/parse.go": "71b352e83d1dfa46eeffa6c73862a36dcda6f95cd2bc8f5b065baf25eadfa5a8",
     "internal/ollama/parse_test.go": "f8a060c4e127917124bfd3e84995cd654acbe0b3e3965d7816193bfe9ca0b939",
@@ -1843,7 +1845,7 @@
     "web/vite.config.ts": "3f50064ae243692f82ee42550741a3aba329229a7f35fc3f88d9a1ae7054d10b",
     "web/vitest.config.ts": "5690a58b3807385034af0fe51e7e26ea37d67f3f4c20e4190354f94e61c07d3a"
   },
-  "source_sha256": "293271b5449d8a29cb51aa19ec92fbbfab1ecb0a7ce088eef07bbe6644aa832f",
+  "source_sha256": "277072d956838e3d89f4947d5b4df2ad664b3d7bf9d5f05da1423780b8fd785a",
   "frontend_sha256": "151f996095262c425fe7e09d662701e252c9e713ff76bee13a1b4077582690d5",
   "assets": {
     ".gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
