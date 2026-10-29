@@ -32,6 +32,7 @@ export const FeishuSettingsPanel: React.FC = () => {
 
   // Test confirm modal
   const [isTestConfirmOpen, setIsTestConfirmOpen] = useState(false);
+  const [confirmationRecipient, setConfirmationRecipient] = useState<string | null>(null);
 
   // Queries
   const settingsQuery = useQuery({
@@ -90,6 +91,7 @@ export const FeishuSettingsPanel: React.FC = () => {
         payload.app_secret = appSecret.trim();
       }
 
+      if (statusQuery.data?.recipient_from_env) delete payload.chat_id;
       return api.putFeishuSettings(payload);
     },
     onSuccess: () => {
@@ -123,6 +125,20 @@ export const FeishuSettingsPanel: React.FC = () => {
   });
 
   const status: FeishuStatusDTO | undefined = statusQuery.data;
+  const isRecipientFromEnv = status?.recipient_from_env ?? false;
+  const recipientValue = isRecipientFromEnv ? status?.recipient ?? '' : chatId;
+  const recipientType = /^oc_[A-Za-z0-9_-]+$/.test(recipientValue.trim()) ? 'group'
+    : /^ou_[A-Za-z0-9_-]+$/.test(recipientValue.trim()) ? 'person' : 'invalid';
+  const hasInvalidRecipient = recipientValue.trim() !== '' && recipientType === 'invalid';
+  const confirmationMutation = useMutation({
+    mutationFn: (recipient: string) => api.confirmFeishuRecipient(recipient),
+    onSuccess: () => {
+      setConfirmationRecipient(null);
+      void queryClient.invalidateQueries({ queryKey: ['feishu-status'] });
+      void queryClient.invalidateQueries({ queryKey: ['feishu-settings'] });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
 
   const formatTime = (isoString?: string) => {
     if (!isoString) return '—';
@@ -227,6 +243,15 @@ export const FeishuSettingsPanel: React.FC = () => {
       </div>
 
       {/* Settings Form */}
+      {status && !status.recipient && <Notice tone="info" title={t('feishu.recipient_missing')} />}
+      {status?.needs_recipient_confirmation && (
+        <Notice tone="warning" title={t('feishu.recipient_pending')}
+          description={<Space orientation="vertical"><span>{status.recipient}</span>
+            <Button disabled={isDemo} onClick={() => setConfirmationRecipient(status.recipient ?? '')}>{t('feishu.recipient_resume')}</Button>
+          </Space>} />
+      )}
+      {status?.last_error && <Notice tone="warning" title={t('feishu.send_failure')} description={<span>{status.last_error} · {formatTime(status.next_attempt_at)}</span>} />}
+      {status?.oauth_group_conflict && <Notice tone="warning" title={t('feishu.oauth_group_conflict')} />}
       <div
         style={{
           display: 'flex',
@@ -287,13 +312,14 @@ export const FeishuSettingsPanel: React.FC = () => {
                 {t('feishu.form_chat_id')}
               </label>
               <Input
-                value={chatId}
-                disabled={isDemo || isEnvOverridden}
-                placeholder="ou_xxxxxxxxxxxxxxxxxxxx"
+                value={recipientValue}
+                disabled={isDemo || isRecipientFromEnv}
+                placeholder={t('feishu.recipient_placeholder')}
                 onChange={(e) => setChatId(e.target.value)}
               />
               <span style={{ fontSize: 12, color: 'var(--muted)', marginTop: 4, display: 'block' }}>
-                {t('feishu.form_chat_id_desc')}
+                {t(`feishu.recipient_${recipientType}`)}
+                {isRecipientFromEnv && <Tag size="small" tone="accent">{t('feishu.source_env_override')}</Tag>}
               </span>
             </div>
           </div>
@@ -397,7 +423,7 @@ export const FeishuSettingsPanel: React.FC = () => {
           <Button
             type="primary"
             icon={<SaveOutlined />}
-            disabled={isDemo || isEnvOverridden || saveMutation.isPending}
+            disabled={isDemo || hasInvalidRecipient || saveMutation.isPending}
             loading={saveMutation.isPending}
             onClick={() => saveMutation.mutate()}
           >
@@ -407,6 +433,14 @@ export const FeishuSettingsPanel: React.FC = () => {
       </div>
 
       {/* Test Card Confirm Modal */}
+      {confirmationRecipient !== null && <Modal open title={t('feishu.recipient_review')}
+        onCancel={() => setConfirmationRecipient(null)}
+        onOk={() => confirmationRecipient !== null && confirmationMutation.mutate(confirmationRecipient)}
+        okText={t('feishu.recipient_confirm')} cancelText={t('common.cancel')}
+        confirmLoading={confirmationMutation.isPending}>
+        <p>{confirmationRecipient}</p>
+        <p>{t('feishu.recipient_review_desc')}</p>
+      </Modal>}
       <Modal
         open={isTestConfirmOpen}
         title={t('feishu.test_confirm_title')}

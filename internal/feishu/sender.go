@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
@@ -57,9 +58,23 @@ func (s *larkSender) SendCard(ctx context.Context, chatID string, card map[strin
 		return fmt.Errorf("im.message.create: %w", err)
 	}
 	if !resp.Success() {
-		return fmt.Errorf("im.message.create: code=%d msg=%s log_id=%s", resp.Code, resp.Msg, resp.RequestId())
+		return recipientDeliveryError(resp.Code, resp.Msg)
 	}
 	return nil
+}
+
+func recipientDeliveryError(code int, message string) error {
+	message = strings.ToLower(message)
+	switch {
+	case strings.Contains(message, "availability") || strings.Contains(message, "visible scope"):
+		return fmt.Errorf("这个人用不了这个机器人；在飞书后台把此人加进应用的可用范围（%d）", code)
+	case strings.Contains(message, "bot") && (strings.Contains(message, "not in") || strings.Contains(message, "not a member")):
+		return fmt.Errorf("机器人不在这个群里；把机器人拉进群后点『发送测试卡片』再试（%d）", code)
+	case strings.Contains(message, "not exist") || strings.Contains(message, "not found"):
+		return fmt.Errorf("找不到这个群 / 这个人，检查号码是否抄错（%d）", code)
+	default:
+		return fmt.Errorf("飞书拒收，请检查接收人和应用权限（%d）", code)
+	}
 }
 
 func receiveIDType(recipient string) string {

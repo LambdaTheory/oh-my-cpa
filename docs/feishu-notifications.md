@@ -3,8 +3,9 @@
 Lane C of the OMC first batch absorbs the retired CPA-buddy (cpab) Feishu bot as
 an OMC capability: it reuses the bot long connection, answers read-only queries
 from OMC's newest quota data, and denoises notifications so a problem is announced
-once and recovery is not nagged. The same credential/window/reset identity is notified only once, including forecast-to-low-to-exhausted
-transitions. It does **not** call a language model, hold an
+once and recovery is not nagged. Credential/window/reset identities remain tracked
+through forecast and low quota; the first actual exhaustion triggers one actionable
+push. It does **not** call a language model, hold an
 Agent session, or trigger an upstream quota refresh.
 
 This document is the lane-C contract: the interface the code exposes, the
@@ -233,21 +234,21 @@ it remains inert while configuration is disabled or degraded and begins evaluati
 ready settings reload without a restart. Tests inject both its prediction source and sender.
 
 
-### Personal quota decision cards
+### Quota decision cards
 
-Quota notifications address one configured operator Open ID (the `ou_` prefix),
-retained in the existing `chat_id` / `OMCPA_FEISHU_CHAT_ID` setting. Group IDs cannot
-make quota delivery ready. Quota queries accept only private messages from this
-person. The dedicated OAuth code group retains its independent authorization and
-chat-id transport. Existing group notification settings require an operator change.
+Quota notifications address one configured group ID (`oc_`) or personal Open ID
+(`ou_`), retained in `chat_id` / `OMCPA_FEISHU_CHAT_ID`. Existing groups require
+confirmation of their exact target before sending or answering queries. Group
+recipients permit direct queries and mentions in joined groups; personal recipients
+permit only that person's private messages. The OAuth group remains independent.
 
 The default times remain 10:00 / 17:00 in the configured timezone. The earliest
 configured slot always queues the daily morning fallback, including healthy or
 missing-data results. Later ordinary slots stay silent. New credential windows at
 or below 10% remaining, predicted exhaustion before reset, and abnormal readings
 open persistent episodes. Untimed and long-stale
-readings retain the existing monitoring grace. A credential/window/reset cycle is
-announced once across forecast, low-quota and exhaustion states. Window IDs (or
+readings retain the existing monitoring grace. Forecast and low quota retain their
+tracked cycle, while reaching exhaustion triggers one actionable push. Window IDs (or
 window kinds when IDs are absent) stay stable across derived reset estimates.
 Only exact reset evidence establishes a cycle: a new reading at or after the
 previous boundary with a later reset opens a new cycle. Recovery sends nothing;
@@ -260,10 +261,22 @@ fallback and morning prediction digest bypass quiet hours at the configured slot
 including retries; startup and morning summaries share that minute's delivery.
 The process must be running during the scheduled minute to send that day's fallback.
 
-Cards lead with whether quota allocation needs attention, then at most three
-conclusion-and-advice points, observation metadata and one console button. Model and
-group scopes remain explicit. Missing percentages say data is missing, never zero.
-A reset countdown means recovery; prediction exhaustion ETA is explicitly estimated.
+Immediate alerts and query cards use a 24-character conclusion and two-line blocks.
+Pushes contain only exhaustion, invalid credentials, unavailable channels and confirmed
+monitor outages, at most three blocks; queries also include low quota, up to eight
+blocks, with healthy channels folded into one line. Groups use channel plus state,
+unique account counts, rounded mean remaining percentage and earliest recovery; one
+account's exhausted windows use its latest reset. Missing values never become zero.
+Alternative channels must be fresh and healthy; the highest total remaining share
+wins, then account count, with unresolved ties and overlong names using fixed copy.
+Low quota, forecasts and one-off failures do not trigger immediate pushes. They
+contribute grouped omission counts when an actionable card is sent. Digest content
+(morning, summary and prediction) retains its existing renderer and schedule.
+Migration 057 persists consecutive failures and the last distinct attempt timestamp.
+Monitor outages require three failed collection attempts and at least the configured
+duration (default 30 minutes). Cached reads do not add attempts; explicit auth or
+cooldown responses do not count. One valid reading resets the count and closes the
+outage without a recovery push. Concurrent channel outages share one display block.
 The console button uses `OMCPA_PUBLIC_URL` plus the deployment base path once;
 an absent or invalid address disables it with configuration guidance. No card write
 callback or table is emitted. Full and simplified cards have the same content bound.
@@ -277,14 +290,19 @@ that could not establish a persisted delivery outcome.
 The settings response exposes tight_remaining_percent as a read-only fixed 10.
 Writes that explicitly contain 10 are accepted; conflicting values return 400.
 The console omits this field on save, while schedule, quiet hours and monitoring
-durations remain editable. Legacy group recipients surface an actionable degraded
-reason requiring a recipient Open ID. Query cards retain scoped empty-result
+durations remain editable. Recipients accept a group ID (`oc_`) or personal Open ID
+(`ou_`). Migration 056 stores confirmation of the exact recipient: existing groups
+remain silent until the console's review and confirmation step. Newly saved web
+recipients take effect immediately. Deployment recipients are read-only; invalid
+values degrade quota delivery while leaving the dedicated OAuth path independent.
+Group recipients permit direct queries and mentions in any joined group; personal
+recipients permit only that person's private queries. Query cards retain scoped empty-result
 answers and stale-observation notices; an empty abnormal filter means no anomalies.
 
 The earliest summary slot always supplies the morning fallback. Prediction
 evaluation runs once per minute from stored data and only
-`will_exhaust` findings trigger an event; surplus alone stays silent. Morning prediction cards also carry stored anomalies and open items. Other
-periods send only newly detected prediction risks. Explicit
+`will_exhaust` findings retain a tracked episode; forecast-only events stay silent
+outside the morning digest. Morning prediction cards also carry stored anomalies and open items. Explicit
 manual prediction sends retain both finding kinds, deliver only their new outbox
 row and never claim a scheduled minute. No finding returns `no_findings`.
 

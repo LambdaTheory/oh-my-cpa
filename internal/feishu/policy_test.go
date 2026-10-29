@@ -156,7 +156,7 @@ func TestChannelUnavailableNearRecoveryIsNotImmediate(t *testing.T) {
 func TestMonitorDownOnCollectorOutageWithNoAccounts(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	rep := Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "codex", Error: "collector failed"}}}
-	tracks := map[string]ChannelTrack{"codex": {FirstSeen: now.Add(-time.Hour)}}
+	tracks := map[string]ChannelTrack{"codex": {FirstSeen: now.Add(-time.Hour), ConsecutiveFailures: 3}}
 	res := evaluatePolicy(policyCfg(), PolicyInput{Report: rep, Tracks: tracks, Now: now})
 	if !hasItem(res.Items, AlertMonitorDown) {
 		t.Fatalf("expected monitor_down for a collector outage, got %+v", res.Items)

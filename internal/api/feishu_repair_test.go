@@ -94,7 +94,7 @@ func TestFeishuDerivedQuotaDeduplicatesThroughSQLiteAndServiceRestart(t *testing
 	for i := 0; i < 5; i++ {
 		clock = clock.Add(time.Minute)
 		reset := clock.Add(5 * time.Hour).UnixMilli()
-		used := 93.0
+		used := 100.0
 		windows, _ := json.Marshal([]quota.QuotaWindow{{ID: "7d", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, ResetAccuracy: "derived"}})
 		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: "synthetic-moving", Provider: "codex", Status: "healthy", ObservedAtMS: clock.UnixMilli(), WindowsJSON: string(windows)}); err != nil {
 			t.Fatal(err)

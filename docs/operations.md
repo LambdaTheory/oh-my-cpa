@@ -243,7 +243,7 @@ never triggers a refresh. Settings and status live under `/api/v1/feishu/setting
 | `OMCPA_FEISHU_FORCE_DISABLED` | `false` | Emergency off. Takes precedence over `OMCPA_FEISHU_ENABLED` and the web switch |
 | `OMCPA_FEISHU_APP_ID` | unset | Overrides the self-built app's App ID |
 | `OMCPA_FEISHU_APP_SECRET` | unset | Overrides the app secret. Held in memory only; never written to a response or a log |
-| `OMCPA_FEISHU_CHAT_ID` | unset | Overrides the quota recipient Open ID (ou_ prefix), retained under the existing chat_id field |
+| `OMCPA_FEISHU_CHAT_ID` | unset | Overrides the quota recipient: group ID (oc_) or personal Open ID (ou_), retained under chat_id |
 | `OMCPA_FEISHU_OAUTH_CHAT_ID` | unset | Dedicated OAuth management group; enables credential recovery only together with the contact and a usable enabled bot |
 | `OMCPA_FEISHU_OAUTH_CONTACT_OPEN_ID` | unset | Fixed code contact, in `ou_...` form |
 | `OMCPA_REAUTH_RUNNER_CIDRS` | loopback, RFC 1918 IPv4 and IPv6 ULA | Comma-separated CIDR allowlist for direct runner connections; narrow this to the actual Docker network and required loopback ranges |
@@ -898,28 +898,38 @@ failure is logged without tokens or uploaded key material.
 
 ## Feishu quota decisions
 
-### Personal quota decision cards
+### Quota notification recipients
 
-Quota notifications address one configured operator Open ID (the `ou_` prefix),
-retained in the existing `chat_id` / `OMCPA_FEISHU_CHAT_ID` setting. Group IDs cannot
-make quota delivery ready. Quota queries accept only private messages from this
-person. The dedicated OAuth code group retains its independent authorization and
-chat-id transport. Existing group notification settings require an operator change.
+Quota notifications address one group (`oc_`) or person (`ou_`), retained in
+`chat_id` / `OMCPA_FEISHU_CHAT_ID`. An environment recipient is read-only in the
+console. With a group recipient, direct messages and bot mentions in any joined
+group receive replies in the originating conversation. With a personal recipient,
+only that person's private queries receive replies. The dedicated OAuth code group
+always takes precedence over ordinary queries, even if it is also the recipient.
+Existing groups remain silent until an operator reviews the displayed group ID
+and confirms delivery. Migration 056 persists confirmation of that exact target;
+saving a new web recipient activates it without a restart.
 
 The default times remain 10:00 / 17:00 in the configured timezone. The earliest
 configured slot always queues the daily morning fallback, including healthy or
 missing-data results. Later ordinary slots stay silent. Credential windows at or
 below 10% remaining or predicted to exhaust before reset open one persistent risk
 identity per credential/window/reset cycle. Untimed and long-stale
-readings retain the existing monitoring grace. Forecast, low quota and exhaustion
-share their identity and do not repeat within that cycle; recovery sends nothing.
+readings retain the existing monitoring grace. Forecast and low quota share their
+tracked identity; reaching exhaustion triggers the first actionable push once
+within that cycle. Recovery sends nothing.
 Quiet hours defer delivery through the existing retry outbox.
 The process must be running during the scheduled minute to send that day's fallback.
 
-Cards lead with whether quota allocation needs attention, then at most three
-conclusion-and-advice points, observation metadata and one console button. Model and
-group scopes remain explicit. Missing percentages say data is missing, never zero.
-A reset countdown means recovery; prediction exhaustion ETA is explicitly estimated.
+Immediate cards contain a short conclusion, up to three two-line blocks, an
+observation footer and a console button. Only exhaustion, invalid credentials,
+unavailable channels and confirmed monitor outages trigger pushes; low quota and
+forecasts are counted in the footer. Queries allow eight blocks, include low quota
+and fold healthy channels into one line. Same-channel/state accounts are merged
+with mean remaining share and earliest recovery. Alternatives use the highest
+total remaining share among fresh healthy channels. Digest content stays unchanged.
+Monitor outages require three distinct failed collection attempts and at least the
+configured duration (default 30 minutes); one valid reading resets the counter.
 The console button uses `OMCPA_PUBLIC_URL` plus the deployment base path once;
 an absent or invalid address disables it with configuration guidance. No card write
 callback or table is emitted. Full and simplified cards have the same content bound.
@@ -928,8 +938,8 @@ seconds with exponential backoff capped at 30 minutes.
 
 Morning prediction findings share the fallback. Prediction evaluation runs once
 per minute from stored data and only
-`will_exhaust` findings trigger an event; surplus alone stays silent. Morning prediction cards also carry stored anomalies and open items. Other
-periods send only newly detected prediction risks. Explicit
+`will_exhaust` findings retain tracked episodes without triggering forecast-only
+pushes. Morning prediction cards also carry stored anomalies and open items. Explicit
 manual prediction sends retain both finding kinds, deliver only their new outbox
 row and never claim a scheduled minute. No finding returns `no_findings`.
 

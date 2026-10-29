@@ -278,6 +278,7 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/feishu/settings", demoAllow, ""},
 	{http.MethodGet, "/api/v1/feishu/status", demoAllow, ""},
 	{http.MethodPost, "/api/v1/feishu/test", demoRefuse, "sending a Feishu test message is disabled"},
+	{http.MethodPost, "/api/v1/feishu/recipient-confirmation", demoRefuse, "enabling Feishu delivery is disabled"},
 	{http.MethodGet, "/api/v1/management/reauth/jobs/next", demoRefuse, "credential recovery is disabled"},
 	{http.MethodGet, "/api/v1/management/reauth/jobs/{id}", demoRefuse, "credential recovery is disabled"},
 	{http.MethodGet, "/api/v1/management/reauth/jobs/{id}/code", demoRefuse, "credential recovery is disabled"},

@@ -56,6 +56,13 @@ func TestMonitorBaselineStartsAtFirstApplicableObservation(t *testing.T) {
 			}
 			*env.clock = start.Add(30 * time.Minute)
 			assertMonitorSends(t, env, 0)
+			for sample := 1; sample <= 3; sample++ {
+				env.source.report.Providers[0].Accounts[0].AttemptedAt = start.Add(time.Duration(sample) * 10 * time.Minute)
+				env.source.report.Providers[0].Accounts[0].CollectionFailed = true
+				if sample < 3 {
+					assertMonitorSends(t, env, 0)
+				}
+			}
 			restartMonitorService(env)
 			*env.clock = start.Add(30*time.Minute + time.Second)
 			state = assertMonitorSends(t, env, 1)
@@ -75,7 +82,7 @@ func TestMonitorPersistedOutageIsNotGivenRestartGrace(t *testing.T) {
 			env := newTestEnv(t, monitorReport("codex", "claude"), true)
 			state := EmptyState()
 			for _, provider := range []string{"codex", "claude"} {
-				track := ChannelTrack{FirstSeen: env.clock.Add(-2 * time.Hour)}
+				track := ChannelTrack{FirstSeen: env.clock.Add(-2 * time.Hour), ConsecutiveFailures: 3}
 				if hasSuccess {
 					track.LastValid = env.clock.Add(-time.Hour)
 				}
@@ -105,17 +112,23 @@ func TestMonitorCachedSuccessAgesFromStoredInstant(t *testing.T) {
 	account.State, account.OK = StateHealthy, true
 	account.Windows = []Window{accountWindow(25, nil)}
 	account.LastSuccessAt, account.ObservedAt = observed, observed
+	account.CollectionFailed = true
+	account.AttemptedAt = *env.clock
 	state := assertMonitorSends(t, env, 0)
 	if !state.ChannelTracks["codex"].LastValid.Equal(observed) {
 		t.Fatalf("cached reading was restamped: %+v", state.ChannelTracks)
 	}
 	*env.clock = observed.Add(30 * time.Minute)
+	account.AttemptedAt = *env.clock
 	assertMonitorSends(t, env, 0)
 	restartMonitorService(env)
 	*env.clock = env.clock.Add(time.Second)
+	account.AttemptedAt = *env.clock
 	assertMonitorSends(t, env, 1)
 
 	account.LastSuccessAt, account.ObservedAt = *env.clock, *env.clock
+	account.CollectionFailed = false
+	account.AttemptedAt = env.clock.Add(time.Second)
 	state = assertMonitorSends(t, env, 1)
 	if len(openItems(state.PendingItems)) != 0 {
 		t.Fatalf("a genuinely new success must resolve without pushing: %+v", state.PendingItems)
@@ -130,7 +143,7 @@ func TestMonitorIgnoresDisabledAndAuthOnlyEvidence(t *testing.T) {
 	state := EmptyState()
 	state.Bootstrapped = true
 	for _, provider := range []string{"codex", "claude"} {
-		state.ChannelTracks[provider] = ChannelTrack{FirstSeen: env.clock.Add(-time.Hour)}
+		state.ChannelTracks[provider] = ChannelTrack{FirstSeen: env.clock.Add(-time.Hour), ConsecutiveFailures: 3}
 	}
 	if err := env.store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
@@ -144,7 +157,7 @@ func TestMonitorBatchQuietRestartAndRetry(t *testing.T) {
 	state := EmptyState()
 	state.Bootstrapped = true
 	for _, provider := range []string{"codex", "claude"} {
-		state.ChannelTracks[provider] = ChannelTrack{FirstSeen: env.clock.Add(-time.Hour)}
+		state.ChannelTracks[provider] = ChannelTrack{FirstSeen: env.clock.Add(-time.Hour), ConsecutiveFailures: 3}
 	}
 	if err := env.store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)

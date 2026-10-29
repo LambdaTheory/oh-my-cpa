@@ -270,8 +270,8 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 			}
 			continue
 		}
-		// A resolved marker remembers the announced risk without turning a
-		// forecast into a permanent incident in the ordinary pending list.
+		// Forecast markers track cycle evidence without creating an actionable
+		// incident. The morning digest can still recap an ongoing forecast.
 		marker := PendingItem{ID: identity, Kind: predictionKindPrefix,
 			Provider: item.Provider, Key: predictionKey(item), Alias: item.CredentialLabel, Status: PendingResolved,
 			Action: "提前准备备用凭证，按需分流", Since: now, LastSeen: now, NotifiedAt: now, CycleResetAt: reset}
@@ -287,6 +287,9 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 		findings = append(findings, item)
 	}
 	if len(findings) == 0 {
+		return false
+	}
+	if !morningMinute(resolved, now) {
 		return false
 	}
 	if morningMinute(resolved, now) {

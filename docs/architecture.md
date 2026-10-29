@@ -2509,10 +2509,16 @@ percentage is "not reported", never zero, and a model- or group-scoped window ru
 out does not make an account unavailable. The denoise rules announce a credential
 problem, a whole-channel outage, or a long-running no-data condition once per
 episode and hold immediate alerts during quiet hours. The earliest daily slot
-always queues a morning fallback; later ordinary slots stay silent. Credential windows with at most 10% remaining and fresh abnormal readings also open denoised episodes. Quota
-delivery uses one operator Open ID; private queries accept only that person. The
+always queues a morning fallback; later ordinary slots stay silent. Low quota and
+forecasts retain tracked episodes without triggering immediate pushes. Quota
+delivery uses one group ID or personal Open ID. Group recipients permit direct
+queries and mentions in joined groups; personal recipients permit only that person's
+private queries. Migration 056 stores exact-target confirmation for legacy groups. The
 separate OAuth code group retains its existing boundary. The renderer limits cards
-to three advice points and one console button, using the public URL and base path. Channel tracks start only for monitored, enabled
+to three two-line actionable blocks (eight for queries) and a conditional console
+button, using the public URL and base path. Migration 057 persists three-failure
+monitoring evidence and distinct attempt timestamps; duration and count must both
+reach their thresholds, and one valid observation resets the count. Channel tracks start only for monitored, enabled
 credentials (or an explicit collector-level failure); disabled or unsupported-only
 channels clear their track rather than aging through an intentional stop. Built-in
 quota capabilities establish a reader before its first success; an otherwise unknown
@@ -3810,8 +3816,9 @@ rendered as competing readouts.
 `internal/feishu/prediction_digest.go` is the scheduled and operator-triggered prediction
 component. At configured summary minutes the Feishu loop evaluates it before the legacy
 scheduled summary. The earliest summary slot supplies the daily fallback. Prediction evaluation runs
-once per minute; only exhaustion findings raise an event. Credential/window/reset
-identity is shared with low-quota alerts so the same risk sends once. Migration
+once per minute; forecast-only findings are tracked silently outside the morning
+digest. Credential/window/reset identity is shared with low quota, while reaching
+actual exhaustion still triggers one actionable push. Migration
 055 persists exact cycle boundaries separately from stable window identities;
 derived reset estimates cannot create new episodes. Positive recovery permits
 recurrence when a reliable cycle is absent. The internal prediction projection
@@ -3820,7 +3827,7 @@ public fields. Morning delivery bypasses quiet hours while ordinary alerts wait.
 prediction cards also carry stored anomalies and open items. Explicit manual sends deliver only their newly persisted row, never claim
 a scheduled minute, and return `no_findings` when empty. The card is limited to
 three advice points and discloses omitted content. See `docs/feishu-notifications.md`
-for the personal recipient, missing-data and console-button contract.
+for the recipient, missing-data and console-button contract.
 
 ## 15. Where to look next
 

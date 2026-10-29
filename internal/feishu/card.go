@@ -11,6 +11,9 @@ func (r *PlainReportRenderer) Card(msg Message) map[string]any       { return r.
 func (r *PlainReportRenderer) CardSimple(msg Message) map[string]any { return r.card(msg, false) }
 
 func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
+	if usesCompactCard(msg.Kind) {
+		return r.compactCard(msg)
+	}
 	config := map[string]any{"update_multi": true}
 	if isFull {
 		config["width_mode"] = "compact"
@@ -49,6 +52,13 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 		meta += fmt.Sprintf(" · 另有 %d 项，请在控制台查看", len(alerts)-count)
 	}
 	elements = append(elements, markdown(meta))
+	elements = append(elements, r.consoleButton())
+	return map[string]any{"schema": "2.0", "config": config, "header": map[string]any{
+		"title": map[string]any{"tag": "plain_text", "content": r.Title(msg)}, "template": cardColor(msg),
+	}, "body": map[string]any{"elements": elements}}
+}
+
+func (r *PlainReportRenderer) consoleButton() map[string]any {
 	button := map[string]any{"tag": "button", "type": "primary", "width": "fill", "text": map[string]any{"tag": "plain_text", "content": "打开控制台"}}
 	parsed, err := url.Parse(r.consoleURL)
 	if err == nil && (parsed.Scheme == "https" || parsed.Scheme == "http") && parsed.Host != "" && parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" {
@@ -57,10 +67,7 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 		button["disabled"] = true
 		button["disabled_tips"] = map[string]any{"tag": "plain_text", "content": "请配置 OMCPA_PUBLIC_URL"}
 	}
-	elements = append(elements, button)
-	return map[string]any{"schema": "2.0", "config": config, "header": map[string]any{
-		"title": map[string]any{"tag": "plain_text", "content": r.Title(msg)}, "template": cardColor(msg),
-	}, "body": map[string]any{"elements": elements}}
+	return button
 }
 
 func markdown(content string) map[string]any {

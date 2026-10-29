@@ -26,10 +26,11 @@ type Notification struct {
 	Alerts  []Alert
 	// Pending and Tight carry a scheduled or quiet-end digest, which has no single
 	// alert. They are empty for an immediate alert notification.
-	Pending  []PendingItem
-	Tight    []TightChannel
-	State    string
-	Attempts int
+	Pending   []PendingItem
+	Tight     []TightChannel
+	State     string
+	Attempts  int
+	LastError string
 	// NextAttemptAt is when a failed send may be retried.
 	NextAttemptAt time.Time
 	SentAt        time.Time
@@ -41,12 +42,15 @@ type Notification struct {
 // exponential retry. It marks a notification sent only after the sender returns
 // nil; a failure leaves it pending with a later NextAttemptAt.
 type Dispatcher struct {
-	sender      Sender
-	renderer    ReportRenderer
-	logger      *slog.Logger
-	now         func() time.Time
-	backoffBase time.Duration
-	backoffMax  time.Duration
+	channelUnavailableAfter time.Duration
+	source                  ReportSource
+	store                   Store
+	sender                  Sender
+	renderer                ReportRenderer
+	logger                  *slog.Logger
+	now                     func() time.Time
+	backoffBase             time.Duration
+	backoffMax              time.Duration
 }
 
 // NewDispatcher builds a dispatcher. A nil logger and nil clock fall back to the
@@ -96,14 +100,31 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			continue
 		}
 		msg := Message{
-			EvaluatedAt: now,
-			Kind:        notification.Kind,
-			Alerts:      notification.Alerts,
-			Pending:     notification.Pending,
-			Tight:       notification.Tight,
-			GeneratedAt: notification.OccurredAt,
+			ChannelUnavailableAfter: d.channelUnavailableAfter,
+			EvaluatedAt:             now,
+			Kind:                    notification.Kind,
+			Alerts:                  notification.Alerts,
+			Pending:                 notification.Pending,
+			Tight:                   notification.Tight,
+			GeneratedAt:             notification.OccurredAt,
+		}
+		if d.source != nil && usesCompactCard(msg.Kind) {
+			if report, has := d.source.ReadReport(ctx); has {
+				msg.Report = &report
+			}
+		}
+		if d.store != nil && usesCompactCard(msg.Kind) {
+			if state, err := d.store.Load(ctx); err == nil {
+				msg.Pending = openItems(state.PendingItems)
+				for _, item := range state.PendingItems {
+					if item.Kind == predictionKindPrefix && item.ResolvedAt.IsZero() {
+						msg.Pending = append(msg.Pending, item)
+					}
+				}
+			}
 		}
 		if err := d.sendWithFallback(ctx, chatID, msg); err != nil {
+			notification.LastError = err.Error()
 			notification.Attempts++
 			notification.NextAttemptAt = now.Add(backoffDelay(notification.Attempts, d.backoffBase, d.backoffMax))
 			d.logger.WarnContext(ctx, "feishu notification send failed",
@@ -112,6 +133,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			continue
 		}
 		notification.State = NotifySent
+		notification.LastError = ""
 		notification.SentAt = now
 		out[i] = notification
 	}
