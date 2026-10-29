@@ -72,6 +72,15 @@ func parseCredits(document string) *quota.OllamaCredits {
 		credits.UsedCents, _ = labelledAmount(root, USED_AMOUNT)
 	}
 
+	if credits.RemainingCents == nil {
+		// The balance line is not always inside the heading's container: with div-only
+		// markup the title sits in a header strip while the figures live in a sibling
+		// block. "Total" appears once on the page and labelledAmount refuses a label that
+		// resolves to more than one value, so this stays as strict as the card lookup and
+		// cannot borrow another card's figure.
+		credits.RemainingCents, _ = labelledAmount(root, BALANCE_AMOUNT)
+	}
+
 	if credits.RemainingCents != nil && credits.UsedCents != nil {
 		total := *credits.RemainingCents + *credits.UsedCents
 		credits.TotalCents = &total
