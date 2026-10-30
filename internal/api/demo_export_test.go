@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,6 +134,10 @@ func demoExportCases() []demoExportCase {
 		{Name: "api-keys-with-keys", Path: "/api/v1/management/api-keys?include_keys=true"},
 		{Name: "client-key-aliases", Path: "/api/v1/management/client-key-aliases"},
 		{Name: "model-square", Path: "/api/v1/management/model-square"},
+		// The model groups page. The demonstration seeds the five presets with a fixed
+		// timestamp and adds no members, so the capture is stable across a regeneration
+		// in a way a live database's would not be.
+		{Name: "model-groups", Path: "/api/v1/management/model-groups"},
 		{Name: "pricing", Path: "/api/v1/pricing"},
 		{Name: "pricing-attention", Path: "/api/v1/pricing/attention"},
 		{Name: "pricing-catalog", Path: "/api/v1/pricing/catalog"},
@@ -677,32 +682,59 @@ func demoExportMirrorTailAsOfMS(decoded any) any {
 	return decoded
 }
 
+// demoExportStampedFields names the responses whose timestamps are stamped while the
+// export answers rather than seeded at the reference, and the fields that carry them.
+//
+// A stamped instant lands a little after the reference, and only the rebase's
+// one-minute rounding puts it back on it. That rounding is enough when the request is
+// quick, but it is a race rather than a property: a slower run - or a machine whose
+// migration took a while - pushes the write past the rounding window and two exports of
+// identical code disagree. Pinning these fields to the reference removes the race, which
+// is the only way the freshness gate can tell "the dataset is stale" from "this run was
+// slow". Seed data is deliberately absent: it is already fixed, and rewriting an instant
+// that is meaningful history would lose it.
+var demoExportStampedFields = map[string][]string{
+	"pricing":      {"updated_at_ms", "catalog_updated_at_ms", "effective_from_ms"},
+	"model-groups": {"created_at_ms", "updated_at_ms"},
+}
+
 func demoExportNormaliseResponse(name string, decoded any, deltaMS int64, requestIDs map[string]int) any {
-	if name == "pricing" || strings.HasPrefix(name, "pricing-") {
-		demoExportNormalisePricingTimes(decoded)
+	if fields := demoExportPinnedFieldsFor(name); fields != nil {
+		demoExportPinInstants(decoded, fields)
 	}
 	return demoExportMirrorTailAsOfMS(demoExportRebase(decoded, deltaMS, requestIDs))
 }
 
-// Pricing writes precede history seeding, whose duration can exceed the rebase's
-// minute rounding window. Only those runtime writes use the fixed export instant;
-// seeded historical versions and unset timestamps retain their original meaning.
-func demoExportNormalisePricingTimes(value any) {
+// demoExportPinnedFieldsFor matches a response case to its pinned fields, treating the
+// `pricing-model-<model>` editor reads as the price book they project.
+func demoExportPinnedFieldsFor(name string) []string {
+	if fields, found := demoExportStampedFields[name]; found {
+		return fields
+	}
+	if strings.HasPrefix(name, "pricing-") {
+		return demoExportStampedFields["pricing"]
+	}
+	return nil
+}
+
+// demoExportPinInstants rewrites every listed field that is later than the reference to
+// the reference, and leaves the others alone: a null timestamp stays null, and seeded
+// history keeps the instant it was given.
+func demoExportPinInstants(value any, fields []string) {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, item := range typed {
-			switch key {
-			case "updated_at_ms", "catalog_updated_at_ms", "effective_from_ms":
+			if slices.Contains(fields, key) {
 				if millis, ok := demoExportNumericMillis(item); ok && millis > float64(demoExportReference.UnixMilli()) {
 					typed[key] = demoExportReference.UnixMilli()
 				}
-			default:
-				demoExportNormalisePricingTimes(item)
+				continue
 			}
+			demoExportPinInstants(item, fields)
 		}
 	case []any:
 		for _, item := range typed {
-			demoExportNormalisePricingTimes(item)
+			demoExportPinInstants(item, fields)
 		}
 	}
 }
