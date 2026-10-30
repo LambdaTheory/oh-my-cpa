@@ -19,6 +19,6 @@ export const OllamaCreditsView: React.FC<{ quota?: NormalizedQuota | null; statu
     {credits?.refillText && <span>{credits.refillText}</span>}
     <span>{t('ollama.models_month')}: {credits?.models?.length ? credits.models.map((entry) =>
       <span className={styles['model']} key={entry.model}>{entry.model} · {t('ollama.model_requests', { count: entry.requests })}</span>,
-    ) : t('ollama.data_missing')}</span>
+    ) : t(credits ? 'ollama.unreported' : 'ollama.data_missing')}</span>
   </div>;
 };
