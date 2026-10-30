@@ -73,9 +73,17 @@ recording and recovery refresh; rejected recovery refreshes make no quota call.
 Service tests also enforce account-kind admission directly at `reauth.Observe`.
 Demo export pricing timestamps use the fixed reference instant for runtime-stamped
 writes, with regression coverage for slow seeding and unchanged historical versions.
-Migration tests extend the existing upgrade chain through 053, including a 052-to-053
-upgrade preserving reset announcements and enforcing the shared OAuth contact slot; the historical 010–014
-gap remains unchanged. No real group, mailbox or browser participates.
+Migration tests extend the existing upgrade chain through 059, including a 052-to-053
+upgrade preserving reset announcements and enforcing the shared OAuth contact slot (the
+historical 010–014 gap remains unchanged), and a 058-to-059 upgrade of a populated
+database that gains the five empty preset model groups while keeping an existing row and
+seeding nothing twice. `internal/repository/model_groups_test.go` owns group admission,
+member append/remove ordering, the same-model-in-two-groups independence, the complete-
+membership reorder refusal and both restore outcomes (missing presets recreated, a
+renamed preset and an operator group under a preset's name left alone); the API tests
+in `internal/api/model_groups_test.go` own the console session and same-origin boundary,
+the request/response shapes and the audit rows. No real group, mailbox or browser
+participates.
 
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.
