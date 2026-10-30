@@ -4111,9 +4111,13 @@ These are ordinary management routes under the console session and same-origin g
 operations capability is registered, and every write records an audit row in the same
 transaction as the change, ahead of it: a create, rename, add, remove, reorder, delete
 or restore whose audit row cannot be written is rolled back whole and answered
-`audit_write_failed`, so a caller never sees a failure for a change that happened. A
-request that would change nothing - an add whose models are all already members, a
-restore with no group missing - performs no write and records no row.
+`audit_write_failed`, so a caller never sees a failure for a change that happened. What
+a write will do is decided by reads first, so the audit row can name it exactly and still
+be the transaction's first write. A request that would change nothing - an add whose
+models are all already members, a restore with no group missing - writes nothing at all:
+it commits a read-only transaction and records no row. The caller's own correlation id
+travels in the event's details and is merged into, not replaced by, the details the write
+produces.
 
 Ordering is maintained by the repository, not by the caller. Adding members appends
 after the current last position and reports a model already present as skipped rather
@@ -4127,8 +4131,11 @@ A preset group is identified by its fixed id, not its name, so restoring recogni
 that was renamed and leaves it - members, order and name - untouched; only a preset that
 is gone is recreated, empty. A group the operator created under a preset's name is left
 alone and reported as skipped, because the name is taken and a second group with that
-name would make every later name lookup ambiguous. Restore is idempotent: a second call
-creates nothing.
+name would make every later name lookup ambiguous. Restore resolves which presets are
+missing inside its transaction and before it writes anything, so a restore with nothing
+missing never issues an insert, and a restore that creates some names them in its audit
+row and then creates exactly those. Restore is idempotent: a second call creates nothing
+and records nothing.
 
 ## Reset announcement evidence
 

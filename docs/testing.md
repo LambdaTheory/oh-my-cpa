@@ -86,8 +86,12 @@ the request/response shapes; `internal/api/model_groups_audit_test.go` breaks th
 store with a synthetic trigger and asserts, per write, that the caller gets
 `audit_write_failed` and the database is unchanged; and
 `internal/api/model_groups_path_test.go` owns member-name decoding, including the
-`a%2Fb`/`a/b` pair whose removal must each hit its own member. No real group, mailbox
-or browser participates.
+`a%2Fb`/`a/b` pair whose removal must each hit its own member.
+`internal/repository/model_groups_restore_test.go` owns the restore path's write order
+(a trigger aborts a preset insert that precedes the audit row in the same transaction),
+its read-only no-op (proved with `query_only`, which a zero-row insert would violate and a
+row-level trigger would not), and that a write's own details merge with the request
+metadata rather than replacing it. No real group, mailbox or browser participates.
 
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.

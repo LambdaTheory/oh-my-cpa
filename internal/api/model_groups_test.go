@@ -401,3 +401,55 @@ func TestModelGroupWritesAreAudited(t *testing.T) {
 		}
 	}
 }
+
+// TestModelGroupAuditKeepsTheCallersCorrelationID covers the regression the incremental
+// review found: the repository replaced the event's details with its own, so a request
+// carrying X-Request-ID lost the only field that ties the row to what the client asked
+// about. The business detail and the caller's id have to survive together.
+func TestModelGroupAuditKeepsTheCallersCorrelationID(t *testing.T) {
+	client, base, repo := startDashboardTestServer(t, nil)
+	const callerID = "caller-correlation-1234"
+
+	request, err := http.NewRequest(http.MethodPost, base+modelGroupBase, strings.NewReader(`{"name":"带关联ID的组"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Origin", base)
+	request.Header.Set("X-Request-ID", callerID)
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	payload, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireStatus(t, response.StatusCode, payload, http.StatusCreated)
+	created := decodeModelGroup(t, payload)
+
+	page, err := repo.QueryAuditEvents(context.Background(), repository.AuditQuery{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var row *repository.AuditEvent
+	for index := range page.Events {
+		if page.Events[index].Action == "model_group.create" && page.Events[index].TargetID == created.ID {
+			row = &page.Events[index]
+			break
+		}
+	}
+	if row == nil {
+		t.Fatal("the create recorded no audit row")
+	}
+	if row.Details["client_request_id"] != callerID {
+		t.Fatalf("audit details = %+v, want the caller's X-Request-ID preserved beside the business detail", row.Details)
+	}
+	if row.Details["name"] != "带关联ID的组" {
+		t.Fatalf("audit details = %+v, want the created group's name", row.Details)
+	}
+	if row.RequestID == "" || row.RequestID == callerID {
+		t.Fatalf("request_id = %q: the server-side id must be its own, distinct from the caller's", row.RequestID)
+	}
+}

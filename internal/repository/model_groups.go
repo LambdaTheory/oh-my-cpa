@@ -377,16 +377,40 @@ func (r *Repository) DeleteModelGroup(ctx context.Context, id string, nowMS int6
 // trace, no change" true instead of merely intended. The error carries
 // ErrModelGroupAuditFailed so the HTTP layer can answer a stable code instead of a bare
 // 500 that a caller would read as a rejected name.
+//
+// The business details are merged into whatever the caller already put on the event
+// rather than replacing it. The handler attaches the caller's own correlation id there,
+// and dropping it would quietly lose the only field that ties this row to the request a
+// client is asking about. Business keys win a collision: they describe the change, which
+// is what the row is for, and the metadata keys are names the handler owns and does not
+// reuse for business data.
 func writeModelGroupAuditTx(ctx context.Context, tx *sql.Tx, audit AuditEvent, nowMS int64, targetID string, details map[string]any) error {
 	audit.TargetType = "model_group"
 	audit.TargetID = targetID
 	audit.Result = "success"
 	audit.OccurredAtMS = nowMS
-	audit.Details = details
+	audit.Details = mergeAuditDetails(audit.Details, details)
 	if _, err := insertAuditEvent(ctx, tx, audit); err != nil {
 		return fmt.Errorf("%w: %w", ErrModelGroupAuditFailed, err)
 	}
 	return nil
+}
+
+// mergeAuditDetails combines the request metadata a handler attached with the business
+// details a write produces. It returns nil when both are empty so an event with no
+// details still stores the empty object insertAuditEvent writes by default.
+func mergeAuditDetails(metadata, business map[string]any) map[string]any {
+	if len(metadata) == 0 && len(business) == 0 {
+		return nil
+	}
+	merged := make(map[string]any, len(metadata)+len(business))
+	for key, value := range metadata {
+		merged[key] = value
+	}
+	for key, value := range business {
+		merged[key] = value
+	}
+	return merged
 }
 
 // AddModelGroupMembers appends models after the current last member. A model already
@@ -663,8 +687,11 @@ func (r *Repository) ReorderModelGroupMembers(ctx context.Context, id string, mo
 // also left alone: the name is taken, and inventing a second "力工组" would make the
 // name ambiguous for every later read.
 //
-// The whole restore is one transaction, including its audit row: a restore that created
-// two of five presets and then failed would leave a state no operation describes.
+// The whole restore is one transaction, and the audit row is its first write. What is
+// missing is decided by reads before anything is written, the same way every other
+// group write decides what it will do first: a restore with nothing missing is then a
+// read-only transaction that writes nothing at all, not five inserts that happen to
+// match no rows.
 func (r *Repository) RestoreDefaultModelGroups(ctx context.Context, nowMS int64, audit AuditEvent) (ModelGroupRestoreResult, error) {
 	tx, err := r.SQL().BeginTx(ctx, nil)
 	if err != nil {
@@ -675,15 +702,15 @@ func (r *Repository) RestoreDefaultModelGroups(ctx context.Context, nowMS int64,
 	result := ModelGroupRestoreResult{Created: []ModelGroup{}, Skipped: []string{}}
 	missing := []struct{ id, name string }{}
 	for _, preset := range presetModelGroups {
-		created, err := restorePresetModelGroupTx(ctx, tx, preset.ID, preset.Name, nowMS)
+		taken, err := presetModelGroupExistsTx(ctx, tx, preset.ID, preset.Name)
 		if err != nil {
 			return ModelGroupRestoreResult{}, err
 		}
-		if created {
-			missing = append(missing, struct{ id, name string }{preset.ID, preset.Name})
+		if taken {
+			result.Skipped = append(result.Skipped, preset.Name)
 			continue
 		}
-		result.Skipped = append(result.Skipped, preset.Name)
+		missing = append(missing, struct{ id, name string }{preset.ID, preset.Name})
 	}
 	// A restore with nothing missing is a no-op and records nothing, for the same reason
 	// an add that skipped every model does.
@@ -694,6 +721,11 @@ func (r *Repository) RestoreDefaultModelGroups(ctx context.Context, nowMS int64,
 		}
 		if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, "defaults", map[string]any{"created": names}); err != nil {
 			return ModelGroupRestoreResult{}, err
+		}
+		for _, preset := range missing {
+			if err = insertPresetModelGroupTx(ctx, tx, preset.id, preset.name, nowMS); err != nil {
+				return ModelGroupRestoreResult{}, err
+			}
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -709,26 +741,37 @@ func (r *Repository) RestoreDefaultModelGroups(ctx context.Context, nowMS int64,
 	return result, nil
 }
 
-// restorePresetModelGroupTx inserts one preset if neither its id nor its name is taken,
-// inside the caller's transaction. The insert is the decision point: the unique name
-// index decides the race, so two restores running at once cannot both create the same
-// group.
-func restorePresetModelGroupTx(ctx context.Context, tx *sql.Tx, id, name string, nowMS int64) (bool, error) {
-	result, err := tx.ExecContext(ctx, `
+// presetModelGroupExistsTx reports whether a preset is already represented, by either of
+// the two conditions restore must honour: the id still exists (so a renamed preset is
+// left as it is rather than duplicated under its original name), or the name is taken by
+// an operator's own group (so a second group with that name is never invented).
+func presetModelGroupExistsTx(ctx context.Context, tx *sql.Tx, id, name string) (bool, error) {
+	var exists int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM model_groups
+		WHERE id = ? OR name = ? COLLATE NOCASE`,
+		id, name).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check preset model group %s: %w", id, err)
+	}
+	return exists > 0, nil
+}
+
+// insertPresetModelGroupTx creates one preset the caller has already found missing. The
+// check-then-insert race is closed by the unique name index, not by this function: a
+// concurrent creator makes the insert fail with a uniqueness violation, which rolls the
+// whole restore back rather than leaving a duplicate or an audit row describing a group
+// this transaction did not create. The caller sees a refusal and a retry reports the
+// preset as skipped. One connection is held per database and restores are operator
+// actions, so the losing side is theoretical; the constraint is what makes "at most one
+// group per preset" a property of the schema rather than of the caller.
+func insertPresetModelGroupTx(ctx context.Context, tx *sql.Tx, id, name string, nowMS int64) error {
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO model_groups (id, name, is_preset, created_at_ms, updated_at_ms)
-		SELECT ?, ?, 1, ?, ?
-		WHERE NOT EXISTS (SELECT 1 FROM model_groups WHERE id = ?)
-		  AND NOT EXISTS (SELECT 1 FROM model_groups WHERE name = ? COLLATE NOCASE)`,
-		id, name, nowMS, nowMS, id, name)
-	if err != nil {
+		VALUES (?, ?, 1, ?, ?)`, id, name, nowMS, nowMS); err != nil {
 		if isUniqueViolation(err) {
-			return false, nil
+			return fmt.Errorf("restore model group %s: another writer created it first", id)
 		}
-		return false, fmt.Errorf("restore model group %s: %w", id, err)
+		return fmt.Errorf("restore model group %s: %w", id, err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count restored model group: %w", err)
-	}
-	return affected > 0, nil
+	return nil
 }
