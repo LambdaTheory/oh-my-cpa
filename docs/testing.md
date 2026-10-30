@@ -81,9 +81,13 @@ seeding nothing twice. `internal/repository/model_groups_test.go` owns group adm
 member append/remove ordering, the same-model-in-two-groups independence, the complete-
 membership reorder refusal and both restore outcomes (missing presets recreated, a
 renamed preset and an operator group under a preset's name left alone); the API tests
-in `internal/api/model_groups_test.go` own the console session and same-origin boundary,
-the request/response shapes and the audit rows. No real group, mailbox or browser
-participates.
+in `internal/api/model_groups_test.go` own the console session and same-origin boundary and
+the request/response shapes; `internal/api/model_groups_audit_test.go` breaks the audit
+store with a synthetic trigger and asserts, per write, that the caller gets
+`audit_write_failed` and the database is unchanged; and
+`internal/api/model_groups_path_test.go` owns member-name decoding, including the
+`a%2Fb`/`a/b` pair whose removal must each hit its own member. No real group, mailbox
+or browser participates.
 
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.

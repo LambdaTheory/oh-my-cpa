@@ -43,6 +43,10 @@ var (
 	ErrModelGroupNameConflict = errors.New("model_group_name_conflict")
 	ErrModelGroupMember       = errors.New("model_group_invalid_member")
 	ErrModelGroupOrder        = errors.New("model_group_invalid_order")
+	// ErrModelGroupAuditFailed means the trail could not be written, so the change was
+	// rolled back with it. It is distinct from a rejected input: the request was valid
+	// and the same one will succeed once the audit store answers.
+	ErrModelGroupAuditFailed = errors.New("model_group_audit_failed")
 )
 
 // ModelGroupMember is one model in one group, at the position the operator gave it.
@@ -61,6 +65,13 @@ type ModelGroup struct {
 	UpdatedAtMS int64              `json:"updated_at_ms"`
 	Members     []ModelGroupMember `json:"members"`
 }
+
+// Every write below takes the audit event it must record and writes it inside the same
+// transaction, before the change itself. That order is the point: the trail is the first
+// write, so a store that refuses it aborts the transaction and no group, name or member
+// moves. Writing the change first and the record afterwards - which is what these
+// functions did before - answers 500 while the change is already durable, and the client
+// cannot tell that from a write that never happened.
 
 // ModelGroupAddResult reports what one add-member request did, so a caller can say
 // which models were already present instead of guessing why the count did not move.
@@ -252,13 +263,24 @@ func (r *Repository) readModelGroups(ctx context.Context, id string) ([]ModelGro
 	return groups, nil
 }
 
-func (r *Repository) CreateModelGroup(ctx context.Context, name string, nowMS int64) (ModelGroup, error) {
+// CreateModelGroup inserts a group and its audit row in one transaction.
+func (r *Repository) CreateModelGroup(ctx context.Context, name string, nowMS int64, audit AuditEvent) (ModelGroup, error) {
 	clean, err := validateModelGroupName(name)
 	if err != nil {
 		return ModelGroup{}, err
 	}
 	group := ModelGroup{ID: uuid.NewString(), Name: clean, CreatedAtMS: nowMS, UpdatedAtMS: nowMS, Members: []ModelGroupMember{}}
-	if _, err = r.SQL().ExecContext(ctx, `
+
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return ModelGroup{}, fmt.Errorf("begin create model group: %w", err)
+	}
+	defer tx.Rollback()
+
+	if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, group.ID, map[string]any{"name": group.Name}); err != nil {
+		return ModelGroup{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO model_groups (id, name, is_preset, created_at_ms, updated_at_ms)
 		VALUES (?, ?, 0, ?, ?)`, group.ID, group.Name, nowMS, nowMS); err != nil {
 		if isUniqueViolation(err) {
@@ -266,48 +288,112 @@ func (r *Repository) CreateModelGroup(ctx context.Context, name string, nowMS in
 		}
 		return ModelGroup{}, fmt.Errorf("create model group: %w", err)
 	}
+	if err = tx.Commit(); err != nil {
+		return ModelGroup{}, fmt.Errorf("commit create model group: %w", err)
+	}
 	return group, nil
 }
 
-func (r *Repository) RenameModelGroup(ctx context.Context, id, name string, nowMS int64) (ModelGroup, error) {
+// RenameModelGroup renames a group and records it in one transaction. The stored name is
+// read inside that transaction, so the audit row names the name that was actually
+// replaced rather than one a concurrent rename already moved on from.
+func (r *Repository) RenameModelGroup(ctx context.Context, id, name string, nowMS int64, audit AuditEvent) (ModelGroup, error) {
 	clean, err := validateModelGroupName(name)
 	if err != nil {
 		return ModelGroup{}, err
 	}
-	result, err := r.SQL().ExecContext(ctx, `
-		UPDATE model_groups SET name = ?, updated_at_ms = ? WHERE id = ?`, clean, nowMS, strings.TrimSpace(id))
+	groupID := strings.TrimSpace(id)
+
+	tx, err := r.SQL().BeginTx(ctx, nil)
 	if err != nil {
+		return ModelGroup{}, fmt.Errorf("begin rename model group: %w", err)
+	}
+	defer tx.Rollback()
+
+	var previous string
+	err = tx.QueryRowContext(ctx, `SELECT name FROM model_groups WHERE id = ?`, groupID).Scan(&previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ModelGroup{}, ErrModelGroupNotFound
+	}
+	if err != nil {
+		return ModelGroup{}, fmt.Errorf("read model group: %w", err)
+	}
+	if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, groupID, map[string]any{"from": previous, "to": clean}); err != nil {
+		return ModelGroup{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE model_groups SET name = ?, updated_at_ms = ? WHERE id = ?`, clean, nowMS, groupID); err != nil {
 		if isUniqueViolation(err) {
 			return ModelGroup{}, ErrModelGroupNameConflict
 		}
 		return ModelGroup{}, fmt.Errorf("rename model group: %w", err)
 	}
-	if affected, _ := result.RowsAffected(); affected == 0 {
-		return ModelGroup{}, ErrModelGroupNotFound
+	if err = tx.Commit(); err != nil {
+		return ModelGroup{}, fmt.Errorf("commit rename model group: %w", err)
 	}
-	return r.GetModelGroup(ctx, id)
+	return r.GetModelGroup(ctx, groupID)
 }
 
-// DeleteModelGroup removes a group and, with it, its member rows. The models
-// themselves are CPA's, not ours: nothing outside this table is touched, so a model
-// that was in this group stays wherever else it is listed.
-func (r *Repository) DeleteModelGroup(ctx context.Context, id string) (bool, error) {
-	result, err := r.SQL().ExecContext(ctx, `DELETE FROM model_groups WHERE id = ?`, strings.TrimSpace(id))
+// DeleteModelGroup removes a group and, with it, its member rows, recording the removal
+// in the same transaction. The models themselves are CPA's, not ours: nothing outside
+// this table is touched, so a model that was in this group stays wherever else it is
+// listed.
+func (r *Repository) DeleteModelGroup(ctx context.Context, id string, nowMS int64, audit AuditEvent) (bool, error) {
+	groupID := strings.TrimSpace(id)
+
+	tx, err := r.SQL().BeginTx(ctx, nil)
 	if err != nil {
+		return false, fmt.Errorf("begin delete model group: %w", err)
+	}
+	defer tx.Rollback()
+
+	var name string
+	err = tx.QueryRowContext(ctx, `SELECT name FROM model_groups WHERE id = ?`, groupID).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read model group: %w", err)
+	}
+	var members int
+	if err = tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM model_group_members WHERE group_id = ?`, groupID).Scan(&members); err != nil {
+		return false, fmt.Errorf("count model group members: %w", err)
+	}
+	if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, groupID, map[string]any{"name": name, "members": members}); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, `DELETE FROM model_groups WHERE id = ?`, groupID); err != nil {
 		return false, fmt.Errorf("delete model group: %w", err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("count deleted model group: %w", err)
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit delete model group: %w", err)
 	}
-	return affected > 0, nil
+	return true, nil
+}
+
+// writeModelGroupAuditTx admits and writes the group's audit row as the transaction's
+// first write. A store that refuses it fails the whole write, which is what keeps "no
+// trace, no change" true instead of merely intended. The error carries
+// ErrModelGroupAuditFailed so the HTTP layer can answer a stable code instead of a bare
+// 500 that a caller would read as a rejected name.
+func writeModelGroupAuditTx(ctx context.Context, tx *sql.Tx, audit AuditEvent, nowMS int64, targetID string, details map[string]any) error {
+	audit.TargetType = "model_group"
+	audit.TargetID = targetID
+	audit.Result = "success"
+	audit.OccurredAtMS = nowMS
+	audit.Details = details
+	if _, err := insertAuditEvent(ctx, tx, audit); err != nil {
+		return fmt.Errorf("%w: %w", ErrModelGroupAuditFailed, err)
+	}
+	return nil
 }
 
 // AddModelGroupMembers appends models after the current last member. A model already
 // in the group is reported as skipped rather than refused: the operator asked for the
 // group to contain it, and it does. Duplicates within one request are handled the same
 // way, so the same name twice in one call adds it once.
-func (r *Repository) AddModelGroupMembers(ctx context.Context, id string, models []string, nowMS int64) (ModelGroupAddResult, error) {
+func (r *Repository) AddModelGroupMembers(ctx context.Context, id string, models []string, nowMS int64, audit AuditEvent) (ModelGroupAddResult, error) {
 	clean := make([]string, 0, len(models))
 	seen := make(map[string]bool, len(models))
 	for _, model := range models {
@@ -346,6 +432,8 @@ func (r *Repository) AddModelGroupMembers(ctx context.Context, id string, models
 	}
 
 	result := ModelGroupAddResult{Added: []string{}, Skipped: []string{}}
+	// What would change is decided by reads, before any write, so the audit row can be
+	// the transaction's first write and still name exactly the models it adds.
 	for _, model := range clean {
 		var present int
 		if err = tx.QueryRowContext(ctx, `
@@ -357,15 +445,22 @@ func (r *Repository) AddModelGroupMembers(ctx context.Context, id string, models
 			result.Skipped = append(result.Skipped, model)
 			continue
 		}
-		position++
-		if _, err = tx.ExecContext(ctx, `
-			INSERT INTO model_group_members (group_id, model, position, added_at_ms)
-			VALUES (?, ?, ?, ?)`, strings.TrimSpace(id), model, position, nowMS); err != nil {
-			return ModelGroupAddResult{}, fmt.Errorf("add model group member: %w", err)
-		}
 		result.Added = append(result.Added, model)
 	}
+	// A request that changes nothing records nothing: it is the same refusal-free
+	// no-op the skipped model is, and an audit row for it would claim a write happened.
 	if len(result.Added) > 0 {
+		if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, strings.TrimSpace(id), map[string]any{"added": result.Added}); err != nil {
+			return ModelGroupAddResult{}, err
+		}
+		for _, model := range result.Added {
+			position++
+			if _, err = tx.ExecContext(ctx, `
+				INSERT INTO model_group_members (group_id, model, position, added_at_ms)
+				VALUES (?, ?, ?, ?)`, strings.TrimSpace(id), model, position, nowMS); err != nil {
+				return ModelGroupAddResult{}, fmt.Errorf("add model group member: %w", err)
+			}
+		}
 		if _, err = tx.ExecContext(ctx, `UPDATE model_groups SET updated_at_ms = ? WHERE id = ?`, nowMS, strings.TrimSpace(id)); err != nil {
 			return ModelGroupAddResult{}, fmt.Errorf("touch model group: %w", err)
 		}
@@ -383,7 +478,7 @@ func (r *Repository) AddModelGroupMembers(ctx context.Context, id string, models
 
 // RemoveModelGroupMember removes one model and closes the gap it leaves, so the
 // remaining members read 1..n rather than keeping a hole where the model was.
-func (r *Repository) RemoveModelGroupMember(ctx context.Context, id, model string, nowMS int64) (ModelGroup, error) {
+func (r *Repository) RemoveModelGroupMember(ctx context.Context, id, model string, nowMS int64, audit AuditEvent) (ModelGroup, error) {
 	clean, err := validateModelGroupModel(model)
 	if err != nil {
 		return ModelGroup{}, err
@@ -403,17 +498,23 @@ func (r *Repository) RemoveModelGroupMember(ctx context.Context, id, model strin
 	if exists == 0 {
 		return ModelGroup{}, ErrModelGroupNotFound
 	}
-	result, err := tx.ExecContext(ctx, `
-		DELETE FROM model_group_members WHERE group_id = ? AND model = ?`, groupID, clean)
-	if err != nil {
-		return ModelGroup{}, fmt.Errorf("remove model group member: %w", err)
+	// The member is confirmed present before the audit row, so a request naming a model
+	// the group does not hold is refused without leaving a record of a removal.
+	var present int
+	if err = tx.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM model_group_members WHERE group_id = ? AND model = ?`,
+		groupID, clean).Scan(&present); err != nil {
+		return ModelGroup{}, fmt.Errorf("check model group member: %w", err)
 	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return ModelGroup{}, fmt.Errorf("count removed model group member: %w", err)
-	}
-	if affected == 0 {
+	if present == 0 {
 		return ModelGroup{}, ErrModelGroupMember
+	}
+	if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, groupID, map[string]any{"removed": clean}); err != nil {
+		return ModelGroup{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+		DELETE FROM model_group_members WHERE group_id = ? AND model = ?`, groupID, clean); err != nil {
+		return ModelGroup{}, fmt.Errorf("remove model group member: %w", err)
 	}
 	if err = closeModelGroupGapTx(ctx, tx, groupID); err != nil {
 		return ModelGroup{}, err
@@ -484,7 +585,7 @@ func writeModelGroupPositionsTx(ctx context.Context, tx *sql.Tx, groupID string,
 // exactly the group's current members, each once: a partial list would silently drop
 // the rest, and a name the group does not hold would silently add it, so both are
 // refused instead of guessed at.
-func (r *Repository) ReorderModelGroupMembers(ctx context.Context, id string, models []string, nowMS int64) (ModelGroup, error) {
+func (r *Repository) ReorderModelGroupMembers(ctx context.Context, id string, models []string, nowMS int64, audit AuditEvent) (ModelGroup, error) {
 	groupID := strings.TrimSpace(id)
 
 	tx, err := r.SQL().BeginTx(ctx, nil)
@@ -540,6 +641,9 @@ func (r *Repository) ReorderModelGroupMembers(ctx context.Context, id string, mo
 		ordered = append(ordered, clean)
 	}
 
+	if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, groupID, map[string]any{"order": ordered}); err != nil {
+		return ModelGroup{}, err
+	}
 	if err = writeModelGroupPositionsTx(ctx, tx, groupID, ordered); err != nil {
 		return ModelGroup{}, err
 	}
@@ -558,27 +662,59 @@ func (r *Repository) ReorderModelGroupMembers(ctx context.Context, id string, mo
 // rather than its current name. A group the operator created under a preset's name is
 // also left alone: the name is taken, and inventing a second "力工组" would make the
 // name ambiguous for every later read.
-func (r *Repository) RestoreDefaultModelGroups(ctx context.Context, nowMS int64) (ModelGroupRestoreResult, error) {
+//
+// The whole restore is one transaction, including its audit row: a restore that created
+// two of five presets and then failed would leave a state no operation describes.
+func (r *Repository) RestoreDefaultModelGroups(ctx context.Context, nowMS int64, audit AuditEvent) (ModelGroupRestoreResult, error) {
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return ModelGroupRestoreResult{}, fmt.Errorf("begin restore model groups: %w", err)
+	}
+	defer tx.Rollback()
+
 	result := ModelGroupRestoreResult{Created: []ModelGroup{}, Skipped: []string{}}
+	missing := []struct{ id, name string }{}
 	for _, preset := range presetModelGroups {
-		group, created, err := r.restorePresetModelGroup(ctx, preset.ID, preset.Name, nowMS)
+		created, err := restorePresetModelGroupTx(ctx, tx, preset.ID, preset.Name, nowMS)
 		if err != nil {
 			return ModelGroupRestoreResult{}, err
 		}
 		if created {
-			result.Created = append(result.Created, group)
+			missing = append(missing, struct{ id, name string }{preset.ID, preset.Name})
 			continue
 		}
 		result.Skipped = append(result.Skipped, preset.Name)
 	}
+	// A restore with nothing missing is a no-op and records nothing, for the same reason
+	// an add that skipped every model does.
+	if len(missing) > 0 {
+		names := make([]string, 0, len(missing))
+		for _, preset := range missing {
+			names = append(names, preset.name)
+		}
+		if err = writeModelGroupAuditTx(ctx, tx, audit, nowMS, "defaults", map[string]any{"created": names}); err != nil {
+			return ModelGroupRestoreResult{}, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return ModelGroupRestoreResult{}, fmt.Errorf("commit restore model groups: %w", err)
+	}
+	for _, preset := range missing {
+		group, err := r.GetModelGroup(ctx, preset.id)
+		if err != nil {
+			return ModelGroupRestoreResult{}, err
+		}
+		result.Created = append(result.Created, group)
+	}
 	return result, nil
 }
 
-// restorePresetModelGroup inserts one preset if neither its id nor its name is taken.
-// The insert is the decision point: the unique name index decides the race, so two
-// restores running at once cannot both create the same group.
-func (r *Repository) restorePresetModelGroup(ctx context.Context, id, name string, nowMS int64) (ModelGroup, bool, error) {
-	result, err := r.SQL().ExecContext(ctx, `
+// restorePresetModelGroupTx inserts one preset if neither its id nor its name is taken,
+// inside the caller's transaction. The insert is the decision point: the unique name
+// index decides the race, so two restores running at once cannot both create the same
+// group.
+func restorePresetModelGroupTx(ctx context.Context, tx *sql.Tx, id, name string, nowMS int64) (bool, error) {
+	result, err := tx.ExecContext(ctx, `
 		INSERT INTO model_groups (id, name, is_preset, created_at_ms, updated_at_ms)
 		SELECT ?, ?, 1, ?, ?
 		WHERE NOT EXISTS (SELECT 1 FROM model_groups WHERE id = ?)
@@ -586,20 +722,13 @@ func (r *Repository) restorePresetModelGroup(ctx context.Context, id, name strin
 		id, name, nowMS, nowMS, id, name)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return ModelGroup{}, false, nil
+			return false, nil
 		}
-		return ModelGroup{}, false, fmt.Errorf("restore model group %s: %w", id, err)
+		return false, fmt.Errorf("restore model group %s: %w", id, err)
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return ModelGroup{}, false, fmt.Errorf("count restored model group: %w", err)
+		return false, fmt.Errorf("count restored model group: %w", err)
 	}
-	if affected == 0 {
-		return ModelGroup{}, false, nil
-	}
-	group, err := r.GetModelGroup(ctx, id)
-	if err != nil {
-		return ModelGroup{}, false, err
-	}
-	return group, true, nil
+	return affected > 0, nil
 }

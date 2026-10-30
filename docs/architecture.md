@@ -4103,9 +4103,17 @@ wire shape, served under `GET/POST /management/model-groups`, `PATCH/DELETE
 /management/model-groups/{id}`, `POST /management/model-groups/{id}/members`,
 `DELETE /management/model-groups/{id}/members/{model}`, `PUT
 /management/model-groups/{id}/order` and `POST /management/model-groups/restore-defaults`.
+A member is named in the path by its own escape, decoded once: chi matches the escaped raw
+path when there is one and the decoded path otherwise, so the handler unescapes only in
+the first case - a second decode would turn a literal `a%2Fb` into `a/b` and remove the
+wrong member.
 These are ordinary management routes under the console session and same-origin guard; no
-operations capability is registered, and every write records an audit row, with a create,
-rename, add, remove, reorder, delete or restore refused when that row cannot be stored.
+operations capability is registered, and every write records an audit row in the same
+transaction as the change, ahead of it: a create, rename, add, remove, reorder, delete
+or restore whose audit row cannot be written is rolled back whole and answered
+`audit_write_failed`, so a caller never sees a failure for a change that happened. A
+request that would change nothing - an add whose models are all already members, a
+restore with no group missing - performs no write and records no row.
 
 Ordering is maintained by the repository, not by the caller. Adding members appends
 after the current last position and reports a model already present as skipped rather
