@@ -1490,10 +1490,14 @@ requires an operator-provided sanitized dataset and is not certified by fixtures
 `internal/ollama/credits_test.go` owns synthetic settings DOM extraction, strict
 whole-USD validation, normal/zero/fetch-failure/mixed-path cases, refusal to fall
 back to legacy windows and persisted credit facts. `internal/api/ollama_accounts_test.go`
-pins the typed wire amounts/model counts and rejects unlisted stored fields.
-`web/tests/ollama-credits.component.test.tsx` owns rendered money, missing data,
-confirmed-zero wording, labelled calculated shares, relative refill text and model
-counts. The existing `omc-ollama-accounts` browser scenario wires these facts into
-the management drawer, detail drawer and workspace row, checks phone overflow and retains desktop
-and phone screenshots under the test output directory. No real account is read;
-actual upstream DOM compatibility remains explicitly unverified.
+pins the typed wire amounts/model counts and rejects unlisted stored fields, including
+the `balance_api` projection from a realistic `/api/balance` body through the stored
+snapshot to the quota DTO (amounts present; models, refill, plan and windows not
+invented). `web/tests/ollama-credits.component.test.tsx` owns rendered money, missing
+data, confirmed-zero wording, labelled calculated shares, relative refill text, model
+counts, the `balance_api` source, and per-field not-reported wording when model counts
+are omitted while USD amounts remain visible. The existing `omc-ollama-accounts` browser
+scenario wires these facts into the management drawer, detail drawer and workspace row,
+checks phone overflow and retains desktop and phone screenshots under the test output
+directory. No real account is read; actual upstream DOM compatibility remains explicitly
+unverified.

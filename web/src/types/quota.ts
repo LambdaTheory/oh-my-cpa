@@ -164,9 +164,11 @@ export interface QuotaCapabilities {
   reset_credit_supported: boolean;
 }
 
+export type OllamaCreditsSource = 'settings_usage_credits' | 'balance_api';
+
 export interface QuotaItem {
   ollama_credits?: {
-    source: 'settings_usage_credits';
+    source: OllamaCreditsSource;
     remaining_cents?: number;
     used_cents?: number;
     total_cents?: number;

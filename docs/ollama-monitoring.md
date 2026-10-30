@@ -144,6 +144,11 @@ audit row; only its presence flag and its version are metadata.
   total is remaining + used; a percentage requires positive total and used amounts. A
   known zero is stored as zero, distinct from an absent field; the console describes it
   in words.
+- The balance endpoint publishes neither monthly model request counts nor refill
+  text, so the key path leaves those fields absent. The console accepts both known
+  sources and shows the USD amounts from `balance_api`; an omitted model count renders
+  as "not reported" for that field, never as zero and never as a generic missing-data
+  label for the whole card.
 - Monthly refill text such as "Monthly credits refill in 2 weeks" stays verbatim.
   It never becomes a reset timestamp, duration, capacity or depletion prediction.
   The separate Models used this month section supplies per-model request counts.
@@ -317,9 +322,12 @@ The module is wired into the running process:
     and modal `web/src/components/ollama/OllamaAccountEditorModal.tsx` allow full management.
   - The list, management drawer and detail drawer share
     `web/src/components/ollama/OllamaCreditsView.tsx`: USD amounts, labelled calculated
-    usage, relative monthly refill text and monthly model requests. Stored historical
-    amounts are hidden when the newest collection failed; they are retained in storage.
-    The list/refresh routes decode stored snapshots through a typed DTO allowlist.
+    usage, relative monthly refill text and monthly model requests. Both
+    `settings_usage_credits` and `balance_api` snapshots are rendered; a field the
+    balance endpoint does not publish is reported as not reported rather than making
+    the populated amounts look missing. Stored historical amounts are hidden when the
+    newest collection failed; they are retained in storage. The list/refresh routes
+    decode stored snapshots through a typed DTO allowlist.
 
 ## Provenance and licensing
 

@@ -145,6 +145,69 @@ func TestOllamaAccountResponsesNeverLeakCookie(t *testing.T) {
 	}
 }
 
+// TestOllamaBalanceJSONProjectsIntoQuotaDTO pins the key path end to end: a
+// realistic balance document becomes the credits object the quota DTO sends. The
+// endpoint's two USD figures must survive the projection, while data it does not
+// publish stays absent instead of becoming zero.
+func TestOllamaBalanceJSONProjectsIntoQuotaDTO(t *testing.T) {
+	const body = `{"included":{"balance_usd":"12.50","allowance_usd":"20.00","period":{"from":"2026-10-01T00:00:00Z","until":"2026-11-01T00:00:00Z"}},"purchased":{"balance_usd":"3.00"}}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got, want := request.Header.Get("Authorization"), "Bearer "+ollamaTestAPIKey; got != want {
+			t.Errorf("Authorization = %q, want %q", got, want)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, body)
+	}))
+	t.Cleanup(upstream.Close)
+
+	client := ollama.NewClient(time.Second, ollama.WithBalanceURL(upstream.URL))
+	snapshot, err := client.FetchBalance(context.Background(), "acct-balance", ollamaTestAPIKey)
+	if err != nil {
+		t.Fatalf("fetch balance: %v", err)
+	}
+	if !snapshot.IsSuccess() {
+		t.Fatalf("balance snapshot must be a success: %+v", snapshot)
+	}
+	encoded, err := json.Marshal(snapshot.ToQuota("Work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dto := ollamaQuotaDTO{AccountID: "acct-balance", Quota: decodeOllamaQuota(string(encoded))}
+	wire, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ollamaQuotaDTO
+	if err := json.Unmarshal(wire, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Quota == nil {
+		t.Fatal("the DTO lost the stored quota")
+	}
+	credits := decoded.Quota.OllamaCredits
+	if credits == nil {
+		t.Fatal("the DTO lost ollama_credits")
+	}
+	if credits.Source != "balance_api" {
+		t.Fatalf("source = %q, want balance_api", credits.Source)
+	}
+	if credits.RemainingCents == nil || *credits.RemainingCents != 1250 ||
+		credits.UsedCents == nil || *credits.UsedCents != 750 ||
+		credits.TotalCents == nil || *credits.TotalCents != 2000 {
+		t.Fatalf("balance amounts = %+v, want 1250/750/2000", credits)
+	}
+	if credits.UsedPercent == nil || *credits.UsedPercent != 37.5 {
+		t.Fatalf("used percent = %v, want 37.5", credits.UsedPercent)
+	}
+	if credits.RefillText != "" || len(credits.Models) != 0 {
+		t.Fatalf("balance endpoint must not invent refill or model facts: %+v", credits)
+	}
+	if decoded.Quota.Plan != nil || len(decoded.Quota.Windows) != 0 {
+		t.Fatalf("balance path must not invent plan or windows: plan=%+v windows=%+v", decoded.Quota.Plan, decoded.Quota.Windows)
+	}
+}
+
 func TestOllamaQuotaReadIsReadOnly(t *testing.T) {
 	server, repo, _ := startOllamaTestServer(t)
 	status, payload := ollamaRequest(t, http.MethodPost, server.URL+"/ollama/accounts",
