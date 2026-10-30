@@ -1,8 +1,15 @@
-import type { NormalizedQuota } from '../../types/quota';
+import type { NormalizedQuota, OllamaCreditsSource } from '../../types/quota';
+
+// Both collectors write the same credits shape. The balance endpoint is the preferred
+// key path; refusing its source here discarded valid amounts before the card saw them.
+const OLLAMA_CREDITS_SOURCES: ReadonlySet<OllamaCreditsSource> = new Set([
+  'settings_usage_credits',
+  'balance_api',
+]);
 
 export function readOllamaCredits(quota?: NormalizedQuota | null, status?: string) {
   const credits = quota?.ollama_credits;
-  if (!credits || credits.source !== 'settings_usage_credits'
+  if (!credits || !OLLAMA_CREDITS_SOURCES.has(credits.source)
     || (status && status.toLowerCase() !== 'ok')
     || quota?.last_refresh?.outcome === 'failed' || quota?.status === 'error') return null;
   const readCents = (value: unknown): number | null => typeof value === 'number'

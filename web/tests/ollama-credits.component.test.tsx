@@ -11,6 +11,14 @@ function reading(overrides: Record<string, unknown> = {}): NormalizedQuota {
   } as unknown as NormalizedQuota;
 }
 
+function balanceReading(overrides: Record<string, unknown> = {}): NormalizedQuota {
+  return { provider: 'ollama', status: 'healthy', windows: [],
+    ollama_credits: { source: 'balance_api', remaining_cents: 1250, used_cents: 750,
+      total_cents: 2000, used_percent: 37.5,
+      models: [{ model: 'llama3.3:70b', requests: 42 }], ...overrides },
+  } as unknown as NormalizedQuota;
+}
+
 function show(quota?: NormalizedQuota, status = 'ok') {
   render(<I18nProvider><OllamaCreditsView quota={quota} status={status} /></I18nProvider>);
   return screen.getByTestId('ollama-credits').textContent ?? '';
@@ -58,5 +66,25 @@ describe('Ollama USD credits', () => {
   it('does not round a small positive share to zero percent', () => {
     const text = show(reading({ remaining_cents: 9998, used_cents: 2 }));
     expect(text).toContain('0.02%');
+  });
+
+  it('renders balance_api credits and model requests instead of discarding the source', () => {
+    const text = show(balanceReading());
+    expect(text).toContain('$12.50');
+    expect(text).toContain('$7.50');
+    expect(text).toContain('$20.00');
+    expect(text).toContain('37.5%');
+    expect(text).toContain('llama3.3:70b');
+    expect(text).toContain('42 requests');
+    expect(text).not.toContain('Data missing');
+  });
+
+  it('keeps balance_api USD amounts visible when model requests are not reported', () => {
+    const text = show(balanceReading({ models: undefined }));
+    expect(text).toContain('$12.50');
+    expect(text).toContain('$7.50');
+    expect(text).toContain('$20.00');
+    expect(text).toContain('Not reported');
+    expect(text).not.toContain('Data missing');
   });
 });
