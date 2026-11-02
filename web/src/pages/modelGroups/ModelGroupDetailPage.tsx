@@ -1,4 +1,5 @@
 import React from 'react';
+import clsx from 'clsx';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Button } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -11,13 +12,14 @@ import { EmptyState } from '../../components/common/EmptyState';
 import { ResponsiveList } from '../../components/common/ResponsiveList';
 import { Tag } from '../../components/common/Tag';
 import { Notice, LoadFailure, useToast } from '../../components/feedback';
-import { ArrowLeftOutlined, CloseOutlined, DownOutlined, PlusOutlined, UpOutlined } from '../../components/icons';
+import { ArrowLeftOutlined, CloseOutlined, DownOutlined, HolderOutlined, PlusOutlined, UpOutlined } from '../../components/icons';
 import {
   MODEL_GROUPS_QUERY_KEY,
   modelGroupById,
   modelGroupRefusalCode,
   moveModelGroupMember,
   reorderModelGroupInList,
+  restoreModelOrder,
   withModelGroup,
   type ModelGroup,
   type ModelGroupList,
@@ -30,10 +32,15 @@ import styles from './ModelGroups.module.css';
 /**
  * One group's members in the operator's order.
  *
- * Reordering saves on the move and the move is optimistic: the row the operator dragged appears
- * where it will land, and a refused save puts the last stored order back under the same notice.
- * Order is the only thing this page writes optimistically because it is the only write whose
- * outcome is the click itself; add, remove and rename wait for the server and then show its answer.
+ * A move saves on the move and is optimistic: the row the operator dragged appears where it will
+ * land, and a refused save puts the last stored order back under the same notice. Order is the
+ * only write that is optimistic because it is the only one whose outcome is the gesture itself;
+ * add, remove and rename wait for the server and then show its answer.
+ *
+ * The group is one write target, so its writes are serialised: while any of them is in flight the
+ * others are disabled, and a refused reorder restores only the order rather than a whole group
+ * snapshot. Both are load-bearing. A reorder that failed after a remove succeeded used to put the
+ * removed model back on the page, and a stale snapshot can undo a rename just as easily.
  */
 export const ModelGroupDetailPage: React.FC = () => {
   const t = useT();
@@ -45,6 +52,16 @@ export const ModelGroupDetailPage: React.FC = () => {
   const [renameError, setRenameError] = React.useState<string | null>(null);
   const [failedOrder, setFailedOrder] = React.useState<string[] | null>(null);
   const [orderFailed, setOrderFailed] = React.useState(false);
+  // Native HTML5 drag, armed by the grip: the row is draggable only after its own handle is
+  // pressed, so a pointer press on a move or remove button never starts a drag.
+  const [armedModel, setArmedModel] = React.useState<string | null>(null);
+  const [draggingModel, setDraggingModel] = React.useState<string | null>(null);
+  const [dropTargetModel, setDropTargetModel] = React.useState<string | null>(null);
+  // Which edge of the target the dragged row will land on; a downward drag lands after it.
+  const [isDropAfter, setIsDropAfter] = React.useState(false);
+  // `isWriting` is the rendered state; this ref closes the same-tick window in which a second
+  // click - a double press of Retry, most likely - still sees the previous render's `false`.
+  const writeInFlight = React.useRef(false);
 
   const groupsQuery = useQuery({
     queryKey: MODEL_GROUPS_QUERY_KEY,
@@ -53,21 +70,28 @@ export const ModelGroupDetailPage: React.FC = () => {
   const group = modelGroupById(groupsQuery.data, id);
 
   const refresh = () => { void groupsQuery.refetch(); };
+  const settleList = () => { void queryClient.invalidateQueries({ queryKey: MODEL_GROUPS_QUERY_KEY }); };
 
-  const reorderMutation = useMutation<ModelGroup, unknown, string[], { previous?: ModelGroupList }>({
+  const reorderMutation = useMutation<ModelGroup, unknown, string[], { previousOrder?: string[] }>({
     mutationFn: (models) => modelGroupApi.reorder(id, models),
     onMutate: async (models) => {
       // A read that lands mid-move would replace the optimistic order with the stored one.
       await queryClient.cancelQueries({ queryKey: MODEL_GROUPS_QUERY_KEY });
-      const previous = queryClient.getQueryData<ModelGroupList>(MODEL_GROUPS_QUERY_KEY);
+      const current = queryClient.getQueryData<ModelGroupList>(MODEL_GROUPS_QUERY_KEY);
+      const previousOrder = current?.groups.find((candidate) => candidate.id === id)?.members.map((member) => member.model);
       queryClient.setQueryData<ModelGroupList>(
         MODEL_GROUPS_QUERY_KEY,
-        (current) => reorderModelGroupInList(current, id, models),
+        (cache) => reorderModelGroupInList(cache, id, models),
       );
-      return { previous };
+      return { previousOrder };
     },
     onError: (_error, models, context) => {
-      if (context?.previous) queryClient.setQueryData(MODEL_GROUPS_QUERY_KEY, context.previous);
+      if (context?.previousOrder) {
+        queryClient.setQueryData<ModelGroupList>(
+          MODEL_GROUPS_QUERY_KEY,
+          (cache) => restoreModelOrder(cache, id, context.previousOrder ?? []),
+        );
+      }
       setFailedOrder(models);
       setOrderFailed(true);
     },
@@ -76,9 +100,11 @@ export const ModelGroupDetailPage: React.FC = () => {
       setFailedOrder(null);
       queryClient.setQueryData<ModelGroupList>(
         MODEL_GROUPS_QUERY_KEY,
-        (current) => withModelGroup(current, saved),
+        (cache) => withModelGroup(cache, saved),
       );
+      settleList();
     },
+    onSettled: () => { writeInFlight.current = false; },
   });
 
   const removeMutation = useMutation({
@@ -86,11 +112,13 @@ export const ModelGroupDetailPage: React.FC = () => {
     onSuccess: (saved, model) => {
       queryClient.setQueryData<ModelGroupList>(
         MODEL_GROUPS_QUERY_KEY,
-        (current) => withModelGroup(current, saved),
+        (cache) => withModelGroup(cache, saved),
       );
+      settleList();
       toast.success(t('model_groups.removed', { model }));
     },
     onError: (error) => toast.error(t('model_groups.remove_failed'), { error }),
+    onSettled: () => { writeInFlight.current = false; },
   });
 
   const renameMutation = useMutation({
@@ -98,8 +126,9 @@ export const ModelGroupDetailPage: React.FC = () => {
     onSuccess: (saved) => {
       queryClient.setQueryData<ModelGroupList>(
         MODEL_GROUPS_QUERY_KEY,
-        (current) => withModelGroup(current, saved),
+        (cache) => withModelGroup(cache, saved),
       );
+      settleList();
       toast.success(t('model_groups.renamed', { name: saved.name }));
       setIsRenaming(false);
       setRenameError(null);
@@ -110,14 +139,52 @@ export const ModelGroupDetailPage: React.FC = () => {
         ? t('model_groups.name_conflict')
         : t('model_groups.save_failed'));
     },
+    onSettled: () => { writeInFlight.current = false; },
   });
+
+  /** The group is one write target: until the current write settles, no other one starts. */
+  const isWriting = reorderMutation.isPending || removeMutation.isPending || renameMutation.isPending;
+
+  /** Claims the group's one write slot; a same-tick second caller is refused. */
+  const beginWrite = () => {
+    if (writeInFlight.current || isWriting) return false;
+    writeInFlight.current = true;
+    return true;
+  };
+
+  const saveOrder = (models: string[]) => {
+    // Retry is a second entry point to the same write; the guard also covers a held response
+    // whose button has not re-rendered as disabled yet.
+    if (!beginWrite()) return;
+    reorderMutation.mutate(models);
+  };
 
   const move = (index: number, delta: -1 | 1) => {
     if (!group) return;
     const models = group.members.map((member) => member.model);
     const next = moveModelGroupMember(models, index, delta);
     if (next === models) return;
-    reorderMutation.mutate(next);
+    saveOrder(next);
+  };
+
+  /** Drops the dragged member into the target member's slot; the rest keep their relative order. */
+  const dropOn = (dragged: string, target: string) => {
+    if (!group || dragged === target) return;
+    const models = group.members.map((member) => member.model);
+    const from = models.indexOf(dragged);
+    const to = models.indexOf(target);
+    if (from < 0 || to < 0) return;
+    const next = [...models];
+    next.splice(from, 1);
+    next.splice(to, 0, dragged);
+    saveOrder(next);
+  };
+
+  const clearDrag = () => {
+    setArmedModel(null);
+    setDraggingModel(null);
+    setDropTargetModel(null);
+    setIsDropAfter(false);
   };
 
   const backToList = () => navigate('/model-groups');
@@ -155,7 +222,7 @@ export const ModelGroupDetailPage: React.FC = () => {
   const actions = (
     <>
       <Button icon={<ArrowLeftOutlined />} onClick={backToList}>{t('model_groups.back_to_list')}</Button>
-      <Button type="text" onClick={() => setIsRenaming(true)}>{t('model_groups.rename')}</Button>
+      <Button type="text" disabled={isWriting} onClick={() => setIsRenaming(true)}>{t('model_groups.rename')}</Button>
       <RefreshButton onRefresh={refresh} isRefreshing={groupsQuery.isFetching} />
       <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>{t('model_groups.add_models')}</Button>
     </>
@@ -165,9 +232,19 @@ export const ModelGroupDetailPage: React.FC = () => {
     {
       key: 'position',
       title: t('model_groups.position'),
-      width: 132,
-      render: (_value, _member, index) => (
+      width: 148,
+      render: (_value, member, index) => (
         <span className={styles['order-cell']}>
+          <span
+            className={styles['drag-handle']}
+            data-drag-handle={member.model}
+            role="img"
+            aria-label={t('model_groups.drag_to_reorder')}
+            onPointerDown={() => { if (!isWriting) setArmedModel(member.model); }}
+            onPointerUp={() => { if (!draggingModel) setArmedModel(null); }}
+          >
+            <HolderOutlined />
+          </span>
           <span className={styles['order-number']}>{index + 1}</span>
           {index === 0 && <Tag size="small" tone="accent">{t('model_groups.preferred')}</Tag>}
         </span>
@@ -192,7 +269,7 @@ export const ModelGroupDetailPage: React.FC = () => {
             icon={<UpOutlined />}
             aria-label={t('model_groups.move_up_model', { model: member.model })}
             data-model-move="up"
-            disabled={index === 0 || reorderMutation.isPending}
+            disabled={index === 0 || isWriting}
             onClick={() => move(index, -1)}
           />
           <Button
@@ -201,7 +278,7 @@ export const ModelGroupDetailPage: React.FC = () => {
             icon={<DownOutlined />}
             aria-label={t('model_groups.move_down_model', { model: member.model })}
             data-model-move="down"
-            disabled={index === group.members.length - 1 || reorderMutation.isPending}
+            disabled={index === group.members.length - 1 || isWriting}
             onClick={() => move(index, 1)}
           />
           <Button
@@ -211,8 +288,11 @@ export const ModelGroupDetailPage: React.FC = () => {
             icon={<CloseOutlined />}
             aria-label={t('model_groups.remove_model', { model: member.model })}
             data-model-remove={member.model}
-            disabled={removeMutation.isPending}
-            onClick={() => removeMutation.mutate(member.model)}
+            disabled={isWriting}
+            onClick={() => {
+              if (!beginWrite()) return;
+              removeMutation.mutate(member.model);
+            }}
           />
         </div>
       ),
@@ -237,7 +317,7 @@ export const ModelGroupDetailPage: React.FC = () => {
           title={t('model_groups.order_failed')}
           description={t('model_groups.order_failed_description')}
           action={failedOrder ? (
-            <Button size="small" onClick={() => reorderMutation.mutate(failedOrder)}>{t('common.retry')}</Button>
+            <Button size="small" disabled={isWriting} onClick={() => saveOrder(failedOrder)}>{t('common.retry')}</Button>
           ) : undefined}
         />
       )}
@@ -257,6 +337,42 @@ export const ModelGroupDetailPage: React.FC = () => {
           isLoading={groupsQuery.isFetching && group.members.length === 0}
           emptyText={t('model_groups.members_empty_title')}
           phone={{ identity: 'model', actions: ['actions'] }}
+          tableProps={{
+            rowClassName: (member) => clsx(
+              draggingModel === member.model && styles['is-dragging'],
+              dropTargetModel === member.model && (isDropAfter ? styles['is-drop-after'] : styles['is-drop-before']),
+            ),
+            onRow: (member) => ({
+              draggable: !isWriting && armedModel === member.model,
+              onDragStart: (event) => {
+                if (isWriting || armedModel !== member.model) return;
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', member.model);
+                setDraggingModel(member.model);
+              },
+              onDragOver: (event) => {
+                if (!draggingModel || draggingModel === member.model || isWriting) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                const from = group.members.findIndex((candidate) => candidate.model === draggingModel);
+                const to = group.members.findIndex((candidate) => candidate.model === member.model);
+                setDropTargetModel(member.model);
+                setIsDropAfter(from < to);
+              },
+              onDragLeave: (event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setDropTargetModel((current) => (current === member.model ? null : current));
+                }
+              },
+              onDrop: (event) => {
+                event.preventDefault();
+                if (!draggingModel || isWriting) return;
+                dropOn(draggingModel, member.model);
+                clearDrag();
+              },
+              onDragEnd: clearDrag,
+            }),
+          }}
         />
       )}
 
@@ -266,11 +382,14 @@ export const ModelGroupDetailPage: React.FC = () => {
         initialName={group.name}
         groups={groupsQuery.data?.groups ?? []}
         exceptId={group.id}
-        isSaving={renameMutation.isPending}
+        isSaving={isWriting}
         serverError={renameError}
         onDraftChange={() => setRenameError(null)}
         onCancel={() => { setIsRenaming(false); setRenameError(null); }}
-        onSubmit={(name) => renameMutation.mutate(name)}
+        onSubmit={(name) => {
+          if (!beginWrite()) return;
+          renameMutation.mutate(name);
+        }}
       />
     </div>
   );

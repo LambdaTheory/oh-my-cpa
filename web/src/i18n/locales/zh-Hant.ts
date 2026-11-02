@@ -3892,4 +3892,5 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "model_groups.members_empty_title": "這個組還沒有模型",
   "model_groups.members_empty_description": "加入模型後可以手動調整順序。",
   "model_groups.all_added": "這個組已經包含閘道裡的所有模型",
+  "model_groups.drag_to_reorder": "拖動調整順序",
 };

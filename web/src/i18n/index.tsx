@@ -4247,6 +4247,7 @@ const DICT: Record<string, [string, string]> = {
   'model_groups.candidates_empty': ['没有匹配的模型', 'No matching models'],
   'model_groups.no_candidates': ['网关里还没有可加的模型', 'The gateway has no models to add'],
   'model_groups.all_added': ['这个组已经包含网关里的所有模型', 'This group already holds every model the gateway serves'],
+  'model_groups.drag_to_reorder': ['拖动调整顺序', 'Drag to reorder'],
   'model_groups.candidates_load_failed': ['无法读取可选模型', 'Could not read the available models'],
   'model_groups.alias_multiple': ['别名 · 指向多个上游', 'Alias · several upstreams'],
   'model_groups.position': ['顺序', 'Order'],

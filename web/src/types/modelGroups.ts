@@ -132,6 +132,35 @@ export function reorderModelGroupInList(
   };
 }
 
+/**
+ * The list after a refused reorder, with only that group's order put back.
+ *
+ * A rollback that restored a whole group snapshot would also undo a rename, a member removal
+ * or an add that landed after the snapshot was taken - and a page that calls a removed model
+ * back is worse than one that leaves a moved row where it landed. The order is therefore
+ * intersected with the membership the group holds now, and any member this order has never
+ * seen stays appended rather than disappearing.
+ */
+export function restoreModelOrder(
+  list: ModelGroupList | undefined,
+  id: string,
+  order: readonly string[],
+): ModelGroupList {
+  if (!list) return { groups: [] };
+  return {
+    groups: list.groups.map((group) => {
+      if (group.id !== id) return group;
+      const present = group.members.map((member) => member.model);
+      const presentSet = new Set(present);
+      const restored = order.filter((model) => presentSet.has(model));
+      for (const model of present) {
+        if (!restored.includes(model)) restored.push(model);
+      }
+      return withModelOrder(group, restored);
+    }),
+  };
+}
+
 /** The server's stable refusal code, when the failure carried one. */
 export function modelGroupRefusalCode(error: unknown): string | undefined {
   const data = (error as { data?: unknown } | null)?.data;

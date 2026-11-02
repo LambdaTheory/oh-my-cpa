@@ -66,7 +66,11 @@ export const ModelGroupNameDialog: React.FC<ModelGroupNameDialogProps> = ({
 
   const error = localError ? t(NAME_ERROR_KEYS[localError], { limit: MODEL_GROUP_NAME_LIMIT }) : serverError || undefined;
 
+  // Every submission path - the button, Enter, the modal's own confirm - goes through here.
+  // A held response keeps the first request in flight while the draft is already invalidated
+  // input, so a second Enter must be a no-op rather than a second create or rename.
   const submit = () => {
+    if (isSaving) return;
     const refusal = modelGroupNameError(name, groups, exceptId);
     if (refusal) {
       setLocalError(refusal);
@@ -75,16 +79,23 @@ export const ModelGroupNameDialog: React.FC<ModelGroupNameDialogProps> = ({
     onSubmit(name.trim());
   };
 
+  const requestClose = () => {
+    if (!isSaving) onCancel();
+  };
+
   return (
     <Modal
       open={open}
       title={t(mode === 'create' ? 'model_groups.create_title' : 'model_groups.rename_title')}
       destroyOnHidden
-      onCancel={onCancel}
+      closable={!isSaving}
+      mask={{ closable: !isSaving }}
+      keyboard={!isSaving}
+      onCancel={requestClose}
       onOk={submit}
       footer={[
-        <Button key="cancel" onClick={onCancel} disabled={isSaving}>{t('common.cancel')}</Button>,
-        <Button key="save" type="primary" loading={isSaving} onClick={submit}>
+        <Button key="cancel" onClick={requestClose} disabled={isSaving}>{t('common.cancel')}</Button>,
+        <Button key="save" type="primary" loading={isSaving} disabled={isSaving} onClick={submit}>
           {mode === 'create' ? t('model_groups.create') : t('common.save')}
         </Button>,
       ]}
@@ -93,6 +104,7 @@ export const ModelGroupNameDialog: React.FC<ModelGroupNameDialogProps> = ({
       <Input
         id="model-group-name"
         autoFocus
+        disabled={isSaving}
         value={name}
         status={error ? 'error' : undefined}
         placeholder={t('model_groups.name_placeholder')}

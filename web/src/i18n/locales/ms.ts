@@ -3892,4 +3892,5 @@ export const MS: Readonly<Record<string, string>> = {
   "model_groups.members_empty_title": "Kumpulan ini belum ada model",
   "model_groups.members_empty_description": "Tambah model, kemudian susun urutannya.",
   "model_groups.all_added": "Kumpulan ini sudah mengandungi semua model yang disediakan gateway.",
+  "model_groups.drag_to_reorder": "Seret untuk menyusun semula",
 };

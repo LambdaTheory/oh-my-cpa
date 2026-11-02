@@ -95,8 +95,9 @@ metadata rather than replacing it. No real group, mailbox or browser participate
 The console pages add three claims. `scripts/test-model-groups.ts` owns the name rules,
 the ordering arithmetic and the independence of two groups' positions as pure functions;
 `web/tests/model-groups.component.test.tsx` owns the rendered decisions a function cannot
-show - an optimistic move, the rollback and notice when a save is refused, and a duplicate
-name refused before a request is sent; and the `model-groups` probe owns the cross-route
+show - an optimistic drag and keyboard move, a refused save that restores only the order while
+the group's writes serialise, and a name that cannot be submitted twice while the first answer
+is held; and the `model-groups` probe owns the cross-route
 journey (create, add, reorder, reload, two groups' independent orders), delete-all then
 restore, the rail entry, and the three surfaces fitting a 375px content pane.
 

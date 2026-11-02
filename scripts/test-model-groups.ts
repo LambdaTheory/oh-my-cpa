@@ -7,6 +7,7 @@ import {
   modelGroupRefusalCode,
   moveModelGroupMember,
   reorderModelGroupInList,
+  restoreModelOrder,
   withModelGroup,
   withModelOrder,
   withoutModelGroup,
@@ -77,6 +78,20 @@ test('one group’s order is independent of the same model in another group', ()
   assert.deepEqual(next.groups[0].members.map((member) => member.model), ['claude', 'gpt-5']);
   assert.deepEqual(next.groups[1].members.map((member) => member.model), ['gpt-5', 'claude']);
   assert.deepEqual(next.groups[1].members.map((member) => member.position), [1, 2]);
+});
+
+test('a refused order restores only the order, not the membership that changed since', () => {
+  const labor = group('a', 'Labor', ['gpt-5', 'claude']);
+  const review = group('b', 'Review', ['gpt-5']);
+  // The order was captured when the group held gpt-5 and claude; since then gpt-5 was removed and
+  // kimi was added. A whole-snapshot rollback would resurrect gpt-5 and drop kimi.
+  labor.members = labor.members.filter((member) => member.model !== 'gpt-5');
+  labor.members.push({ model: 'kimi', position: 2, added_at_ms: 9 });
+  const restored = restoreModelOrder({ groups: [labor, review] }, 'a', ['gpt-5', 'claude']);
+  assert.deepEqual(restored.groups[0].members.map((member) => member.model), ['claude', 'kimi']);
+  assert.deepEqual(restored.groups[0].members.map((member) => member.position), [1, 2]);
+  // The other group is untouched.
+  assert.deepEqual(restored.groups[1].members.map((member) => member.model), ['gpt-5']);
 });
 
 test('a write’s answer replaces the stored group, appends a new one, and a delete removes only it', () => {
