@@ -582,3 +582,49 @@ func TestModelGroupsModelsAverageUsageCountsForwardReset(t *testing.T) {
 		t.Fatalf("average usage = %v, want 60 from the new cycle", got)
 	}
 }
+
+// Accounts whose readings only touch opposite edges of the common span cannot
+// measure it: each account's one increment crosses a boundary and is discarded.
+// That is missing history, not a proven zero.
+func TestModelGroupsModelsAverageUsageStaggeredSamplingIsUnknown(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok")
+	day := int64(24 * 60 * 60 * 1000)
+	weekStart := nowMS - int64(modelGroupsUsageDays)
+	insertGroupObservation(t, service.Repo, "auth-model-ok", 0, weekStart, 0)
+	insertGroupObservation(t, service.Repo, "auth-model-ok", 20, weekStart+2*day, 1)
+	insertGroupObservation(t, service.Repo, "auth-model-ok-2", 0, weekStart+day, 2)
+	insertGroupObservation(t, service.Repo, "auth-model-ok-2", 20, weekStart+3*day, 3)
+	directory, credentials, quotas := service.modelGroupAdviceInputs(ctx)
+	credentials = append(credentials, AdviceCredential{AuthIndex: "auth-model-ok-2", Provider: "claude", ProviderID: "provider-1", Models: []string{"upstream-model-ok"}})
+	quotas = append(quotas, Quota{AuthIndex: "auth-model-ok-2", Provider: "claude", Status: "healthy", ObservedAtMS: nowMS - 1000,
+		Windows: []quota.QuotaWindow{{Label: "Weekly", Kind: "weekly", Scope: "standard", UsedPercent: advicePercent(20), RemainingPercent: advicePercent(80)}}})
+	usage := service.modelGroupAverageUsage(ctx, []string{"model-ok"}, directory, credentials, quotas, nowMS)
+	if usage["model-ok"] != nil {
+		t.Fatalf("average usage = %v, want null when both increments cross the common interval's edges", *usage["model-ok"])
+	}
+}
+
+// Steady readings through the common span are a real zero, not missing history:
+// every account is observed across the span and nothing moved.
+func TestModelGroupsModelsAverageUsageSteadyZeroIsZero(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok")
+	day := int64(24 * 60 * 60 * 1000)
+	weekStart := nowMS - int64(modelGroupsUsageDays)
+	for index := 0; index <= 3; index++ {
+		insertGroupObservation(t, service.Repo, "auth-model-ok", 10, weekStart+int64(index)*day, index)
+		insertGroupObservation(t, service.Repo, "auth-model-ok-2", 10, weekStart+int64(index)*day, index+10)
+	}
+	directory, credentials, quotas := service.modelGroupAdviceInputs(ctx)
+	credentials = append(credentials, AdviceCredential{AuthIndex: "auth-model-ok-2", Provider: "claude", ProviderID: "provider-1", Models: []string{"upstream-model-ok"}})
+	quotas = append(quotas, Quota{AuthIndex: "auth-model-ok-2", Provider: "claude", Status: "healthy", ObservedAtMS: nowMS - 1000,
+		Windows: []quota.QuotaWindow{{Label: "Weekly", Kind: "weekly", Scope: "standard", UsedPercent: advicePercent(10), RemainingPercent: advicePercent(90)}}})
+	usage := service.modelGroupAverageUsage(ctx, []string{"model-ok"}, directory, credentials, quotas, nowMS)
+	if usage["model-ok"] == nil {
+		t.Fatal("steady readings through the common span must be a measured zero")
+	}
+	if got := *usage["model-ok"]; got != 0 {
+		t.Fatalf("average usage = %v, want 0 for steady readings", got)
+	}
+}

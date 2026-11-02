@@ -471,11 +471,21 @@ func groupUsageCoverage(buckets []repository.QuotaObservationBucket) (firstMS, l
 	return firstMS, lastMS, count >= 2
 }
 
+// modelGroupUsageShare is one account's consumption inside the common span and
+// the span its own readings actually cover there.
+type modelGroupUsageShare struct {
+	total    float64
+	firstMS  int64
+	lastMS   int64
+	readings int
+}
+
 // combinedGroupDailyUsage merges the accounts on one interval and one
-// denominator: the span every account covers. Consumption is counted only
-// between two readings that both fall inside that span, so a longer history
-// cannot contribute more than a shorter one and the rate is not the sum of
-// differently timed daily means.
+// denominator: the span every account covers. Each account's readings inside
+// that span must themselves cover at least half of it; otherwise its only
+// increment crosses an edge and is discarded, and the result would be a
+// confident zero standing for missing history. A genuine steady zero keeps its
+// readings through the span and stays measurable.
 func combinedGroupDailyUsage(series []modelGroupUsageSeries) (float64, bool) {
 	if len(series) == 0 {
 		return 0, false
@@ -493,14 +503,19 @@ func combinedGroupDailyUsage(series []modelGroupUsageSeries) (float64, bool) {
 			endMS = lastMS
 		}
 	}
-	if endMS-startMS < modelGroupsUsageMinimumCoverage {
+	span := endMS - startMS
+	if span < modelGroupsUsageMinimumCoverage {
 		return 0, false
 	}
 	total := 0.0
 	for _, item := range series {
-		total += groupUsageWithin(item.buckets, item.periodMS, startMS, endMS)
+		share := groupUsageWithin(item.buckets, item.periodMS, startMS, endMS)
+		if share.readings < 2 || (share.lastMS-share.firstMS)*2 < span {
+			return 0, false
+		}
+		total += share.total
 	}
-	days := float64(endMS-startMS) / float64(24*60*60*1000)
+	days := float64(span) / float64(24*60*60*1000)
 	if days > 7 {
 		days = 7
 	}
@@ -513,9 +528,11 @@ func combinedGroupDailyUsage(series []modelGroupUsageSeries) (float64, bool) {
 // groupUsageWithin adds the consumption an account recorded between two
 // readings that are both inside [startMS, endMS]. The first reading inside the
 // span has no in-span predecessor, so the increment that crosses the boundary
-// is skipped rather than attributed partly to the common window.
-func groupUsageWithin(buckets []repository.QuotaObservationBucket, periodMS, startMS, endMS int64) float64 {
-	var total float64
+// is skipped rather than attributed partly to the common window. It also
+// reports the span the in-window readings cover, which is what tells a real
+// zero apart from too little history.
+func groupUsageWithin(buckets []repository.QuotaObservationBucket, periodMS, startMS, endMS int64) modelGroupUsageShare {
+	var share modelGroupUsageShare
 	var previous *repository.QuotaObservationBucket
 	for index := range buckets {
 		bucket := &buckets[index]
@@ -525,19 +542,30 @@ func groupUsageWithin(buckets []repository.QuotaObservationBucket, periodMS, sta
 		if bucket.LastObservedAtMS > endMS {
 			break
 		}
+		if bucket.LastObservedAtMS < startMS {
+			previous = bucket
+			continue
+		}
+		if share.readings == 0 || bucket.LastObservedAtMS < share.firstMS {
+			share.firstMS = bucket.LastObservedAtMS
+		}
+		if bucket.LastObservedAtMS > share.lastMS {
+			share.lastMS = bucket.LastObservedAtMS
+		}
+		share.readings++
 		if previous != nil && previous.LastObservedAtMS >= startMS {
 			switch {
 			case groupUsageReset(*previous, *bucket, periodMS):
 				if bucket.LastUsedPercent > 0 {
-					total += bucket.LastUsedPercent
+					share.total += bucket.LastUsedPercent
 				}
 			case bucket.LastUsedPercent > previous.LastUsedPercent:
-				total += bucket.LastUsedPercent - previous.LastUsedPercent
+				share.total += bucket.LastUsedPercent - previous.LastUsedPercent
 			}
 		}
 		previous = bucket
 	}
-	return total
+	return share
 }
 
 // groupUsageReset reports whether current starts a new cycle relative to

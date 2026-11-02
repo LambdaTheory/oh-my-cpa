@@ -813,8 +813,9 @@ inside that span divided by its length. A percentage drop, or a reset instant
 that advances by more than half the window's period, starts a new cycle: usage
 before it is not subtracted from usage after it. The figure is null rather than
 partial when a serving account has no reading, no relevant window, too little or
-unreadable history, and when the common span is under a day; an ambiguous route
-is null too. Account-level windows are shared by every model on the account, so
+unreadable history, when its readings inside the common span cover less than
+half of it (so the rate would rest on an increment that crossed the boundary),
+and when the common span is under a day; an ambiguous route is null too. Account-level windows are shared by every model on the account, so
 a model without a model-scoped window reports the account's consumption, the
 same way advice treats that window as applying to each model.
 
