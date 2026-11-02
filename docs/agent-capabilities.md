@@ -331,6 +331,9 @@ a new capability must not add them:
   stay console-only because either can carry credential material into a preview;
 - approval, secret submission, or OAuth completion for an operation an external agent
   prepared.
+- creating, renaming or deleting a model group, or changing its members: groups are operator
+  decisions, so agents can read them (`model_groups_list`, `model_groups_models`) but never
+  write them.
 - which entries this console's rail shows: it is console state stored in the preferences
   document rather than a deployment capability, no capability reads or writes it, and the pages
   it hides stay reachable by URL.
@@ -760,6 +763,69 @@ history and unavailable usage return `scope_unknown`, `history_unavailable` and
 history, changed scopes/periods and early-reset cycles do not produce one. Costs use
 request-time prices and require 95% priced-request coverage; error percentages describe
 rounding only and must not be presented as statistical confidence. See ADR 0059.
+
+### Model groups
+
+Model groups are the operator's ordered lists of client-requested model names,
+one list per kind of work (for example 力工组 for bulk jobs). They are created
+and edited only in the console; two low-risk reads on Agent and MCP, including
+the read-only MCP key, expose them to a caller:
+
+- `model_groups_list` takes no parameters and returns every group as `name` and
+  `member_count`, in the console's order (presets first). It carries no member
+  names: those belong to the per-group read.
+- `model_groups_models` takes `group`, the operator's name for the group, and
+  returns `group`, `is_found`, `reason`, `models` and `omitted`. Names are
+  matched case-insensitively. A group that does not exist is a successful result
+  with `is_found: false` and `reason: "model_group_not_found"`, not an error and
+  not a silent empty list. An existing group with no members returns
+  `reason: "model_group_empty"` and an empty `models` array.
+
+Each member carries `model` (the name a client requests), `availability`,
+`average_usage_percent` (null when no usable history exists), `position` (the
+operator's 1-based order) and `is_preferred` (position 1). `availability` is one
+of four bands, mapped from `model_advice`'s verdict for the same name and the
+same evidence - this projection adds no second availability rule, so the two
+tools cannot disagree:
+
+| Band | `model_advice` verdict | Meaning |
+| --- | --- | --- |
+| `available` | `ok` | a fresh reading with room |
+| `tight` | `caution` | usable but nearly spent |
+| `unknown` | `unknown` | no usable reading, or an ambiguous route |
+| `unavailable` | `avoid` | spent or blocked for every matching account |
+
+The list is ordered by band (available, tight, unknown, unavailable) and then by
+the operator's position, so a caller can take the first usable model without
+sorting. Two members with the same band and position are ordered by model name,
+which keeps repeated reads identical. Unusable members are always returned, last:
+a caller can see why a model was not recommended instead of mistaking it for a
+model that is not in the group.
+
+`average_usage_percent` is the seven-day daily consumption of the relevant quota
+window, in percentage points per day. It is read from stored quota observation
+history, never by probing an upstream endpoint. Each account serving the model
+contributes one window - the most precise relevant one (a model-scoped window
+over an account-wide one), the longest period when both are equal. The accounts
+are merged on one effective span: the span between the earliest and the latest
+reading instants every serving account holds within the rolling seven days. Only
+increments whose two readings both lie inside that span are counted, so the
+denominator is tiled exactly by measured intervals and no part of it rests on a
+boundary slice that only belongs to a longer increment; interior sampling may be
+staggered. A percentage drop, or a reset instant that advances by more than half
+the window's period, starts a new cycle: usage before it is not subtracted from
+usage after it. The figure is null rather than partial when a serving account has
+no reading, no relevant window, too little or unreadable history, when the
+accounts share fewer than two reading instants or their span is under a day, or
+when the route is ambiguous. Account-level windows are shared by every model on the account, so
+a model without a model-scoped window reports the account's consumption, the
+same way advice treats that window as applying to each model.
+
+The result reveals no account name, credential identity, provider routing detail,
+reason, reset time or data age. Both reads are bounded: at most 100 groups or
+members are returned, with `omitted` counting the remainder, and the result
+still fits the capability's 32 KiB budget. Writes are deliberately absent - a
+group is a human judgement and the console is where it changes.
 
 ### Passive quota observations
 

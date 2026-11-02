@@ -159,6 +159,58 @@ func (r *Repository) ListModelGroups(ctx context.Context) ([]ModelGroup, error) 
 	return groups, nil
 }
 
+// GetModelGroupByName resolves the group a reader names, rather than the id the
+// console carries. Names are unique case-insensitively, so a caller's spelling of
+// the same name reaches the same group; a group the operator renamed is simply
+// absent under the name that no longer exists.
+func (r *Repository) GetModelGroupByName(ctx context.Context, name string) (ModelGroup, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ModelGroup{}, ErrModelGroupNotFound
+	}
+	groups, err := r.ListModelGroups(ctx)
+	if err != nil {
+		return ModelGroup{}, err
+	}
+	for _, group := range groups {
+		if equalModelGroupName(group.Name, name) {
+			return group, nil
+		}
+	}
+	return ModelGroup{}, ErrModelGroupNotFound
+}
+
+// equalModelGroupName applies SQLite's NOCASE collation, which folds ASCII
+// letters only. Unicode folding would match a group the unique index treats as
+// a different group (Équipe and équipe may coexist), making the second one
+// unreachable by its own name.
+func equalModelGroupName(left, right string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := 0; index < len(left); index++ {
+		first, second := left[index], right[index]
+		if first == second {
+			continue
+		}
+		if !isASCIILetter(first) || !isASCIILetter(second) || asciiLower(first) != asciiLower(second) {
+			return false
+		}
+	}
+	return true
+}
+
+func isASCIILetter(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+}
+
+func asciiLower(value byte) byte {
+	if value >= 'A' && value <= 'Z' {
+		return value + 'a' - 'A'
+	}
+	return value
+}
+
 func (r *Repository) GetModelGroup(ctx context.Context, id string) (ModelGroup, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
