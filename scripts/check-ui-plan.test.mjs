@@ -386,7 +386,7 @@ test('phone source editing and backup dialogs are selected by shared overlay and
   }
   assert.deepEqual(planFor('web/src/hooks/useIsPhoneViewport.ts'), [
     'agent-narrow', 'playground-narrow', 'touch-ergonomics', 'phone-lists',
-    'config-source-editor', 'config-backups', 'model-square', 'mobile-console',
+    'config-source-editor', 'config-backups', 'model-square', 'model-groups', 'mobile-console',
   ]);
   // A source-only decision must not schedule unrelated conversation checks.
   assert.deepEqual(planFor('web/src/components/config/sourceWrap.ts'), ['phone-lists', 'config-source-editor', 'config-backups', 'mobile-console']);

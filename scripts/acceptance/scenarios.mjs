@@ -1,4 +1,5 @@
 import { modelSquare, modelSquareFixtures, modelSquareLedgerFixtures } from './probes/modelSquare.mjs';
+import { modelGroups, modelGroupsFixtures } from './probes/modelGroups.mjs';
 import { mobileConsole } from './probes/mobileConsole.mjs';
 import { routeRenderError, routeLazyError } from './probes/routeError.mjs';
 import { agentWorkspace, agentExternal, agentFailureCopy, agentStream, agentNarrow, agentLive, agentQuestion, agentViews, agentReplace, agentAttach, agentFixtures } from './probes/agent.mjs';
@@ -964,6 +965,12 @@ export const SCENARIOS = [
     name: 'advertised models form maker sections with copyable call names, price and request linkage, details and native Back',
     options: { routes: [...modelSquareFixtures(), ...modelSquareLedgerFixtures()] },
     run: modelSquare,
+  },
+  {
+    id: 'model-groups',
+    name: 'the console names model groups, fills and orders them independently, restores the presets and fits a phone',
+    options: { routes: modelGroupsFixtures() },
+    run: modelGroups,
   },
   {
     id: 'mobile-console',

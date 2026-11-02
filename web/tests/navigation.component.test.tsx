@@ -17,7 +17,7 @@ describe('Navigation Groups', () => {
     const operateGroup = staticNavGroups.find(group => group.key === 'operate');
     expect(operateGroup).toBeDefined();
     const operateKeys = operateGroup?.items.map(item => item.key);
-    expect(operateKeys).toEqual(['/dashboard', '/agent', '/model-square']);
+    expect(operateKeys).toEqual(['/dashboard', '/agent', '/model-square', '/model-groups']);
   });
 
   it('does not contain /playground when plugin pages are merged', () => {

@@ -143,7 +143,7 @@ const SCENARIO_PATHS = [
   // SHELL_PATHS because it is about the rules those files carry, not about every scenario.
   {
     prefix: 'web/src/hooks/useIsPhoneViewport',
-    scenarios: ['phone-lists', 'touch-ergonomics', 'agent-narrow', 'playground-narrow', 'config-source-editor', 'config-backups', 'model-square', 'mobile-console'],
+    scenarios: ['phone-lists', 'touch-ergonomics', 'agent-narrow', 'playground-narrow', 'config-source-editor', 'config-backups', 'model-square', 'model-groups', 'mobile-console'],
   },
   {
     prefix: 'web/src/components/common/PhoneRow',
@@ -230,6 +230,8 @@ const SCENARIO_PATHS = [
   { prefix: 'web/src/types/configSchema', scenarios: ['config-source-editor', 'phone-lists', 'mobile-console'] },
   { prefix: 'web/src/pages/ModelSquarePage', scenarios: ['model-square', 'mobile-console'] },
   { prefix: 'web/src/types/modelSquare', scenarios: ['model-square', 'mobile-console'] },
+  { prefix: 'web/src/pages/modelGroups/', scenarios: ['model-groups'] },
+  { prefix: 'web/src/types/modelGroups', scenarios: ['model-groups'] },
   // The key list page: the phone rendering, the touch rules and the modal Back dismissal
   // each load `/api-keys`.
   { prefix: 'web/src/pages/ApiKeysPage', scenarios: ['phone-lists', 'touch-ergonomics', 'overlay-back', 'mobile-console'] },

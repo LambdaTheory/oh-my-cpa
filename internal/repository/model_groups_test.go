@@ -473,3 +473,37 @@ func TestModelGroupWritesSurviveAReopen(t *testing.T) {
 	}
 	assertMembers(t, reread, []string{"m1", "m2"})
 }
+
+// SQLite's NOCASE collation folds ASCII letters only, so Équipe and équipe are
+// two legal, distinct groups. Resolving a name must use the same rule as the
+// uniqueness constraint; Unicode case folding would make the second group
+// unreachable by its own name.
+func TestModelGroupNameLookupMatchesDatabaseCaseFolding(t *testing.T) {
+	repo, ctx := modelGroupRepo(t)
+	nowMS := int64(2_000_000_000_000)
+	upper, err := repo.CreateModelGroup(ctx, "Équipe", nowMS, testAudit("model_group.create"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := repo.CreateModelGroup(ctx, "équipe", nowMS, testAudit("model_group.create"))
+	if err != nil {
+		t.Fatalf("SQLite NOCASE must allow a group differing only in non-ASCII case: %v", err)
+	}
+	if upper.ID == lower.ID {
+		t.Fatal("the two groups share an id")
+	}
+	for _, test := range []struct{ query, want string }{
+		{"Équipe", "Équipe"},
+		{"équipe", "équipe"},
+		{"éQUIPE", "équipe"},
+		{"ÉQUIPE", "Équipe"},
+	} {
+		group, err := repo.GetModelGroupByName(ctx, test.query)
+		if err != nil {
+			t.Fatalf("lookup %q: %v", test.query, err)
+		}
+		if group.Name != test.want {
+			t.Errorf("lookup %q returned %q, want %q", test.query, group.Name, test.want)
+		}
+	}
+}
