@@ -806,15 +806,17 @@ model that is not in the group.
 window, in percentage points per day. It is read from stored quota observation
 history, never by probing an upstream endpoint. Each account serving the model
 contributes one window - the most precise relevant one (a model-scoped window
-over an account-wide one), the longest period when both are equal - and its
-daily rate; the member's figure is the sum of those rates, so several accounts
-are merged before the average rather than reported as several numbers. A drop or
-a later reset starts a new cycle: usage before it is not subtracted from usage
-after it. Less than a day of covered history, incomplete history, an ambiguous
-route or no reading leaves the figure null rather than zero. Account-level
-windows are shared by every model on the account, so a model without a
-model-scoped window reports the account's consumption, the same way advice
-treats that window as applying to each model.
+over an account-wide one), the longest period when both are equal. The accounts
+are merged on one timeline: the common span every serving account covers within
+the rolling seven days, and the member's figure is their combined consumption
+inside that span divided by its length. A percentage drop, or a reset instant
+that advances by more than half the window's period, starts a new cycle: usage
+before it is not subtracted from usage after it. The figure is null rather than
+partial when a serving account has no reading, no relevant window, too little or
+unreadable history, and when the common span is under a day; an ambiguous route
+is null too. Account-level windows are shared by every model on the account, so
+a model without a model-scoped window reports the account's consumption, the
+same way advice treats that window as applying to each model.
 
 The result reveals no account name, credential identity, provider routing detail,
 reason, reset time or data age. Both reads are bounded: at most 100 groups or

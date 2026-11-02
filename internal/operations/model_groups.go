@@ -157,11 +157,25 @@ func (s *Service) modelGroupModels(ctx context.Context, input ModelGroupsModelsI
 	}
 	nowMS := capability.AnchorMS(ctx)
 	directory, credentials, quotas := s.modelGroupAdviceInputs(ctx)
-	advice := ProjectModelAdvice(ModelAdviceInput{Models: names}, directory, quotas, credentials, nowMS, s.AdviceBlocked)
+	advice := projectModelGroupAdvice(names, directory, quotas, credentials, nowMS, s.AdviceBlocked)
 	usage := s.modelGroupAverageUsage(ctx, names, directory, credentials, quotas, nowMS)
 	result.Models = projectModelGroupModels(members, advice, usage)
 	boundModelGroupsModels(&result)
 	return result, nil
+}
+
+// projectModelGroupAdvice asks ProjectModelAdvice for one member at a time.
+// That projection bounds its own result to model_advice's 50-row / 32 KiB
+// capability budget; a single-member call cannot reach that bound, so a group
+// of up to modelGroupsMemberLimit keeps, for every member, the verdict
+// model_advice would give that model on its own.
+func projectModelGroupAdvice(models []string, directory ModelSquareDirectory, quotas []Quota, credentials []AdviceCredential, nowMS int64, isBlocked func(string, string) bool) ModelAdviceResult {
+	result := ModelAdviceResult{Models: []ModelAdviceItem{}, GeneratedAtMS: nowMS}
+	for _, model := range models {
+		single := ProjectModelAdvice(ModelAdviceInput{Models: []string{model}}, directory, quotas, credentials, nowMS, isBlocked)
+		result.Models = append(result.Models, single.Models...)
+	}
+	return result
 }
 
 // modelGroupAdviceInputs reads the same three sources model_advice uses and
@@ -246,11 +260,19 @@ func boundModelGroupsModels(result *ModelGroupsModelsResult) {
 	}
 }
 
+// modelGroupUsageSeries is one account's window history, read once and shared
+// by every member that points at the same window.
+type modelGroupUsageSeries struct {
+	buckets  []repository.QuotaObservationBucket
+	periodMS int64
+}
+
 // modelGroupAverageUsage computes each member's seven-day daily usage from the
 // stored quota observation history. The PRD's "merge accounts, then average"
-// means: sum what every account serving the model consumed per day, and divide
-// by the covered days. A member whose accounts have no usable history is left
-// nil rather than reported as zero.
+// means: sum every serving account's consumption inside the interval all of
+// them cover, then divide by that interval's length. A member is nil when any
+// serving account lacks usable history - a partial account would present part
+// of the model's usage as the whole figure.
 func (s *Service) modelGroupAverageUsage(ctx context.Context, models []string, directory ModelSquareDirectory, credentials []AdviceCredential, quotas []Quota, nowMS int64) map[string]*float64 {
 	usage := make(map[string]*float64, len(models))
 	if s.Repo == nil || len(credentials) == 0 || len(quotas) == 0 {
@@ -270,43 +292,54 @@ func (s *Service) modelGroupAverageUsage(ctx context.Context, models []string, d
 	}
 	// A standard window is shared by every model a credential serves, so its
 	// history is read once and reused for each member that points at it.
-	rates := map[string]float64{}
+	seriesByKey := map[string]modelGroupUsageSeries{}
+	unreadable := map[string]bool{}
 	fromMS := nowMS - modelGroupsUsageDays
 	for _, model := range models {
 		upstream, resolved := modelGroupUpstream(routes[model])
 		if !resolved {
 			continue
 		}
-		total := 0.0
-		found := false
+		modelSeries := []modelGroupUsageSeries{}
+		serving, complete := 0, true
 		for _, credential := range credentials {
 			if !modelGroupCredentialServes(model, upstream, routes[model], providers, credential) {
 				continue
 			}
+			serving++
 			reading, ok := quotaByIndex[credential.AuthIndex]
 			if !ok {
-				continue
+				complete = false
+				break
 			}
 			window, ok := modelGroupUsageWindow(reading.Windows, upstream)
 			if !ok {
-				continue
+				complete = false
+				break
 			}
 			key := strings.Join([]string{credential.AuthIndex, reading.Provider, modelGroupWindowKind(window), window.Scope, window.Model}, "\x00")
-			rate, cached := rates[key]
-			if !cached {
-				ok := false
-				rate, ok = s.modelGroupWindowDailyUsage(ctx, credential.AuthIndex, reading.Provider, window, fromMS, nowMS)
-				if !ok {
-					continue
-				}
-				rates[key] = rate
+			if unreadable[key] {
+				complete = false
+				break
 			}
-			total += rate
-			found = true
+			series, cached := seriesByKey[key]
+			if !cached {
+				series, ok = s.modelGroupWindowUsageSeries(ctx, credential.AuthIndex, reading.Provider, window, fromMS, nowMS)
+				if !ok {
+					unreadable[key] = true
+					complete = false
+					break
+				}
+				seriesByKey[key] = series
+			}
+			modelSeries = append(modelSeries, series)
 		}
-		if found {
-			value := roundGroupUsage(total)
-			usage[model] = &value
+		if serving == 0 || !complete {
+			continue
+		}
+		if value, ok := combinedGroupDailyUsage(modelSeries); ok {
+			rounded := roundGroupUsage(value)
+			usage[model] = &rounded
 		}
 	}
 	return usage
@@ -397,29 +430,33 @@ func modelGroupWindowKind(window quota.QuotaWindow) string {
 	return inferAdviceWindowKind(window)
 }
 
-// modelGroupWindowDailyUsage is the seven-day daily consumption of one
-// account's window, in percentage points per day. A drop or a later reset means
-// the cycle restarted, so the reading after it is usage in the new cycle and
-// the reading before it is never subtracted from it.
-func (s *Service) modelGroupWindowDailyUsage(ctx context.Context, authIndex, provider string, window quota.QuotaWindow, fromMS, toMS int64) (float64, bool) {
+// modelGroupWindowUsageSeries reads one account's window history over the
+// rolling seven days. Overflow or a read failure leaves the series unusable,
+// which makes the member's average null rather than partial.
+func (s *Service) modelGroupWindowUsageSeries(ctx context.Context, authIndex, provider string, window quota.QuotaWindow, fromMS, toMS int64) (modelGroupUsageSeries, bool) {
 	limit := int(modelGroupsUsageDays/quota.PredictionBucketMS) + 2
 	buckets, hasMore, err := s.Repo.ListQuotaObservationBuckets(ctx, repository.QuotaObservationBucketFilter{
 		AuthIndex: authIndex, Provider: provider, WindowKind: modelGroupWindowKind(window),
 		Scope: window.Scope, Model: window.Model, FromMS: fromMS, ToMS: toMS,
 	}, limit)
 	if err != nil || hasMore {
-		return 0, false
+		return modelGroupUsageSeries{}, false
 	}
-	return averageGroupDailyUsage(buckets)
+	if _, _, ok := groupUsageCoverage(buckets); !ok {
+		return modelGroupUsageSeries{}, false
+	}
+	periodMS := int64(0)
+	if window.PeriodHours != nil && *window.PeriodHours > 0 {
+		periodMS = int64(*window.PeriodHours * 60 * 60 * 1000)
+	}
+	return modelGroupUsageSeries{buckets: buckets, periodMS: periodMS}, true
 }
 
-func averageGroupDailyUsage(buckets []repository.QuotaObservationBucket) (float64, bool) {
-	var total float64
-	var firstMS, lastMS int64
+// groupUsageCoverage is the span a series actually observed. A single reading
+// describes an instant, not an interval, so it is not coverage.
+func groupUsageCoverage(buckets []repository.QuotaObservationBucket) (firstMS, lastMS int64, ok bool) {
 	count := 0
-	var previous *repository.QuotaObservationBucket
-	for index := range buckets {
-		bucket := buckets[index]
+	for _, bucket := range buckets {
 		if bucket.LastObservedAtMS <= 0 {
 			continue
 		}
@@ -429,47 +466,102 @@ func averageGroupDailyUsage(buckets []repository.QuotaObservationBucket) (float6
 		if bucket.LastObservedAtMS > lastMS {
 			lastMS = bucket.LastObservedAtMS
 		}
-		switch {
-		case previous == nil:
-			if bucket.LastUsedPercent > bucket.MinUsedPercent {
-				total += bucket.LastUsedPercent - bucket.MinUsedPercent
-			}
-		case groupUsageReset(*previous, bucket):
-			if bucket.LastUsedPercent > 0 {
-				total += bucket.LastUsedPercent
-			}
-		case bucket.LastUsedPercent > previous.LastUsedPercent:
-			total += bucket.LastUsedPercent - previous.LastUsedPercent
-		}
-		previous = &buckets[index]
 		count++
 	}
-	if count < 2 {
+	return firstMS, lastMS, count >= 2
+}
+
+// combinedGroupDailyUsage merges the accounts on one interval and one
+// denominator: the span every account covers. Consumption is counted only
+// between two readings that both fall inside that span, so a longer history
+// cannot contribute more than a shorter one and the rate is not the sum of
+// differently timed daily means.
+func combinedGroupDailyUsage(series []modelGroupUsageSeries) (float64, bool) {
+	if len(series) == 0 {
 		return 0, false
 	}
-	covered := lastMS - firstMS
-	if covered < modelGroupsUsageMinimumCoverage {
+	var startMS, endMS int64
+	for index, item := range series {
+		firstMS, lastMS, ok := groupUsageCoverage(item.buckets)
+		if !ok {
+			return 0, false
+		}
+		if index == 0 || firstMS > startMS {
+			startMS = firstMS
+		}
+		if index == 0 || lastMS < endMS {
+			endMS = lastMS
+		}
+	}
+	if endMS-startMS < modelGroupsUsageMinimumCoverage {
 		return 0, false
 	}
-	if covered > modelGroupsUsageDays {
-		covered = modelGroupsUsageDays
+	total := 0.0
+	for _, item := range series {
+		total += groupUsageWithin(item.buckets, item.periodMS, startMS, endMS)
 	}
-	days := float64(covered) / float64(24*60*60*1000)
+	days := float64(endMS-startMS) / float64(24*60*60*1000)
+	if days > 7 {
+		days = 7
+	}
 	if days <= 0 {
 		return 0, false
 	}
 	return total / days, true
 }
 
-func groupUsageReset(previous, current repository.QuotaObservationBucket) bool {
+// groupUsageWithin adds the consumption an account recorded between two
+// readings that are both inside [startMS, endMS]. The first reading inside the
+// span has no in-span predecessor, so the increment that crosses the boundary
+// is skipped rather than attributed partly to the common window.
+func groupUsageWithin(buckets []repository.QuotaObservationBucket, periodMS, startMS, endMS int64) float64 {
+	var total float64
+	var previous *repository.QuotaObservationBucket
+	for index := range buckets {
+		bucket := &buckets[index]
+		if bucket.LastObservedAtMS <= 0 {
+			continue
+		}
+		if bucket.LastObservedAtMS > endMS {
+			break
+		}
+		if previous != nil && previous.LastObservedAtMS >= startMS {
+			switch {
+			case groupUsageReset(*previous, *bucket, periodMS):
+				if bucket.LastUsedPercent > 0 {
+					total += bucket.LastUsedPercent
+				}
+			case bucket.LastUsedPercent > previous.LastUsedPercent:
+				total += bucket.LastUsedPercent - previous.LastUsedPercent
+			}
+		}
+		previous = bucket
+	}
+	return total
+}
+
+// groupUsageReset reports whether current starts a new cycle relative to
+// previous. A percentage drop is direct evidence. So is a reset instant that
+// jumps forward by more than half the window period: a cycle can roll over
+// while its used share is already higher than the previous reading (40% before
+// a weekly boundary, 60% in the new cycle). A rolling window moves its boundary
+// every few minutes, so a forward jump only counts at a period-sized scale;
+// without a period it cannot be told apart from rolling, and only a drop counts.
+func groupUsageReset(previous, current repository.QuotaObservationBucket, periodMS int64) bool {
 	if current.ResetDetected {
 		return true
 	}
 	if previous.LastUsedPercent > current.MinUsedPercent+quotaPredictionResetTolerancePercent {
 		return true
 	}
-	return previous.LastResetAtMS != nil && current.MinResetAtMS != nil &&
-		float64(*previous.LastResetAtMS)-float64(*current.MinResetAtMS) > float64(quotaPredictionResetToleranceMS)
+	if previous.LastResetAtMS == nil || current.MinResetAtMS == nil {
+		return false
+	}
+	advance := *current.MinResetAtMS - *previous.LastResetAtMS
+	if periodMS > 0 && advance > periodMS/2 {
+		return true
+	}
+	return advance < -int64(quotaPredictionResetToleranceMS)
 }
 
 func roundGroupUsage(value float64) float64 {
