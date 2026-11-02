@@ -1,0 +1,161 @@
+/* Model groups: the group cards, the member table's order cell, and the add-models picker.
+   The card is the console's one framed surface (`--surface` over the page, 1px border, small
+   radius); it is not a nested panel inside one. */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: 16px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.card-name {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.card-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The actions sit at the card's floor, so cards of different name lengths line up. */
+.card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+/* The order cell carries the slot itself in tabular mono, so a column of numbers aligns. */
+.order-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.order-number {
+  min-width: 1.5em;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-name {
+  display: inline-block;
+  max-width: 100%;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+/* A phone hides `PageHeader`'s title; a group's own name is the subject of its page, so it is
+   drawn in the heading block at exactly the width the title disappears. */
+.phone-title {
+  display: none;
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.candidate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.candidate-caption {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.candidate-search {
+  width: 320px;
+  max-width: 100%;
+}
+
+.add-footer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.add-footer-count {
+  margin-inline-end: auto;
+  color: var(--muted);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The name dialog's field: labels and their help sit in the body, not antd's Form. */
+.name-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+.form-help,
+.form-error {
+  margin: 8px 0 0;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.form-help {
+  color: var(--muted);
+}
+
+.form-error {
+  color: var(--danger);
+}
+
+@media (max-width: 640px) {
+  .phone-title {
+    display: block;
+    margin-top: 4px;
+  }
+
+  .candidate-search {
+    width: 100%;
+  }
+
+  .card-actions {
+    gap: 4px;
+  }
+}

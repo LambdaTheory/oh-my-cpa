@@ -4137,6 +4137,17 @@ missing never issues an insert, and a restore that creates some names them in it
 row and then creates exactly those. Restore is idempotent: a second call creates nothing
 and records nothing.
 
+The console draws the groups at `/model-groups`, with the lazy pages in
+`web/src/pages/modelGroups/`: the list page names each group and opens it, one page holds a
+group's members in their order, and one adds models. A group is resolved from the one list
+read rather than a second by-id route, and the add page's candidates come from
+`GET /management/model-square` - the advertised call names and aliases - with models already
+in the group left out. A move saves the complete order on the click and is optimistic; a
+refused save puts the last stored order back under a retry notice. No page states which
+other groups hold a model, and none draws availability or average usage: the management API
+exposes no per-model reading for either, so drawing them would state numbers the console
+cannot verify.
+
 ## Reset announcement evidence
 
 Migration 049 adds reset_announcements without changing quota_snapshots or previous

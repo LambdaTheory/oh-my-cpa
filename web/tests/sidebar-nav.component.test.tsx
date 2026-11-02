@@ -97,7 +97,7 @@ describe('sidebar visibility panel', () => {
     // The console's groups, then the plugins group before Control, because that is where the rail
     // puts them.
     expect(titles).toEqual([
-      'Dashboard', 'Agent', 'Model Square',
+      'Dashboard', 'Agent', 'Model Square', 'Model Groups',
       'AI providers', 'OAuth management', 'Key management',
       'Request Events', 'Cost & Usage', 'Logs', 'Audit trail',
       'Plugin management', 'Plugin store',

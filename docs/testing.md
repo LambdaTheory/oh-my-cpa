@@ -92,6 +92,13 @@ store with a synthetic trigger and asserts, per write, that the caller gets
 its read-only no-op (proved with `query_only`, which a zero-row insert would violate and a
 row-level trigger would not), and that a write's own details merge with the request
 metadata rather than replacing it. No real group, mailbox or browser participates.
+The console pages add three claims. `scripts/test-model-groups.ts` owns the name rules,
+the ordering arithmetic and the independence of two groups' positions as pure functions;
+`web/tests/model-groups.component.test.tsx` owns the rendered decisions a function cannot
+show - an optimistic move, the rollback and notice when a save is refused, and a duplicate
+name refused before a request is sent; and the `model-groups` probe owns the cross-route
+journey (create, add, reorder, reload, two groups' independent orders), delete-all then
+restore, the rail entry, and the three surfaces fitting a 375px content pane.
 
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.
