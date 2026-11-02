@@ -69,6 +69,8 @@ type TableLifecycle struct {
 // horizon-publishing engine as everything else; it does not write its own loop.
 var TABLE_LIFECYCLES = map[string]TableLifecycle{
 	"reset_announcements":        {Kind: LifecyclePermanent, Reason: "operator-registered external evidence remains queryable after expiration"},
+	"model_groups":               {Kind: LifecyclePermanent, Reason: "operator-owned model groups, created and removed only by the operator"},
+	"model_group_members":        {Kind: LifecyclePermanent, Reason: "a group's ordered members, deleted with the group in the same statement"},
 	"channel_model_prices":       {Kind: LifecycleReplaced, Reason: "operator prices keyed by the usage channel and upstream model; history lives in model_price_versions"},
 	"credential_warmup_policies": {Kind: LifecyclePermanent, Reason: "operator-approved scheduling policies, bound to instance and exact credential identity"},
 	"credential_warmup_state":    {Kind: LifecycleOwnerBounded, Reason: "one scheduling record per credential; preserved for restart deduplication"},

@@ -266,6 +266,17 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/resources", h.listResources)
 				v1.Patch("/resources/{id}/override", h.updateResourceOverride)
 				v1.Get("/management/model-square", h.listModelSquare)
+				// Model groups: the console's own naming of models, read and written here
+				// and nowhere else. Grouped under the management tree because the write
+				// side is a management action, sibling to the model square's read.
+				v1.Get("/management/model-groups", h.listModelGroups)
+				v1.Post("/management/model-groups", h.createModelGroup)
+				v1.Post("/management/model-groups/restore-defaults", h.restoreDefaultModelGroups)
+				v1.Patch("/management/model-groups/{id}", h.renameModelGroup)
+				v1.Delete("/management/model-groups/{id}", h.deleteModelGroup)
+				v1.Post("/management/model-groups/{id}/members", h.addModelGroupMembers)
+				v1.Delete("/management/model-groups/{id}/members/{model}", h.removeModelGroupMember)
+				v1.Put("/management/model-groups/{id}/order", h.reorderModelGroupMembers)
 				h.registerReauthRoutes(v1)
 				v1.Get("/management/overview", h.managementOverview)
 				v1.Get("/management/dashboard", h.dashboard)

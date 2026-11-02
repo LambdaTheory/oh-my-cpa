@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,14 @@ type AuditEvent struct {
 	Details       map[string]any `json:"details,omitempty"`
 }
 
+// auditExecer is satisfied by both *sql.DB and *sql.Tx. A caller that must write the
+// trail in the same transaction as the change it describes runs the same statement; the
+// alternative, writing the change and then the record, is a change with no trace when
+// the second write fails.
+type auditExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 // RecordAuditEvent writes one audit record to the append-only audit_events table.
 // Target identifiers, action names, and details are sanitized to ensure no secret
 // material is retained in audit logs.
@@ -33,6 +42,14 @@ func (r *Repository) RecordAuditEvent(ctx context.Context, event AuditEvent) (in
 	if r == nil || r.SQL() == nil {
 		return 0, errors.New("repository is not initialized")
 	}
+	return insertAuditEvent(ctx, r.SQL(), event)
+}
+
+// insertAuditEvent admits and writes one record through execer.
+//
+// The admission lives here rather than in each caller so a transactional writer cannot
+// quietly skip the redaction: every path to audit_events goes through this function.
+func insertAuditEvent(ctx context.Context, execer auditExecer, event AuditEvent) (int64, error) {
 	if event.OccurredAtMS <= 0 {
 		event.OccurredAtMS = time.Now().UnixMilli()
 	}
@@ -63,7 +80,7 @@ func (r *Repository) RecordAuditEvent(ctx context.Context, event AuditEvent) (in
 		}
 	}
 
-	res, err := r.SQL().ExecContext(ctx, `
+	res, err := execer.ExecContext(ctx, `
 		INSERT INTO audit_events (
 			occurred_at_ms, action, target_type, target_id, result,
 			request_id, source_summary, details_json
