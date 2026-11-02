@@ -628,3 +628,81 @@ func TestModelGroupsModelsAverageUsageSteadyZeroIsZero(t *testing.T) {
 		t.Fatalf("average usage = %v, want 0 for steady readings", got)
 	}
 }
+
+// Exactly half the common interval can still leave the other half's increment
+// crossing the end boundary: A reads on days 0,1,2 and again on day 4; B reads
+// on days 1 and 3. The common span is days 1-3, but A's growth from day 2 to
+// day 4 is not attributable inside it, so the span is unmeasurable rather than
+// a proven zero.
+func TestModelGroupsModelsAverageUsageHalfCoveredBoundaryIsUnknown(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok")
+	day := int64(24 * 60 * 60 * 1000)
+	weekStart := nowMS - int64(modelGroupsUsageDays)
+	for _, index := range []int{0, 1, 2} {
+		insertGroupObservation(t, service.Repo, "auth-model-ok", 0, weekStart+int64(index)*day, index)
+	}
+	insertGroupObservation(t, service.Repo, "auth-model-ok", 20, weekStart+4*day, 4)
+	insertGroupObservation(t, service.Repo, "auth-model-ok-2", 0, weekStart+day, 10)
+	insertGroupObservation(t, service.Repo, "auth-model-ok-2", 0, weekStart+3*day, 11)
+	directory, credentials, quotas := service.modelGroupAdviceInputs(ctx)
+	credentials = append(credentials, AdviceCredential{AuthIndex: "auth-model-ok-2", Provider: "claude", ProviderID: "provider-1", Models: []string{"upstream-model-ok"}})
+	quotas = append(quotas, Quota{AuthIndex: "auth-model-ok-2", Provider: "claude", Status: "healthy", ObservedAtMS: nowMS - 1000,
+		Windows: []quota.QuotaWindow{{Label: "Weekly", Kind: "weekly", Scope: "standard", UsedPercent: advicePercent(20), RemainingPercent: advicePercent(80)}}})
+	usage := service.modelGroupAverageUsage(ctx, []string{"model-ok"}, directory, credentials, quotas, nowMS)
+	if usage["model-ok"] != nil {
+		t.Fatalf("average usage = %v, want null when A's growth crosses the common end", *usage["model-ok"])
+	}
+}
+
+// More than half covered is still unmeasurable when the increment crosses the
+// boundary: A covers three of the four common days but its only growth runs
+// from day 4 to day 6, past the common end at day 5.
+func TestModelGroupsModelsAverageUsageAboveHalfBoundaryIsUnknown(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok")
+	day := int64(24 * 60 * 60 * 1000)
+	weekStart := nowMS - int64(modelGroupsUsageDays)
+	for _, index := range []int{0, 1, 2, 3, 4} {
+		insertGroupObservation(t, service.Repo, "auth-model-ok", 0, weekStart+int64(index)*day, index)
+	}
+	insertGroupObservation(t, service.Repo, "auth-model-ok", 20, weekStart+6*day, 6)
+	insertGroupObservation(t, service.Repo, "auth-model-ok-2", 0, weekStart+day, 10)
+	insertGroupObservation(t, service.Repo, "auth-model-ok-2", 0, weekStart+5*day, 11)
+	directory, credentials, quotas := service.modelGroupAdviceInputs(ctx)
+	credentials = append(credentials, AdviceCredential{AuthIndex: "auth-model-ok-2", Provider: "claude", ProviderID: "provider-1", Models: []string{"upstream-model-ok"}})
+	quotas = append(quotas, Quota{AuthIndex: "auth-model-ok-2", Provider: "claude", Status: "healthy", ObservedAtMS: nowMS - 1000,
+		Windows: []quota.QuotaWindow{{Label: "Weekly", Kind: "weekly", Scope: "standard", UsedPercent: advicePercent(20), RemainingPercent: advicePercent(80)}}})
+	usage := service.modelGroupAverageUsage(ctx, []string{"model-ok"}, directory, credentials, quotas, nowMS)
+	if usage["model-ok"] != nil {
+		t.Fatalf("average usage = %v, want null when A's growth crosses the common end", *usage["model-ok"])
+	}
+}
+
+// Staggered interior sampling is fine when every account has readings at both
+// ends of the common measured span: the increments then tile the span exactly.
+// A reads on days 0,2,4; B daily. Both span days 0-4, so the combined rate is
+// (20 + 20) / 4 = 10 points a day.
+func TestModelGroupsModelsAverageUsageAlignedBoundariesWithStaggeredInterior(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok")
+	day := int64(24 * 60 * 60 * 1000)
+	weekStart := nowMS - int64(modelGroupsUsageDays)
+	for index, used := range []float64{0, 10, 20} {
+		insertGroupObservation(t, service.Repo, "auth-model-ok", used, weekStart+int64(index*2)*day, index)
+	}
+	for index, used := range []float64{0, 5, 10, 15, 20} {
+		insertGroupObservation(t, service.Repo, "auth-model-ok-2", used, weekStart+int64(index)*day, index+10)
+	}
+	directory, credentials, quotas := service.modelGroupAdviceInputs(ctx)
+	credentials = append(credentials, AdviceCredential{AuthIndex: "auth-model-ok-2", Provider: "claude", ProviderID: "provider-1", Models: []string{"upstream-model-ok"}})
+	quotas = append(quotas, Quota{AuthIndex: "auth-model-ok-2", Provider: "claude", Status: "healthy", ObservedAtMS: nowMS - 1000,
+		Windows: []quota.QuotaWindow{{Label: "Weekly", Kind: "weekly", Scope: "standard", UsedPercent: advicePercent(20), RemainingPercent: advicePercent(80)}}})
+	usage := service.modelGroupAverageUsage(ctx, []string{"model-ok"}, directory, credentials, quotas, nowMS)
+	if usage["model-ok"] == nil {
+		t.Fatal("aligned boundaries must produce a rate even when interior sampling is staggered")
+	}
+	if got := *usage["model-ok"]; got != 10 {
+		t.Fatalf("average usage = %v, want 10 over the shared four-day span", got)
+	}
+}

@@ -807,15 +807,17 @@ window, in percentage points per day. It is read from stored quota observation
 history, never by probing an upstream endpoint. Each account serving the model
 contributes one window - the most precise relevant one (a model-scoped window
 over an account-wide one), the longest period when both are equal. The accounts
-are merged on one timeline: the common span every serving account covers within
-the rolling seven days, and the member's figure is their combined consumption
-inside that span divided by its length. A percentage drop, or a reset instant
-that advances by more than half the window's period, starts a new cycle: usage
-before it is not subtracted from usage after it. The figure is null rather than
-partial when a serving account has no reading, no relevant window, too little or
-unreadable history, when its readings inside the common span cover less than
-half of it (so the rate would rest on an increment that crossed the boundary),
-and when the common span is under a day; an ambiguous route is null too. Account-level windows are shared by every model on the account, so
+are merged on one effective span: the span between the earliest and the latest
+reading instants every serving account holds within the rolling seven days. Only
+increments whose two readings both lie inside that span are counted, so the
+denominator is tiled exactly by measured intervals and no part of it rests on a
+boundary slice that only belongs to a longer increment; interior sampling may be
+staggered. A percentage drop, or a reset instant that advances by more than half
+the window's period, starts a new cycle: usage before it is not subtracted from
+usage after it. The figure is null rather than partial when a serving account has
+no reading, no relevant window, too little or unreadable history, when the
+accounts share fewer than two reading instants or their span is under a day, or
+when the route is ambiguous. Account-level windows are shared by every model on the account, so
 a model without a model-scoped window reports the account's consumption, the
 same way advice treats that window as applying to each model.
 
