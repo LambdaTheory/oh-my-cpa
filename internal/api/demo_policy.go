@@ -168,6 +168,17 @@ var demoPolicy = []demoPolicyRule{
 	// Observation of the fixture: the dashboard, the request records and the log
 	// tail all read data the fixture published.
 	{http.MethodGet, "/api/v1/management/model-square", demoAllow, ""},
+	// Model groups are the console's own naming of models, stored in this deployment's
+	// database and touching no gateway. Reads are served from the fixture; writes move
+	// the fixture's in-memory groups, which the demo header marks as not durable.
+	{http.MethodGet, "/api/v1/management/model-groups", demoAllow, ""},
+	{http.MethodPost, "/api/v1/management/model-groups", demoAllow, ""},
+	{http.MethodPost, "/api/v1/management/model-groups/restore-defaults", demoAllow, ""},
+	{http.MethodPatch, "/api/v1/management/model-groups/{id}", demoAllow, ""},
+	{http.MethodDelete, "/api/v1/management/model-groups/{id}", demoAllow, ""},
+	{http.MethodPost, "/api/v1/management/model-groups/{id}/members", demoAllow, ""},
+	{http.MethodDelete, "/api/v1/management/model-groups/{id}/members/{model}", demoAllow, ""},
+	{http.MethodPut, "/api/v1/management/model-groups/{id}/order", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/overview", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/dashboard", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/dashboard/tail", demoAllow, ""},

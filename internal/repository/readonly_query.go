@@ -68,6 +68,8 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"ingest_gaps":                   nil,
 	"model_price_versions":          nil,
 	"model_prices":                  nil,
+	"model_groups":                  nil,
+	"model_group_members":           nil,
 	"channel_model_prices":          nil,
 	"pricing_catalog_state":         nil,
 	"pricing_channel_versions":      nil,

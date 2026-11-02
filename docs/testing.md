@@ -73,9 +73,25 @@ recording and recovery refresh; rejected recovery refreshes make no quota call.
 Service tests also enforce account-kind admission directly at `reauth.Observe`.
 Demo export pricing timestamps use the fixed reference instant for runtime-stamped
 writes, with regression coverage for slow seeding and unchanged historical versions.
-Migration tests extend the existing upgrade chain through 053, including a 052-to-053
-upgrade preserving reset announcements and enforcing the shared OAuth contact slot; the historical 010–014
-gap remains unchanged. No real group, mailbox or browser participates.
+Migration tests extend the existing upgrade chain through 059, including a 052-to-053
+upgrade preserving reset announcements and enforcing the shared OAuth contact slot (the
+historical 010–014 gap remains unchanged), and a 058-to-059 upgrade of a populated
+database that gains the five empty preset model groups while keeping an existing row and
+seeding nothing twice. `internal/repository/model_groups_test.go` owns group admission,
+member append/remove ordering, the same-model-in-two-groups independence, the complete-
+membership reorder refusal and both restore outcomes (missing presets recreated, a
+renamed preset and an operator group under a preset's name left alone); the API tests
+in `internal/api/model_groups_test.go` own the console session and same-origin boundary and
+the request/response shapes; `internal/api/model_groups_audit_test.go` breaks the audit
+store with a synthetic trigger and asserts, per write, that the caller gets
+`audit_write_failed` and the database is unchanged; and
+`internal/api/model_groups_path_test.go` owns member-name decoding, including the
+`a%2Fb`/`a/b` pair whose removal must each hit its own member.
+`internal/repository/model_groups_restore_test.go` owns the restore path's write order
+(a trigger aborts a preset insert that precedes the audit row in the same transaction),
+its read-only no-op (proved with `query_only`, which a zero-row insert would violate and a
+row-level trigger would not), and that a write's own details merge with the request
+metadata rather than replacing it. No real group, mailbox or browser participates.
 
 Put each claim in the **lowest layer that can make it fail for the reason its name
 gives**. Move a claim up a layer only when the lower one cannot observe it.

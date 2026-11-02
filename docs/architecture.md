@@ -2661,6 +2661,7 @@ transient codes and pending notifications, and preserves every job and historica
 | CPA configuration | `cpa_config_backups`, `cpa_config_backup_settings` | Encrypted copies of the stored CPA configuration file, kept before every configuration write (migration 030, ADR 0037; migration 033 adds each copy's `layout` and `reason` and the single-row retention table, ADR 0051). v8 copies are kept to the operator's retention (default 20, 5–100), pre-v8 copies to the latest ten; `cpa_config_backups` is hidden from `database_query` |
 | Account automation | `account_automation_accounts`, `account_automation_batches`, `account_automation_settings` | Migrations 043 and 054. `accounts` is both the opt-in roster and each account's plan (state, evidence watermark `disable_observed_at_ms` + `cycle_key`, `cycle_reset_at_ms`, persisted `next_attempt_at_ms`, and `intent_version`, plus burn_credit and the removed_at_ms tombstone); active lists exclude tombstones and pause preserves recovery/retry state. `cycle_reset_at_ms` is execution history unless the current state still owns a recovery plan, and confirmed or external enable paths clear the consumed value. `batches` holds the one-time adoption snapshots; `settings` is the single web switch. The roster's `account_label` is redacted from the operator query path (ADR 0105) |
 | Ollama monitoring | `ollama_accounts` | Migrations 044 and 058. One row per operator account: an AES-GCM encrypted session cookie, an optional AES-GCM encrypted API key with its own version, collection status, newest scrubbed error and persisted retry, and the newest safe `quota_snapshot_json`. The table is **hidden** from the operator query path because it carries both credentials |
+| Model groups | `model_groups`, `model_group_members` | Migration 059. An operator-named group with an optional ordered list of model names, stored as OMC's own naming and touching no CPA state. A name is unique case-insensitively and bounded to 40 runes; `is_preset` marks the five groups a deployment starts with (`力工组`, `前端组`, `编排组`, `审查组`, `跟进组`), which rename and delete like any other and are what "restore the default groups" recognises by identity. Members live in their own table because one model may sit in several groups, each with an independent `position`; `(group_id, model)` is the primary key and `(group_id, position)` is unique, so a group cannot hold a model twice or two models in one slot. Deleting a group deletes its members and nothing else |
 | Credential recovery | `reauth_jobs` | Migration 053. Safe metadata, invalid-cycle ownership, state, deadlines, notification intent, device display metadata and accepted message identity; no email OTP or token. Hidden from operator queries; receipts are retained |
 | Feishu notifications | `feishu_settings`, `feishu_secrets`, `feishu_pending_items`, `feishu_notifications`, `feishu_channel_tracks`, `feishu_state`, `feishu_account_signals` | Migration 045. Settings and runtime state are non-secret and readable; `feishu_secrets` holds the AES-GCM encrypted app secret and is **hidden**; `feishu_account_signals` is the enum-only newest collection outcome per credential (never a raw error or secret); pending items and the delivery outbox are bounded by the module's own reconciliation |
 | Release observation | `release_index`, `release_check_state` | Migrations 024 and 025; `truncated` is added by 025, so a database that applied 024 before it existed still gains the column. `release_index` holds one row per published version (tag, name, publication time, prerelease flag) and is **replaced as a unit per product** by `PublishReleaseSnapshot`, because a feed that stops listing a withdrawn release must stop the console claiming it exists. `release_check_state` holds one row per product — the last attempt and success times, the redacted failure reason, the latest tag, the ETag and the truncation flag — and is written by `RecordReleaseCheckAttempt`/`PublishReleaseSnapshot`/`RecordReleaseCheckFailure`, read by `ListReleases` and `GetReleaseCheckState(ForRepository)`. A release's prose body is **never stored**: it lives in bounded process memory for the life of the process, so an index without notes still names the versions and links to the source (see §10) |
@@ -2726,12 +2727,13 @@ fix a defect with a new migration, never by editing `schema_migrations`
 The fork occupies migrations 041–045. A schema 45 deployment keeps those tables
 and advances through 046 (credential warmup), 047 (font library), and 048 (channel
 model prices), then 049 (reset announcements), 050 (reset grant status), 051–052
-(quota refresh outcomes), and 053 (OAuth reauthentication jobs). The migration backup
-is created and smoke-tested before 046; each
+(quota refresh outcomes), 053 (OAuth reauthentication jobs), 054–058 (account
+automation, Feishu cycles and confirmation, monitor failures, Ollama API keys), and
+059 (model groups). The migration backup is created and smoke-tested before 046; each
 subsequent migration commits separately. A failed migration stops startup, and
 restoring an older executable requires restoring the matching pre-upgrade database
 backup. The repository's synthetic upgrade test checks both sets of tables, a
-pre-existing fork row, and the gap-free 041–053 upgrade sequence without duplicate
+pre-existing fork row, and the gap-free 041–059 upgrade sequence without duplicate
 versions. Versions 010–014 were never part of this repository's migration history.
 
 ## 10. Background loops
@@ -4089,6 +4091,51 @@ credential state but refuses policy writes and consumption, and never starts the
 
 Warmup round ordering is oldest observation first. Fleets exceeding a round's capacity
 remain queued rather than increasing concurrency or skipping protection.
+
+## Model groups
+
+Migration 059 adds `model_groups` and `model_group_members` and seeds the five preset
+groups, so a fresh database and an upgraded one start from the same state without a
+first-read bootstrap. A group is the operator's own naming of model identifiers: the
+repository in `internal/repository/model_groups.go` owns admission, ordering and the
+preset rules, and the handwritten DTOs in `internal/api/model_groups.go` are the only
+wire shape, served under `GET/POST /management/model-groups`, `PATCH/DELETE
+/management/model-groups/{id}`, `POST /management/model-groups/{id}/members`,
+`DELETE /management/model-groups/{id}/members/{model}`, `PUT
+/management/model-groups/{id}/order` and `POST /management/model-groups/restore-defaults`.
+A member is named in the path by its own escape, decoded once: chi matches the escaped raw
+path when there is one and the decoded path otherwise, so the handler unescapes only in
+the first case - a second decode would turn a literal `a%2Fb` into `a/b` and remove the
+wrong member.
+These are ordinary management routes under the console session and same-origin guard; no
+operations capability is registered, and every write records an audit row in the same
+transaction as the change, ahead of it: a create, rename, add, remove, reorder, delete
+or restore whose audit row cannot be written is rolled back whole and answered
+`audit_write_failed`, so a caller never sees a failure for a change that happened. What
+a write will do is decided by reads first, so the audit row can name it exactly and still
+be the transaction's first write. A request that would change nothing - an add whose
+models are all already members, a restore with no group missing - writes nothing at all:
+it commits a read-only transaction and records no row. The caller's own correlation id
+travels in the event's details and is merged into, not replaced by, the details the write
+produces.
+
+Ordering is maintained by the repository, not by the caller. Adding members appends
+after the current last position and reports a model already present as skipped rather
+than refusing the whole request. Removing a member renumbers the rest to 1..n inside the
+same transaction, because a hole would make "the fourth model" ambiguous. Reordering
+requires the complete current membership exactly once: a short list would silently drop
+members and an unknown name would silently add one, so both are refused. Each group's
+positions are its own, so the same model in two groups reorders independently.
+
+A preset group is identified by its fixed id, not its name, so restoring recognises one
+that was renamed and leaves it - members, order and name - untouched; only a preset that
+is gone is recreated, empty. A group the operator created under a preset's name is left
+alone and reported as skipped, because the name is taken and a second group with that
+name would make every later name lookup ambiguous. Restore resolves which presets are
+missing inside its transaction and before it writes anything, so a restore with nothing
+missing never issues an insert, and a restore that creates some names them in its audit
+row and then creates exactly those. Restore is idempotent: a second call creates nothing
+and records nothing.
 
 ## Reset announcement evidence
 

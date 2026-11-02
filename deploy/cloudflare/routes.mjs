@@ -63,6 +63,9 @@ const FIXED_ROUTES = new Map([
   ['/api/v1/pricing/attention', 'pricing-attention'],
   ['/api/v1/pricing/catalog', 'pricing-catalog'],
   ['/api/v1/management/model-square', 'model-square'],
+  // The model group list. The demonstration seeds the five preset groups empty, so this
+  // is what a visitor sees before they add anything.
+  ['/api/v1/management/model-groups', 'model-groups'],
   ['/api/v1/management/overview', 'overview'],
   ['/api/v1/management/system', 'system'],
   ['/api/v1/management/system/releases', 'system-releases'],
