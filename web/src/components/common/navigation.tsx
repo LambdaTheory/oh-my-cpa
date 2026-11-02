@@ -14,6 +14,7 @@ import {
   RobotOutlined,
   SettingOutlined,
   BlockOutlined,
+  AppstoreOutlined,
 } from '../icons';
 import { PLUGIN_PAGE_ROUTE_PREFIX, type PluginPageEntry } from '../plugins/pluginPages';
 import { isRenderableLogoURL } from '../../types/pluginOAuthProviders';
@@ -37,6 +38,7 @@ export const STATIC_NAV_GROUPS: readonly NavGroup[] = [
       { key: '/dashboard', labelKey: 'nav.dashboard', icon: <DashboardOutlined /> },
       { key: '/agent', labelKey: 'nav.agent', icon: <RobotOutlined /> },
       { key: '/model-square', labelKey: 'nav.model_square', icon: <BlockOutlined /> },
+      { key: '/model-groups', labelKey: 'nav.model_groups', icon: <AppstoreOutlined /> },
     ],
   },
   {

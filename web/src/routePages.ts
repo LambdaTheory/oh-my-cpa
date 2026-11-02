@@ -30,6 +30,15 @@ export const AuthorizePage = React.lazy(loadAuthorizePage);
 export const loadModelSquarePage = createPageLoader(() => import('./pages/ModelSquarePage'), 'ModelSquarePage');
 export const ModelSquarePage = React.lazy(loadModelSquarePage);
 
+export const loadModelGroupsPage = createPageLoader(() => import('./pages/modelGroups/ModelGroupsPage'), 'ModelGroupsPage');
+export const ModelGroupsPage = React.lazy(loadModelGroupsPage);
+
+export const loadModelGroupDetailPage = createPageLoader(() => import('./pages/modelGroups/ModelGroupDetailPage'), 'ModelGroupDetailPage');
+export const ModelGroupDetailPage = React.lazy(loadModelGroupDetailPage);
+
+export const loadModelGroupAddPage = createPageLoader(() => import('./pages/modelGroups/ModelGroupAddPage'), 'ModelGroupAddPage');
+export const ModelGroupAddPage = React.lazy(loadModelGroupAddPage);
+
 export const loadLogsPage = createPageLoader(() => import('./pages/LogsPage'), 'LogsPage');
 export const LogsPage = React.lazy(loadLogsPage);
 
