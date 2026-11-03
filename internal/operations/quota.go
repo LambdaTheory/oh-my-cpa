@@ -3,6 +3,8 @@ package operations
 import (
 	"context"
 	"errors"
+	"math/big"
+
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 )
@@ -17,6 +19,8 @@ type QuotaSubscription struct {
 }
 
 type Quota struct {
+	// Balance is internal evidence; quota_list keeps its existing response.
+	Balance        *ModelGroupBalance        `json:"-"`
 	Plan           *QuotaSubscription        `json:"plan,omitempty"`
 	AuthIndex      string                    `json:"auth_index"`
 	Name           string                    `json:"name"`
@@ -35,6 +39,14 @@ func SafeQuota(value *quota.NormalizedQuota) Quota {
 	result := Quota{AuthIndex: value.AuthIndex, Name: safeLabel(value.Name), Provider: value.Provider, Status: value.Status, ObservedAtMS: value.ObservedAtMS, Windows: windows, Recommendation: value.Recommendation}
 	if value.Plan != nil {
 		result.Plan = &QuotaSubscription{PlanType: safeLabel(value.Plan.PlanType), PlanLabel: safeLabel(value.Plan.PlanLabel), Tier: value.Plan.Tier, IsSubscriptionActive: value.Plan.IsSubscriptionActive}
+	}
+	if value.OllamaCredits != nil && value.OllamaCredits.RemainingCents != nil {
+		result.Balance = &ModelGroupBalance{Amount: big.NewRat(*value.OllamaCredits.RemainingCents, 100).FloatString(2), Currency: "USD"}
+	} else if value.Plan != nil && value.Plan.Credits != nil && !value.Plan.Credits.IsUnlimited {
+		amount := value.Plan.Credits.Balance
+		if _, _, ok := parseGroupBalance(amount); ok {
+			result.Balance = &ModelGroupBalance{Amount: amount, Currency: "USD"}
+		}
 	}
 	return result
 }

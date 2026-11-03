@@ -782,7 +782,7 @@ the read-only MCP key, expose them to a caller:
   `reason: "model_group_empty"` and an empty `models` array.
 
 Each member carries `model` (the name a client requests), `availability`,
-`average_usage_percent` (null when no usable history exists), `position` (the
+`balance` (decimal-string `amount` and `currency: "USD"`, or null), `position` (the
 operator's 1-based order) and `is_preferred` (position 1). `availability` is one
 of four bands, mapped from `model_advice`'s verdict for the same name and the
 same evidence - this projection adds no second availability rule, so the two
@@ -802,24 +802,14 @@ which keeps repeated reads identical. Unusable members are always returned, last
 a caller can see why a model was not recommended instead of mistaking it for a
 model that is not in the group.
 
-`average_usage_percent` is the seven-day daily consumption of the relevant quota
-window, in percentage points per day. It is read from stored quota observation
-history, never by probing an upstream endpoint. Each account serving the model
-contributes one window - the most precise relevant one (a model-scoped window
-over an account-wide one), the longest period when both are equal. The accounts
-are merged on one effective span: the span between the earliest and the latest
-reading instants every serving account holds within the rolling seven days. Only
-increments whose two readings both lie inside that span are counted, so the
-denominator is tiled exactly by measured intervals and no part of it rests on a
-boundary slice that only belongs to a longer increment; interior sampling may be
-staggered. A percentage drop, or a reset instant that advances by more than half
-the window's period, starts a new cycle: usage before it is not subtracted from
-usage after it. The figure is null rather than partial when a serving account has
-no reading, no relevant window, too little or unreadable history, when the
-accounts share fewer than two reading instants or their span is under a day, or
-when the route is ambiguous. Account-level windows are shared by every model on the account, so
-a model without a model-scoped window reports the account's consumption, the
-same way advice treats that window as applying to each model.
+The balance sums published monetary balances of accounts serving the model from
+existing quota readings, without upstream calls. Ollama's stored USD cents become
+decimal USD; prepaid credits retain their decimal precision. Only accounts with a
+numeric balance contribute. If none has one, or the route is ambiguous, the balance
+is null. Unlimited credits, window percentages and separate product allowances do
+not supply a monetary balance. Currency follows the existing USD convention.
+Balance does not affect availability or ordering.
+
 
 The result reveals no account name, credential identity, provider routing detail,
 reason, reset time or data age. Both reads are bounded: at most 100 groups or
