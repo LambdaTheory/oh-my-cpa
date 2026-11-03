@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "source_revision": "0df7411b455d411686f6e2f8876802685b5ae4e5",
-  "previous_deploy": "095025d6d0d2791f5a57959c41cf972aa7bd88eb",
+  "source_revision": "fc935a3696d70d17af2e72c72f7969b0de6965f9",
+  "previous_deploy": "cfef130d2785be1dd404c0703f5854fb5fdf38ba",
   "build_version": "fork",
   "build_tag": "",
   "source_files": {
@@ -416,8 +416,8 @@
     "internal/operations/model_advice.go": "083ce636324abe4db634a3be03768d22a9a277222f5bd0777616f02ae50dcb36",
     "internal/operations/model_advice_credentials.go": "9e7bb7799c967cff9bbe5ba36b6da8b4458288fb33bc10e3c502bfd2d57c9875",
     "internal/operations/model_advice_test.go": "08babc2446d0e512f591c04d69b94779560d51d9d319da76f73554dbcc0b4e97",
-    "internal/operations/model_groups.go": "73fabe0906e866c234a5e24b90d6283de53dd262286df020abd761ec61263524",
-    "internal/operations/model_groups_test.go": "cb31c39f312d9b25d3477c0593b9909b7b2e2390fd52c85d1542f55246898ee2",
+    "internal/operations/model_groups.go": "1767fdd23d068cbffe98b8480111a9c0d1080e30bb93e651aa2ed89c0ee9446f",
+    "internal/operations/model_groups_test.go": "b3484d2c9ac845bd5c3c40ee8ff10ccff0add9ac346245034ffe43e10c143a24",
     "internal/operations/model_square.go": "273bb7d3a6d1fb88a6d2b610cc5385ee7ea5408ca95432e72fe44b8aa4777f2b",
     "internal/operations/model_square_test.go": "8927ba774809a2cbe3f911e6875e61bf11e8a52426cd39f6c19746b0902d46b5",
     "internal/operations/oauth.go": "7c387a9605a03f73cc4dba568546a0d0d161c8a42827e307f470d58f21468d45",
@@ -425,7 +425,7 @@
     "internal/operations/pricing_test.go": "e465a15a74701fa62fe245bd1be10235fd48b34fb0cd5c9db5338c8cede35c79",
     "internal/operations/provider_mutations.go": "27a37f8e9e58d92c194c69af7f1c881933cb4f14ce2f41bde1defddb91660c59",
     "internal/operations/providers.go": "48ebc391630241174a72ea6e11039b8fc19ea249297b206fd729236d4c85f15d",
-    "internal/operations/quota.go": "dcc22676fe95d97696088deb8f79e84fc7a1bf6fdefef0475830af1fb9825e1c",
+    "internal/operations/quota.go": "eb85ef3e8499071b159a89c47a7349da656024a811d4487410617d19305fd4d6",
     "internal/operations/quota_actions.go": "7ab2b96add71be82ff7ce2116a8a4912252ae5f927c2ebde92e94a5423253294",
     "internal/operations/quota_auto_refresh.go": "4168ca4217479d1ce30476a9cf44a0ee51fae3fd23abdc49a9fbd0ad0442cd04",
     "internal/operations/quota_auto_refresh_test.go": "efc5e01eae2a9793f3f07455051b3624ec44f3f83ed5cc2c61d452006b20e15c",
@@ -433,7 +433,7 @@
     "internal/operations/quota_observations_test.go": "f9a3803f100e830549832f3b163bed4ceceef46a64422be1db994f573401ecf7",
     "internal/operations/quota_prediction.go": "c93ffbdd3f9b960e24e757cd987f4769a6340d4fece7ade7ef4d71b1f35a3dba",
     "internal/operations/quota_prediction_test.go": "816c331e36a34543592b79dddebbfaa0942bd02657aecc46ade178838f98a09b",
-    "internal/operations/quota_test.go": "38701fbe3eb1dacc345668e3e60e598ecabeafba05009ff4939721c521f00606",
+    "internal/operations/quota_test.go": "40d28da6b2873a53eac1e86939ec1a70b39ae7faed84016db5ef564ca523026a",
     "internal/operations/reset_advice.go": "4e15b338158ed1cfe2cc3391f3973a430b93ca5ffd852d1ef39369be136c9756",
     "internal/operations/reset_advice_announcements_test.go": "0548343158e3bf5ccae17f0d405691bb1f54814827dba3fa762bc85b4ec8e708",
     "internal/operations/reset_advice_test.go": "5cce339a8c6431e396e3fe2e0be74650e3f3caf2b589223e5fe0c5df6b6c0487",
@@ -1870,7 +1870,7 @@
     "web/vite.config.ts": "3f50064ae243692f82ee42550741a3aba329229a7f35fc3f88d9a1ae7054d10b",
     "web/vitest.config.ts": "5690a58b3807385034af0fe51e7e26ea37d67f3f4c20e4190354f94e61c07d3a"
   },
-  "source_sha256": "9993d5e7b10ab697977bf457c0cc15f07791d791ab34c347b96a4e37097898ea",
+  "source_sha256": "45153476b3302569751d0aafb9f694996521f40fea04bf2a5607b3e783d5a0b6",
   "frontend_sha256": "021d5c780d81ccd0802ba5b4b732ee48bcd4f21225010dc3654704c65788e587",
   "assets": {
     ".gitkeep": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
