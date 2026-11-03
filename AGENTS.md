@@ -16,6 +16,10 @@
 - 建分支、写 commit、开 PR 之前，先读开发流程规范全文：`gh api repos/LambdaTheory/team-context/contents/rules/dev-workflow.md -H "Accept: application/vnd.github.raw"`
 <!-- team-context:end -->
 
+### 本仓库的提交身份
+
+上面团队规范里的 bot 身份要求在本仓库不适用：`lambdatheory-agent` App 没有装在 `LambdaTheory/oh-my-cpa`，近期也没有安装计划。本仓库的提交、推送和 PR 评论一律用当前登录的人类身份 `Newoahil`（88387859+Newoahil@users.noreply.github.com），不写 bot 作者，也不需要先报告接入缺口。这是仓库所有者 2026-11-03 授权的例外，靠独立会话和独立 agent 保证独立性，不靠账号；依据见 [ADR 0117](docs/adr/0117-agent-commits-use-the-human-git-identity.md)。
+
 **本项目的集成分支是 `dev`。** `master` 停在 2026-10-16 的最后一次合并，不再作为集成分支；`deploy/prebuilt` 是发布分支，只由 `scripts/prebuilt-web.mjs publish` 推进，不直接合代码进去。
 
 ---
