@@ -4144,7 +4144,7 @@ read rather than a second by-id route, and the add page's candidates come from
 `GET /management/model-square` - the advertised call names and aliases - with models already
 in the group left out. A move saves the complete order on the click and is optimistic; a
 refused save puts the last stored order back under a retry notice. No page states which
-other groups hold a model, and none draws availability or average usage: the management API
+other groups hold a model, and none draws availability or balances: the management API
 exposes no per-model reading for either, so drawing them would state numbers the console
 cannot verify.
 
