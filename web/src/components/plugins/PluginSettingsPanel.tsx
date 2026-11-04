@@ -3,6 +3,7 @@ import { Button, Checkbox, Input, Select, Tooltip } from 'antd';
 import { Switch } from '../common/Switch';
 import { PageLoading } from '../common/PageLoading';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { DeleteOutlined, PlusOutlined, SafetyCertificateOutlined, SaveOutlined, UndoOutlined } from '../icons';
 import { api, ApiError, apiErrorCode, describeError } from '../../api/client';
 import { useT } from '../../i18n';
@@ -64,6 +65,7 @@ export function PluginSettingsPanel({ isDemo }: PluginSettingsPanelProps) {
   const t = useT();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const settingsQuery = useQuery({
     queryKey: ['management-plugin-settings'],
@@ -225,9 +227,16 @@ export function PluginSettingsPanel({ isDemo }: PluginSettingsPanelProps) {
             )}
           />
           <div className={styles['source-list']}>
-            <div className={styles['source-fixed']}>
+            <div className={styles['source-fixed']} data-plugin-official-source>
               <SafetyCertificateOutlined />
-              {t('plugin.settings_official_source')}
+              <span className={styles['source-fixed-label']}>{t('plugin.settings_official_source')}</span>
+            </div>
+            <div className={styles['source-fixed']} data-plugin-omc-source>
+              <SafetyCertificateOutlined />
+              <span className={styles['source-fixed-label']}>{t('plugin.settings_omc_source')}</span>
+              <Button type="link" size="small" className={styles['source-fixed-action']} onClick={() => navigate('/omc-settings')}>
+                {t('plugin.settings_omc_source_open')}
+              </Button>
             </div>
             {current.sources.map((source, index) => {
               const issue = issueFor((candidate) => (candidate.kind === 'source-url' || candidate.kind === 'source-duplicate') && candidate.index === index);

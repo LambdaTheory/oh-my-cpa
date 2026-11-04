@@ -97,8 +97,12 @@ export interface StorePluginItem {
   logo?: string;
   install_type?: string;
   platforms: string[];
-  /** From the built-in registry and a first-party repository; decided by the server. */
+  /** CPA's built-in registry listed the entry; decided by the server from the source id. */
   is_official: boolean;
+  /** The entry's repository is published by the gateway vendor; decided by the server. */
+  is_official_repository: boolean;
+  /** From Oh My CPA's own registry, which the console keeps configured; also decided by the server. */
+  is_omc: boolean;
   auth_required: boolean;
   auth_configured: boolean;
   installed: boolean;
@@ -149,9 +153,13 @@ export interface PluginSettings {
   dir: string;
   store_sources: string[];
   store_auth: PluginStoreAuthRule[];
+  /** The registry Oh My CPA manages itself; it is not an entry of `store_sources`. */
+  omc_source_url: string;
+  omc_source_enabled: boolean;
 }
 
-export type PluginSettingsUpdate = Omit<PluginSettings, 'dir'>;
+/** The fields a save owns; the managed source's address and switch are the server's. */
+export type PluginSettingsUpdate = Pick<PluginSettings, 'revision' | 'enabled' | 'store_sources' | 'store_auth'>;
 
 /** The name a plugin is called by in the console: its registered name, then its id. */
 export function pluginDisplayName(plugin: { id: string; metadata?: { name?: string } }): string {
