@@ -1,12 +1,10 @@
 import React from 'react';
-import { Button, Tooltip } from 'antd';
+import { Button } from 'antd';
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/client';
 import { useT } from '../../i18n';
 import { isDemoMode } from '../../types/demoMode';
 import type { DashboardPredictionsResponse, DashboardPredictionItem } from '../../types/quotaPrediction';
-import { formatTokensFull } from '../../types/tokenDisplay';
-import dayjs from '../../utils/time';
 import { ConfirmAction } from '../common/ConfirmAction';
 import { EmptyState } from '../common/EmptyState';
 import { Panel } from '../common/Panel';
@@ -19,7 +17,20 @@ import { Tag, type TagTone } from '../common/Tag';
 import { LoadFailure, Notice, useToast } from '../feedback';
 import { SendOutlined } from '../icons';
 import styles from './QuotaPrediction.module.css';
-import { assessPrediction, classifyPredictionFailure, predictionDeviation, summarizePredictions, summarizeUnpushed, type PredictionSufficiency } from './quotaPredictionLogic';
+import {
+  formatPredictionDeviation,
+  formatPredictionETA,
+  formatPredictionPercent,
+  isExhausted,
+  isStaleReading,
+  predictionConclusion,
+  predictionLasts,
+  predictionUnavailableKey,
+  sortPredictions,
+  summarizePredictions,
+  summarizeUnpushed,
+  type PredictionLasts,
+} from './quotaPredictionLogic';
 
 export const QUOTA_PREDICTION_QUERY_KEY = 'dashboard-quota-predictions';
 export const QUOTA_PREDICTION_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
@@ -30,6 +41,8 @@ export const QUOTA_PREDICTION_REFRESH_OPTIONS = Object.freeze({
 });
 
 const PROVIDER_ORDER = ['antigravity', 'claude', 'codex', 'ollama', 'step'];
+
+const LASTS_TONES: Record<PredictionLasts, TagTone> = { yes: 'success', no: 'danger', unknown: 'neutral' };
 
 export interface QuotaPredictionPanelProps {
   data?: DashboardPredictionsResponse;
@@ -43,32 +56,9 @@ export interface QuotaPredictionPanelProps {
   onSend?: () => void;
 }
 
-function formatPercent(value: number | null | undefined, t: ReturnType<typeof useT>): string {
-  if (value == null || !Number.isFinite(value)) return t('dash.prediction.missing');
-  return value > 0 && value < 0.1 ? '<0.1%' : `${value.toFixed(1)}%`;
-}
-
 function formatReset(value: number | null | undefined, t: ReturnType<typeof useT>): string {
-  return value == null || value <= 0 ? t('dash.prediction.missing') : dayjs(value).format('YYYY-MM-DD HH:mm');
-}
-
-function formatEndurance(item: DashboardPredictionItem, generatedAtMS: number, t: ReturnType<typeof useT>): string {
-  const assessment = assessPrediction(item, generatedAtMS);
-  if (assessment.enduranceMS !== null) {
-    if (assessment.enduranceMS <= 0) return t('dash.prediction.exhausted');
-    if (assessment.enduranceMS < 60_000) return t('dash.prediction.less_minute');
-    if (assessment.enduranceMS < 3_600_000) return t('dash.prediction.duration_minutes', { n: Math.ceil(assessment.enduranceMS / 60_000) });
-    return t('dash.prediction.duration_hours', { n: (assessment.enduranceMS / 3_600_000).toFixed(1) });
-  }
-  if (assessment.hasForecast && item.verdict !== 'will_exhaust') return t('dash.prediction.through_reset');
-  return t('dash.prediction.missing');
-}
-
-function formatRemaining(item: DashboardPredictionItem, generatedAtMS: number, t: ReturnType<typeof useT>): string {
-  const remaining = assessPrediction(item, generatedAtMS).remainingPercent;
-  if (remaining === null) return t('dash.prediction.missing');
-  if (remaining === 0) return t('dash.prediction.exhausted');
-  return formatPercent(remaining, t);
+  if (value == null || value <= 0) return t('dash.prediction.unknown_short');
+  return new Date(value).toLocaleString();
 }
 
 function providerLabel(provider: string, t: ReturnType<typeof useT>): string {
@@ -83,61 +73,52 @@ function translatedValue(prefix: string, value: string, t: ReturnType<typeof use
   return label === key ? value : label;
 }
 
-const SUFFICIENCY_TONES: Record<PredictionSufficiency, TagTone> = { enough: 'success', insufficient: 'danger', unknown: 'neutral' };
-
-const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: number; hasReadError: boolean }> = ({ item, generatedAtMS, hasReadError }) => {
+const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: number }> = ({ item, generatedAtMS }) => {
   const t = useT();
   const credentialLabel = item.credential_label || item.auth_index || t('dash.prediction.credential_unknown');
   const windowLabel = translatedValue('dash.prediction.window', item.window_kind, t);
   const windowDetail = item.window_model || item.window_id;
-  const assessment = assessPrediction(item, generatedAtMS);
-  const failure = hasReadError ? 'reading_failed' : classifyPredictionFailure(item, generatedAtMS);
-  const sufficiency = hasReadError ? 'unknown' : assessment.untilReset;
-  const details = item.reasons.map((reason) => translatedValue('dash.prediction.reason', reason, t));
-  if (item.capacity_unavailable) details.push(translatedValue('dash.prediction.reason', item.capacity_unavailable, t));
-  const failureDetail = details.join(' · ') || t('dash.prediction.missing');
-  const advice = hasReadError || sufficiency === 'unknown' ? t('dash.prediction.advice_check')
-    : assessment.enduranceMS === 0 ? t('dash.prediction.advice_exhausted')
-    : assessment.isLow && item.lasts_until_reset !== true ? t('dash.prediction.advice_low')
-      : assessment.isUrgent ? t('dash.prediction.advice_urgent', { n: Math.max(1, Math.ceil((assessment.enduranceMS ?? 0) / 3_600_000)) })
-        : sufficiency === 'insufficient' ? t('dash.prediction.advice_later') : t('dash.prediction.advice_none');
-  const hasTokenEstimate = assessment.remainingPercent !== null && item.remaining_tokens != null
-    && item.remaining_tokens > 0 && item.capacity_error_percent != null;
-  const hasWindowEstimate = assessment.remainingPercent !== null && item.remaining_window_hours != null
-    && item.remaining_window_hours > 0 && item.window_error_hours != null;
-  const deviation = predictionDeviation(item);
+  const lasts = predictionLasts(item);
+  const stale = isStaleReading(item);
+  const conclusion = predictionConclusion(item, generatedAtMS);
+  const reasons = item.reasons.map((reason) => translatedValue('dash.prediction.reason', reason, t));
+  const diagnostics = [item.verdict, item.evidence, ...reasons].filter(Boolean).join(' · ');
   return (
-    <li className={styles['row']} data-sufficiency={sufficiency}>
+    <li className={styles['row']} data-lasts={lasts} data-exhausted={isExhausted(item) ? 'true' : undefined}>
       <div className={styles['identity']}>
         <strong title={credentialLabel}>{credentialLabel}</strong>
         <span>{item.window_kind === 'model_scoped' ? windowLabel + ' · ' + windowDetail : windowLabel}</span>
       </div>
       <div className={styles['verdict']}>
-        <Tag size="small" tone={SUFFICIENCY_TONES[sufficiency]}>{t(`dash.prediction.sufficiency.${sufficiency}`)}</Tag>
-        {failure && <Tooltip title={failureDetail} trigger={['hover', 'focus']}><span tabIndex={0} className={styles['reason-trigger']}><Tag size="small">{t(`dash.prediction.failure.${failure}`)}</Tag></span></Tooltip>}
+        <Tag size="small" tone={LASTS_TONES[lasts]}>{t(`dash.prediction.lasts.${lasts}`)}</Tag>
+        {stale && <Tag size="small">{t('dash.prediction.expired')}</Tag>}
       </div>
       <div className={styles['combined-reading']}>
-        <div><span>{t('dash.prediction.remaining_amount')}</span><b>{hasReadError ? t('dash.prediction.missing') : formatRemaining(item, generatedAtMS, t)}</b></div>
-        <div><span>{t('dash.prediction.endurance')}</span><b>{hasReadError ? t('dash.prediction.missing') : formatEndurance(item, generatedAtMS, t)}</b></div>
+        <div><span>{t('dash.prediction.actual')}</span><b>{formatPredictionPercent(item.used_percent, t)}</b></div>
+        <div><span>{t('dash.prediction.expected')}</span><b>{formatPredictionPercent(item.expected_used_percent, t)}</b></div>
+        <div className={styles['deviation']}><span>{t('dash.prediction.deviation')}</span><b>{formatPredictionDeviation(item, t)}</b></div>
       </div>
-      {!hasReadError && (
-        <p className={styles['context']}>
-          {t('dash.prediction.usage_vs_expected', {
-            actual: formatPercent(item.used_percent, t),
-            expected: formatPercent(item.expected_used_percent, t),
-          })}
-          {deviation && ` · ${deviation.direction === 'even'
-            ? t('dash.prediction.deviation_even')
-            : t(`dash.prediction.deviation_${deviation.direction}`, { n: deviation.points.toFixed(1) })}`}
-        </p>
-      )}
-      {!hasReadError && hasTokenEstimate ? (
-        <p className={styles['estimate']}>{t('dash.prediction.token_estimate', { n: formatTokensFull(item.remaining_tokens!), error: item.capacity_error_percent! })}</p>
-      ) : !hasReadError && hasWindowEstimate ? (
-        <p className={styles['estimate']}>{t('dash.prediction.window_estimate', { n: Number(item.remaining_window_hours!.toPrecision(3)), error: Number(item.window_error_hours!.toPrecision(2)) })}</p>
-      ) : null}
-      <p className={styles['context']}>{t('dash.prediction.reset')} <span title={formatReset(item.reset_at_ms, t)}>{formatReset(item.reset_at_ms, t)}</span></p>
-      <p className={styles['advice']}>{advice}</p>
+      <p className={styles['context']}>
+        {t('dash.prediction.eta_label')} <span>{formatPredictionETA(item, t)}</span>
+        {' · '}
+        {t('dash.prediction.reset')} <span title={formatReset(item.reset_at_ms, t)}>{formatReset(item.reset_at_ms, t)}</span>
+      </p>
+      <p className={styles['advice']}>
+        {t(conclusion.key, conclusion.vars)}
+        {lasts === 'no' && !stale && !isExhausted(item) && ` ${t('dash.prediction.advice_backup')}`}
+      </p>
+      <details className={styles['diagnostics']}>
+        <summary>{t('dash.prediction.diagnostics')}</summary>
+        <p>{diagnostics || t('dash.prediction.unknown_short')}</p>
+        {item.unavailable_reason && <p>{t(predictionUnavailableKey(item.unavailable_reason))}</p>}
+        {(item.sample_count != null || item.coverage_seconds != null) && (
+          <p>
+            {item.sample_count != null && t('dash.prediction.sample', { n: item.sample_count })}
+            {item.sample_count != null && item.coverage_seconds != null && ' · '}
+            {item.coverage_seconds != null && t('dash.prediction.coverage', { n: Math.round((item.coverage_seconds / 3600) * 10) / 10 })}
+          </p>
+        )}
+      </details>
     </li>
   );
 };
@@ -163,12 +144,10 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
         || left.provider.localeCompare(right.provider);
     }), [data?.providers]);
 
-  const insufficientCount = isError ? null : groups.filter((group) => summarizePredictions(group.items, data!.generated_at_ms, data!.omitted > 0).untilReset === 'insufficient').length;
-  const hasUnknownProvider = groups.some((group) => summarizePredictions(group.items, data!.generated_at_ms, data!.omitted > 0).untilReset === 'unknown');
-  const unpushed = React.useMemo(
-    () => summarizeUnpushed(groups.flatMap((group) => group.items), data?.generated_at_ms ?? 0),
-    [groups, data?.generated_at_ms],
-  );
+  const generatedAtMS = data?.generated_at_ms ?? 0;
+  const allItems = React.useMemo(() => groups.flatMap((group) => group.items), [groups]);
+  const summary = summarizePredictions(allItems);
+  const unpushed = summarizeUnpushed(allItems);
 
   return (
     <Panel className={styles['panel']} data-testid="dashboard-quota-prediction">
@@ -191,7 +170,12 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
         </div>
       </div>
 
-      {data && groups.length > 0 && <p className={styles['summary-count']}>{insufficientCount === null ? t('dash.prediction.sufficiency.unknown') : insufficientCount > 0 ? t('dash.prediction.providers_short', { n: insufficientCount }) : hasUnknownProvider ? t('dash.prediction.sufficiency.unknown') : t('dash.prediction.providers_clear')}</p>}
+      {data && groups.length > 0 && (
+        <p className={styles['summary-count']} data-testid="prediction-summary">
+          {t('dash.prediction.summary_window_counts', { cannot: summary.cannot, unknown: summary.unknown })}
+          {data.omitted > 0 ? ` · ${t('dash.prediction.summary_omitted', { n: data.omitted })}` : ''}
+        </p>
+      )}
       {isError && data && <Notice tone="warning" title={t('dash.prediction.stale_data')} description={error instanceof Error ? error.message : undefined} />}
       {isError && !data ? (
         <LoadFailure title={t('dash.prediction.error')} error={error} onRetry={onRefresh} />
@@ -201,20 +185,33 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
         <EmptyState size="compact" title={t('dash.prediction.empty')} description={t('dash.prediction.empty_desc')} />
       ) : (
         <div className={styles['groups']}>
-          {groups.map((group) => (
-            <section key={group.provider} className={styles['group']} aria-label={providerLabel(group.provider, t)}>
-              <details>
-              <summary className={styles['group-head']}>
-                <ProviderBrandIcon iconId={credentialProviderIconId(group.provider === 'step' ? 'stepfun' : group.provider)} size={18} />
-                <strong>{providerLabel(group.provider, t)}</strong>
-                <Tag size="small" tone={SUFFICIENCY_TONES[isError ? 'unknown' : summarizePredictions(group.items, data!.generated_at_ms, data!.omitted > 0).untilReset]}>
-                  {t(`dash.prediction.sufficiency.${isError ? 'unknown' : summarizePredictions(group.items, data!.generated_at_ms, data!.omitted > 0).untilReset}`)}
-                </Tag>
-              </summary>
-              <ul>{group.items.map((item) => <PredictionRow key={JSON.stringify([item.auth_index ?? item.credential_label, item.window_id, item.window_scope, item.window_model])} item={item} generatedAtMS={data!.generated_at_ms} hasReadError={isError} />)}</ul>
-              </details>
-            </section>
-          ))}
+          {groups.map((group) => {
+            const groupSummary = summarizePredictions(group.items);
+            const sorted = sortPredictions(group.items, generatedAtMS);
+            return (
+              <section key={group.provider} className={styles['group']} aria-label={providerLabel(group.provider, t)}>
+                <details>
+                  <summary className={styles['group-head']}>
+                    <ProviderBrandIcon iconId={credentialProviderIconId(group.provider === 'step' ? 'stepfun' : group.provider)} size={18} />
+                    <strong>{providerLabel(group.provider, t)}</strong>
+                    <span>{t('dash.prediction.group_summary', { credentials: group.items.length, cannot: groupSummary.cannot })}</span>
+                    <Tag size="small" tone={groupSummary.cannot > 0 ? 'danger' : groupSummary.unknown > 0 ? 'neutral' : 'success'}>
+                      {groupSummary.cannot > 0
+                        ? t('dash.prediction.lasts.no')
+                        : groupSummary.unknown > 0 ? t('dash.prediction.lasts.unknown') : t('dash.prediction.lasts.yes')}
+                    </Tag>
+                  </summary>
+                  <ul>{sorted.map((item) => (
+                    <PredictionRow
+                      key={JSON.stringify([item.auth_index ?? item.credential_label, item.window_id, item.window_scope, item.window_model])}
+                      item={item}
+                      generatedAtMS={generatedAtMS}
+                    />
+                  ))}</ul>
+                </details>
+              </section>
+            );
+          })}
           {data && data.omitted > 0 && <Notice tone="info" title={t('dash.prediction.omitted', { n: data.omitted })} />}
         </div>
       )}
