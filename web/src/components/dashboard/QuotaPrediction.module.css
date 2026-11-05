@@ -173,6 +173,13 @@
   font-weight: 600;
 }
 
+.footer {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
 .reason-trigger {
   cursor: help;
 }

@@ -19,7 +19,7 @@ import { Tag, type TagTone } from '../common/Tag';
 import { LoadFailure, Notice, useToast } from '../feedback';
 import { SendOutlined } from '../icons';
 import styles from './QuotaPrediction.module.css';
-import { assessPrediction, classifyPredictionFailure, summarizePredictions, type PredictionSufficiency } from './quotaPredictionLogic';
+import { assessPrediction, classifyPredictionFailure, predictionDeviation, summarizePredictions, summarizeUnpushed, type PredictionSufficiency } from './quotaPredictionLogic';
 
 export const QUOTA_PREDICTION_QUERY_KEY = 'dashboard-quota-predictions';
 export const QUOTA_PREDICTION_REFETCH_INTERVAL_MS = 5 * 60 * 1000;
@@ -105,6 +105,7 @@ const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: nu
     && item.remaining_tokens > 0 && item.capacity_error_percent != null;
   const hasWindowEstimate = assessment.remainingPercent !== null && item.remaining_window_hours != null
     && item.remaining_window_hours > 0 && item.window_error_hours != null;
+  const deviation = predictionDeviation(item);
   return (
     <li className={styles['row']} data-sufficiency={sufficiency}>
       <div className={styles['identity']}>
@@ -125,6 +126,9 @@ const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: nu
             actual: formatPercent(item.used_percent, t),
             expected: formatPercent(item.expected_used_percent, t),
           })}
+          {deviation && ` · ${deviation.direction === 'even'
+            ? t('dash.prediction.deviation_even')
+            : t(`dash.prediction.deviation_${deviation.direction}`, { n: deviation.points.toFixed(1) })}`}
         </p>
       )}
       {!hasReadError && hasTokenEstimate ? (
@@ -161,6 +165,10 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
 
   const insufficientCount = isError ? null : groups.filter((group) => summarizePredictions(group.items, data!.generated_at_ms, data!.omitted > 0).untilReset === 'insufficient').length;
   const hasUnknownProvider = groups.some((group) => summarizePredictions(group.items, data!.generated_at_ms, data!.omitted > 0).untilReset === 'unknown');
+  const unpushed = React.useMemo(
+    () => summarizeUnpushed(groups.flatMap((group) => group.items), data?.generated_at_ms ?? 0),
+    [groups, data?.generated_at_ms],
+  );
 
   return (
     <Panel className={styles['panel']} data-testid="dashboard-quota-prediction">
@@ -209,6 +217,9 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
           ))}
           {data && data.omitted > 0 && <Notice tone="info" title={t('dash.prediction.omitted', { n: data.omitted })} />}
         </div>
+      )}
+      {data && !isError && groups.length > 0 && (
+        <p className={styles['footer']}>{t('dash.prediction.unpushed', unpushed)}</p>
       )}
     </Panel>
   );
