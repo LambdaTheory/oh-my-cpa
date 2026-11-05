@@ -119,6 +119,11 @@ func NewServer(ctx context.Context, backend Backend, options Options) (*mcp.Serv
 			if options.Caller != nil {
 				ctx = capability.WithCaller(ctx, options.Caller(request))
 			}
+			// A capability that answers with a link for a person (a repository key's one-time
+			// approval link) gets the console address from the transport, never from a guess.
+			if options.ConsoleURL != nil {
+				ctx = capability.WithConsoleURL(ctx, options.ConsoleURL(request))
+			}
 			arguments := request.Params.Arguments
 			// A client may omit the arguments of a tool that takes none.
 			if len(arguments) == 0 {

@@ -240,20 +240,44 @@ func TestManagementRepoKeyEndpoints(t *testing.T) {
 		t.Fatalf("detail after stop = %+v", detail)
 	}
 
-	// 7. Re-enabling needs the key itself; OMC keeps no plaintext, so a wrong value is
-	// refused and the real one restores the same key (AC-31, AC-35).
-	resp, payload = doJSON(t, client, http.MethodPost, baseURL+"/omc/api/v1/management/repo-keys/"+bindingID+"/reenable",
-		`{"reason":"mistake","key":"sk-not-the-key"}`)
+	// 7. Re-enabling is a request a person approves (AC-31): the console files it with a
+	// reason, it waits in the same queue, and the key comes back from the sealed copy so
+	// the operator never pastes a secret and OMC keeps no plaintext (AC-35).
+	resp, payload = doJSON(t, client, http.MethodPost, baseURL+"/omc/api/v1/management/repo-keys/"+bindingID+"/reenable-request",
+		`{"reason":""}`)
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Fatalf("a mismatched key answered %d: %s", resp.StatusCode, payload)
+		t.Fatalf("a reasonless re-enable request answered %d: %s", resp.StatusCode, payload)
 	}
-	resp, payload = doJSON(t, client, http.MethodPost, baseURL+"/omc/api/v1/management/repo-keys/"+bindingID+"/reenable",
-		fmt.Sprintf(`{"reason":"stopped by mistake","key":%q}`, issued))
+	resp, payload = doJSON(t, client, http.MethodPost, baseURL+"/omc/api/v1/management/repo-keys/"+bindingID+"/reenable-request",
+		`{"reason":"stopped by mistake"}`)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("reenable status = %d body %s", resp.StatusCode, payload)
+		t.Fatalf("reenable request status = %d body %s", resp.StatusCode, payload)
 	}
-	if err := json.Unmarshal(payload, &stopped); err != nil || stopped.Key.Status != "active" {
-		t.Fatalf("reenabled key = %s", payload)
+	var reenableRequest struct {
+		Application RepoKeyApplicationDTO `json:"application"`
+	}
+	if err := json.Unmarshal(payload, &reenableRequest); err != nil {
+		t.Fatalf("reenable request response is not JSON: %s", payload)
+	}
+	if reenableRequest.Application.Status != "pending" || reenableRequest.Application.RequestKind != "reenable" ||
+		reenableRequest.Application.TargetBindingID != bindingID {
+		t.Fatalf("re-enable request = %+v", reenableRequest.Application)
+	}
+	// Filing it changed nothing yet: the key is still stopped and out of the gateway.
+	for _, key := range state.clientKeys {
+		if key == issued {
+			t.Fatal("the key came back into the gateway before the approval")
+		}
+	}
+	resp, payload = doJSON(t, client, http.MethodPost,
+		baseURL+"/omc/api/v1/management/repo-keys/applications/"+reenableRequest.Application.ID+"/approve",
+		`{"reason":"stopped by mistake"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reenable approval status = %d body %s", resp.StatusCode, payload)
+	}
+	if err := json.Unmarshal(payload, &approved); err != nil ||
+		approved.Application.Status != "approved" || approved.Application.DecisionReason != "stopped by mistake" {
+		t.Fatalf("reenable approval = %s", payload)
 	}
 	found := false
 	for _, key := range state.clientKeys {
@@ -263,6 +287,31 @@ func TestManagementRepoKeyEndpoints(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the re-enabled key is not back in the gateway")
+	}
+	// The same key, not a fresh one: a re-enable never issues.
+	if len(state.clientKeys) != 3 {
+		t.Fatalf("re-enable issued a new key: %v", state.clientKeys)
+	}
+	// It is active again, and it did not land in the delivery queue. (A fresh value: an
+	// omitted field would otherwise keep the stopped_at_ms decoded into the earlier one.)
+	var active struct {
+		Key RepoKeyBindingDTO `json:"key"`
+	}
+	resp, payload = getJSON(t, client, baseURL+"/omc/api/v1/management/repo-keys/"+bindingID)
+	if err := json.Unmarshal(payload, &active); err != nil || active.Key.Status != "active" || active.Key.StoppedAtMS != 0 {
+		t.Fatalf("key after re-enable = %v %q %d %s", err, active.Key.Status, active.Key.StoppedAtMS, payload)
+	}
+	resp, payload = getJSON(t, client, baseURL+"/omc/api/v1/management/repo-keys/applications?status=approved&awaiting=true")
+	var awaiting struct {
+		Applications []RepoKeyApplicationDTO `json:"applications"`
+	}
+	if err := json.Unmarshal(payload, &awaiting); err != nil {
+		t.Fatalf("awaiting list = %s", payload)
+	}
+	for _, application := range awaiting.Applications {
+		if application.ID == reenableRequest.Application.ID {
+			t.Fatalf("the re-enable request waits for a delivery a caller never asked for: %+v", application)
+		}
 	}
 
 	// 8. The reveal is the one place the plaintext leaves, and it is audited on its own.

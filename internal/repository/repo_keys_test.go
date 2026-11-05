@@ -38,11 +38,31 @@ func newRepoKeyBinding(repo *Repository, ctx context.Context, t *testing.T, repo
 	binding, err := repo.CreateRepoKeyBinding(ctx, RepoKeyBinding{
 		InstanceID: "default", RepoID: repoID, RepoHasRemote: true,
 		KeyFingerprint: fingerprint, KeyMask: mask, CreatedBy: "operator@example.com",
+		// The deployment-cipher copy a re-enable unseals; the repository only requires its
+		// presence (AC-31), so the tests carry a placeholder.
+		KeySealed: "sealed:" + fingerprint,
 	}, nowMS, testAudit("repo_key.issue"))
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
 	return binding
+}
+
+// newRepoKeyReenableRequest files the request that asks to put a stopped key back in
+// service. It names the binding instead of carrying a public key (AC-31).
+func newRepoKeyReenableRequest(t *testing.T, repo *Repository, ctx context.Context, binding RepoKeyBinding, token string, nowMS int64) RepoKeyApplication {
+	t.Helper()
+	application, created, err := repo.CreateRepoKeyApplication(ctx, RepoKeyApplication{
+		InstanceID: binding.InstanceID, RepoID: binding.RepoID, RepoHasRemote: true,
+		AgentName: "console", DeviceName: "console", Purpose: "put the stopped key back in service",
+		Kind: "reuse", RequestKind: "reenable", TargetBindingID: binding.ID,
+		KeyFingerprint: binding.KeyFingerprint, KeyMask: binding.KeyMask, KeyAlgorithm: "x25519",
+		Source: "console", AuthorizationTokenHash: repokey.TokenFingerprint(token), TokenExpiresAtMS: nowMS + 60_000,
+	}, nowMS, testAudit("repo_key.apply"))
+	if err != nil || !created {
+		t.Fatalf("reenable request: %v created=%v", err, created)
+	}
+	return application
 }
 
 func countAudit(t *testing.T, repo *Repository, ctx context.Context, action string) int {
@@ -139,13 +159,30 @@ func TestRepoKeyStopAndReenableRetainsHistory(t *testing.T) {
 		t.Fatalf("stopping twice error = %v, want ErrRepoKeyConflict", err)
 	}
 
-	reenabled, err := repo.ReenableRepoKeyBinding(ctx, binding.ID, "operator@example.com", "cause fixed", 3000,
+	// Re-enabling is a request a person approves, not a switch the console throws (AC-31).
+	request := newRepoKeyReenableRequest(t, repo, ctx, binding, "token-reenable", 2500)
+	reenabled, err := repo.ApproveRepoKeyReenable(ctx, request.ID, "operator@example.com", "cause fixed", 3000,
 		testAudit("repo_key.reenable"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reenabled.Status != "active" || reenabled.StoppedAtMS != nil {
-		t.Fatalf("reenabled binding = %+v", reenabled)
+	if reenabled.Status != "approved" || reenabled.DecidedAtMS == nil || reenabled.DecisionReason != "cause fixed" {
+		t.Fatalf("approved reenable request = %+v", reenabled)
+	}
+	// The key came back without waiting in the delivery queue: a re-enable hands nothing
+	// to a caller (AC-33).
+	if reenabled.FirstDeliveredAtMS == nil || *reenabled.FirstDeliveredAtMS != 3000 {
+		t.Fatalf("reenable request still waits for delivery: %+v", reenabled)
+	}
+	restored, err := repo.GetActiveRepoKeyBinding(ctx, "default", "org/app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ID != binding.ID || restored.StoppedAtMS != nil {
+		t.Fatalf("reenabled binding = %+v", restored)
+	}
+	if restored.KeyFingerprint != binding.KeyFingerprint {
+		t.Fatalf("reenabled binding = %q, want the same key %q", restored.KeyFingerprint, binding.KeyFingerprint)
 	}
 
 	stops, err := repo.ListRepoKeyStops(ctx, "default", binding.ID)
@@ -162,18 +199,30 @@ func TestRepoKeyStopAndReenableRetainsHistory(t *testing.T) {
 	}
 }
 
-// A leaked key is never put back into service (AC-31).
+// A leaked key is never put back into service (AC-31). The stop drops the sealed copy on
+// purpose, so there is nothing left that could restore it.
 func TestRepoKeyLeakedKeyCannotBeReenabled(t *testing.T) {
 	repo, ctx := repoKeyRepo(t)
 	binding := newRepoKeyBinding(repo, ctx, t, "org/leaky", "fp-leak", "sk-cpa-****cccc", 1000)
-	if _, err := repo.StopRepoKeyBinding(ctx, binding.ID, "operator@example.com", "leaked", "pasted into a ticket", 2000,
-		testAudit("repo_key.stop")); err != nil {
+	stopped, err := repo.StopRepoKeyBinding(ctx, binding.ID, "operator@example.com", "leaked", "pasted into a ticket", 2000,
+		testAudit("repo_key.stop"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err := repo.ReenableRepoKeyBinding(ctx, binding.ID, "operator@example.com", "we think it is fine", 3000,
+	if stopped.KeySealed != "" {
+		t.Fatalf("a leaked key kept its sealed copy: %+v", stopped)
+	}
+	request := newRepoKeyReenableRequest(t, repo, ctx, binding, "token-leak", 2500)
+	_, err = repo.ApproveRepoKeyReenable(ctx, request.ID, "operator@example.com", "we think it is fine", 3000,
 		testAudit("repo_key.reenable"))
 	if !errors.Is(err, ErrRepoKeyBindingNotReenable) {
 		t.Fatalf("reenable leaked error = %v, want ErrRepoKeyBindingNotReenable", err)
+	}
+	if _, err := repo.GetActiveRepoKeyBinding(ctx, "default", "org/leaky"); !errors.Is(err, ErrRepoKeyNotFound) {
+		t.Fatalf("a leaked key answered as active: %v", err)
+	}
+	if count := countAudit(t, repo, ctx, "repo_key.reenable"); count != 0 {
+		t.Fatalf("a refused re-enable still wrote %d audit events", count)
 	}
 }
 
@@ -229,6 +278,41 @@ func TestRepoKeyApplicationDedupeAndPublicKeyRefresh(t *testing.T) {
 	}
 }
 
+// A caller asking again is handed a fresh link. The returned token must be the one the
+// waiting row accepts, so the row rotates with it and the earlier link stops working
+// (AC-8, review F1).
+func TestRepoKeyApplicationDedupeRotatesApprovalToken(t *testing.T) {
+	repo, ctx := repoKeyRepo(t)
+	base := RepoKeyApplication{
+		InstanceID: "default", RepoID: "org/rotate", RepoHasRemote: true,
+		AgentName: "claude", DeviceName: "laptop", Purpose: "run evaluations",
+		Kind: "issue", PublicKey: "x25519:first", PublicKeyFingerprint: "x25519:sha256:first",
+		KeyAlgorithm: "x25519", Source: "agent", AuthorizationTokenHash: repokey.TokenFingerprint("token-1"), TokenExpiresAtMS: 9000,
+	}
+	first, created, err := repo.CreateRepoKeyApplication(ctx, base, 1000, testAudit("repo_key.apply"))
+	if err != nil || !created {
+		t.Fatalf("first application: %v created=%v", err, created)
+	}
+
+	again := base
+	again.AuthorizationTokenHash = repokey.TokenFingerprint("token-2")
+	again.TokenExpiresAtMS = 12000
+	reused, created, err := repo.CreateRepoKeyApplication(ctx, again, 1100, testAudit("repo_key.apply"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || reused.ID != first.ID {
+		t.Fatalf("duplicate applied as %s created=%v, want reuse of %s", reused.ID, created, first.ID)
+	}
+	// The link the caller was just given opens the waiting application...
+	if found, err := repo.GetRepoKeyApplicationByToken(ctx, "token-2"); err != nil || found.ID != first.ID {
+		t.Fatalf("the returned token does not open the application: %v", err)
+	}
+	// ...and the one handed out before it no longer does.
+	if _, err := repo.GetRepoKeyApplicationByToken(ctx, "token-1"); !errors.Is(err, ErrRepoKeyApplicationNotFound) {
+		t.Fatalf("the superseded token still opens the application: %v", err)
+	}
+}
 // A decision is applied once. The second caller (the one-time link, or the console
 // queue) reads the stored outcome instead of re-deciding (AC-8, AC-25).
 func TestRepoKeyDecisionIsAppliedOnce(t *testing.T) {

@@ -160,7 +160,10 @@ func (h *Handler) invokeCapability(writer http.ResponseWriter, request *http.Req
 	if !readAgentInput(writer, request, &input) {
 		return
 	}
-	ctx := capability.WithCaller(request.Context(), requestCaller(request))
+	// The caller reached this deployment, so the console address is known here: capabilities
+	// that answer with a link for a person (repo_key_apply's one-time approval link, AC-8)
+	// build it from this, not from a configured host.
+	ctx := capability.WithConsoleURL(capability.WithCaller(request.Context(), requestCaller(request)), h.consoleURL(request))
 	result, err := h.agent.executor.Invoke(ctx, principal, input.Name, input.Arguments, "")
 	if err != nil {
 		writePlaygroundError(writer, 400, capability.ErrorCode(err))

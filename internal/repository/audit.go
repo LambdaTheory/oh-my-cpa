@@ -322,8 +322,10 @@ func auditFilterClauses(query AuditQuery) ([]string, []any) {
 	}
 	if search := strings.TrimSpace(query.Search); search != "" {
 		pattern := "%" + escapeLikePattern(strings.ToLower(search)) + "%"
-		where = append(where, `(lower(e.action) LIKE ? ESCAPE '\' OR lower(e.target_type) LIKE ? ESCAPE '\' OR lower(e.target_id) LIKE ? ESCAPE '\' OR lower(e.request_id) LIKE ? ESCAPE '\')`)
-		args = append(args, pattern, pattern, pattern, pattern)
+		// details_json is searched too: the repository key trail records the repository, the
+		// agent and the device there, and AC-23 asks the audit page to filter by them.
+		where = append(where, `(lower(e.action) LIKE ? ESCAPE '\' OR lower(e.target_type) LIKE ? ESCAPE '\' OR lower(e.target_id) LIKE ? ESCAPE '\' OR lower(e.request_id) LIKE ? ESCAPE '\' OR lower(COALESCE(e.details_json, '')) LIKE ? ESCAPE '\')`)
+		args = append(args, pattern, pattern, pattern, pattern, pattern)
 	}
 	if query.FoldAttempts {
 		// The request-id pairing is exact. The second arm pairs rows written before
