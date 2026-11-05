@@ -4540,6 +4540,7 @@ const DICT: Record<string, [string, string]> = {
   'insights.metric.requests': ['请求', 'Requests'],
   'insights.metric.latency': ['平均延迟', 'Avg latency'],
   'insights.change_new': ['新增', 'New'],
+  'insights.change_noise': ['在正常波动范围内', 'Within normal variation'],
   'insights.change_was': ['上期 {value}', 'Prev. {value}'],
   'insights.dim.key': ['密钥', 'Key'],
   'insights.dim.call_point': ['调用模型', 'Call model'],
