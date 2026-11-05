@@ -36,9 +36,20 @@
   font-size: var(--text-sm);
 }
 
+.filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
 .search {
   width: 260px;
   max-width: 100%;
+}
+
+.status-filter {
+  width: 120px;
 }
 
 .section {
@@ -156,9 +167,37 @@
   font-size: var(--text-sm);
 }
 
+/* A fingerprint is compared character by character; keep it monospace and unbroken. */
+.fingerprint {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  word-break: break-all;
+}
+
+/* What approving or stopping will do, stated plainly rather than left to be inferred. */
+.impact {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent, var(--border));
+  background: var(--surface-2, transparent);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.audit-link {
+  align-self: flex-start;
+  color: var(--accent, var(--fg));
+  font-size: var(--text-sm);
+}
+
 @media (max-width: 640px) {
   .search {
     width: 100%;
+  }
+
+  .status-filter {
+    flex: 1;
+    width: auto;
   }
 
   .purpose {

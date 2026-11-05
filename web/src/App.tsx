@@ -29,6 +29,7 @@ import {
   DashboardPage,
   AgentPage,
   AuthorizePage,
+  RepoKeyApplyPage,
   ModelSquarePage,
   ModelGroupsPage,
   ModelGroupDetailPage,
@@ -174,6 +175,8 @@ const AppRoutes: React.FC = () => {
       errorElement: <RouteErrorPage />,
       children: [
         { path: 'authorize/:id', element: <AuthorizePage /> },
+        // A repository key's one-time approval link (AC-8), opened from an agent's own program.
+        { path: 'repo-key-apply/:token', element: <RepoKeyApplyPage /> },
       ],
     }],
     { basename: config.basePath || undefined },

@@ -4,9 +4,12 @@ import type { ModelSquareDirectory } from '../types/modelSquare';
 import type {
   RepoKeyApplication,
   RepoKeyApplicationStatus,
+  RepoKeyAuditPushStatus,
   RepoKeyBinding,
   RepoKeyBindingDetail,
   RepoKeyListResponse,
+  RepoKeyRepoView,
+  RepoKeyReview,
 } from '../types/repoKeys';
 import type { CustomIcon } from '../types/customIcons';
 import type { InstalledFont } from '../types/fonts';
@@ -770,11 +773,65 @@ export const api = {
     );
   },
 
-  async approveRepoKeyApplication(id: string): Promise<{ application: RepoKeyApplication }> {
+  async approveRepoKeyApplication(id: string, reason = ''): Promise<{ application: RepoKeyApplication }> {
     return request<{ application: RepoKeyApplication }>(
       `/management/repo-keys/applications/${encodeURIComponent(id)}/approve`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify({ reason }) },
     );
+  },
+
+  /** The approval snapshot the queue and the one-time link both show (AC-4, AC-8). */
+  async getRepoKeyReview(id: string): Promise<RepoKeyReview> {
+    return request<RepoKeyReview>(`/management/repo-keys/applications/${encodeURIComponent(id)}/review`, {
+      method: 'GET',
+    });
+  },
+
+  /** A repository's state as an approver needs it, for the proxy application form (AC-29). */
+  async getRepoKeyRepoStatus(repo: string): Promise<RepoKeyRepoView> {
+    return request<RepoKeyRepoView>(`/management/repo-keys/repo-status?repo=${encodeURIComponent(repo)}`, {
+      method: 'GET',
+    });
+  },
+
+  /** The audit platform link's health (AC-32). */
+  async getRepoKeyAuditPush(): Promise<RepoKeyAuditPushStatus> {
+    return request<RepoKeyAuditPushStatus>('/management/repo-keys/audit-push', { method: 'GET' });
+  },
+
+  /** The one-time approval link's snapshot; the address names the request, the session decides it. */
+  async getRepoKeyApprovalLink(token: string): Promise<RepoKeyReview> {
+    return request<RepoKeyReview>(`/management/repo-keys/apply-link/${encodeURIComponent(token)}`, {
+      method: 'GET',
+    });
+  },
+
+  async approveRepoKeyByLink(token: string, reason = ''): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/apply-link/${encodeURIComponent(token)}/approve`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  async rejectRepoKeyByLink(token: string, reason: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/apply-link/${encodeURIComponent(token)}/reject`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  /** An awaiting envelope, handed to the operator; the hand-out is recorded server-side (AC-33). */
+  async fetchRepoKeyCiphertext(
+    id: string,
+  ): Promise<{ application_id: string; kind: string; key_mask: string; algorithm: string; ciphertext: string; instructions: string }> {
+    return request<{
+      application_id: string;
+      kind: string;
+      key_mask: string;
+      algorithm: string;
+      ciphertext: string;
+      instructions: string;
+    }>(`/management/repo-keys/applications/${encodeURIComponent(id)}/ciphertext`, { method: 'POST' });
   },
 
   async rejectRepoKeyApplication(id: string, reason: string): Promise<{ application: RepoKeyApplication }> {
@@ -784,8 +841,11 @@ export const api = {
     );
   },
 
-  async getRepoKeyBinding(id: string): Promise<RepoKeyBindingDetail> {
-    return request<RepoKeyBindingDetail>(`/management/repo-keys/${encodeURIComponent(id)}`, { method: 'GET' });
+  async getRepoKeyBinding(id: string, window = '7d'): Promise<RepoKeyBindingDetail> {
+    return request<RepoKeyBindingDetail>(
+      `/management/repo-keys/${encodeURIComponent(id)}?window=${encodeURIComponent(window)}`,
+      { method: 'GET' },
+    );
   },
 
   async stopRepoKeyBinding(id: string, category: string, reason: string): Promise<{ key: RepoKeyBinding }> {
@@ -796,16 +856,17 @@ export const api = {
   },
 
   /**
-   * Puts a stopped key back into service.
+   * Asks to put a stopped key back into service.
    *
-   * Oh My CPA stores no plaintext, so the operator supplies the key again; the server checks it
-   * against the stopped record's fingerprint and refuses a value that is not the same key.
+   * This files a request, it does not restore anything: a person approves it in the same queue,
+   * and the server brings the original key back from its sealed copy (AC-31). OMC never asks for
+   * the plaintext.
    */
-  async reenableRepoKeyBinding(id: string, reason: string, key: string): Promise<{ key: RepoKeyBinding }> {
-    return request<{ key: RepoKeyBinding }>(`/management/repo-keys/${encodeURIComponent(id)}/reenable`, {
-      method: 'POST',
-      body: JSON.stringify({ reason, key }),
-    });
+  async requestRepoKeyReenable(id: string, reason: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/${encodeURIComponent(id)}/reenable-request`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
   },
 
   /** The one place a key's value is read back: explicit, with a reason, and audited. */

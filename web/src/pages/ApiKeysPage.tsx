@@ -109,6 +109,21 @@ export const ApiKeysPage: React.FC = () => {
     staleTime: 60_000,
   });
 
+  // Which gateway key belongs to which repository, so the list can mark the ones that do not
+  // (AC-14). The binding carries the gateway's usage fingerprint and never the key itself.
+  const repoKeysQuery = useQuery({
+    queryKey: ['management-repo-keys', 'keys', '', 'all'],
+    queryFn: () => api.getRepoKeys(),
+    staleTime: 30_000,
+  });
+  const repoByKey = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const binding of repoKeysQuery.data?.keys ?? []) {
+      if (binding.status === 'active' && binding.key_fingerprint) map[binding.key_fingerprint] = binding.repo;
+    }
+    return map;
+  }, [repoKeysQuery.data]);
+
   const [searchQuery, setSearchQuery] = React.useState('');
   const [editor, setEditor] = React.useState<EditorState>(CLOSED_EDITOR);
   const [keyInput, setKeyInput] = React.useState('');
@@ -478,6 +493,7 @@ export const ApiKeysPage: React.FC = () => {
             apiKeys={currentApiKeys}
             metadata={keysQuery.data?.keys}
             usage={usageByFingerprint}
+            repoByKey={repoByKey}
             formatTime={formatUsageTime}
             searchQuery={searchQuery}
             isBusy={saveMutation.isPending}
