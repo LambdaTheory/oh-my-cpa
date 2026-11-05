@@ -138,6 +138,11 @@ func demoExportCases() []demoExportCase {
 		// timestamp and adds no members, so the capture is stable across a regeneration
 		// in a way a live database's would not be.
 		{Name: "model-groups", Path: "/api/v1/management/model-groups"},
+		// The availability and balance the group pages draw beside each model, projected
+		// from the fixture's gateway evidence: some models are available, the rest are
+		// unknown because the fixture holds no reading for them, and no balance is
+		// stated. It is a real answer, not an empty one.
+		{Name: "model-group-readings", Path: "/api/v1/management/model-groups/readings"},
 		{Name: "pricing", Path: "/api/v1/pricing"},
 		{Name: "pricing-attention", Path: "/api/v1/pricing/attention"},
 		{Name: "pricing-catalog", Path: "/api/v1/pricing/catalog"},
