@@ -154,6 +154,13 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/management/client-key-aliases", demoAllow, ""},
 	{http.MethodDelete, "/api/v1/management/client-key-aliases/{fingerprint}", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/client-key-usage", demoAllow, ""},
+	// Repository keys are metadata reads in the demo. Approving one would issue or reuse a
+	// real gateway key and hand a working credential to a caller, and revealing one would
+	// print it, so every write stays refused.
+	{http.MethodGet, "/api/v1/management/repo-keys", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/repo-keys/applications", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/repo-keys/applications/{id}", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/repo-keys/{id}", demoAllow, ""},
 	{http.MethodGet, "/api/v1/pricing", demoAllow, ""},
 	{http.MethodGet, "/api/v1/pricing/attention", demoAllow, ""},
 	{http.MethodGet, "/api/v1/pricing/catalog", demoAllow, ""},
@@ -370,6 +377,12 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPut, "/api/v1/management/config/{key}", demoRefuse, "writing the gateway configuration is disabled"},
 	{http.MethodPost, "/api/v1/management/api-keys", demoRefuse, "changing gateway key material is disabled"},
 	{http.MethodDelete, "/api/v1/management/api-keys/{index}", demoRefuse, "changing gateway key material is disabled"},
+	{http.MethodPost, "/api/v1/management/repo-keys/applications", demoRefuse, "issuing a repository key needs a real gateway"},
+	{http.MethodPost, "/api/v1/management/repo-keys/applications/{id}/approve", demoRefuse, "issuing a repository key needs a real gateway"},
+	{http.MethodPost, "/api/v1/management/repo-keys/applications/{id}/reject", demoRefuse, "repository key decisions are unavailable in the demo"},
+	{http.MethodPost, "/api/v1/management/repo-keys/{id}/stop", demoRefuse, "changing gateway key material is disabled"},
+	{http.MethodPost, "/api/v1/management/repo-keys/{id}/reenable", demoRefuse, "changing gateway key material is disabled"},
+	{http.MethodPost, "/api/v1/management/repo-keys/{id}/reveal", demoRefuse, "revealing a gateway key is disabled"},
 	{http.MethodPost, "/api/v1/management/providers", demoRefuse, "changing provider configuration is disabled"},
 	{http.MethodPut, "/api/v1/management/providers/{id}", demoRefuse, "changing provider configuration is disabled"},
 	{http.MethodDelete, "/api/v1/management/providers/{id}", demoRefuse, "changing provider configuration is disabled"},

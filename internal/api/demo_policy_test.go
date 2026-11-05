@@ -107,6 +107,14 @@ func TestDemoPolicyRefusesTheDangerousSurface(t *testing.T) {
 		{http.MethodPost, "/api/v1/playground/chat"},
 		{http.MethodPost, "/api/v1/management/api-keys"},
 		{http.MethodDelete, "/api/v1/management/api-keys/0"},
+		// A repository key decision issues or reuses a real gateway key, and a reveal
+		// prints one: both are refused in a public demonstration.
+		{http.MethodPost, "/api/v1/management/repo-keys/applications"},
+		{http.MethodPost, "/api/v1/management/repo-keys/applications/41/approve"},
+		{http.MethodPost, "/api/v1/management/repo-keys/applications/41/reject"},
+		{http.MethodPost, "/api/v1/management/repo-keys/41/stop"},
+		{http.MethodPost, "/api/v1/management/repo-keys/41/reenable"},
+		{http.MethodPost, "/api/v1/management/repo-keys/41/reveal"},
 		{http.MethodPost, "/api/v1/management/quota/reset"},
 		{http.MethodPost, "/api/v1/management/quota/clear-cooldown"},
 		{http.MethodPost, "/api/v1/management/quota/redeem-credit"},
