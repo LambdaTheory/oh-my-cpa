@@ -16,7 +16,14 @@ export function assessPrediction(item: DashboardPredictionItem, generatedAtMS: n
   const hasForecast = hasReading && item.verdict !== 'unknown'
     && item.reset_at_ms !== null && item.reset_at_ms > generatedAtMS;
   const willExhaust = hasForecast && item.verdict === 'will_exhaust';
-  const untilReset: PredictionSufficiency = isLow || willExhaust ? 'insufficient' : hasForecast ? 'enough' : 'unknown';
+  // The risk threshold is solely "can this last until the reset" (浩文 2026-11-05).
+  // When the backend states it, that answer wins; the older local heuristic stays
+  // as the fallback for responses that predate the field.
+  const stated = item.lasts_until_reset;
+  const untilReset: PredictionSufficiency = stated === false ? 'insufficient'
+    : stated === true ? (hasReading ? 'enough' : 'unknown')
+      : stated === null ? 'unknown'
+        : isLow || willExhaust ? 'insufficient' : hasForecast ? 'enough' : 'unknown';
   const isUrgent = isLow || (willExhaust && item.exhaustion_eta_ms !== null
     && item.exhaustion_eta_ms <= generatedAtMS + DAY_MS);
   const today: PredictionSufficiency = isUrgent ? 'insufficient' : !hasForecast

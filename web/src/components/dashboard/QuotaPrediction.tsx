@@ -98,7 +98,7 @@ const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: nu
   const failureDetail = details.join(' · ') || t('dash.prediction.missing');
   const advice = hasReadError || sufficiency === 'unknown' ? t('dash.prediction.advice_check')
     : assessment.enduranceMS === 0 ? t('dash.prediction.advice_exhausted')
-    : assessment.isLow ? t('dash.prediction.advice_low')
+    : assessment.isLow && item.lasts_until_reset !== true ? t('dash.prediction.advice_low')
       : assessment.isUrgent ? t('dash.prediction.advice_urgent', { n: Math.max(1, Math.ceil((assessment.enduranceMS ?? 0) / 3_600_000)) })
         : sufficiency === 'insufficient' ? t('dash.prediction.advice_later') : t('dash.prediction.advice_none');
   const hasTokenEstimate = assessment.remainingPercent !== null && item.remaining_tokens != null
@@ -119,6 +119,14 @@ const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: nu
         <div><span>{t('dash.prediction.remaining_amount')}</span><b>{hasReadError ? t('dash.prediction.missing') : formatRemaining(item, generatedAtMS, t)}</b></div>
         <div><span>{t('dash.prediction.endurance')}</span><b>{hasReadError ? t('dash.prediction.missing') : formatEndurance(item, generatedAtMS, t)}</b></div>
       </div>
+      {!hasReadError && (
+        <p className={styles['context']}>
+          {t('dash.prediction.usage_vs_expected', {
+            actual: formatPercent(item.used_percent, t),
+            expected: formatPercent(item.expected_used_percent, t),
+          })}
+        </p>
+      )}
       {!hasReadError && hasTokenEstimate ? (
         <p className={styles['estimate']}>{t('dash.prediction.token_estimate', { n: formatTokensFull(item.remaining_tokens!), error: item.capacity_error_percent! })}</p>
       ) : !hasReadError && hasWindowEstimate ? (

@@ -17,6 +17,10 @@ export interface QuotaPredictionItem {
   projected_tokens_at_reset: number | null;
   projected_cost_nanos_at_reset: number | null;
   exhaustion_eta_ms: number | null;
+  // Both are additive: responses that predate them omit the field, and the
+  // display then falls back to the older local heuristic.
+  expected_used_percent?: number | null;
+  lasts_until_reset?: boolean | null;
   verdict: QuotaPredictionVerdict;
   evidence: string;
   reasons: string[];
