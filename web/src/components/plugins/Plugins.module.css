@@ -63,6 +63,11 @@
   color: var(--warn);
 }
 
+.badge-success {
+  border-color: var(--success);
+  color: var(--success);
+}
+
 .badge-accent {
   border-color: var(--accent);
   color: var(--accent);
@@ -213,6 +218,22 @@
 
 .store-notice {
   margin-top: 12px;
+}
+
+.store-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.store-source {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .card-grid {
@@ -410,6 +431,24 @@
   border-radius: var(--radius-sm);
   color: var(--muted);
   font-size: var(--text-sm);
+}
+
+/* The row is one line: the label gives way when the panel narrows, the glyph and the
+   link keep their box. */
+.source-fixed > :global(.anticon) {
+  flex: none;
+}
+
+.source-fixed-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-fixed-action {
+  margin-left: auto;
+  flex: none;
 }
 
 .field-error {
