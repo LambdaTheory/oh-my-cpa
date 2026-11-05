@@ -30,7 +30,11 @@ type RepoKeyBindingDTO struct {
 	ID            string `json:"id"`
 	Repo          string `json:"repo"`
 	RepoHasRemote bool   `json:"repo_has_remote"`
-	KeyMask       string `json:"key_mask"`
+	// KeyFingerprint is the gateway's usage identity for this key: the same value the
+	// client-key list carries, so the two lists can be matched up without either of them
+	// holding the key itself (AC-14).
+	KeyFingerprint string `json:"key_fingerprint,omitempty"`
+	KeyMask        string `json:"key_mask"`
 	// Alias is the operator's name for the key, if one was given. The gateway's own alias
 	// list is keyed by fingerprint, so both lists show the same name (AC-15).
 	Alias       string `json:"alias,omitempty"`
@@ -141,7 +145,8 @@ type RepoKeyStopDTO struct {
 func repoKeyBindingDTO(binding repository.RepoKeyBinding) RepoKeyBindingDTO {
 	item := RepoKeyBindingDTO{
 		ID: binding.ID, Repo: binding.RepoID, RepoHasRemote: binding.RepoHasRemote,
-		KeyMask: binding.KeyMask, Status: binding.Status, CreatedAtMS: binding.CreatedAtMS,
+		KeyMask: binding.KeyMask, KeyFingerprint: binding.KeyFingerprint,
+		Status: binding.Status, CreatedAtMS: binding.CreatedAtMS,
 		CreatedBy: binding.CreatedBy, StoppedBy: binding.StoppedBy,
 		StopCategory: binding.StopCategory, StopReason: binding.StopReason,
 	}

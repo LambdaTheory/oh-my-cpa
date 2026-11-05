@@ -221,6 +221,11 @@ func demoExportCases() []demoExportCase {
 		{Name: "repo-keys", Path: "/api/v1/management/repo-keys"},
 		{Name: "repo-key-applications", Path: "/api/v1/management/repo-keys/applications?status=pending"},
 		{Name: "repo-key-applications-awaiting", Path: "/api/v1/management/repo-keys/applications?status=approved&awaiting=true"},
+		// The panel's audit-platform block and the repository lookup the approval views use.
+		// The lookup names a repository so the read is the one the console makes; the
+		// demonstration has no binding, so it answers the "no key yet" state.
+		{Name: "repo-key-audit-push", Path: "/api/v1/management/repo-keys/audit-push"},
+		{Name: "repo-key-repo-status", Path: "/api/v1/management/repo-keys/repo-status?repo=" + url.QueryEscape("LambdaTheory/oh-my-cpa")},
 	}
 	// The price editor reads one model at a time, and the price book opens it for any
 	// row, so every model the book lists has its own captured read.
@@ -303,6 +308,8 @@ var demoExportRouteGaps = map[string]string{
 	// demonstration's gateway list, which the fixture deliberately does not have.
 	"/api/v1/management/repo-keys/{id}":              "the demonstration seeds no repository key, so no detail row exists",
 	"/api/v1/management/repo-keys/applications/{id}": "the demonstration seeds no key application, so no application detail exists",
+	"/api/v1/management/repo-keys/applications/{id}/review": "the demonstration seeds no key application, so there is no application to review",
+	"/api/v1/management/repo-keys/apply-link/{token}":       "the demonstration issues no approval link, so no token ever opens a page",
 }
 
 // demoExportFirstEventPath builds the detail path for the first event the list carried.
