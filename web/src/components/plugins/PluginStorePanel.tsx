@@ -4,7 +4,9 @@ import { PageLoading } from '../common/PageLoading';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DownloadOutlined,
+  InfoCircleOutlined,
   LockOutlined,
+  PuzzleOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
   SyncOutlined,
@@ -18,8 +20,10 @@ import {
   filterStorePlugins,
   isStoreInstallBlocked,
   PLUGIN_STORE_FILTERS,
+  STORE_INSTALL_WARNINGS,
   storeFilterCounts,
   storeInstallConfirmToken,
+  storePluginOrigin,
   type PluginStoreFilter,
 } from './pluginStoreLogic';
 import { formatPluginVersion, PluginLinks, PluginLogo, PluginMeta } from './PluginParts';
@@ -33,6 +37,26 @@ import { Toolbar } from '../common/Toolbar';
 /** Past this length a description is clamped with a toggle; shorter ones never need one. */
 const DESCRIPTION_CLAMP_CHARS = 150;
 
+/**
+ * The card's origin mark. Its four states keep two facts apart that the operator would
+ * otherwise have to infer: which registry listed the entry, and whether the gateway
+ * vendor publishes its code. `official-source` is the case that otherwise reads as
+ * third-party - the vendor's catalogue, a community author's repository.
+ */
+function StoreOriginBadge({ entry }: { entry: StorePluginItem }) {
+  const t = useT();
+  switch (storePluginOrigin(entry)) {
+    case 'omc':
+      return <span className={`${styles.badge} ${styles['badge-accent']}`}><PuzzleOutlined />{t('plugin.badge_omc')}</span>;
+    case 'official':
+      return <span className={`${styles.badge} ${styles['badge-success']}`}><SafetyCertificateOutlined />{t('plugin.badge_official')}</span>;
+    case 'official-source':
+      return <span className={styles.badge}><InfoCircleOutlined />{t('plugin.badge_official_source')}</span>;
+    default:
+      return <span className={`${styles.badge} ${styles['badge-warn']}`}><WarningOutlined />{t('plugin.badge_third_party')}</span>;
+  }
+}
+
 interface PluginStorePanelProps {
   store: PluginStoreResponse | undefined;
   isLoading: boolean;
@@ -44,10 +68,11 @@ interface PluginStorePanelProps {
 /**
  * The plugin store: every registry CPA is configured with, as cards.
  *
- * Installing a plugin runs its code inside the gateway, so the card says where it comes
- * from before anything else: the built-in registry with a first-party repository is
- * marked official, and everything else is marked third-party and has to be confirmed by
- * typing the plugin's id.
+ * Installing a plugin runs its code inside the gateway, so the card says two things
+ * before anything else: which registry listed the entry, and whose code it names. Oh My
+ * CPA's own registry is marked and pinned above the others; the built-in registry with
+ * the vendor's repository is the only combination that installs without acknowledging
+ * the code by typing the plugin's id.
  */
 export function PluginStorePanel({ store, isLoading, isDemo, onManage, onOpenSettings }: PluginStorePanelProps) {
   const t = useT();
@@ -106,6 +131,16 @@ export function PluginStorePanel({ store, isLoading, isDemo, onManage, onOpenSet
           )}
           action={<Button size="small" onClick={onOpenSettings}>{t('plugin.open_settings')}</Button>}
         />
+      )}
+
+      {(store?.sources.length ?? 0) > 0 && (
+        <ul className={styles['store-sources']} aria-label={t('plugin.store_sources')}>
+          {store?.sources.map((source) => (
+            <li key={source.id} className={styles['store-source']} data-plugin-store-source={source.id}>
+              {source.is_official ? t('plugin.source_official') : source.name}
+            </li>
+          ))}
+        </ul>
       )}
 
       <Toolbar className={styles['toolbar-spaced']}>
@@ -176,7 +211,7 @@ function StoreCard({ entry, isExpanded, isDemo, onToggleDescription, onInstall, 
   const actionTitle = isDemo ? t('demo.blocked') : blocked === 'auth' ? t('plugin.auth_required_hint') : undefined;
 
   return (
-    <article className={styles['store-card']} data-store-id={entry.store_id} data-plugin-id={entry.id}>
+    <article className={styles['store-card']} data-store-id={entry.store_id} data-plugin-id={entry.id} data-store-origin={storePluginOrigin(entry)}>
       <div className={styles['card-head']}>
         <PluginLogo logo={entry.logo} />
         <div className={styles['card-title']}>
@@ -186,11 +221,7 @@ function StoreCard({ entry, isExpanded, isDemo, onToggleDescription, onInstall, 
       </div>
 
       <span className={styles.badges}>
-        {entry.is_official ? (
-          <span className={styles.badge}><SafetyCertificateOutlined />{t('plugin.badge_official')}</span>
-        ) : (
-          <span className={`${styles.badge} ${styles['badge-warn']}`}><WarningOutlined />{t('plugin.badge_third_party')}</span>
-        )}
+        <StoreOriginBadge entry={entry} />
         {isUpdate ? (
           <span className={`${styles.badge} ${styles['badge-accent']}`}>{t('plugin.badge_update')}</span>
         ) : entry.installed ? (
@@ -221,7 +252,11 @@ function StoreCard({ entry, isExpanded, isDemo, onToggleDescription, onInstall, 
           version && <span className={styles['meta-strong']}>{version}</span>,
           entry.author && t('plugin.by_author', { author: entry.author }),
           entry.license,
-          entry.source_name && t('plugin.from_source', { source: entry.is_official || entry.source_id === 'official' ? t('plugin.source_official') : entry.source_name }),
+          entry.source_name && t('plugin.from_source', {
+            source: entry.is_omc
+              ? t('plugin.source_omc')
+              : entry.is_official ? t('plugin.source_official') : entry.source_name,
+          }),
         ]}
       />
 
@@ -331,10 +366,12 @@ function PluginInstallModal({ entry, isPluginSystemEnabled, onClose, onOpenSetti
 
   if (!entry) return null;
 
-  const isThirdParty = !entry.is_official;
+  const origin = storePluginOrigin(entry);
+  const warning = STORE_INSTALL_WARNINGS[origin];
   const token = storeInstallConfirmToken(entry);
   const isVersionValid = versionMode === 'latest' || /^v?[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(version.trim());
-  const isConfirmed = !isThirdParty || confirmation.trim() === token;
+  // The warning block carries the only confirmation input, so its presence is the gate.
+  const isConfirmed = !warning || confirmation.trim() === token;
   const name = entry.name || entry.id;
 
   return (
@@ -345,7 +382,7 @@ function PluginInstallModal({ entry, isPluginSystemEnabled, onClose, onOpenSetti
       onOk={() => installMutation.mutate(entry)}
       okText={entry.installed ? t('plugin.update') : t('plugin.install')}
       cancelText={t('common.cancel')}
-      okButtonProps={{ disabled: !isVersionValid || !isConfirmed, danger: isThirdParty }}
+      okButtonProps={{ disabled: !isVersionValid || !isConfirmed, danger: Boolean(warning) }}
       confirmLoading={installMutation.isPending}
       mask={{ closable: !installMutation.isPending }}
       destroyOnHidden
@@ -353,7 +390,11 @@ function PluginInstallModal({ entry, isPluginSystemEnabled, onClose, onOpenSetti
       <div className={styles['install-body']}>
         <PluginMeta
           items={[
-            t('plugin.from_source', { source: entry.source_id === 'official' ? t('plugin.source_official') : entry.source_name }),
+            t('plugin.from_source', {
+              source: entry.is_omc
+                ? t('plugin.source_omc')
+                : entry.is_official ? t('plugin.source_official') : entry.source_name,
+            }),
             entry.install_type,
             entry.platforms.length > 0 && t('plugin.platforms', { platforms: entry.platforms.join(', ') }),
           ]}
@@ -378,13 +419,13 @@ function PluginInstallModal({ entry, isPluginSystemEnabled, onClose, onOpenSetti
             </div>
           )}
         </div>
-        {isThirdParty && (
+        {warning && (
           <Notice
             tone="warning"
-            title={t('plugin.third_party_title')}
+            title={t(warning.title)}
             description={(
               <div className={styles['install-body']}>
-                <span>{t('plugin.third_party_desc')}</span>
+                <span>{t(warning.description)}</span>
                 <label className={styles['rule-field']}>
                   <span className={styles['rule-field-label']}>{t('plugin.third_party_confirm', { token })}</span>
                   <Input

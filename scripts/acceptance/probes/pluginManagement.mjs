@@ -1,15 +1,16 @@
 import { settleLayout, until } from '../harness.mjs';
+import { createPreferenceFixture } from '../preferences-fixture.mjs';
 
 /**
  * Plugin management: the installed list, the store's cards and the plugin system settings,
  * on one page, and the pages plugins register, in the navigation.
  *
  * What a browser establishes here is what the operator sees and can reach: a store card draws
- * the registry's own artwork and links, a third-party install cannot be confirmed without the
- * typed id, a plugin's declared fields are typed controls whose invalid values are refused
- * before anything is sent, and the settings save carries exactly the rules on screen. A
- * page a running plugin registered is a navigation entry that opens a frame on the console's
- * plugin host.
+ * the registry's own artwork and links, an install of anything but the vendor's own code cannot
+ * be confirmed without the typed id, a plugin's declared fields are typed controls whose invalid
+ * values are refused before anything is sent, and the settings save carries exactly the rules on
+ * screen. A page a running plugin registered is a navigation entry that opens a frame on the
+ * console's plugin host.
  */
 
 const LOGO = 'data:image/svg+xml;base64,' + Buffer.from(
@@ -59,27 +60,41 @@ const STORE = {
   plugins_enabled: true,
   plugins_dir: '/srv/cpa/plugins',
   sources: [
+    { id: 'source-omc', name: 'Oh My CPA', url: 'https://raw.githubusercontent.com/LambdaTheory/oh-my-cpa/master/plugins/registry.json', is_official: false },
     { id: 'official', name: 'official', url: 'https://registry.example/plugins.json', is_official: true },
     { id: 'source-mirror', name: 'mirror.example', url: 'https://mirror.example/registry.json', is_official: false },
   ],
   source_errors: [{ source_id: 'source-down', source_name: 'down.example', source_url: 'https://down.example/r.json', message: 'fetch registry: 503' }],
-  total: 3,
+  total: 5,
   plugins: [
+    {
+      store_id: 'source-omc/usage-digest', source_id: 'source-omc', source_name: 'Oh My CPA', id: 'usage-digest', name: 'Usage Digest',
+      description: 'Posts a daily spend and request summary.', author: 'oh-my-cpa', version: '0.3.0', repository_url: 'https://github.com/WizisCool/omc-plugin-usage-digest',
+      license: 'MIT', tags: ['digest'], platforms: [], is_official: false, is_official_repository: false, is_omc: true,
+      auth_required: false, auth_configured: false, installed: false, effective_enabled: false, update_available: false,
+    },
     {
       store_id: 'official/request-logger', source_id: 'official', source_name: 'official', id: 'request-logger', name: 'Request Logger',
       description: 'Logs request metadata.', author: 'router-for-me', version: '1.1.0', repository_url: 'https://github.com/router-for-me/request-logger',
-      license: 'MIT', tags: ['logging'], logo: LOGO, platforms: ['linux/amd64'], is_official: true, auth_required: false, auth_configured: false,
+      license: 'MIT', tags: ['logging'], logo: LOGO, platforms: ['linux/amd64'], is_official: true, is_official_repository: true, auth_required: false, auth_configured: false,
       installed: true, installed_version: '1.0.0', install_source_status: 'matched', effective_enabled: true, update_available: true,
     },
     {
       store_id: 'official/rate-limiter', source_id: 'official', source_name: 'official', id: 'rate-limiter', name: 'Rate Limiter',
       description: 'Token buckets per caller key.', author: 'router-for-me', version: '2.0.0', repository_url: 'https://github.com/router-for-me/rate-limiter',
-      homepage: 'https://limiter.example', license: 'Apache-2.0', tags: ['network', 'limits'], platforms: [], is_official: true,
+      homepage: 'https://limiter.example', license: 'Apache-2.0', tags: ['network', 'limits'], platforms: [], is_official: true, is_official_repository: true,
+      auth_required: false, auth_configured: false, installed: false, effective_enabled: false, update_available: false,
+    },
+    {
+      // Listed by the official registry, published in the author's own repository.
+      store_id: 'official/deepseek-search', source_id: 'official', source_name: 'official', id: 'deepseek-search', name: 'DeepSeek Search',
+      description: 'Adds DeepSeek-powered web search.', author: 'karuboniru', version: '0.1.0', repository_url: 'https://github.com/karuboniru/deepseek-search',
+      license: 'MIT', tags: ['search'], platforms: [], is_official: true, is_official_repository: false,
       auth_required: false, auth_configured: false, installed: false, effective_enabled: false, update_available: false,
     },
     {
       store_id: 'source-mirror/team-router', source_id: 'source-mirror', source_name: 'mirror.example', id: 'team-router', name: 'Team Router',
-      description: 'Routes by team.', author: 'someone', version: '0.3.0', tags: [], platforms: [], is_official: false,
+      description: 'Routes by team.', author: 'someone', version: '0.3.0', tags: [], platforms: [], is_official: false, is_official_repository: false,
       auth_required: false, auth_configured: false, installed: false, effective_enabled: false, update_available: false,
     },
   ],
@@ -90,6 +105,8 @@ const SETTINGS = {
   enabled: true,
   dir: 'plugins',
   store_sources: ['https://mirror.example/registry.json'],
+  omc_source_url: 'https://raw.githubusercontent.com/LambdaTheory/oh-my-cpa/master/plugins/registry.json',
+  omc_source_enabled: true,
   store_auth: [
     { match: 'https://mirror.example/', apply_to: ['registry', 'artifact'], type: 'bearer', token_env: 'MIRROR_TOKEN', allow_insecure: false },
   ],
@@ -98,7 +115,18 @@ const SETTINGS = {
 /** The fixtures, with a log of the writes each scenario can assert against. */
 export function pluginManagementFixtures(writes) {
   const installedPlugins = structuredClone(PLUGINS);
+  const preferences = createPreferenceFixture();
+  let isOMCSourceEnabled = true;
   return [
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/preferences')
+      || method === 'PUT' && url.pathname.includes('/preferences/'), (url, method, request) => {
+      const result = preferences(url, method, request.postData());
+      if (method === 'PUT' && url.pathname.endsWith('/preferences/omc_plugin_source_enabled') && result.status === 200) {
+        isOMCSourceEnabled = result.json.value;
+        writes.push({ kind: 'source-preference', value: isOMCSourceEnabled });
+      }
+      return result;
+    }],
     [(url) => url.pathname.endsWith('/plugin-host/v0/resource/plugins/request-logger/console'), () => ({ contentType: 'text/html', body: '<!doctype html><html><body>Probe plugin console</body></html>' })],
     [(url, method) => ['GET', 'PUT'].includes(method) && url.pathname.endsWith('/management/plugins/settings'), (url, method, request) => {
       if (method === 'PUT') {
@@ -106,7 +134,7 @@ export function pluginManagementFixtures(writes) {
         writes.push({ kind: 'settings', body });
         return { ...SETTINGS, ...body, revision: 'rev-2' };
       }
-      return SETTINGS;
+      return { ...SETTINGS, omc_source_enabled: isOMCSourceEnabled };
     }],
     [(url, method) => ['GET', 'PUT'].includes(method) && /\/management\/plugins\/[^/]+\/config$/.test(url.pathname), (url, method, request) => {
       if (method === 'PUT') {
@@ -121,7 +149,15 @@ export function pluginManagementFixtures(writes) {
       writes.push({ kind: 'install', path: url.pathname, body: JSON.parse(request.postData() ?? '{}') });
       return { status: 'ok', id: 'team-router', version: '0.3.0', plugins_enabled: true, restart_required: false };
     }],
-    [(url) => url.pathname.endsWith('/management/plugin-store'), () => STORE],
+    [(url) => url.pathname.endsWith('/management/plugin-store'), () => {
+      const plugins = STORE.plugins.filter((entry) => isOMCSourceEnabled || !entry.is_omc);
+      return {
+        ...STORE,
+        sources: STORE.sources.filter((source) => isOMCSourceEnabled || source.id !== 'source-omc'),
+        plugins,
+        total: plugins.length,
+      };
+    }],
     [(url, method) => method === 'DELETE' && /\/management\/plugins\/[^/]+$/.test(url.pathname), (url, method) => {
       if (method !== 'DELETE') throw new Error(`Unexpected plugin operation: ${method}`);
       const pluginId = decodeURIComponent(url.pathname.split('/').pop());
@@ -160,11 +196,55 @@ export async function pluginManagement({ base, page, check, writes }) {
   check('a plugin that is not running gets no page entry', (await page.locator('.app-menu [data-route-path^="/plugin-pages/quota-notifier"]').count()) === 0);
   check('the page entry carries the plugin\'s own artwork', (await pageEntry.locator('img.app-menu-plugin-logo').count()) === 1);
 
+  // Source names must remain visible before the managed registry publishes an entry.
+  const emptyManagedStore = {
+    ...STORE,
+    plugins: STORE.plugins.filter((entry) => !entry.is_omc),
+    total: STORE.plugins.filter((entry) => !entry.is_omc).length,
+    source_errors: [...STORE.source_errors, {
+      source_id: 'source-omc', source_name: 'Oh My CPA', source_url: SETTINGS.omc_source_url, message: 'fetch registry: 404',
+    }],
+  };
+  const emptySourceRoute = (route) => route.fulfill({ json: emptyManagedStore });
+  await page.route('**/omc/api/v1/management/plugin-store', emptySourceRoute);
+  await page.goto(`${base}/plugins/store`, { waitUntil: 'domcontentloaded' });
+  const sources = page.locator('[data-plugin-store-source]');
+  await until(async () => (await sources.count()) === 3, { label: 'the registry name row' });
+  check('an empty managed registry is visible before all other source names',
+    await sources.first().getAttribute('data-plugin-store-source') === 'source-omc'
+      && await sources.first().innerText() === 'Oh My CPA'
+      && await page.locator('article[data-store-origin="omc"]').count() === 0);
+  check('a registry that is not published yet reports its error beside the visible source',
+    (await page.getByText('fetch registry: 404', { exact: false }).count()) === 1);
+  await page.unroute('**/omc/api/v1/management/plugin-store', emptySourceRoute);
+
+  await page.goto(`${base}/omc-settings`, { waitUntil: 'domcontentloaded' });
+  const sourceSwitch = page.getByRole('switch', { name: /Oh My CPA 插件源|Oh My CPA plugin registry/ });
+  await sourceSwitch.click();
+  await until(() => writes.some((write) => write.kind === 'source-preference' && write.value === false), { label: 'the disabled managed source preference' });
+  await page.goto(`${base}/plugins/store`, { waitUntil: 'domcontentloaded' });
+  await until(async () => await sources.count() === 2, { label: 'the store without the disabled source' });
+  check('turning the managed source off removes its name while other sources keep their order',
+    JSON.stringify(await sources.evaluateAll((rows) => rows.map((row) => row.dataset.pluginStoreSource))) === JSON.stringify(['official', 'source-mirror'])
+      && await page.locator('article[data-store-origin="omc"]').count() === 0);
+  await page.goto(`${base}/omc-settings`, { waitUntil: 'domcontentloaded' });
+  await until(async () => await sourceSwitch.getAttribute('aria-checked') === 'false', { label: 'the stored off switch' });
+  await sourceSwitch.click();
+  await until(() => writes.some((write) => write.kind === 'source-preference' && write.value === true), { label: 'the restored managed source preference' });
+  await page.goto(`${base}/plugins/store`, { waitUntil: 'domcontentloaded' });
+  await until(async () => await sources.count() === 3, { label: 'the restored source name' });
+  check('turning the source back on restores its name first', await sources.first().getAttribute('data-plugin-store-source') === 'source-omc');
+
   // ── store cards ─────────────────────────────────────────────────────────────
   const cards = page.locator('[data-plugin-panel="store"] article[data-store-id]');
-  const cardsShown = await isTrue(async () => (await cards.count()) === 3, 'the store cards');
+  const cardsShown = await isTrue(async () => (await cards.count()) === 5, 'the store cards');
   check('the store renders one card per registry entry', cardsShown, String(await cards.count()));
   if (!cardsShown) return;
+
+  const omc = page.locator('article[data-store-id="source-omc/usage-digest"]');
+  check('the Oh My CPA registry is pinned above the other registries', (await cards.first().getAttribute('data-store-id')) === 'source-omc/usage-digest');
+  const omcText = await omc.innerText();
+  check('an Oh My CPA entry carries its own badge and source name', /Oh My CPA/.test(omcText) && !/Third-party|第三方/.test(omcText), omcText);
 
   const limiter = page.locator('article[data-store-id="official/rate-limiter"]');
   const limiterText = await limiter.innerText();
@@ -180,6 +260,27 @@ export async function pluginManagement({ base, page, check, writes }) {
   check('a card without an icon draws the generic mark', (await limiter.locator('[data-plugin-logo="fallback"]').count()) === 1);
   check('an installed entry with a newer release offers the update', (await logger.getByRole('button', { name: /更新|Update/ }).count()) >= 1);
   check('the failing registry is named above the cards', (await page.getByText('down.example').count()) >= 1);
+
+  // ── the official registry's community entry ─────────────────────────────────
+  const communityCard = page.locator('article[data-store-id="official/deepseek-search"]');
+  const communityOrigin = await communityCard.getAttribute('data-store-origin');
+  const communityBadges = await communityCard.locator('[class*="badge"]').first().innerText();
+  check(
+    'a community repository listed by the official registry is marked as the official source, not as a third-party one',
+    communityOrigin === 'official-source' && /官方源|Official source/.test(communityBadges) && !/第三方|Third-party/.test(communityBadges),
+    `${communityOrigin}: ${communityBadges}`,
+  );
+  await communityCard.getByRole('button', { name: /安装|Install/ }).click();
+  const communityDialog = page.locator('.ant-modal:visible');
+  await communityDialog.waitFor({ timeout: 5000 });
+  const communityDialogText = await communityDialog.innerText();
+  check(
+    'the dialog tells the operator the code is community-published and unreviewed',
+    /官方源社区插件|Community plugin from the official source/.test(communityDialogText) && /未经审查|unreviewed/.test(communityDialogText),
+    communityDialogText,
+  );
+  check('an official-registry community install still needs its id typed', await communityDialog.locator('.ant-modal-footer .ant-btn-primary').isDisabled());
+  await communityDialog.getByRole('button', { name: /取消|Cancel/ }).click();
 
   await page.getByPlaceholder(/搜索名称|Search by name/).fill('limits');
   const searched = await isTrue(async () => (await cards.count()) === 1, 'the store search');
@@ -369,6 +470,17 @@ export async function pluginManagement({ base, page, check, writes }) {
   await page.goto(`${base}/plugins/settings`, { waitUntil: 'domcontentloaded' });
   const settings = page.locator('[data-plugin-panel="settings"]');
   await settings.waitFor({ timeout: 10000 });
+  const omcRow = settings.locator('[data-plugin-omc-source]');
+  check('the managed Oh My CPA source is a fixed row rather than an editable source',
+    (await omcRow.count()) === 1 && (await omcRow.locator('input').count()) === 0
+      && (await omcRow.innerText()).includes('Oh My CPA'));
+  const omcRowText = await omcRow.innerText();
+  check('the managed source row is one compact line: no registry address and no state label',
+    !/https?:\/\//.test(omcRowText) && !/(已启用|已关闭|\bOn\b|\bOff\b)/.test(omcRowText), omcRowText);
+  const glyphOf = (row) => row.locator('svg').first().evaluate((node) => node.outerHTML);
+  const omcGlyph = await glyphOf(omcRow);
+  check('the managed source row draws the official source\'s glyph',
+    omcGlyph === (await glyphOf(settings.locator('[data-plugin-official-source]'))), omcGlyph.slice(0, 120));
   check('the store auth rule is shown as a form, not YAML', (await settings.locator('[data-plugin-auth-rule]').count()) === 1
     && (await settings.locator('input[value="MIRROR_TOKEN"]').count()) === 1);
   await settings.getByRole('button', { name: /添加源|Add source/ }).click();
@@ -388,6 +500,9 @@ export async function pluginManagement({ base, page, check, writes }) {
       && settingsWrite.body.store_auth[0].token_env === 'MIRROR_TOKEN',
     JSON.stringify(settingsWrite),
   );
+  await omcRow.getByRole('button', { name: /在 OMC 设置中管理|Manage in OMC settings/ }).click();
+  check('the managed source row links to the OMC settings switch',
+    await isTrue(async () => new URL(page.url()).pathname.endsWith('/omc-settings'), 'the OMC settings page'));
 
   await page.goto(`${base}/plugins`, { waitUntil: 'domcontentloaded' });
   const removable = page.locator('article[data-plugin-id="quota-notifier"]');
