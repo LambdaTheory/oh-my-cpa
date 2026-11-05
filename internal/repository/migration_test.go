@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -332,13 +333,7 @@ func TestMigration045UpgradesForkSchemaThrough055(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer rows.Close()
-	expectedVersions := make([]int, 0, 50)
-	for version := 1; version <= 9; version++ {
-		expectedVersions = append(expectedVersions, version)
-	}
-	for version := 15; version <= 61; version++ {
-		expectedVersions = append(expectedVersions, version)
-	}
+	expectedVersions := embeddedMigrationVersions(t)
 	for _, want := range expectedVersions {
 		if !rows.Next() {
 			t.Fatalf("schema_migrations ended before version %d", want)
@@ -502,8 +497,8 @@ func TestMigration053ProviderFlowsShareContactSlot(t *testing.T) {
 	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT version), MAX(version) FROM schema_migrations`).Scan(&count, &distinctCount, &maxVersion); err != nil {
 		t.Fatal(err)
 	}
-	if count != 56 || distinctCount != 56 || maxVersion != 61 {
-		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 56/56/61", count, distinctCount, maxVersion)
+	if versions := embeddedMigrationVersions(t); count != len(versions) || distinctCount != len(versions) || maxVersion != versions[len(versions)-1] {
+		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want %d/%d/%d", count, distinctCount, maxVersion, len(versions), len(versions), versions[len(versions)-1])
 	}
 	for i, p := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
 		if _, err := db.SQL.ExecContext(ctx, "INSERT INTO reauth_jobs (id,auth_index,provider,account_label,flow,code_kind,state,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,'pending',?,?)", p, p, p, p, "device_code", "device", i, i); err != nil {
@@ -545,4 +540,27 @@ func TestMigration054PreservesAutomationRoster(t *testing.T) {
 	if credit != 0 || removed != nil || reset != 2000 || cycle != "synthetic-cycle" {
 		t.Fatalf("migration changed roster: credit=%d removed=%v reset=%d cycle=%s", credit, removed, reset, cycle)
 	}
+}
+
+// embeddedMigrationVersions lists every shipped migration version in order, so a
+// renumbering is reflected here instead of needing a hand-edited upper bound.
+func embeddedMigrationVersions(t *testing.T) []int {
+	t.Helper()
+	entries, err := migrations.Files.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := make([]int, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		version, err := migrationVersion(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		versions = append(versions, version)
+	}
+	sort.Ints(versions)
+	return versions
 }
