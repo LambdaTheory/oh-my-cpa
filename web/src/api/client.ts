@@ -819,9 +819,13 @@ export const api = {
 
   /** A repository's state as an approver needs it, for the proxy application form (AC-29). */
   async getRepoKeyRepoStatus(repo: string): Promise<RepoKeyRepoView> {
-    return request<RepoKeyRepoView>(`/management/repo-keys/repo-status?repo=${encodeURIComponent(repo)}`, {
-      method: 'GET',
-    });
+    // The handler answers under a `repo` key, like its sibling single-object reads; the
+    // form reads the view itself, so the envelope is unwrapped here (AC-29).
+    const response = await request<{ repo: RepoKeyRepoView }>(
+      `/management/repo-keys/repo-status?repo=${encodeURIComponent(repo)}`,
+      { method: 'GET' },
+    );
+    return response.repo;
   },
 
   /** The audit platform link's health (AC-32). */
