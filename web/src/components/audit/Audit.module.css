@@ -18,6 +18,12 @@
   width: 180px;
 }
 
+/* The structured narrowings (repository, agent) keep the select's width so the row reads as
+   one set of filters rather than a search box followed by two hints. */
+.audit-narrow {
+  width: 180px;
+}
+
 .clear-filters {
   padding-inline: 4px;
 }
@@ -299,7 +305,8 @@
   }
 
   .audit-category,
-  .audit-range {
+  .audit-range,
+  .audit-narrow {
     flex: 1 1 0;
     width: auto;
     min-width: 0;

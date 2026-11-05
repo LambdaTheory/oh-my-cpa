@@ -763,14 +763,44 @@ export const api = {
   async applyRepoKeyOnBehalf(payload: {
     repo: string;
     purpose: string;
-    public_key: string;
+    public_key?: string;
     public_key_fingerprint?: string;
     agent: string;
-  }): Promise<{ application_id: string; status: string; kind: string; approval_token?: string; approval_url?: string }> {
-    return request<{ application_id: string; status: string; kind: string; approval_token?: string; approval_url?: string }>(
-      '/management/repo-keys/applications',
-      { method: 'POST', body: JSON.stringify(payload) },
-    );
+  }): Promise<{
+    application_id: string;
+    status: string;
+    kind: string;
+    approval_token?: string;
+    approval_url?: string;
+    approval_expires_at_ms?: number;
+  }> {
+    return request<{
+      application_id: string;
+      status: string;
+      kind: string;
+      approval_token?: string;
+      approval_url?: string;
+      approval_expires_at_ms?: number;
+    }>('/management/repo-keys/applications', { method: 'POST', body: JSON.stringify(payload) });
+  },
+
+  /**
+   * Issues a fresh one-time link for a still-pending application (AC-8). Only the token's
+   * fingerprint is stored, so the original link cannot be shown again; the server rotates
+   * the token and the previous link stops working.
+   */
+  async createRepoKeyApprovalLink(id: string): Promise<{
+    application: RepoKeyApplication;
+    approval_token: string;
+    approval_url: string;
+    approval_expires_at_ms: number;
+  }> {
+    return request<{
+      application: RepoKeyApplication;
+      approval_token: string;
+      approval_url: string;
+      approval_expires_at_ms: number;
+    }>(`/management/repo-keys/applications/${encodeURIComponent(id)}/approval-link`, { method: 'POST' });
   },
 
   async approveRepoKeyApplication(id: string, reason = ''): Promise<{ application: RepoKeyApplication }> {

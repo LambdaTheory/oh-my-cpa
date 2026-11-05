@@ -13,6 +13,7 @@ import { Tag } from '../common/Tag';
 import { SearchInput } from '../common/SearchInput';
 import { CopyButton } from '../common/CopyButton';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
+import { formatCost } from '../../types/tokenDisplay';
 import dayjs from '../../utils/time';
 import type {
   RepoKeyApplication,
@@ -35,6 +36,15 @@ type ReasonDialog =
 
 const STATUS_FILTERS = ['all', 'active', 'stopped'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
+
+/** What the console's stand-in application got back: enough to hand the applicant its link. */
+type ProxyApplyResult = {
+  application_id: string;
+  status: string;
+  kind: string;
+  approval_token?: string;
+  approval_url?: string;
+};
 
 /**
  * Repository-owned keys, beside the gateway's own key list.
@@ -67,6 +77,12 @@ export function RepoKeysPanel() {
   const [proxyPurpose, setProxyPurpose] = React.useState('');
   const [proxyAgent, setProxyAgent] = React.useState('');
   const [proxyPublicKey, setProxyPublicKey] = React.useState('');
+  const [proxyKeyMode, setProxyKeyMode] = React.useState<'public_key' | 'fingerprint'>('public_key');
+  const [proxyFingerprint, setProxyFingerprint] = React.useState('');
+  const [proxyRepoLookup, setProxyRepoLookup] = React.useState('');
+  const [proxyResult, setProxyResult] = React.useState<ProxyApplyResult | null>(null);
+  const [approvalLinkFor, setApprovalLinkFor] = React.useState<RepoKeyApplication | null>(null);
+  const [approvalLink, setApprovalLink] = React.useState<string | null>(null);
 
   const formatTime = React.useCallback(
     (ms?: number) => (ms ? dayjs(ms).format('YYYY-MM-DD HH:mm:ss') : '—'),
@@ -112,6 +128,23 @@ export function RepoKeysPanel() {
     queryKey: ['management-repo-keys', 'audit-push'],
     queryFn: () => api.getRepoKeyAuditPush(),
     refetchInterval: 30_000,
+  });
+
+  // The proxy form states what approving would do before the operator files it (AC-29).
+  // The lookup settles after typing rather than on every keystroke, and inside the dialog
+  // so the list below is not asked about a repository nobody typed.
+  React.useEffect(() => {
+    if (!proxyOpen) return undefined;
+    const repo = proxyRepo.trim();
+    const timer = window.setTimeout(() => setProxyRepoLookup(repo), 400);
+    return () => window.clearTimeout(timer);
+  }, [proxyRepo, proxyOpen]);
+
+  const proxyRepoStatusQuery = useQuery({
+    queryKey: ['management-repo-keys', 'repo-status', proxyRepoLookup],
+    queryFn: () => api.getRepoKeyRepoStatus(proxyRepoLookup),
+    enabled: proxyOpen && proxyRepoLookup !== '' && proxyResult === null,
+    retry: false,
   });
 
   const invalidate = React.useCallback(async () => {
@@ -191,17 +224,26 @@ export function RepoKeysPanel() {
         repo: proxyRepo.trim(),
         purpose: proxyPurpose.trim(),
         agent: proxyAgent.trim(),
-        public_key: proxyPublicKey.trim(),
+        // An operator either pastes the caller's public key or names a fingerprint already
+        // registered for that agent; the server resolves the latter the same way an agent's
+        // own application would (AC-29).
+        public_key: proxyKeyMode === 'public_key' ? proxyPublicKey.trim() : '',
+        public_key_fingerprint: proxyKeyMode === 'fingerprint' ? proxyFingerprint.trim() : undefined,
       }),
     onSuccess: async (result) => {
-      toast.success(
-        result.status === 'approved' ? t('repo_keys.proxy_auto_approved') : t('repo_keys.proxy_submitted'),
-      );
-      setProxyOpen(false);
-      setProxyRepo('');
-      setProxyPurpose('');
-      setProxyAgent('');
-      setProxyPublicKey('');
+      // The receipt stays on screen: an approval link is shown once and never stored, so a
+      // toast that disappears would leave the operator with nothing to hand over (AC-29).
+      setProxyResult(result);
+      await invalidate();
+    },
+    onError: (err: unknown) => failureToast(err, t('repo_keys.failed')),
+  });
+
+  const approvalLinkMutation = useMutation({
+    mutationFn: (id: string) => api.createRepoKeyApprovalLink(id),
+    onSuccess: async (result) => {
+      setApprovalLink(result.approval_url);
+      toast.success(t('repo_keys.approval_link_ready'));
       await invalidate();
     },
     onError: (err: unknown) => failureToast(err, t('repo_keys.failed')),
@@ -212,6 +254,23 @@ export function RepoKeysPanel() {
     setReason('');
     setCategory('rotate');
     setRevealed(null);
+  }, []);
+
+  const closeProxy = React.useCallback(() => {
+    setProxyOpen(false);
+    setProxyRepo('');
+    setProxyPurpose('');
+    setProxyAgent('');
+    setProxyPublicKey('');
+    setProxyKeyMode('public_key');
+    setProxyFingerprint('');
+    setProxyRepoLookup('');
+    setProxyResult(null);
+  }, []);
+
+  const closeApprovalLink = React.useCallback(() => {
+    setApprovalLinkFor(null);
+    setApprovalLink(null);
   }, []);
 
   const submitDialog = () => {
@@ -297,11 +356,22 @@ export function RepoKeysPanel() {
     {
       title: t('repo_keys.col_actions'),
       key: 'actions',
-      width: 240,
+      width: 340,
       render: (_: unknown, row) => (
         <div className={styles['row-actions']}>
           <Button size="small" onClick={() => setReviewID(row.id)}>
             {t('repo_keys.detail')}
+          </Button>
+          <Button
+            size="small"
+            disabled={isDemo}
+            onClick={() => {
+              setApprovalLinkFor(row);
+              setApprovalLink(null);
+              approvalLinkMutation.mutate(row.id);
+            }}
+          >
+            {t('repo_keys.approval_link')}
           </Button>
           <Button
             type="primary"
@@ -437,6 +507,11 @@ export function RepoKeysPanel() {
 
   const detail = detailQuery.data;
   const isReasonMissing = reason.trim() === '';
+  const isProxyReady =
+    proxyRepo.trim() !== '' &&
+    proxyPurpose.trim() !== '' &&
+    proxyAgent.trim() !== '' &&
+    (proxyKeyMode === 'public_key' ? proxyPublicKey.trim() !== '' : proxyFingerprint.trim() !== '');
   const auditPush = auditPushQuery.data;
 
   return (
@@ -695,56 +770,150 @@ export function RepoKeysPanel() {
         )}
       </Modal>
 
-      {/* The console's stand-in for an agent that cannot reach MCP yet (AC-29). */}
+      {/* The console's stand-in for an agent that cannot reach MCP yet (AC-29). It says what
+          approving would do before it is filed, accepts a pasted public key or a fingerprint
+          already registered for the agent, and keeps the receipt - with its one-time link -
+          on screen. */}
       <Modal
         open={proxyOpen}
         title={t('repo_keys.proxy_title')}
-        onCancel={() => setProxyOpen(false)}
-        onOk={() => proxyMutation.mutate()}
-        okText={t('repo_keys.proxy_submit')}
+        onCancel={closeProxy}
+        onOk={() => (proxyResult ? closeProxy() : proxyMutation.mutate())}
+        okText={proxyResult ? t('common.close') : t('repo_keys.proxy_submit')}
         cancelText={t('common.cancel')}
+        cancelButtonProps={{ style: { display: proxyResult ? 'none' : undefined } }}
         confirmLoading={proxyMutation.isPending}
-        okButtonProps={{
-          disabled:
-            proxyRepo.trim() === '' ||
-            proxyPurpose.trim() === '' ||
-            proxyAgent.trim() === '' ||
-            proxyPublicKey.trim() === '',
-        }}
+        okButtonProps={{ disabled: proxyResult === null && !isProxyReady }}
         destroyOnHidden
       >
-        <p className={styles['hint']}>{t('repo_keys.proxy_hint')}</p>
-        <div className={styles['field']}>
-          <label htmlFor="repo-key-proxy-repo">{t('repo_keys.col_repo')}</label>
-          <Input
-            id="repo-key-proxy-repo"
-            value={proxyRepo}
-            onChange={(event) => setProxyRepo(event.target.value)}
-            placeholder="LambdaTheory/oh-my-cpa"
-          />
-        </div>
-        <div className={styles['field']}>
-          <label htmlFor="repo-key-proxy-agent">{t('repo_keys.proxy_agent')}</label>
-          <Input id="repo-key-proxy-agent" value={proxyAgent} onChange={(event) => setProxyAgent(event.target.value)} />
-        </div>
-        <div className={styles['field']}>
-          <label htmlFor="repo-key-proxy-purpose">{t('repo_keys.col_purpose')}</label>
-          <Input
-            id="repo-key-proxy-purpose"
-            value={proxyPurpose}
-            onChange={(event) => setProxyPurpose(event.target.value)}
-          />
-        </div>
-        <div className={styles['field']}>
-          <label htmlFor="repo-key-proxy-public-key">{t('repo_keys.proxy_public_key')}</label>
-          <Input.TextArea
-            id="repo-key-proxy-public-key"
-            value={proxyPublicKey}
-            onChange={(event) => setProxyPublicKey(event.target.value)}
-            autoSize={{ minRows: 2, maxRows: 4 }}
-            placeholder="x25519:..."
-          />
-        </div>
+        {proxyResult ? (
+          <div>
+            <dl className={styles['facts']}>
+              <div>
+                <dt>{t('repo_keys.application_id')}</dt>
+                <dd className={styles['mono']}>{proxyResult.application_id}</dd>
+              </div>
+              <div>
+                <dt>{t('repo_keys.col_kind')}</dt>
+                <dd>{t(`repo_keys.kind_${proxyResult.kind as 'issue' | 'reuse' | 'reissue'}`)}</dd>
+              </div>
+              <div>
+                <dt>{t('repo_keys.application_status')}</dt>
+                <dd>{t(`repo_keys.application_status_${proxyResult.status}`)}</dd>
+              </div>
+            </dl>
+            {proxyResult.status === 'approved' ? (
+              <p className={styles['impact']}>{t('repo_keys.proxy_auto_approved')}</p>
+            ) : (
+              <>
+                <p className={styles['hint']}>{t('repo_keys.proxy_result_hint')}</p>
+                {proxyResult.approval_url && (
+                  <div className={styles['revealed']}>
+                    <label htmlFor="repo-key-proxy-link">{t('repo_keys.approval_link')}</label>
+                    <Input id="repo-key-proxy-link" readOnly value={proxyResult.approval_url} className={styles['mono']} />
+                    <div className={styles['revealed-actions']}>
+                      <CopyButton text={proxyResult.approval_url} label={t('repo_keys.copy')} showLabel />
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ) : (
+          <>
+            <p className={styles['hint']}>{t('repo_keys.proxy_hint')}</p>
+            <div className={styles['field']}>
+              <label htmlFor="repo-key-proxy-repo">{t('repo_keys.col_repo')}</label>
+              <Input
+                id="repo-key-proxy-repo"
+                value={proxyRepo}
+                onChange={(event) => setProxyRepo(event.target.value)}
+                placeholder="LambdaTheory/oh-my-cpa"
+              />
+              {proxyRepoStatusQuery.data && (
+                <p className={styles['impact']}>
+                  {proxyRepoStatusQuery.data.state === 'active'
+                    ? t('repo_keys.proxy_impact_reuse', { mask: proxyRepoStatusQuery.data.key_mask ?? '' })
+                    : proxyRepoStatusQuery.data.state === 'stopped'
+                      ? t('repo_keys.proxy_impact_reissue')
+                      : t('repo_keys.proxy_impact_issue')}
+                </p>
+              )}
+            </div>
+            <div className={styles['field']}>
+              <label htmlFor="repo-key-proxy-agent">{t('repo_keys.proxy_agent')}</label>
+              <Input id="repo-key-proxy-agent" value={proxyAgent} onChange={(event) => setProxyAgent(event.target.value)} />
+            </div>
+            <div className={styles['field']}>
+              <label htmlFor="repo-key-proxy-purpose">{t('repo_keys.col_purpose')}</label>
+              <Input
+                id="repo-key-proxy-purpose"
+                value={proxyPurpose}
+                onChange={(event) => setProxyPurpose(event.target.value)}
+              />
+            </div>
+            <div className={styles['field']}>
+              <label htmlFor="repo-key-proxy-key-mode">{t('repo_keys.proxy_key_source')}</label>
+              <Select
+                id="repo-key-proxy-key-mode"
+                value={proxyKeyMode}
+                onChange={(value: 'public_key' | 'fingerprint') => setProxyKeyMode(value)}
+                options={[
+                  { value: 'public_key', label: t('repo_keys.proxy_key_mode_public_key') },
+                  { value: 'fingerprint', label: t('repo_keys.proxy_key_mode_fingerprint') },
+                ]}
+              />
+            </div>
+            {proxyKeyMode === 'public_key' ? (
+              <div className={styles['field']}>
+                <label htmlFor="repo-key-proxy-public-key">{t('repo_keys.proxy_public_key')}</label>
+                <Input.TextArea
+                  id="repo-key-proxy-public-key"
+                  value={proxyPublicKey}
+                  onChange={(event) => setProxyPublicKey(event.target.value)}
+                  autoSize={{ minRows: 2, maxRows: 4 }}
+                  placeholder="x25519:..."
+                />
+              </div>
+            ) : (
+              <div className={styles['field']}>
+                <label htmlFor="repo-key-proxy-fingerprint">{t('repo_keys.proxy_fingerprint')}</label>
+                <Input
+                  id="repo-key-proxy-fingerprint"
+                  value={proxyFingerprint}
+                  onChange={(event) => setProxyFingerprint(event.target.value)}
+                  placeholder="x25519:sha256:..."
+                />
+                <p className={styles['hint']}>{t('repo_keys.proxy_fingerprint_hint')}</p>
+              </div>
+            )}
+          </>
+        )}
+      </Modal>
+
+      {/* The stored record holds only token fingerprints, so the console issues a fresh link
+          rather than showing the applicant's (AC-8). It is in this dialog only. */}
+      <Modal
+        open={approvalLinkFor !== null}
+        title={t('repo_keys.approval_link_title', { repo: approvalLinkFor?.repo ?? '' })}
+        onCancel={closeApprovalLink}
+        footer={null}
+        destroyOnHidden
+      >
+        <p className={styles['hint']}>{t('repo_keys.approval_link_hint')}</p>
+        {approvalLinkMutation.isPending && <p>{t('common.loading')}</p>}
+        {approvalLink && (
+          <div className={styles['revealed']}>
+            <label htmlFor="repo-key-approval-link">{t('repo_keys.approval_link')}</label>
+            <Input id="repo-key-approval-link" readOnly value={approvalLink} className={styles['mono']} />
+            <div className={styles['revealed-actions']}>
+              <CopyButton text={approvalLink} label={t('repo_keys.copy')} showLabel />
+              <Button size="small" danger onClick={closeApprovalLink}>
+                {t('repo_keys.hide')}
+              </Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal
@@ -947,6 +1116,10 @@ function RepoKeyDetail({
           <dd>{usage.total_tokens.toLocaleString()}</dd>
         </div>
         <div>
+          <dt>{t('repo_keys.fact_cost')}</dt>
+          <dd>{formatCost(nanosToUSD(usage.cost_nanos))}</dd>
+        </div>
+        <div>
           <dt>{t('repo_keys.fact_last_used')}</dt>
           <dd>{formatTime(usage.last_used_ms || undefined)}</dd>
         </div>
@@ -965,6 +1138,7 @@ function RepoKeyDetail({
                 requests: model.requests.toLocaleString(),
                 failed: model.failed.toLocaleString(),
                 tokens: model.tokens.toLocaleString(),
+                cost: formatCost(nanosToUSD(model.cost_nanos)),
               })}
             </li>
           ))}
@@ -1016,7 +1190,7 @@ function RepoKeyDetail({
               {' · '}
               {formatTime(delivery.delivered_at_ms)}
               {' · '}
-              {t('repo_keys.delivery_operator', { name: delivery.operator })}
+              {t('repo_keys.delivery_operator', { name: operatorLabel(t, delivery.operator) })}
               {delivery.public_key_fingerprint
                 ? ` · ${t('repo_keys.delivery_fingerprint', { value: shortFingerprint(delivery.public_key_fingerprint) })}`
                 : ''}
@@ -1043,7 +1217,7 @@ function RepoKeyDetail({
         </ul>
       )}
 
-      <Link className={styles['audit-link']} to={`/audit?q=${encodeURIComponent(detail.key.repo)}`}>
+      <Link className={styles['audit-link']} to={`/audit?repo=${encodeURIComponent(detail.key.repo)}`}>
         {t('repo_keys.detail_audit')}
       </Link>
     </div>
@@ -1054,4 +1228,22 @@ function RepoKeyDetail({
 function shortFingerprint(value: string): string {
   if (value.length <= 24) return value;
   return `${value.slice(0, 14)}…${value.slice(-8)}`;
+}
+
+/** Who handed the key over is stored as an enum; the record should read as a sentence (AC-20). */
+const OPERATOR_LABELS: Readonly<Record<string, string>> = {
+  approval: 'repo_keys.operator_approval',
+  auto: 'repo_keys.operator_auto',
+  console_reveal: 'repo_keys.operator_console_reveal',
+};
+
+function operatorLabel(t: ReturnType<typeof useT>, operator: string): string {
+  const key = OPERATOR_LABELS[operator];
+  // A value written by a newer server is printed as-is rather than hidden behind a placeholder.
+  return key ? t(key) : operator || '—';
+}
+
+/** Costs arrive in nano-USD; the console prints dollars. */
+function nanosToUSD(nanos: number): number {
+  return (nanos || 0) / 1_000_000_000;
 }
