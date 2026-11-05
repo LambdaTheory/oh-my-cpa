@@ -695,11 +695,28 @@ responses.
 ## TPS calculation mode
 
 OMC Settings → Display chooses whether request-record and Playground TPS includes
-first-token latency. The default excludes it when the remaining window is at least
-50 ms; otherwise it falls back to total latency. Including it always uses total latency.
-The server-stored `omc_tps_calculation_mode` preference (`exclude_ttft` /
-`include_ttft`) also supports Agent/MCP reads and writes; historical timing and usage
-remain unchanged.
+first-token latency. The rate describes observed output delivery, not the model's
+internal decoding clock.
+
+- **Include first-token latency (default).** TPS is total output tokens divided by total
+  latency. Known reasoning tokens remain in the output total.
+- **Exclude first-token latency.** When `exclude_ttft` is selected, TPS divides
+  output tokens by the interval from the first observable token to completion. A record
+  that reports reasoning tokens uses this denominator only when the first timestamp is
+  known to mark non-reasoning content. A Playground turn has that boundary when reasoning
+  arrives on a separate thought channel; inline reasoning shares the reply clock. A usage
+  record without reported reasoning may subtract a valid `ttft_ms`; when reasoning is
+  reported, its single timestamp does not locate the answer boundary and exclusion is
+  unavailable.
+- **Unavailable is a result.** Missing or contradictory timing and token accounting, or a
+  reasoning count that cannot be attributed to the observed interval, displays `—` with the
+  reason rather than silently switching to another denominator. There is no duration or
+  rate threshold. Choosing exclusion displays a warning that the narrower denominator can
+  make the rate unusually high.
+
+Both modes recalculate historical readouts from stored observations. The setting never
+rewrites usage or timing, and it does not change the independent TTFT readout. TPS exports
+also carry `tps_basis` and `tps_mode`.
 
 ## Plugin store
 
