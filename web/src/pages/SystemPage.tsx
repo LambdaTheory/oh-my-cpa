@@ -50,6 +50,7 @@ import type { UpdateOffer } from './SystemPage/versionPresentation';
 import { useConsoleUpdate } from './SystemPage/useConsoleUpdate';
 import type { UpdateOutcome } from './SystemPage/useConsoleUpdate';
 import { UpdateAction, UpdateStatusLine, UpdaterSetup } from './SystemPage/UpdateControls';
+import { DataRetention, DATA_RETENTION_QUERY_KEY } from './SystemPage/DataRetention';
 import { UPDATE_STATUS_QUERY_KEY, useUpdateDismissals } from '../hooks/useUpdateNotice';
 import { isUpdateDismissed } from '../utils/updateDismissals';
 import type { SystemUpdatesResponse } from '../types/system';
@@ -414,6 +415,9 @@ export const SystemPage: React.FC = () => {
 
     setDisplayedOutcome(job);
     void queryClient.invalidateQueries({ queryKey: ['management-system-info'] });
+    // A rebuild is also what moves an older file into incremental mode, which the retention
+    // card reports.
+    void queryClient.invalidateQueries({ queryKey: DATA_RETENTION_QUERY_KEY });
 
     const label = actionLabel(job.action);
     if (job.error) {
@@ -581,6 +585,7 @@ export const SystemPage: React.FC = () => {
               setDisplayedOutcome(null);
               void refetch();
               void queryClient.invalidateQueries({ queryKey: ['management-system-maintenance'] });
+              void queryClient.invalidateQueries({ queryKey: DATA_RETENTION_QUERY_KEY });
             }}
           />
         )}
@@ -864,6 +869,8 @@ export const SystemPage: React.FC = () => {
                     { key: 'schema', label: t('sys.schema_version'), value: `v${sysInfo.database.schema_version}`, testId: 'sys-storage-fact-row' },
                   ]}
                 />
+
+                <DataRetention />
 
               </>
             )}

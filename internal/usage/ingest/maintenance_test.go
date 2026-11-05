@@ -21,7 +21,7 @@ func TestMaintenanceBackfillsQuotaObservations(t *testing.T) {
 		VALUES ('default', 'backfill-me', 'c-1', 'group', 1000, 0, ?)`, headers); err != nil {
 		t.Fatal(err)
 	}
-	maintenance, err := NewMaintenance(store, nil, time.Second, 90, 7)
+	maintenance, err := NewMaintenance(store, nil, time.Second, repository.UsageRetention{RequestRecordDays: 90, PayloadDays: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,13 +42,12 @@ func TestMaintenanceBackfillsQuotaObservations(t *testing.T) {
 func TestMaintenanceKeepsQuotaObservationsBeyondRequestRetention(t *testing.T) {
 	store := newStore(t)
 	// Request retention off must not remove the fixed observation horizon.
-	maintenance, err := NewMaintenance(store, nil, time.Second, 0, 0)
+	maintenance, err := NewMaintenance(store, nil, time.Second, repository.UsageRetention{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	maintenance.now = func() time.Time { return now }
-	cutoffs := maintenance.lifecycleCutoffs()
+	cutoffs := lifecycleCutoffs(maintenance.Defaults(), now)
 	horizon, declared := cutoffs[repository.LifecycleQuotaObservations]
 	if !declared {
 		t.Fatalf("quota observation horizon is not published: %+v", cutoffs)
