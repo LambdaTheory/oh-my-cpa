@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -58,10 +59,10 @@ func TestManagementRepoKeyApprovalLinkEndpoint(t *testing.T) {
 		t.Fatalf("approval link status = %d body %s", resp.StatusCode, payload)
 	}
 	var issued struct {
-		Application        RepoKeyApplicationDTO `json:"application"`
-		ApprovalToken      string                `json:"approval_token"`
-		ApprovalURL        string                `json:"approval_url"`
-		ApprovalExpiresAt  int64                 `json:"approval_expires_at_ms"`
+		Application       RepoKeyApplicationDTO `json:"application"`
+		ApprovalToken     string                `json:"approval_token"`
+		ApprovalURL       string                `json:"approval_url"`
+		ApprovalExpiresAt int64                 `json:"approval_expires_at_ms"`
 	}
 	if err := json.Unmarshal(payload, &issued); err != nil {
 		t.Fatalf("approval link response is not JSON: %s", payload)
@@ -410,5 +411,32 @@ func TestManagementRepoKeyEndpoints(t *testing.T) {
 	resp, payload = getJSON(t, client, baseURL+"/omc/api/v1/management/repo-keys/applications?status=someday")
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("unknown status filter answered %d: %s", resp.StatusCode, payload)
+	}
+}
+
+// The proxy application form reads a repository's state before filing, to say whether the
+// approval would reuse, re-issue or issue a key (AC-29). The handler answers under a `repo`
+// key; this pins that envelope so a flat fixture cannot stand in for it again and hide a
+// client that reads the fields one level too high.
+func TestManagementRepoKeyRepoStatusEndpointShape(t *testing.T) {
+	fixture := newProviderTestFixture(t)
+	client, baseURL := fixture.client, fixture.baseURL
+
+	resp, payload := getJSON(t, client, baseURL+"/omc/api/v1/management/repo-keys/repo-status?repo="+url.QueryEscape("LambdaTheory/oh-my-cpa"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("repo status = %d body %s", resp.StatusCode, payload)
+	}
+	var envelope struct {
+		Repo  *RepoKeyRepoViewDTO `json:"repo"`
+		State *string             `json:"state"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatalf("repo status is not JSON: %s", payload)
+	}
+	if envelope.Repo == nil || envelope.Repo.State != "none" || envelope.Repo.Repo != "LambdaTheory/oh-my-cpa" {
+		t.Fatalf("repo status = %s", payload)
+	}
+	if envelope.State != nil {
+		t.Fatalf("repo status carries a flat state beside the envelope: %s", payload)
 	}
 }
