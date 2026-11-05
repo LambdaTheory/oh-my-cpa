@@ -90,6 +90,14 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"usage_events":                  nil,
 	"usage_facts_15m":               nil,
 	"usage_facts_daily":             nil,
+	"repo_key_bindings":             nil,
+	"repo_key_callers":              nil,
+	"repo_key_recipients":           nil,
+	// `authorization_token_hash` is a one-way fingerprint, so the table carries no
+	// credential an operator query could lift out.
+	"repo_key_applications": nil,
+	"repo_key_stops":        nil,
+	"repo_key_deliveries":   nil,
 }
 
 // QUERY_HIDDEN_TABLES are never readable, with the reason recorded for the next reviewer.
