@@ -100,6 +100,25 @@ a message naming the variable.
 | `OMCPA_USAGE_RETENTION_DAYS` | `90` | Days of request records (the request list and its detail) kept, `0` to keep them all. Ninety matches the request list's longest preset. Dashboard statistics do not depend on it: they are kept permanently as usage facts |
 | `OMCPA_USAGE_INBOX_RETENTION_DAYS` | `7` | Days a captured payload is kept after it was decoded into a request record, `0` to keep it as long as the record. Payloads are the largest part of the database and nothing reads them once decoded except a re-decode after a decoder fix |
 
+### Audit platform push
+
+Setting an ingest address turns on a copy of the audit trail for the company audit platform
+(ADR 0119). Events are queued in the same transaction as the audit row and delivered by a
+background loop; a request never waits for the platform.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMCPA_AUDIT_INGEST_URL` | unset | The platform's ingest endpoint, for example `https://audit.example.com/v1/ingest`. Unset or empty disables pushing; a non-HTTP(S) value or a malformed URL stops start-up. Always off in demo mode |
+| `OMCPA_AUDIT_INGEST_TIMEOUT_MS` | `1500` | Per-request timeout, 1–60000 |
+| `OMCPA_AUDIT_RETRY_ENABLED` | `true` | Retry a batch the platform could not take. When off, a failure quarantines the events instead, so the status never claims a delivery that will not be attempted |
+| `OMCPA_AUDIT_RETRY_MAX_BATCH` | `50` | Events per request, 1–500 |
+
+Events the platform refuses as malformed, or refuses individually, are quarantined with the
+reason it gave rather than replayed. The service log carries one line per delivery attempt
+with the pending count, the quarantined count, the oldest pending event and the last
+successful delivery, which is where an operator reads whether the platform is receiving
+anything.
+
 ### Quota refresh scheduler
 
 When enabled, exactly one quota refresh mode runs outside demo mode:

@@ -979,6 +979,20 @@ caller's own `X-Request-ID` is never the pairing key - one value sent on two req
 would pair an attempt with another request's outcome - and is recorded on the audit
 row as `client_request_id` for correlation instead.
 
+A deployment may also hand a copy of these events to a company audit platform
+(`OMCPA_AUDIT_INGEST_URL`). `internal/auditpush` builds the platform's event envelope for
+the repository-key actions, and `internal/repository/audit_push.go` writes it to
+`audit_push_events` inside the same transaction as the audit row, so an event the trail
+records is an event the platform is owed and the converse is also true: if the queue row
+cannot be written, the action fails rather than proceed unrecorded. The queued payload is
+stored exactly as it will be sent and never rebuilt, because the platform rejects a
+retried `ts` that differs from the first attempt; the HTTP body, the batch size, the
+backoff and the `sent`/`quarantined` states live in `internal/auditpush/pusher.go`. A
+payload the platform refuses as malformed is quarantined with the platform's reason
+rather than retried forever, and the backlog is visible in the log and through
+`AuditPushStatusOf`. Nothing in a business request waits for delivery: the outbox is
+pumped on its own interval (ADR 0119).
+
 ### Quota resolution and partial-success boundary
 
 Plugin quota resolution requires a matching quota identifier, plugin ID, or auth
