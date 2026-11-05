@@ -85,6 +85,10 @@ type RepoKeyApplication struct {
 	DecidedBy              string `json:"decided_by"`
 	DecidedAtMS            *int64 `json:"decided_at_ms,omitempty"`
 	RejectReason           string `json:"reject_reason"`
+	// Ciphertext is the key sealed to this application's public key. It is returned to the
+	// caller and stored so the same envelope can be fetched again; it is never a plaintext
+	// OMC can read (PRD 4.4, AC-33).
+	Ciphertext             string `json:"ciphertext,omitempty"`
 	AuthorizationTokenHash string `json:"-"`
 	TokenExpiresAtMS       int64  `json:"token_expires_at_ms"`
 	FirstDeliveredAtMS     *int64 `json:"first_delivered_at_ms,omitempty"`
@@ -128,7 +132,7 @@ const repoKeyBindingColumns = `id, instance_id, repo_id, repo_has_remote, key_fi
 const repoKeyApplicationColumns = `id, instance_id, repo_id, repo_has_remote, agent_name, device_name,
 	purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source, binding_id,
 	key_fingerprint, key_mask, decided_by, decided_at_ms, reject_reason, authorization_token_hash,
-	token_expires_at_ms, first_delivered_at_ms, created_at_ms, updated_at_ms`
+	ciphertext, token_expires_at_ms, first_delivered_at_ms, created_at_ms, updated_at_ms`
 
 func scanRepoKeyBinding(scanner interface{ Scan(...any) error }) (RepoKeyBinding, error) {
 	var binding RepoKeyBinding
@@ -158,7 +162,7 @@ func scanRepoKeyApplication(scanner interface{ Scan(...any) error }) (RepoKeyApp
 		&application.PublicKeyFingerprint, &application.KeyAlgorithm, &application.Source,
 		&application.BindingID, &application.KeyFingerprint, &application.KeyMask,
 		&application.DecidedBy, &decidedAt, &application.RejectReason,
-		&application.AuthorizationTokenHash, &application.TokenExpiresAtMS, &deliveredAt,
+		&application.AuthorizationTokenHash, &application.Ciphertext, &application.TokenExpiresAtMS, &deliveredAt,
 		&application.CreatedAtMS, &application.UpdatedAtMS,
 	)
 	application.RepoHasRemote = hasRemote == 1
@@ -651,6 +655,93 @@ func (r *Repository) GetRepoKeyApplicationByToken(ctx context.Context, token str
 	return application, nil
 }
 
+// CreateApprovedRepoKeyApplication stores an application a registered caller earned without a
+// new human decision: the repository already holds a usable key and this caller was accepted
+// for it before (PRD 4.2 免审). It still enters the pending-delivery queue, because the
+// ciphertext has not been handed out yet (AC-33).
+func (r *Repository) CreateApprovedRepoKeyApplication(ctx context.Context, application RepoKeyApplication, nowMS int64, audit AuditEvent) (RepoKeyApplication, error) {
+	if strings.TrimSpace(application.RepoID) == "" || strings.TrimSpace(application.AgentName) == "" ||
+		strings.TrimSpace(application.PublicKey) == "" || strings.TrimSpace(application.BindingID) == "" ||
+		strings.TrimSpace(application.Ciphertext) == "" {
+		return RepoKeyApplication{}, ErrRepoKeyInvalid
+	}
+	application.ID = uuid.NewString()
+	application.Status = "approved"
+	application.CreatedAtMS = nowMS
+	application.UpdatedAtMS = nowMS
+	application.DecidedBy = ""
+	application.DecidedAtMS = &nowMS
+	application.FirstDeliveredAtMS = nil
+
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("begin create approved repo key application: %w", err)
+	}
+	defer tx.Rollback()
+	if err = writeRepoKeyAuditTx(ctx, tx, audit, nowMS, bindingKeyTarget(application.RepoID, application.PublicKeyFingerprint), map[string]any{
+		"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
+		"kind": application.Kind, "source": application.Source, "auto_approved": true,
+		"key_mask": application.KeyMask, "public_key_fingerprint": application.PublicKeyFingerprint,
+	}); err != nil {
+		return RepoKeyApplication{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO repo_key_applications (id, instance_id, repo_id, repo_has_remote, agent_name, device_name,
+			purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source,
+			binding_id, key_fingerprint, key_mask, decided_at_ms, ciphertext,
+			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		application.ID, application.InstanceID, application.RepoID, boolToInt(application.RepoHasRemote),
+		application.AgentName, application.DeviceName, application.Purpose, application.Kind,
+		application.PublicKey, application.PublicKeyFingerprint, application.KeyAlgorithm, application.Source,
+		application.BindingID, application.KeyFingerprint, application.KeyMask, nowMS, application.Ciphertext,
+		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS); err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("create approved repo key application: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("commit approved repo key application: %w", err)
+	}
+	return application, nil
+}
+
+// ListRepoKeyAwaitingDelivery returns approved applications whose ciphertext has not been
+// fetched yet: the console's 待交付 queue (AC-33).
+func (r *Repository) ListRepoKeyAwaitingDelivery(ctx context.Context, instanceID string, limit int) ([]RepoKeyApplication, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := r.SQL().QueryContext(ctx, `
+		SELECT `+repoKeyApplicationColumns+` FROM repo_key_applications
+		WHERE instance_id = ? AND status = 'approved' AND first_delivered_at_ms IS NULL
+		ORDER BY decided_at_ms DESC, created_at_ms DESC LIMIT ?`, strings.TrimSpace(instanceID), limit)
+	if err != nil {
+		return nil, fmt.Errorf("list repo key applications awaiting delivery: %w", err)
+	}
+	defer rows.Close()
+	applications := []RepoKeyApplication{}
+	for rows.Next() {
+		application, scanErr := scanRepoKeyApplication(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan repo key application: %w", scanErr)
+		}
+		applications = append(applications, application)
+	}
+	return applications, rows.Err()
+}
+
+// CountRepoKeyAwaitingDelivery is the number on the 待交付 tab (AC-16).
+func (r *Repository) CountRepoKeyAwaitingDelivery(ctx context.Context, instanceID string) (int, error) {
+	var count int
+	err := r.SQL().QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM repo_key_applications
+		WHERE instance_id = ? AND status = 'approved' AND first_delivered_at_ms IS NULL`,
+		strings.TrimSpace(instanceID)).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count repo key applications awaiting delivery: %w", err)
+	}
+	return count, nil
+}
+
 // ApplicationDecision is what an approval records. The caller has already issued or
 // resolved the key; the repository stores the decision atomically with the binding
 // fields, so a half-decided application cannot exist.
@@ -663,6 +754,9 @@ type ApplicationDecision struct {
 	BindingID      string
 	KeyFingerprint string
 	KeyMask        string
+	// Ciphertext is the envelope sealed to the application's public key, written together
+	// with the approval so an approved application is always fetchable.
+	Ciphertext string
 }
 
 // DecideRepoKeyApplication applies the operator's decision exactly once.
@@ -711,10 +805,11 @@ func (r *Repository) DecideRepoKeyApplication(ctx context.Context, decision Appl
 		}
 		if _, err = tx.ExecContext(ctx, `
 			UPDATE repo_key_applications SET status = 'approved', kind = ?, binding_id = ?,
-				key_fingerprint = ?, key_mask = ?, decided_by = ?, decided_at_ms = ?, updated_at_ms = ?
+				key_fingerprint = ?, key_mask = ?, decided_by = ?, decided_at_ms = ?,
+				ciphertext = ?, updated_at_ms = ?
 			WHERE id = ?`,
 			kind, decision.BindingID, decision.KeyFingerprint, decision.KeyMask,
-			decision.DecidedBy, nowMS, nowMS, applicationID); err != nil {
+			decision.DecidedBy, nowMS, decision.Ciphertext, nowMS, applicationID); err != nil {
 			return RepoKeyApplication{}, fmt.Errorf("approve repo key application: %w", err)
 		}
 	} else {

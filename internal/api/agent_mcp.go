@@ -76,7 +76,7 @@ func (h *Handler) mcpHandler(isReadOnly bool) (http.Handler, error) {
 			return ""
 		}
 		return request.Extra.Header.Get(MCP_CONSOLE_URL_HEADER)
-	}})
+	}, Caller: mcpbridge.HeaderCaller})
 	if err != nil {
 		return nil, err
 	}

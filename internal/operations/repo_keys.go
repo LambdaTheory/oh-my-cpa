@@ -1,0 +1,773 @@
+package operations
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/repokey"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
+)
+
+// Repository-owned caller API keys (PRD plans/prd/omc-repo-api-keys).
+//
+// The wrapper answers the question the console and the agents both ask: which repository owns
+// which key, who has been given it, and is it usable right now. It composes three things that
+// are each tested on their own: CPA's key list (the only place a key's value exists), the
+// repository's metadata (`internal/repository`), and the delivery envelope
+// (`internal/repokey`).
+//
+// Two rules shape everything below. A key value is never stored, logged or returned — only its
+// gateway fingerprint, its display mask and an envelope the caller decrypts. And every write
+// goes to the audit trail in the same transaction as the change it describes.
+
+const (
+	repoKeyInstanceID = "default"
+	// RepoKeyConsoleDevice is the device recorded for an application an operator filed. The
+	// console renders it as 「控制台代提」; storing a stable token instead of the prose keeps
+	// the record comparable across languages and versions (PRD 4.1).
+	RepoKeyConsoleDevice = "console"
+	// repoKeyApprovalLifetime is how long a one-time approval link works. The application
+	// itself never expires (AC-8).
+	repoKeyApprovalLifetime = 24 * time.Hour
+)
+
+// Audit actions. One stable name per event type the PRD lists in 4.8; the eight are spread
+// across apply/approve/reject/deliver/reveal/stop/reissue/reenable.
+const (
+	AuditRepoKeyApply    = "repo_key.apply"
+	AuditRepoKeyApprove  = "repo_key.approve"
+	AuditRepoKeyReject   = "repo_key.reject"
+	AuditRepoKeyDeliver  = "repo_key.deliver"
+	AuditRepoKeyReveal   = "repo_key.reveal"
+	AuditRepoKeyStop     = "repo_key.stop"
+	AuditRepoKeyReissue  = "repo_key.reissue"
+	AuditRepoKeyReenable = "repo_key.reenable"
+)
+
+// RepoKeyQueryInput asks whether a repository has a usable key (AC-3).
+type RepoKeyQueryInput struct {
+	Repo string `json:"repo" jsonschema:"the repository, as a remote identity such as org/repo or a local directory name"`
+}
+
+// RepoKeyQueryResult is the three-way answer plus what the caller's next application would
+// become. It names no key value: only the mask (PRD 4.1, AC-5).
+type RepoKeyQueryResult struct {
+	Repo                string `json:"repo"`
+	RepoHasRemote       bool   `json:"repo_has_remote"`
+	State               string `json:"state"`
+	KeyMask             string `json:"key_mask,omitempty"`
+	KeyCreatedAtMS      int64  `json:"key_created_at_ms,omitempty"`
+	StoppedAtMS         int64  `json:"stopped_at_ms,omitempty"`
+	StopCategory        string `json:"stop_category,omitempty"`
+	CallerAgent         string `json:"caller_agent,omitempty"`
+	CallerDevice        string `json:"caller_device,omitempty"`
+	PublicKeyRegistered bool   `json:"public_key_registered"`
+	CallerRegistered    bool   `json:"caller_registered"`
+	NextKind            string `json:"next_kind"`
+	AutoApprove         bool   `json:"auto_approve"`
+}
+
+// RepoKeyApplyInput is an agent's application. The agent and device come from the transport,
+// not from the arguments: they are the caller's identity, and a caller that cannot state one
+// cannot be given a key (AC-2).
+type RepoKeyApplyInput struct {
+	Repo      string `json:"repo" jsonschema:"the repository this key is for, as a remote identity such as org/repo or a local directory name"`
+	Purpose   string `json:"purpose" jsonschema:"one sentence on what the key will be used for; the operator reads it to decide"`
+	PublicKey string `json:"public_key,omitempty" jsonschema:"the caller's X25519 public key, x25519:<base64>; required on the first application, later applications reuse the registered one"`
+}
+
+// RepoKeyApplyResult is what the applicant keeps: the application id for status and ciphertext
+// calls, and the one-time approval link to put in front of a person.
+type RepoKeyApplyResult struct {
+	ApplicationID    string `json:"application_id"`
+	Status           string `json:"status"`
+	Kind             string `json:"kind"`
+	Repo             string `json:"repo"`
+	RepoHasRemote    bool   `json:"repo_has_remote"`
+	Agent            string `json:"agent"`
+	Device           string `json:"device"`
+	KeyMask          string `json:"key_mask,omitempty"`
+	ApprovalToken    string `json:"approval_token,omitempty"`
+	ApprovalURL      string `json:"approval_url,omitempty"`
+	ApprovalExpires  int64  `json:"approval_expires_at_ms,omitempty"`
+	NextActionDetail string `json:"next_action,omitempty"`
+}
+
+// RepoKeyStatusResult answers "what happened to my application" without ever naming the key.
+type RepoKeyStatusResult struct {
+	ApplicationID    string `json:"application_id"`
+	Status           string `json:"status"`
+	Kind             string `json:"kind"`
+	Repo             string `json:"repo"`
+	Agent            string `json:"agent"`
+	Device           string `json:"device"`
+	Purpose          string `json:"purpose"`
+	KeyMask          string `json:"key_mask,omitempty"`
+	RejectReason     string `json:"reject_reason,omitempty"`
+	DecidedAtMS      int64  `json:"decided_at_ms,omitempty"`
+	FirstDeliveredMS int64  `json:"first_delivered_at_ms,omitempty"`
+	CiphertextReady  bool   `json:"ciphertext_ready"`
+	CreatedAtMS      int64  `json:"created_at_ms"`
+}
+
+// RepoKeyCiphertextResult is the delivery: an envelope the caller opens with its private key.
+type RepoKeyCiphertextResult struct {
+	ApplicationID string `json:"application_id"`
+	Kind          string `json:"kind"`
+	KeyMask       string `json:"key_mask"`
+	Algorithm     string `json:"algorithm"`
+	Ciphertext    string `json:"ciphertext"`
+	Instructions  string `json:"instructions"`
+}
+
+type repoKeyApplyParams struct {
+	Repo                 string
+	Purpose              string
+	PublicKey            string
+	PublicKeyFingerprint string
+	Agent                string
+	Device               string
+	Source               string
+	Operator             string
+	AutoApproveAllowed   bool
+}
+
+// QueryRepoKey reports whether the repository has a usable key, only stopped keys, or none
+// (AC-3), and what the caller's next application would be.
+func (s *Service) QueryRepoKey(ctx context.Context, input RepoKeyQueryInput) (RepoKeyQueryResult, error) {
+	repoID, hasRemote, err := repokey.NormalizeRepo(input.Repo)
+	if err != nil {
+		return RepoKeyQueryResult{}, invalidParameters{detail: "The repo must be a remote identity such as org/repo, or a local directory name."}
+	}
+	status, err := s.Repo.GetRepoKeyRepoStatus(ctx, repoKeyInstanceID, repoID)
+	if err != nil {
+		return RepoKeyQueryResult{}, err
+	}
+	result := RepoKeyQueryResult{Repo: repoID, RepoHasRemote: hasRemote, State: status.State}
+	switch status.State {
+	case "active":
+		result.KeyMask = status.Binding.KeyMask
+		result.KeyCreatedAtMS = status.Binding.CreatedAtMS
+		result.NextKind = "reuse"
+	case "stopped":
+		result.StoppedAtMS = derefInt64(status.Binding.StoppedAtMS)
+		result.StopCategory = status.Binding.StopCategory
+		result.NextKind = "reissue"
+	default:
+		result.NextKind = "issue"
+	}
+	if caller, ok := capability.CallerFrom(ctx); ok {
+		result.CallerAgent = strings.TrimSpace(caller.Agent)
+		result.CallerDevice = strings.TrimSpace(caller.Device)
+		if result.CallerAgent != "" && result.CallerDevice != "" {
+			callerRow, callerErr := s.Repo.GetRepoKeyCaller(ctx, repoKeyInstanceID, result.CallerAgent, result.CallerDevice)
+			result.PublicKeyRegistered = callerErr == nil
+			if recipient, recipientErr := s.Repo.IsRepoKeyRecipient(ctx, repoKeyInstanceID, repoID, result.CallerAgent, result.CallerDevice); recipientErr == nil {
+				result.CallerRegistered = recipient && result.PublicKeyRegistered
+			}
+			if callerErr != nil && !errors.Is(callerErr, repository.ErrRepoKeyNotFound) {
+				return RepoKeyQueryResult{}, callerErr
+			}
+			_ = callerRow
+		}
+	}
+	result.AutoApprove = result.State == "active" && result.CallerRegistered
+	return result, nil
+}
+
+// ApplyRepoKey files an agent's application from the MCP entry point (AC-1).
+func (s *Service) ApplyRepoKey(ctx context.Context, input RepoKeyApplyInput) (RepoKeyApplyResult, error) {
+	caller, ok := capability.CallerFrom(ctx)
+	if !ok {
+		return RepoKeyApplyResult{}, errors.New("caller_identity_required")
+	}
+	return s.applyRepoKey(ctx, repoKeyApplyParams{
+		Repo: input.Repo, Purpose: input.Purpose, PublicKey: input.PublicKey,
+		Agent: caller.Agent, Device: caller.Device, Source: "agent", AutoApproveAllowed: true,
+	})
+}
+
+// ProxyRepoKeyApplication files the same application from the console (AC-29). The device is
+// the console marker, and an operator-filed application never skips approval: the person who
+// would approve it is already here.
+func (s *Service) ProxyRepoKeyApplication(ctx context.Context, repo, purpose, publicKey, publicKeyFingerprint, agent, operator string) (RepoKeyApplyResult, error) {
+	return s.applyRepoKey(ctx, repoKeyApplyParams{
+		Repo: repo, Purpose: purpose, PublicKey: publicKey, PublicKeyFingerprint: publicKeyFingerprint,
+		Agent: agent, Device: RepoKeyConsoleDevice, Source: "console", Operator: operator,
+	})
+}
+
+func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (RepoKeyApplyResult, error) {
+	repoID, hasRemote, err := repokey.NormalizeRepo(params.Repo)
+	if err != nil {
+		return RepoKeyApplyResult{}, invalidParameters{detail: "The repo must be a remote identity such as org/repo, or a local directory name."}
+	}
+	agent := strings.TrimSpace(params.Agent)
+	purpose := strings.TrimSpace(params.Purpose)
+	if agent == "" || len(agent) > 128 {
+		return RepoKeyApplyResult{}, invalidParameters{detail: "The agent name is required and must be at most 128 characters."}
+	}
+	device := strings.TrimSpace(params.Device)
+	if device == "" || len(device) > 128 {
+		return RepoKeyApplyResult{}, invalidParameters{detail: "The device name could not be determined; reconnect with a device header."}
+	}
+	if purpose == "" || len(purpose) > 500 {
+		return RepoKeyApplyResult{}, invalidParameters{detail: "The purpose is required and must be at most 500 characters."}
+	}
+
+	publicKey, fingerprint, err := s.resolveRepoKeyPublicKey(ctx, agent, device, params.PublicKey, params.PublicKeyFingerprint)
+	if err != nil {
+		return RepoKeyApplyResult{}, err
+	}
+	previous, previousErr := s.Repo.GetRepoKeyCaller(ctx, repoKeyInstanceID, agent, device)
+	if previousErr != nil && !errors.Is(previousErr, repository.ErrRepoKeyNotFound) {
+		return RepoKeyApplyResult{}, previousErr
+	}
+	// A changed public key is exactly the case the operator must look at again, even for a
+	// caller this repository already accepted (AC-34).
+	publicKeyChanged := previousErr == nil && previous.PublicKeyFingerprint != fingerprint
+	nowMS := time.Now().UnixMilli()
+	if _, err = s.Repo.UpsertRepoKeyCaller(ctx, repository.RepoKeyCaller{
+		InstanceID: repoKeyInstanceID, AgentName: agent, DeviceName: device,
+		PublicKey: publicKey, PublicKeyFingerprint: fingerprint, KeyAlgorithm: "x25519",
+	}, nowMS); err != nil {
+		return RepoKeyApplyResult{}, err
+	}
+
+	status, err := s.Repo.GetRepoKeyRepoStatus(ctx, repoKeyInstanceID, repoID)
+	if err != nil {
+		return RepoKeyApplyResult{}, err
+	}
+	kind := "issue"
+	switch status.State {
+	case "active":
+		kind = "reuse"
+	case "stopped":
+		kind = "reissue"
+	}
+
+	token, err := repokey.RandomToken()
+	if err != nil {
+		return RepoKeyApplyResult{}, err
+	}
+	application := repository.RepoKeyApplication{
+		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: hasRemote,
+		AgentName: agent, DeviceName: device, Purpose: purpose, Kind: kind,
+		PublicKey: publicKey, PublicKeyFingerprint: fingerprint, KeyAlgorithm: "x25519",
+		Source: params.Source, AuthorizationTokenHash: repokey.TokenFingerprint(token),
+		TokenExpiresAtMS: nowMS + repoKeyApprovalLifetime.Milliseconds(),
+	}
+
+	// 免审: a caller this repository already accepted, asking for the key it already uses, with
+	// the public key it registered. Everything else waits for a person (PRD 4.2 q01).
+	if params.AutoApproveAllowed && kind == "reuse" && !publicKeyChanged {
+		if recipient, recipientErr := s.Repo.IsRepoKeyRecipient(ctx, repoKeyInstanceID, repoID, agent, device); recipientErr == nil && recipient {
+			approved, approveErr := s.autoApproveRepoKeyApplication(ctx, status.Binding, application, publicKey, nowMS)
+			if approveErr == nil {
+				return s.repoKeyApplyResult(approved, token), nil
+			}
+			// The gateway could not hand the key out right now; the application falls through
+			// to the queue rather than failing the caller.
+		}
+	}
+
+	stored, _, err := s.Repo.CreateRepoKeyApplication(ctx, application, nowMS, repository.AuditEvent{
+		Action: AuditRepoKeyApply, SourceSummary: params.Source,
+		Details: map[string]any{
+			"repo": repoID, "agent": agent, "device": device, "kind": kind,
+			"public_key_fingerprint": fingerprint, "public_key_changed": publicKeyChanged,
+			"operator": params.Operator,
+		},
+	})
+	if err != nil {
+		return RepoKeyApplyResult{}, err
+	}
+	return s.repoKeyApplyResult(stored, token), nil
+}
+
+func (s *Service) autoApproveRepoKeyApplication(ctx context.Context, binding *repository.RepoKeyBinding, application repository.RepoKeyApplication, publicKey string, nowMS int64) (repository.RepoKeyApplication, error) {
+	if binding == nil {
+		return repository.RepoKeyApplication{}, errors.New("repo_key_missing")
+	}
+	secret, err := s.repoKeySecret(ctx, binding.KeyFingerprint)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	raw, err := repokey.ParsePublicKey(publicKey)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	envelope, err := repokey.Encrypt(raw, secret)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	application.Kind = "reuse"
+	application.BindingID = binding.ID
+	application.KeyFingerprint = binding.KeyFingerprint
+	application.KeyMask = binding.KeyMask
+	application.Ciphertext = envelope
+	return s.Repo.CreateApprovedRepoKeyApplication(ctx, application, nowMS, repository.AuditEvent{
+		Action: AuditRepoKeyApply, SourceSummary: application.Source,
+		Details: map[string]any{
+			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
+			"kind": "reuse", "auto_approved": true, "key_mask": binding.KeyMask,
+			"public_key_fingerprint": application.PublicKeyFingerprint,
+		},
+	})
+}
+
+func (s *Service) repoKeyApplyResult(application repository.RepoKeyApplication, token string) RepoKeyApplyResult {
+	result := RepoKeyApplyResult{
+		ApplicationID: application.ID, Status: application.Status, Kind: application.Kind,
+		Repo: application.RepoID, RepoHasRemote: application.RepoHasRemote,
+		Agent: application.AgentName, Device: application.DeviceName,
+		KeyMask: application.KeyMask, ApprovalToken: token,
+		ApprovalExpires: application.TokenExpiresAtMS,
+	}
+	switch application.Status {
+	case "approved":
+		result.NextActionDetail = "This repository already had a usable key and this caller was accepted for it before, so no human decision was needed. Fetch the ciphertext next and open it locally with your private key."
+	default:
+		result.NextActionDetail = "Give the approval link to a person who can sign in to the console. The application stays queued until they decide."
+	}
+	return result
+}
+
+// resolveRepoKeyPublicKey prefers the key sent with this application, then a fingerprint the
+// console operator pasted, then the key already registered for this agent and device.
+func (s *Service) resolveRepoKeyPublicKey(ctx context.Context, agent, device, publicKey, fingerprint string) (string, string, error) {
+	if strings.TrimSpace(publicKey) != "" {
+		raw, err := repokey.ParsePublicKey(publicKey)
+		if err != nil {
+			return "", "", invalidParameters{detail: "The public key must be x25519: followed by the 32-byte key in base64."}
+		}
+		return "x25519:" + base64.StdEncoding.EncodeToString(raw), repokey.PublicKeyFingerprint(raw), nil
+	}
+	if strings.TrimSpace(fingerprint) != "" {
+		caller, err := s.Repo.FindRepoKeyCallerByFingerprint(ctx, repoKeyInstanceID, fingerprint, agent)
+		if err != nil {
+			return "", "", invalidParameters{detail: "No registered public key matches that fingerprint for this agent."}
+		}
+		return caller.PublicKey, caller.PublicKeyFingerprint, nil
+	}
+	caller, err := s.Repo.GetRepoKeyCaller(ctx, repoKeyInstanceID, agent, device)
+	if err != nil {
+		return "", "", invalidParameters{detail: "A public key is required on the first application; generate a key pair locally and send the public half."}
+	}
+	return caller.PublicKey, caller.PublicKeyFingerprint, nil
+}
+
+// RepoKeyStatus reports an application's state (AC-24).
+func (s *Service) RepoKeyStatus(ctx context.Context, applicationID string) (RepoKeyStatusResult, error) {
+	application, err := s.Repo.GetRepoKeyApplication(ctx, applicationID)
+	if err != nil {
+		return RepoKeyStatusResult{}, err
+	}
+	result := RepoKeyStatusResult{
+		ApplicationID: application.ID, Status: application.Status, Kind: application.Kind,
+		Repo: application.RepoID, Agent: application.AgentName, Device: application.DeviceName,
+		Purpose: application.Purpose, KeyMask: application.KeyMask,
+		RejectReason: application.RejectReason, CreatedAtMS: application.CreatedAtMS,
+		DecidedAtMS: derefInt64(application.DecidedAtMS), FirstDeliveredMS: derefInt64(application.FirstDeliveredAtMS),
+	}
+	result.CiphertextReady = application.Status == "approved" && application.Ciphertext != ""
+	return result, nil
+}
+
+// FetchRepoKeyCiphertext hands the envelope back. The same envelope may be fetched again: it
+// opens only with the caller's private key, so it is not a one-time secret; each hand-out is
+// still recorded (AC-33).
+func (s *Service) FetchRepoKeyCiphertext(ctx context.Context, applicationID, operator string) (RepoKeyCiphertextResult, error) {
+	application, err := s.Repo.GetRepoKeyApplication(ctx, applicationID)
+	if err != nil {
+		return RepoKeyCiphertextResult{}, err
+	}
+	if application.Status != "approved" || strings.TrimSpace(application.Ciphertext) == "" {
+		return RepoKeyCiphertextResult{}, errors.New("application_not_approved")
+	}
+	nowMS := time.Now().UnixMilli()
+	deliveryKind := "issue"
+	if application.Kind == "reuse" {
+		deliveryKind = "reuse"
+	}
+	deliveredBy := "approval"
+	if strings.TrimSpace(application.DecidedBy) == "" {
+		deliveredBy = "auto"
+	}
+	if operator != "" {
+		deliveredBy = "console_reveal"
+	}
+	if _, err = s.Repo.RecordRepoKeyDelivery(ctx, repository.RepoKeyDelivery{
+		InstanceID: repoKeyInstanceID, ApplicationID: application.ID, BindingID: application.BindingID,
+		KeyFingerprint: application.KeyFingerprint, KeyMask: application.KeyMask,
+		AgentName: application.AgentName, DeviceName: application.DeviceName,
+		PublicKeyFingerprint: application.PublicKeyFingerprint,
+		Kind:                 deliveryKind, Operator: deliveredBy, DeliveredAtMS: nowMS,
+	}, repository.AuditEvent{
+		Action: AuditRepoKeyDeliver, SourceSummary: deliveredBy,
+		Details: map[string]any{
+			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
+			"kind": deliveryKind, "key_mask": application.KeyMask,
+			"public_key_fingerprint": application.PublicKeyFingerprint, "operator": operator,
+		},
+	}); err != nil {
+		return RepoKeyCiphertextResult{}, err
+	}
+	return RepoKeyCiphertextResult{
+		ApplicationID: application.ID, Kind: deliveryKind, KeyMask: application.KeyMask,
+		Algorithm: repokey.Algorithm, Ciphertext: application.Ciphertext,
+		Instructions: "Open this envelope with the private key that matches the public key you registered, then use the key locally. The plaintext never passes through this interface.",
+	}, nil
+}
+
+// repoKeySecret finds the plaintext of one key in the gateway. It is called only inside a
+// write that is about to hand that key to a caller, and the value never leaves that call.
+func (s *Service) repoKeySecret(ctx context.Context, fingerprint string) (string, error) {
+	client, err := s.Client(ctx)
+	if err != nil {
+		return "", err
+	}
+	keys, err := client.ClientAPIKeys(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, key := range keys {
+		actual, err := s.Repo.UsageClientKeyFingerprint(strings.TrimSpace(key))
+		if err != nil {
+			return "", err
+		}
+		if actual == fingerprint {
+			return strings.TrimSpace(key), nil
+		}
+	}
+	return "", errors.New("repo_key_missing_in_gateway")
+}
+
+func (s *Service) repoKeyIndex(keys []string, fingerprint string) int {
+	for index, key := range keys {
+		actual, err := s.Repo.UsageClientKeyFingerprint(strings.TrimSpace(key))
+		if err == nil && actual == fingerprint {
+			return index
+		}
+	}
+	return -1
+}
+
+// ApproveRepoKeyApplication is the one decision, whether it is taken in the console queue or
+// from the one-time link. It issues or reuses the key, seals it to the applicant's public key,
+// and records the recipient so this caller needs no further approval for this repository.
+func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, operator string) (repository.RepoKeyApplication, error) {
+	application, err := s.Repo.GetRepoKeyApplication(ctx, applicationID)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	if application.Status != "pending" {
+		// Already decided, by the other entry point or an earlier click (AC-8).
+		return application, nil
+	}
+	release, err := s.lock(ctx)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	defer release()
+	client, err := s.Client(ctx)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	keys, err := client.ClientAPIKeys(ctx)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	nowMS := time.Now().UnixMilli()
+	binding, secret, kind, err := s.repoKeyForApproval(ctx, client, keys, application.RepoID, application.RepoHasRemote, nowMS)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	raw, err := repokey.ParsePublicKey(application.PublicKey)
+	if err != nil {
+		return repository.RepoKeyApplication{}, errors.New("invalid_public_key")
+	}
+	envelope, err := repokey.Encrypt(raw, secret)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	decided, err := s.Repo.DecideRepoKeyApplication(ctx, repository.ApplicationDecision{
+		ApplicationID: application.ID, Approve: true, DecidedBy: operator,
+		Kind: kind, BindingID: binding.ID, KeyFingerprint: binding.KeyFingerprint,
+		KeyMask: binding.KeyMask, Ciphertext: envelope,
+	}, nowMS, repository.AuditEvent{
+		Action: AuditRepoKeyApprove, SourceSummary: "console",
+		Details: map[string]any{
+			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
+			"kind": kind, "key_mask": binding.KeyMask, "binding_id": binding.ID,
+			"public_key_fingerprint": application.PublicKeyFingerprint,
+		},
+	})
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	if err = s.Repo.AddRepoKeyRecipient(ctx, repoKeyInstanceID, application.RepoID,
+		application.AgentName, application.DeviceName, operator, nowMS); err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	return decided, nil
+}
+
+// repoKeyForApproval resolves, at decision time, which key this approval hands out. A pending
+// application that waited while the repository changed underneath it is decided against the
+// repository as it is now, never against the state the applicant saw.
+func (s *Service) repoKeyForApproval(ctx context.Context, client interface {
+	UpdateClientAPIKeys(context.Context, []string) error
+}, keys []string, repoID string, repoHasRemote bool, nowMS int64) (repository.RepoKeyBinding, string, string, error) {
+	active, err := s.Repo.GetActiveRepoKeyBinding(ctx, repoKeyInstanceID, repoID)
+	if err == nil {
+		secret, secretErr := s.repoKeySecret(ctx, active.KeyFingerprint)
+		if secretErr != nil {
+			return repository.RepoKeyBinding{}, "", "", secretErr
+		}
+		return active, secret, "reuse", nil
+	}
+	if !errors.Is(err, repository.ErrRepoKeyNotFound) {
+		return repository.RepoKeyBinding{}, "", "", err
+	}
+
+	secret, err := repokey.GenerateKeyValue()
+	if err != nil {
+		return repository.RepoKeyBinding{}, "", "", err
+	}
+	if err = client.UpdateClientAPIKeys(ctx, append(append([]string{}, keys...), secret)); err != nil {
+		return repository.RepoKeyBinding{}, "", "", configWriteOutcome(err)
+	}
+	fingerprint, err := s.Repo.UsageClientKeyFingerprint(secret)
+	if err != nil {
+		_, _ = s.removeRepoKeyFromGateway(ctx, client, keys, "")
+		return repository.RepoKeyBinding{}, "", "", err
+	}
+	binding, bindErr := s.Repo.CreateRepoKeyBinding(ctx, repository.RepoKeyBinding{
+		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: repoHasRemote,
+		KeyFingerprint: fingerprint, KeyMask: security.MaskSecret(secret), CreatedBy: "",
+	}, nowMS, repository.AuditEvent{
+		Action: AuditRepoKeyReissue, SourceSummary: "console",
+		Details: map[string]any{"repo": repoID, "key_mask": security.MaskSecret(secret), "new_key": true},
+	})
+	if bindErr != nil {
+		// The key is in the gateway but has no owner; leaving it there would be an
+		// unaccounted caller key, so it is removed again.
+		_ = client.UpdateClientAPIKeys(ctx, keys)
+		return repository.RepoKeyBinding{}, "", "", bindErr
+	}
+	return binding, secret, "issue", nil
+}
+
+func (s *Service) removeRepoKeyFromGateway(ctx context.Context, client interface {
+	UpdateClientAPIKeys(context.Context, []string) error
+}, keys []string, fingerprint string) (bool, error) {
+	index := s.repoKeyIndex(keys, fingerprint)
+	if index < 0 {
+		return false, nil
+	}
+	remaining := append(append([]string{}, keys[:index]...), keys[index+1:]...)
+	return true, client.UpdateClientAPIKeys(ctx, remaining)
+}
+
+// RejectRepoKeyApplication records the operator's refusal and the reason the applicant reads
+// back (AC-7).
+func (s *Service) RejectRepoKeyApplication(ctx context.Context, applicationID, operator, reason string) (repository.RepoKeyApplication, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return repository.RepoKeyApplication{}, invalidParameters{detail: "A rejection must say why, so the applicant can correct the application."}
+	}
+	application, err := s.Repo.GetRepoKeyApplication(ctx, applicationID)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	if application.Status != "pending" {
+		return application, nil
+	}
+	return s.Repo.DecideRepoKeyApplication(ctx, repository.ApplicationDecision{
+		ApplicationID: application.ID, Approve: false, DecidedBy: operator, RejectReason: reason,
+	}, time.Now().UnixMilli(), repository.AuditEvent{
+		Action: AuditRepoKeyReject, SourceSummary: "console",
+		Details: map[string]any{
+			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
+			"kind": application.Kind, "reject_reason": reason,
+		},
+	})
+}
+
+// StopRepoKeyBinding removes the key from the gateway and keeps every record about it. CPA has
+// no disabled state, so removal is what stops it (AC-10, AC-11).
+func (s *Service) StopRepoKeyBinding(ctx context.Context, bindingID, operator, category, reason string) (repository.RepoKeyBinding, error) {
+	release, err := s.lock(ctx)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	defer release()
+	binding, err := s.Repo.GetRepoKeyBindingByID(ctx, bindingID)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	client, err := s.Client(ctx)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	keys, err := client.ClientAPIKeys(ctx)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	if _, err = s.removeRepoKeyFromGateway(ctx, client, keys, binding.KeyFingerprint); err != nil {
+		return repository.RepoKeyBinding{}, configWriteOutcome(err)
+	}
+	nowMS := time.Now().UnixMilli()
+	return s.Repo.StopRepoKeyBinding(ctx, binding.ID, operator, category, reason, nowMS, repository.AuditEvent{
+		Action: AuditRepoKeyStop, SourceSummary: "console",
+		Details: map[string]any{
+			"repo": binding.RepoID, "key_mask": binding.KeyMask,
+			"category": category, "reason": reason,
+		},
+	})
+}
+
+// ReenableRepoKeyBinding puts a stopped key back. The operator must paste the key again: OMC
+// keeps no plaintext of it, so nothing else can prove this is the same key (see the progress
+// file's handover note; AC-31 vs AC-35).
+func (s *Service) ReenableRepoKeyBinding(ctx context.Context, bindingID, operator, reason, plaintext string) (repository.RepoKeyBinding, error) {
+	reason = strings.TrimSpace(reason)
+	plaintext = strings.TrimSpace(plaintext)
+	if reason == "" || plaintext == "" {
+		return repository.RepoKeyBinding{}, invalidParameters{detail: "Re-enabling needs a reason and the key's value, so its fingerprint can be checked against the stopped record."}
+	}
+	release, err := s.lock(ctx)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	defer release()
+	binding, err := s.Repo.GetRepoKeyBindingByID(ctx, bindingID)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	if binding.Status != "stopped" {
+		return repository.RepoKeyBinding{}, errors.New("repo_key_not_stopped")
+	}
+	if binding.StopCategory == "leaked" {
+		return repository.RepoKeyBinding{}, errors.New("repo_key_leaked_never_reenabled")
+	}
+	fingerprint, err := s.Repo.UsageClientKeyFingerprint(plaintext)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	if fingerprint != binding.KeyFingerprint {
+		return repository.RepoKeyBinding{}, errors.New("repo_key_mismatch")
+	}
+	client, err := s.Client(ctx)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	keys, err := client.ClientAPIKeys(ctx)
+	if err != nil {
+		return repository.RepoKeyBinding{}, err
+	}
+	if s.repoKeyIndex(keys, fingerprint) >= 0 {
+		return repository.RepoKeyBinding{}, errors.New("repo_key_already_in_gateway")
+	}
+	if err = client.UpdateClientAPIKeys(ctx, append(append([]string{}, keys...), plaintext)); err != nil {
+		return repository.RepoKeyBinding{}, configWriteOutcome(err)
+	}
+	nowMS := time.Now().UnixMilli()
+	reenabled, err := s.Repo.ReenableRepoKeyBinding(ctx, binding.ID, operator, reason, nowMS, repository.AuditEvent{
+		Action: AuditRepoKeyReenable, SourceSummary: "console",
+		Details: map[string]any{
+			"repo": binding.RepoID, "key_mask": binding.KeyMask,
+			"previous_category": binding.StopCategory, "reason": reason,
+		},
+	})
+	if err != nil {
+		_ = client.UpdateClientAPIKeys(ctx, keys)
+		return repository.RepoKeyBinding{}, err
+	}
+	return reenabled, nil
+}
+
+// RevealRepoKeyPlaintext is the console's documented fallback: one deliberate click by a signed
+// in operator, recorded with the reason they gave (AC-36). It is not part of any agent path.
+func (s *Service) RevealRepoKeyPlaintext(ctx context.Context, bindingID, operator, reason string) (string, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "", invalidParameters{detail: "Write why the plaintext is needed; the reason is recorded in the audit trail."}
+	}
+	binding, err := s.Repo.GetRepoKeyBindingByID(ctx, bindingID)
+	if err != nil {
+		return "", err
+	}
+	if binding.Status != "active" {
+		return "", errors.New("repo_key_not_active")
+	}
+	secret, err := s.repoKeySecret(ctx, binding.KeyFingerprint)
+	if err != nil {
+		return "", err
+	}
+	operator = strings.TrimSpace(operator)
+	if operator == "" {
+		operator = "console"
+	}
+	if _, err = s.Repo.RecordAuditEvent(ctx, repository.AuditEvent{
+		Action: AuditRepoKeyReveal, TargetType: "repo_api_key", TargetID: binding.RepoID + "|" + binding.KeyMask,
+		Result: "success", SourceSummary: "console",
+		Details: map[string]any{
+			"repo": binding.RepoID, "key_mask": binding.KeyMask, "operator": operator, "reason": reason,
+		},
+	}); err != nil {
+		return "", err
+	}
+	return secret, nil
+}
+
+// registerRepoKeys declares the four MCP capabilities (AC-24). They are mcp-only: the console
+// uses its own routes, and no capability hands out a plaintext or approves anything (AC-25).
+func (s *Service) registerRepoKeys(registry *capability.Registry) error {
+	mcpOnly := func(metadata capability.Metadata) capability.Metadata {
+		metadata.Adapters = []string{"mcp"}
+		return metadata
+	}
+	metadata := mcpOnly(Meta("repo_key_query", "Ask whether a repository already has a usable client key, and what applying next would do. Returns the key mask, never the key.", "read", "low"))
+	if err := capability.Register(registry, metadata, nil, func(ctx context.Context, input RepoKeyQueryInput, _, _ string) (RepoKeyQueryResult, error) {
+		return s.QueryRepoKey(ctx, input)
+	}); err != nil {
+		return err
+	}
+	metadata = mcpOnly(Meta("repo_key_apply", "Apply for the repository's client key. A person approves the first application; the answer carries the one-time approval link and never the key.", "write", "low"))
+	metadata.Invalidates = []string{"repo-keys", "client-api-keys"}
+	if err := capability.Register(registry, metadata, nil, func(ctx context.Context, input RepoKeyApplyInput, _, _ string) (RepoKeyApplyResult, error) {
+		return s.ApplyRepoKey(ctx, input)
+	}); err != nil {
+		return err
+	}
+	type statusInput struct {
+		ApplicationID string `json:"application_id" jsonschema:"the application_id returned when the key was applied for"`
+	}
+	metadata = mcpOnly(Meta("repo_key_status", "Read the state of one key application: pending, approved, or rejected with the reason.", "read", "low"))
+	if err := capability.Register(registry, metadata, nil, func(ctx context.Context, input statusInput, _, _ string) (RepoKeyStatusResult, error) {
+		return s.RepoKeyStatus(ctx, input.ApplicationID)
+	}); err != nil {
+		return err
+	}
+	metadata = mcpOnly(Meta("repo_key_ciphertext", "Fetch the ciphertext of an approved application. It opens only with the private key you registered; each fetch is recorded.", "read", "low"))
+	if err := capability.Register(registry, metadata, nil, func(ctx context.Context, input statusInput, _, _ string) (RepoKeyCiphertextResult, error) {
+		return s.FetchRepoKeyCiphertext(ctx, input.ApplicationID, "")
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func derefInt64(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}

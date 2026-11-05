@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/app"
@@ -27,7 +28,31 @@ Environment:
                             https://omc.example.com/omc (plain HTTP is accepted
                             for loopback addresses only)
   OMCPA_CPA_MANAGEMENT_KEY  the CPA management key that signs in to the console
+  OMCPA_AGENT_NAME          the agent name this connection reports when it applies
+                            for a repository key; defaults to oh-my-cpa-mcp
+  OMCPA_DEVICE_NAME         the device name it reports; defaults to the hostname
 `
+// mcpAgentName is the self-reported agent identity behind this stdio connection. It is what
+// an approval page shows, so a personal agent should set its own name rather than accept the
+// generic default.
+func mcpAgentName() string {
+	if value := strings.TrimSpace(os.Getenv("OMCPA_AGENT_NAME")); value != "" && len(value) <= 128 {
+		return value
+	}
+	return "oh-my-cpa-mcp"
+}
+
+// mcpDeviceName is the machine this connection runs on. It is recorded with each delivery and
+// never used to decide anything.
+func mcpDeviceName() string {
+	if value := strings.TrimSpace(os.Getenv("OMCPA_DEVICE_NAME")); value != "" && len(value) <= 128 {
+		return value
+	}
+	if hostname, err := os.Hostname(); err == nil && strings.TrimSpace(hostname) != "" {
+		return strings.TrimSpace(hostname)
+	}
+	return "unknown-device"
+}
 
 func envOr(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
@@ -48,7 +73,7 @@ func main() {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := mcpbridge.Run(ctx, os.Getenv("OMCPA_SERVER_URL"), os.Getenv("OMCPA_CPA_MANAGEMENT_KEY"), envOr("OMCPA_VERSION", config.BuildVersion)); err != nil {
+		if err := mcpbridge.Run(ctx, os.Getenv("OMCPA_SERVER_URL"), os.Getenv("OMCPA_CPA_MANAGEMENT_KEY"), envOr("OMCPA_VERSION", config.BuildVersion), mcpAgentName(), mcpDeviceName()); err != nil {
 			slog.Error("MCP bridge stopped", "error", err)
 			os.Exit(1)
 		}

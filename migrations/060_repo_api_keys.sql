@@ -91,6 +91,10 @@ CREATE TABLE repo_key_applications (
     key_mask TEXT NOT NULL DEFAULT '',
     decided_by TEXT NOT NULL DEFAULT '',
     decided_at_ms INTEGER,
+    -- The delivered envelope, encrypted to the caller's public key at approval time and kept
+    -- so the same ciphertext can be fetched again (AC-33). It is a ciphertext, not a secret
+    -- OMC can read: without the caller's private key it opens nothing (AC-35).
+    ciphertext TEXT NOT NULL DEFAULT '',
     reject_reason TEXT NOT NULL DEFAULT '',
     -- One-time authorization link. It names the same application the console
     -- queue does, so either place decides it and the other stops showing it (AC-8).
