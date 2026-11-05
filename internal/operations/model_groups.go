@@ -233,7 +233,8 @@ func projectModelGroupReadings(names []string, advice ModelAdviceResult, balance
 	return readings
 }
 
-// projectModelGroupAdvice asks ProjectModelAdvice for one member at a time.// That projection bounds its own result to model_advice's 50-row / 32 KiB
+// projectModelGroupAdvice asks ProjectModelAdvice for one member at a time.
+// That projection bounds its own result to model_advice's 50-row / 32 KiB
 // capability budget; a single-member call cannot reach that bound, so a group
 // of up to modelGroupsMemberLimit keeps, for every member, the verdict
 // model_advice would give that model on its own.

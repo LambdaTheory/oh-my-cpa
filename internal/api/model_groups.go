@@ -54,8 +54,8 @@ type modelGroupBalanceDTO struct {
 }
 
 type modelGroupReadingDTO struct {
-	Model        string                 `json:"model"`
-	Availability string                 `json:"availability"`
+	Model        string                `json:"model"`
+	Availability string                `json:"availability"`
 	Balance      *modelGroupBalanceDTO `json:"balance"`
 }
 
@@ -225,7 +225,8 @@ func (h *Handler) listModelGroupReadings(writer http.ResponseWriter, request *ht
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func (h *Handler) createModelGroup(writer http.ResponseWriter, request *http.Request) {	if h.repo == nil {
+func (h *Handler) createModelGroup(writer http.ResponseWriter, request *http.Request) {
+	if h.repo == nil {
 		writeError(writer, http.StatusServiceUnavailable, "model group storage is unavailable")
 		return
 	}
