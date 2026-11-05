@@ -609,7 +609,7 @@ func TestPredictionCardDropsFindingsThatExpiredWhileQueued(t *testing.T) {
 	env := newTestEnv(t, Report{}, false)
 	now := *env.clock
 	used := 60.0
-	current := PredictionDigest{Items: []PredictionDigestItem{{
+	current := PredictionDigest{Omitted: 3, Items: []PredictionDigestItem{{
 		CredentialLabel: "account", Provider: "codex", Key: "a1", WindowID: "weekly", WindowKind: "weekly",
 		UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(),
 	}}}

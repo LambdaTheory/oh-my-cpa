@@ -209,7 +209,8 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 // from it; this is the "check the roster immediately before sending" step, run
 // on every delivery attempt rather than only when the card is queued. Alerts
 // that are not prediction rows (a morning digest can carry report alerts in the
-// same notification) are kept as they are.
+// same notification) are kept as they are. The "omitted" footer is dropped when
+// no finding survives, because it counts rows the card would no longer show.
 func (d *Dispatcher) currentPredictionAlerts(ctx context.Context, alerts []Alert) ([]Alert, error) {
 	digest, err := d.predictionSource(ctx)
 	if err != nil {
@@ -220,11 +221,26 @@ func (d *Dispatcher) currentPredictionAlerts(ctx context.Context, alerts []Alert
 		live[predictionItemID(item)] = true
 	}
 	kept := make([]Alert, 0, len(alerts))
+	findings := 0
 	for _, alert := range alerts {
-		if alert.Kind == predictionKindPrefix && !live[alertItemID(alert)] {
+		if alert.Kind != predictionKindPrefix {
+			kept = append(kept, alert)
 			continue
 		}
-		kept = append(kept, alert)
+		if live[alertItemID(alert)] {
+			kept = append(kept, alert)
+			findings++
+		}
+	}
+	if findings == 0 {
+		// The footer counts findings the card no longer shows.
+		withoutFooter := kept[:0]
+		for _, alert := range kept {
+			if alert.Kind != "omitted" {
+				withoutFooter = append(withoutFooter, alert)
+			}
+		}
+		kept = withoutFooter
 	}
 	return kept, nil
 }
