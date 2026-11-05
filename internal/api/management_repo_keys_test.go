@@ -31,6 +31,70 @@ func countRepoKeyAudit(t *testing.T, fixture providerTestFixture, action string)
 	return count
 }
 
+// The console can put a waiting application's link back in front of a person: it issues a
+// fresh one-time link, the earlier one stops working, and a decided application is refused
+// (AC-8).
+func TestManagementRepoKeyApprovalLinkEndpoint(t *testing.T) {
+	fixture := newProviderTestFixture(t)
+	client, baseURL := fixture.client, fixture.baseURL
+
+	publicKey := repoKeyPublicKey(t)
+	applyBody := fmt.Sprintf(`{"repo":"LambdaTheory/oh-my-cpa","purpose":"write release notes","agent":"claude","public_key":%q}`, publicKey)
+	resp, payload := doJSON(t, client, http.MethodPost, baseURL+"/omc/api/v1/management/repo-keys/applications", applyBody)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("apply status = %d body %s", resp.StatusCode, payload)
+	}
+	var applied struct {
+		ApplicationID string `json:"application_id"`
+		ApprovalToken string `json:"approval_token"`
+	}
+	if err := json.Unmarshal(payload, &applied); err != nil || applied.ApplicationID == "" {
+		t.Fatalf("apply response = %s", payload)
+	}
+
+	resp, payload = doJSON(t, client, http.MethodPost,
+		baseURL+"/omc/api/v1/management/repo-keys/applications/"+applied.ApplicationID+"/approval-link", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("approval link status = %d body %s", resp.StatusCode, payload)
+	}
+	var issued struct {
+		Application        RepoKeyApplicationDTO `json:"application"`
+		ApprovalToken      string                `json:"approval_token"`
+		ApprovalURL        string                `json:"approval_url"`
+		ApprovalExpiresAt  int64                 `json:"approval_expires_at_ms"`
+	}
+	if err := json.Unmarshal(payload, &issued); err != nil {
+		t.Fatalf("approval link response is not JSON: %s", payload)
+	}
+	if issued.ApprovalToken == "" || issued.ApprovalExpiresAt == 0 ||
+		!strings.HasSuffix(issued.ApprovalURL, "/repo-key-apply/"+issued.ApprovalToken) ||
+		issued.Application.Status != "pending" {
+		t.Fatalf("issued link = %+v", issued)
+	}
+
+	// The issued link opens the same application; the one the applicant received no longer does.
+	resp, payload = getJSON(t, client, baseURL+"/omc/api/v1/management/repo-keys/apply-link/"+issued.ApprovalToken)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the issued link did not open: %d %s", resp.StatusCode, payload)
+	}
+	resp, _ = getJSON(t, client, baseURL+"/omc/api/v1/management/repo-keys/apply-link/"+applied.ApprovalToken)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("the superseded link answered %d, want 404", resp.StatusCode)
+	}
+
+	// Once decided, the application gets no new link.
+	resp, payload = doJSON(t, client, http.MethodPost,
+		baseURL+"/omc/api/v1/management/repo-keys/applications/"+applied.ApplicationID+"/approve", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve status = %d body %s", resp.StatusCode, payload)
+	}
+	resp, payload = doJSON(t, client, http.MethodPost,
+		baseURL+"/omc/api/v1/management/repo-keys/applications/"+applied.ApplicationID+"/approval-link", "")
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("a decided application answered %d, want 409: %s", resp.StatusCode, payload)
+	}
+}
+
 // The console's half of the loop: an operator stands in for a caller, approves the
 // application, sees the key appear masked, and the plaintext reaches no console response
 // except the deliberate reveal (AC-24, AC-25, AC-35).

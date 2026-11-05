@@ -455,6 +455,33 @@ type repoKeyProxyApplyRequest struct {
 	Agent                string `json:"agent"`
 }
 
+// createRepoKeyApprovalLink re-issues a pending application's one-time approval link for an
+// operator to hand to the approver (AC-8).
+//
+// The stored record holds only the token's fingerprint, so the link the applicant received
+// cannot be read back; a fresh one is issued and the earlier link stops working. The link is
+// in this response only - nothing stores it, and the audit trail records that it happened
+// without recording the token.
+func (h *Handler) createRepoKeyApprovalLink(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	if h.repo == nil {
+		writeError(writer, http.StatusServiceUnavailable, "database is unavailable")
+		return
+	}
+	application, token, err := h.operationsService().IssueRepoKeyApprovalLink(request.Context(),
+		strings.TrimSpace(chi.URLParam(request, "id")), repoKeyConsoleOperator)
+	if err != nil {
+		writeRepoKeyError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{
+		"application":            repoKeyApplicationDTO(application),
+		"approval_token":         token,
+		"approval_url":           h.consoleURL(request) + "/repo-key-apply/" + token,
+		"approval_expires_at_ms": application.TokenExpiresAtMS,
+	})
+}
+
 // applyRepoKeyOnBehalf creates an application for a caller that cannot reach MCP yet.
 //
 // The console is a stand-in, not a shortcut: the application is queued like any other, and

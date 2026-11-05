@@ -313,6 +313,46 @@ func TestRepoKeyApplicationDedupeRotatesApprovalToken(t *testing.T) {
 		t.Fatalf("the superseded token still opens the application: %v", err)
 	}
 }
+// The console can re-issue a waiting application's one-time link: the row rotates, the
+// earlier link stops opening it, and a decided application refuses a link that could never
+// open anything (AC-8).
+func TestRepoKeyRotateApprovalTokenOnlyWhilePending(t *testing.T) {
+	repo, ctx := repoKeyRepo(t)
+	application, _, err := repo.CreateRepoKeyApplication(ctx, RepoKeyApplication{
+		InstanceID: "default", RepoID: "org/relink", RepoHasRemote: true,
+		AgentName: "claude", DeviceName: "laptop", Purpose: "cut releases",
+		Kind: "issue", PublicKey: "x25519:pk", PublicKeyFingerprint: "x25519:sha256:pk",
+		KeyAlgorithm: "x25519", Source: "agent",
+		AuthorizationTokenHash: repokey.TokenFingerprint("token-old"), TokenExpiresAtMS: 9000,
+	}, 1000, testAudit("repo_key.apply"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotated, err := repo.RotateRepoKeyApprovalToken(ctx, application.ID,
+		repokey.TokenFingerprint("token-new"), 20000, 1500, testAudit("repo_key.approval_link"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rotated.TokenExpiresAtMS != 20000 || rotated.Status != "pending" {
+		t.Fatalf("rotated application = %+v", rotated)
+	}
+	if found, err := repo.GetRepoKeyApplicationByToken(ctx, "token-new"); err != nil || found.ID != application.ID {
+		t.Fatalf("the issued link does not open the application: %v", err)
+	}
+	if _, err := repo.GetRepoKeyApplicationByToken(ctx, "token-old"); !errors.Is(err, ErrRepoKeyApplicationNotFound) {
+		t.Fatalf("the superseded link still opens the application: %v", err)
+	}
+
+	if _, err := repo.SQL().Exec(`UPDATE repo_key_applications SET status = 'rejected' WHERE id = ?`, application.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.RotateRepoKeyApprovalToken(ctx, application.ID,
+		repokey.TokenFingerprint("token-late"), 30000, 2000, testAudit("repo_key.approval_link")); !errors.Is(err, ErrRepoKeyConflict) {
+		t.Fatalf("a decided application accepted a fresh link: %v", err)
+	}
+}
+
 // A decision is applied once. The second caller (the one-time link, or the console
 // queue) reads the stored outcome instead of re-deciding (AC-8, AC-25).
 func TestRepoKeyDecisionIsAppliedOnce(t *testing.T) {

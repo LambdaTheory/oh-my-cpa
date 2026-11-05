@@ -741,6 +741,56 @@ func (r *Repository) GetRepoKeyApplicationByToken(ctx context.Context, token str
 	return application, nil
 }
 
+// RotateRepoKeyApprovalToken replaces the one-time link of a still-pending application.
+//
+// Only the token's fingerprint is stored, so the console cannot show the link the applicant
+// was handed: it issues a fresh one instead. Rotation is what keeps "one live link per
+// application" true - the earlier link stops opening anything the moment this returns (AC-8).
+// A decided application is refused rather than given a link that could never open it.
+func (r *Repository) RotateRepoKeyApprovalToken(ctx context.Context, applicationID, tokenHash string, expiresAtMS, nowMS int64, audit AuditEvent) (RepoKeyApplication, error) {
+	if strings.TrimSpace(applicationID) == "" || strings.TrimSpace(tokenHash) == "" {
+		return RepoKeyApplication{}, ErrRepoKeyInvalid
+	}
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("begin rotate repo key approval token: %w", err)
+	}
+	defer tx.Rollback()
+
+	application, err := scanRepoKeyApplication(tx.QueryRowContext(ctx, `
+		SELECT `+repoKeyApplicationColumns+` FROM repo_key_applications WHERE id = ?`,
+		strings.TrimSpace(applicationID)))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RepoKeyApplication{}, ErrRepoKeyApplicationNotFound
+	}
+	if err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("read repo key application: %w", err)
+	}
+	if application.Status != "pending" {
+		return RepoKeyApplication{}, ErrRepoKeyConflict
+	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE repo_key_applications SET authorization_token_hash = ?, token_expires_at_ms = ?, updated_at_ms = ?
+		WHERE id = ? AND status = 'pending'`,
+		tokenHash, expiresAtMS, nowMS, application.ID); err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("rotate repo key approval token: %w", err)
+	}
+	if err = writeRepoKeyAuditTx(ctx, tx, audit, nowMS,
+		bindingKeyTarget(application.RepoID, application.PublicKeyFingerprint), map[string]any{
+			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
+			"kind": application.Kind, "public_key_fingerprint": application.PublicKeyFingerprint,
+		}); err != nil {
+		return RepoKeyApplication{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return RepoKeyApplication{}, fmt.Errorf("commit rotate repo key approval token: %w", err)
+	}
+	application.AuthorizationTokenHash = tokenHash
+	application.TokenExpiresAtMS = expiresAtMS
+	application.UpdatedAtMS = nowMS
+	return application, nil
+}
+
 // CreateApprovedRepoKeyApplication stores an application a registered caller earned without a
 // new human decision: the repository already holds a usable key and this caller was accepted
 // for it before (PRD 4.2 免审). It still enters the pending-delivery queue, because the

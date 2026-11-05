@@ -387,6 +387,7 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodPost, "/api/v1/management/repo-keys/{id}/stop", demoRefuse, "changing gateway key material is disabled"},
 	{http.MethodPost, "/api/v1/management/repo-keys/{id}/reenable-request", demoRefuse, "changing gateway key material is disabled"},
 	{http.MethodPost, "/api/v1/management/repo-keys/applications/{id}/ciphertext", demoRefuse, "the demonstration holds no sealed key material"},
+	{http.MethodPost, "/api/v1/management/repo-keys/applications/{id}/approval-link", demoRefuse, "the demonstration queues no application, so no approval link can be issued"},
 	{http.MethodPost, "/api/v1/management/repo-keys/apply-link/{token}/approve", demoRefuse, "repository key decisions are unavailable in the demo"},
 	{http.MethodPost, "/api/v1/management/repo-keys/apply-link/{token}/reject", demoRefuse, "repository key decisions are unavailable in the demo"},
 	{http.MethodPost, "/api/v1/management/repo-keys/{id}/reveal", demoRefuse, "revealing a gateway key is disabled"},

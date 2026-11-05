@@ -665,6 +665,41 @@ func TestRepoKeyApprovalLinkPointsAtTheConsoleAndOnlyWhilePending(t *testing.T) 
 	}
 }
 
+// The console cannot read back the link an applicant was handed (only token fingerprints are
+// stored), so it issues a fresh one; the earlier link stops working, and a decided application
+// is refused (AC-8).
+func TestRepoKeyConsoleIssuesAFreshApprovalLink(t *testing.T) {
+	service, _ := newRepoKeyService(t)
+	ctx := callerContext("claude-hl", "laptop-a")
+	_, publicKey := newCallerKeyPair(t)
+	applied, err := service.ApplyRepoKey(ctx, RepoKeyApplyInput{Repo: "org/relink", Purpose: "release", PublicKey: publicKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rotated, token, err := service.IssueRepoKeyApprovalLink(context.Background(), applied.ApplicationID, "console")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token == "" || token == applied.ApprovalToken || rotated.Status != "pending" || rotated.TokenExpiresAtMS == 0 {
+		t.Fatalf("issued link = %q rotated = %+v", token, rotated)
+	}
+	if _, err := service.RepoKeyApplicationByToken(context.Background(), applied.ApprovalToken); err == nil {
+		t.Fatal("the superseded approval link still opens the application")
+	}
+	linked, err := service.RepoKeyApplicationByToken(context.Background(), token)
+	if err != nil || linked.ID != applied.ApplicationID {
+		t.Fatalf("the issued link opened %+v: %v", linked, err)
+	}
+
+	if _, err := service.ApproveRepoKeyApplication(context.Background(), applied.ApplicationID, "operator@example.com", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.IssueRepoKeyApprovalLink(context.Background(), applied.ApplicationID, "console"); err == nil {
+		t.Fatal("a decided application was handed a fresh approval link")
+	}
+}
+
 // The console can take an awaiting ciphertext and hand it to the operator, each fetch is
 // recorded, and the application leaves the queue the first time (AC-33).
 func TestRepoKeyConsoleFetchesAwaitingCiphertext(t *testing.T) {

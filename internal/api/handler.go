@@ -380,6 +380,7 @@ func (h *Handler) routes() chi.Router {
 				v1.Post("/management/repo-keys/applications/{id}/approve", h.approveRepoKeyApplication)
 				v1.Post("/management/repo-keys/applications/{id}/reject", h.rejectRepoKeyApplication)
 				v1.Post("/management/repo-keys/applications/{id}/ciphertext", h.fetchRepoKeyCiphertext)
+				v1.Post("/management/repo-keys/applications/{id}/approval-link", h.createRepoKeyApprovalLink)
 				v1.Get("/management/repo-keys/{id}", h.getRepoKeyBinding)
 				v1.Post("/management/repo-keys/{id}/stop", h.stopRepoKeyBinding)
 				v1.Post("/management/repo-keys/{id}/reenable-request", h.requestRepoKeyReenable)

@@ -51,6 +51,9 @@ const (
 	AuditRepoKeyStop     = "repo_key.stop"
 	AuditRepoKeyReissue  = "repo_key.reissue"
 	AuditRepoKeyReenable = "repo_key.reenable"
+	// AuditRepoKeyApprovalLink records the console re-issuing a pending application's
+	// one-time link. The old link stops working in the same write (AC-8).
+	AuditRepoKeyApprovalLink = "repo_key.approval_link"
 )
 
 // repoKeyPush builds the team audit platform's copy of one recorded action (PRD 4.8).
@@ -455,6 +458,40 @@ func (s *Service) RepoKeyApplicationByToken(ctx context.Context, token string) (
 		return repository.RepoKeyApplication{}, errors.New("approval_link_expired")
 	}
 	return application, nil
+}
+
+// IssueRepoKeyApprovalLink hands an operator a fresh one-time link for an application that
+// is still waiting. The database keeps only token fingerprints, so the link an applicant was
+// given cannot be shown again; a new one is issued and the previous one stops opening
+// anything in the same write (AC-8). The link itself is never stored, logged or audited.
+func (s *Service) IssueRepoKeyApprovalLink(ctx context.Context, applicationID, operator string) (repository.RepoKeyApplication, string, error) {
+	applicationID = strings.TrimSpace(applicationID)
+	application, err := s.Repo.GetRepoKeyApplication(ctx, applicationID)
+	if err != nil {
+		return repository.RepoKeyApplication{}, "", err
+	}
+	if application.Status != "pending" {
+		return repository.RepoKeyApplication{}, "", repository.ErrRepoKeyConflict
+	}
+	token, err := repokey.RandomToken()
+	if err != nil {
+		return repository.RepoKeyApplication{}, "", err
+	}
+	nowMS := time.Now().UnixMilli()
+	rotated, err := s.Repo.RotateRepoKeyApprovalToken(ctx, application.ID,
+		repokey.TokenFingerprint(token), nowMS+repoKeyApprovalLifetime.Milliseconds(), nowMS,
+		repository.AuditEvent{
+			Action: AuditRepoKeyApprovalLink, SourceSummary: "console",
+			Details: map[string]any{"operator": operator},
+			Push: repoKeyPush(AuditRepoKeyApprovalLink, application.ID, application.RepoID,
+				fmt.Sprintf("issued a fresh approval link for %s by %s@%s; the previous link is void",
+					application.RepoID, application.AgentName, application.DeviceName),
+				auditpush.ChannelConsole, repoKeyTags(application.AgentName, application.DeviceName)),
+		})
+	if err != nil {
+		return repository.RepoKeyApplication{}, "", err
+	}
+	return rotated, token, nil
 }
 
 // RepoKeyStatus reports an application's state (AC-24).
