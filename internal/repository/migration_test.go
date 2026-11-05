@@ -336,7 +336,7 @@ func TestMigration045UpgradesForkSchemaThrough055(t *testing.T) {
 	for version := 1; version <= 9; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
-	for version := 15; version <= 62; version++ {
+	for version := 15; version <= 60; version++ {
 		expectedVersions = append(expectedVersions, version)
 	}
 	for _, want := range expectedVersions {
@@ -502,8 +502,8 @@ func TestMigration053ProviderFlowsShareContactSlot(t *testing.T) {
 	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT version), MAX(version) FROM schema_migrations`).Scan(&count, &distinctCount, &maxVersion); err != nil {
 		t.Fatal(err)
 	}
-	if count != 57 || distinctCount != 57 || maxVersion != 62 {
-		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 57/57/62", count, distinctCount, maxVersion)
+	if count != 55 || distinctCount != 55 || maxVersion != 60 {
+		t.Fatalf("migration ledger count/distinct/max = %d/%d/%d, want 55/55/60", count, distinctCount, maxVersion)
 	}
 	for i, p := range []string{"claude", "codex", "antigravity", "devin", "kimi", "kimi-ai", "xai", "meta"} {
 		if _, err := db.SQL.ExecContext(ctx, "INSERT INTO reauth_jobs (id,auth_index,provider,account_label,flow,code_kind,state,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,'pending',?,?)", p, p, p, p, "device_code", "device", i, i); err != nil {
