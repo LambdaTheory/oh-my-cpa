@@ -157,8 +157,8 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
                 </div>
                 <Meter value={remaining ?? 0} color={quotaRemainingStroke(remaining)} label={remaining == null ? undefined : quotaWindowLabel(kind, window.label, t)} />
                 <div className={styles['window-foot']}>
-                  <span className={styles['window-reset']} title={quotaResetText(window, nowMS, t)}>
-                    {quotaResetCountdown(window, nowMS, t)}
+                  <span className={styles['window-reset']} title={quotaResetText(window, nowMS, t) || t('quota.window_boundary_unknown')}>
+                    {quotaResetCountdown(window, nowMS, t) || t('quota.window_boundary_unknown')}
                   </span>
                   {capacityText && (
                     <span

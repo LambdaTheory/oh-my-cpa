@@ -50,7 +50,9 @@ export const QuotaProgressBar: React.FC<QuotaProgressBarProps> = ({
 
   // Reset cell: "09/05 19:43 · in 4 hours"; backend-provided label as fallback. A passed
   // instant is only "recovered" when upstream stated it exactly: the row beside this cell
-  // makes the same distinction, and a derived instant supports no such claim.
+  // makes the same distinction, and a derived instant supports no such claim. A window that
+  // states neither an instant nor a label says its boundary is unknown rather than leaving
+  // the cell blank, which would read as a missing reading rather than a missing boundary.
   const resetMarker = resetAccuracyMarker(resetAccuracy);
   const computedResetText = (() => {
     if (resetAtMS) {
@@ -58,7 +60,7 @@ export const QuotaProgressBar: React.FC<QuotaProgressBarProps> = ({
       if (!resetMarker) return t('quota.recovered');
       return resetLabel ? `${resetMarker}${resetLabel}` : '';
     }
-    return resetLabel ? `${resetMarker}${resetLabel}` : '';
+    return resetLabel ? `${resetMarker}${resetLabel}` : t('quota.window_boundary_unknown');
   })();
 
   const displayPercent = hasData ? `${clampedRemaining}%` : '--';
