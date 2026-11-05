@@ -96,6 +96,24 @@ type ModelGroupsModelsResult struct {
 	Omitted int                   `json:"omitted"`
 }
 
+// ModelGroupReading is one model's console-facing state. It carries exactly the two
+// figures model_groups_models reports for a member - the availability band and the
+// balance - because the console and a caller must never disagree about the same name.
+// The console needs them for names that are not in a group yet as well: the add page's
+// candidates come from the gateway directory, so a reading is not a group property.
+type ModelGroupReading struct {
+	Model        string             `json:"model"`
+	Availability string             `json:"availability"`
+	Balance      *ModelGroupBalance `json:"balance"`
+}
+
+// ModelGroupReadingsResult covers every name the group pages can render: the members of
+// all groups plus the models the gateway advertises. Ordering is by name so a repeated
+// read of unchanged data is byte-identical.
+type ModelGroupReadingsResult struct {
+	Models []ModelGroupReading `json:"models"`
+}
+
 func (s *Service) registerModelGroups(registry *capability.Registry) error {
 	if err := read(registry, "model_groups_list", "List the operator's model groups with each group's name and member count. Read-only; group names are what the per-group read accepts. Member names and quota detail come from model_groups_models.", func(ctx context.Context, _ ModelGroupsListInput) (ModelGroupsListResult, error) {
 		if s.Repo == nil {
@@ -155,8 +173,67 @@ func (s *Service) modelGroupModels(ctx context.Context, input ModelGroupsModelsI
 	return result, nil
 }
 
-// projectModelGroupAdvice asks ProjectModelAdvice for one member at a time.
-// That projection bounds its own result to model_advice's 50-row / 32 KiB
+// ModelGroupReadings is the console's read of the same projection. It resolves every
+// name the group pages may draw - the members of all groups and the models the gateway
+// advertises, which are the add page's candidates - through projectModelGroupAdvice and
+// modelGroupBalances, the functions model_groups_models itself uses. One projection is
+// the point: a member cannot be available in the console and unavailable to a caller.
+//
+// Unreadable evidence is not an error here either. modelGroupAdviceInputs degrades a
+// failed directory, credential or quota read to empty evidence, so the names still come
+// back with availability "unknown" and a null balance, exactly as the per-group read
+// answers when quota data is missing.
+func (s *Service) ModelGroupReadings(ctx context.Context) (ModelGroupReadingsResult, error) {
+	if s.Repo == nil {
+		return ModelGroupReadingsResult{}, errors.New("capability_unavailable")
+	}
+	groups, err := s.Repo.ListModelGroups(ctx)
+	if err != nil {
+		return ModelGroupReadingsResult{}, err
+	}
+	names := make([]string, 0, len(groups))
+	seen := make(map[string]bool)
+	collect := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	for _, group := range groups {
+		for _, member := range group.Members {
+			collect(member.Model)
+		}
+	}
+	directory, credentials, quotas := s.modelGroupAdviceInputs(ctx)
+	for _, model := range directory.Models {
+		collect(model.ID)
+	}
+	sort.Strings(names)
+	advice := projectModelGroupAdvice(names, directory, quotas, credentials, capability.AnchorMS(ctx), s.AdviceBlocked)
+	balances := modelGroupBalances(names, directory, credentials, quotas)
+	return ModelGroupReadingsResult{Models: projectModelGroupReadings(names, advice, balances)}, nil
+}
+
+func projectModelGroupReadings(names []string, advice ModelAdviceResult, balances map[string]*ModelGroupBalance) []ModelGroupReading {
+	verdicts := make(map[string]string, len(advice.Models))
+	for _, item := range advice.Models {
+		verdicts[item.Model] = item.Verdict
+	}
+	readings := make([]ModelGroupReading, 0, len(names))
+	for _, name := range names {
+		// A name with no verdict is one the projection could not measure; the empty
+		// verdict maps to "unknown" for the same reason a missing reading does.
+		readings = append(readings, ModelGroupReading{
+			Model:        name,
+			Availability: modelGroupAvailability(verdicts[name]),
+			Balance:      balances[name],
+		})
+	}
+	return readings
+}
+
+// projectModelGroupAdvice asks ProjectModelAdvice for one member at a time.// That projection bounds its own result to model_advice's 50-row / 32 KiB
 // capability budget; a single-member call cannot reach that bound, so a group
 // of up to modelGroupsMemberLimit keeps, for every member, the verdict
 // model_advice would give that model on its own.
