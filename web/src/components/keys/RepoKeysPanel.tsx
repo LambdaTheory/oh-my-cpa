@@ -563,7 +563,7 @@ export function RepoKeysPanel() {
         okText={dialog?.kind === 'reveal' ? t('repo_keys.reveal_confirm') : t('common.confirm')}
         cancelText={t('common.cancel')}
         confirmLoading={isDialogBusy}
-        okButtonProps={{ disabled: isReasonMissing }}
+        okButtonProps={{ disabled: isReasonMissing || (dialog?.kind === 'reveal' && revealed !== null) }}
         destroyOnHidden
       >
         {dialog?.kind === 'stop' && (
