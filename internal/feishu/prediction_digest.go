@@ -253,6 +253,16 @@ func predictionItemStale(item PredictionDigestItem, now time.Time) bool {
 	return ageMS > item.FreshWindowMS
 }
 
+// alertStale is the delivery-time twin of predictionItemStale: it re-checks a
+// queued row against the freshness bound it was created with, so a retry cannot
+// render an observation that has since aged out.
+func alertStale(alert Alert, now time.Time) bool {
+	if alert.FreshWindowMS <= 0 || alert.ObservedAt.IsZero() {
+		return false
+	}
+	return now.UnixMilli()-alert.ObservedAt.UnixMilli() > alert.FreshWindowMS
+}
+
 func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
 	if state == nil || !resolved.Ready() || sameSummaryMinute(state.LastSummaryAt, resolved, now) {
 		return false
@@ -325,20 +335,14 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 func predictionNotification(items []PredictionDigestItem, omitted int, resolved Resolved, now time.Time) Notification {
 	alerts := make([]Alert, 0, len(items))
 	for _, item := range items {
-		detail := "耗尽时间数据缺失"
-		if item.ExhaustionETAMS != nil && *item.ExhaustionETAMS > now.UnixMilli() {
-			detail = "预计还可用 " + remainingDuration(time.UnixMilli(*item.ExhaustionETAMS).Sub(now))
-		} else if item.ExhaustionETAMS != nil {
-			detail = "已到达耗尽时间"
-		}
-		facts := []string{"当前已用 " + predictionPercent(item.UsedPercent), "期望 " + predictionPercent(item.ExpectedUsedPercent)}
+		facts := []string{"实际 " + predictionPercent(item.UsedPercent), "期望 " + predictionPercent(item.ExpectedUsedPercent)}
 		observed := time.Time{}
 		if item.ObservedAtMS > 0 {
 			observed = time.UnixMilli(item.ObservedAtMS).UTC()
 		}
 		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed,
-			Alias: item.CredentialLabel, Title: predictionWindowLabel(item), Detail: detail + "（预测）", Facts: facts,
-			Advice: "提前准备备用凭证，按需分流", OccurredAt: now})
+			Alias: item.CredentialLabel, Title: predictionWindowLabel(item), Detail: predictionExhaustionLine(item, resolved, now), Facts: facts,
+			Advice: "提前准备备用凭证，按需分流", OccurredAt: now, FreshWindowMS: item.FreshWindowMS})
 	}
 	localMinute := now.In(resolved.Location).Format("15:04")
 	if morningMinute(resolved, now) {
@@ -398,6 +402,21 @@ func predictionPercent(value *float64) string {
 		return "数据缺失"
 	}
 	return fmt.Sprintf("%.1f%%", *value)
+}
+
+// predictionExhaustionLine states the concrete time the window runs out and the
+// one conclusion a pushed row carries: it cannot last until its reset. An
+// absolute time replaces the old relative duration, so a delayed or retried
+// render still says when rather than "in 1 hour" from a stale queue time.
+func predictionExhaustionLine(item PredictionDigestItem, resolved Resolved, now time.Time) string {
+	if item.ExhaustionETAMS == nil {
+		return "耗尽时间数据缺失 · 撑不到重置"
+	}
+	eta := time.UnixMilli(*item.ExhaustionETAMS).In(resolved.Location)
+	if !eta.After(now) {
+		return "已到达耗尽时间 · 撑不到重置"
+	}
+	return "预计 " + eta.Format("01-02 15:04") + " 耗尽 · 撑不到重置"
 }
 
 func scheduledMinute(resolved Resolved, now time.Time) bool {

@@ -130,7 +130,7 @@ func TestPredictionUsesExhaustionClockAndSurplusIsQuiet(t *testing.T) {
 	item := PredictionDigestItem{Provider: "codex", CredentialLabel: "work", Verdict: "will_exhaust", ExhaustionETAMS: &eta}
 	notification := predictionNotification([]PredictionDigestItem{item}, 0, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Alerts: notification.Alerts, Kind: notification.Kind}))
-	if !strings.Contains(payload, "预计还可用 1 小时 30 分钟") || !strings.Contains(payload, "当前已用 数据缺失") {
+	if !strings.Contains(payload, "预计 10-26 18:30 耗尽 · 撑不到重置") || !strings.Contains(payload, "实际 数据缺失") {
 		t.Fatal(payload)
 	}
 	item.Verdict = "under_used"

@@ -19,26 +19,59 @@ const (
 
 func (r *PlainReportRenderer) predictionCard(msg Message) map[string]any {
 	rows := make([]Alert, 0, len(msg.Alerts))
+	others := make([]Alert, 0, len(msg.Alerts))
 	for _, alert := range msg.Alerts {
 		if strings.HasPrefix(alert.Kind, predictionKindPrefix) {
 			rows = append(rows, alert)
+		} else {
+			others = append(others, alert)
 		}
 	}
 	total := len(rows) + msg.Omitted
 	count := min(len(rows), predictionCardRowLimit)
 	config := map[string]any{"update_multi": true, "width_mode": "compact"}
-	elements := []map[string]any{markdown(fmt.Sprintf("**%d 个窗口撑不到重置**", total))}
+	elements := make([]map[string]any, 0, len(msg.Alerts)+4)
+	switch {
+	case total > 0:
+		elements = append(elements, markdown(fmt.Sprintf("**%d 个窗口撑不到重置**", total)))
+	case len(others) > 0:
+		elements = append(elements, markdown("**其他需要处理**"))
+	}
 	for _, alert := range rows[:count] {
 		elements = append(elements, markdown(predictionRow(alert)))
+	}
+	// The morning card appends actionable non-prediction alerts (channel
+	// unavailable, credential invalid) to the same notification. They are what a
+	// person has to act on, so they follow the forecast rows instead of being
+	// filtered away with the prediction-kind check above.
+	if len(others) > 0 {
+		if total > 0 {
+			elements = append(elements, markdown("**其他需要处理**"))
+		}
+		otherCount := min(len(others), maxDecisionPoints)
+		for _, alert := range others[:otherCount] {
+			elements = append(elements, markdown("• "+decisionPoint(alert)))
+		}
+		if omitted := len(others) - otherCount; omitted > 0 {
+			elements = append(elements, markdown(fmt.Sprintf("另有 %d 项需要处理，见控制台", omitted)))
+		}
 	}
 	if pending := predictionPendingLine(msg.Pending); pending != "" {
 		elements = append(elements, markdown(pending))
 	}
-	meta := "读数 " + r.predictionReadTime(rows)
-	if omitted := total - count; omitted > 0 {
-		meta += fmt.Sprintf(" · 另有 %d 项，见控制台", omitted)
+	meta := ""
+	if len(rows) > 0 {
+		meta = "读数 " + r.predictionReadTime(rows)
 	}
-	elements = append(elements, markdown(meta))
+	if omitted := total - count; omitted > 0 {
+		if meta != "" {
+			meta += " · "
+		}
+		meta += fmt.Sprintf("另有 %d 项，见控制台", omitted)
+	}
+	if meta != "" {
+		elements = append(elements, markdown(meta))
+	}
 	elements = append(elements, r.consoleButton())
 	return map[string]any{"schema": "2.0", "config": config, "header": map[string]any{
 		"title": map[string]any{"tag": "plain_text", "content": r.Title(msg)}, "template": "orange",

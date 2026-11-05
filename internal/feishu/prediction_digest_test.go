@@ -621,7 +621,7 @@ func TestPredictionCardShowsBaselineAndLatestRead(t *testing.T) {
 	newer := PredictionDigestItem{CredentialLabel: "newer", Provider: "claude", WindowKind: "five_hour", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
 	notification := predictionNotification([]PredictionDigestItem{older, newer}, 2, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Alerts: notification.Alerts, Omitted: notification.Omitted, Kind: notification.Kind}))
-	if !strings.Contains(payload, "当前已用 80.0%") || !strings.Contains(payload, "期望 60.5%") {
+	if !strings.Contains(payload, "实际 80.0%") || !strings.Contains(payload, "期望 60.5%") {
 		t.Fatalf("baseline missing: %s", payload)
 	}
 	if !strings.Contains(payload, "另有 2 项") {
@@ -629,6 +629,77 @@ func TestPredictionCardShowsBaselineAndLatestRead(t *testing.T) {
 	}
 	if !strings.Contains(payload, "读数 10-27 09:00") {
 		t.Fatalf("read time is not the newest observation: %s", payload)
+	}
+}
+
+// F4: the row states the actual usage and an absolute exhaustion time, matching
+// the console's wording instead of a relative countdown.
+func TestPredictionCardStatesAbsoluteExhaustionTime(t *testing.T) {
+	now := mustTime("2026-10-27T09:00:00Z")
+	eta := now.Add(2 * time.Hour).UnixMilli()
+	used, expected := 88.0, 52.0
+	notification := predictionNotification([]PredictionDigestItem{{
+		CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
+		UsedPercent: &used, ExpectedUsedPercent: &expected, ExhaustionETAMS: &eta,
+		ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+	}}, 0, readyPredictionConfig(), now)
+	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Kind: notification.Kind, Alerts: notification.Alerts}))
+	if !strings.Contains(payload, "实际 88.0%") || !strings.Contains(payload, "期望 52.0%") {
+		t.Fatalf("actual/expected wording missing: %s", payload)
+	}
+	if !strings.Contains(payload, "预计 10-27 11:00 耗尽 · 撑不到重置") {
+		t.Fatalf("absolute exhaustion time missing: %s", payload)
+	}
+	if strings.Contains(payload, "预计还可用") || strings.Contains(payload, "当前已用") {
+		t.Fatalf("old relative wording survived: %s", payload)
+	}
+}
+
+// F3: the morning card carries actionable non-prediction alerts alongside the
+// forecast; the prediction-kind filter used to drop them.
+func TestPredictionCardKeepsNonPredictionAlerts(t *testing.T) {
+	now := mustTime("2026-10-27T09:00:00Z")
+	used, expected := 80.0, 60.0
+	notification := predictionNotification([]PredictionDigestItem{{
+		CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
+		UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+	}}, 0, readyPredictionConfig(), now)
+	channel := Alert{Kind: AlertChannelUnavailable, Provider: "claude", Title: "渠道不可用", Detail: "连续失败 3 次", ObservedAt: now}
+	card := NewPlainReportRenderer(time.UTC).Card(Message{
+		Kind: notification.Kind, Alerts: append(notification.Alerts, channel),
+	})
+	payload := marshalTestJSON(card)
+	if !strings.Contains(payload, "渠道不可用") {
+		t.Fatalf("non-prediction alert was dropped: %s", payload)
+	}
+	if !strings.Contains(payload, "其他需要处理") || !strings.Contains(payload, "1 个窗口撑不到重置") {
+		t.Fatalf("combined card structure missing: %s", payload)
+	}
+}
+
+// F2: a quiet-hours release or retry must re-check the reading age. An expired
+// row is dropped, and a card left with nothing evidence-based is not sent.
+func TestPredictionDeliveryDropsExpiredRows(t *testing.T) {
+	now := mustTime("2026-10-27T09:00:00Z")
+	sender := newFakeSender()
+	dispatcher := NewDispatcher(sender, NewPlainReportRenderer(time.UTC), nil).withClock(func() time.Time { return now })
+	bound := int64((time.Hour / time.Millisecond))
+	stale := Alert{Kind: predictionKindPrefix, Provider: "codex", Title: "每周窗口", ObservedAt: now.Add(-3 * time.Hour), FreshWindowMS: bound}
+	fresh := Alert{Kind: predictionKindPrefix, Provider: "claude", Title: "5 小时窗口", ObservedAt: now.Add(-10 * time.Minute), FreshWindowMS: bound}
+	outbox := []Notification{
+		{ID: "stale", Kind: predictionKindPrefix + KindMorning, Alerts: []Alert{stale}, State: NotifyPending, OccurredAt: now.Add(-3 * time.Hour), CreatedAt: now.Add(-3 * time.Hour)},
+		{ID: "mixed", Kind: predictionKindPrefix + KindMorning, Alerts: []Alert{stale, fresh}, State: NotifyPending, OccurredAt: now, CreatedAt: now},
+	}
+	out := dispatcher.deliverDue(context.Background(), "chat", outbox)
+	if sends, _ := sender.counts(); sends != 1 {
+		t.Fatalf("stale-only card should not send, mixed card should: sends=%d", sends)
+	}
+	if out[0].State != NotifySent || out[1].State != NotifySent {
+		t.Fatalf("delivery states = %+v", out)
+	}
+	payload := marshalTestJSON(sender.lastCard())
+	if strings.Contains(payload, "每周窗口") || !strings.Contains(payload, "5 小时窗口") {
+		t.Fatalf("expired row survived delivery: %s", payload)
 	}
 }
 
