@@ -25,6 +25,11 @@ type AuditEvent struct {
 	RequestID     string         `json:"request_id"`
 	SourceSummary string         `json:"source_summary"`
 	Details       map[string]any `json:"details,omitempty"`
+	// Push, when set, is the platform copy of this record. It is written by the same
+	// statement path as the audit row, so a business step that was recorded locally is
+	// also queued for the team audit platform even if the process stops immediately
+	// afterwards (PRD 4.8).
+	Push *AuditPushEvent `json:"-"`
 }
 
 // auditExecer is satisfied by both *sql.DB and *sql.Tx. A caller that must write the
@@ -42,7 +47,25 @@ func (r *Repository) RecordAuditEvent(ctx context.Context, event AuditEvent) (in
 	if r == nil || r.SQL() == nil {
 		return 0, errors.New("repository is not initialized")
 	}
-	return insertAuditEvent(ctx, r.SQL(), event)
+	db := r.SQL()
+	if event.Push == nil {
+		return insertAuditEvent(ctx, db, event)
+	}
+	// The queue row is part of the record, not a follow-up write: a row that reached
+	// the trail but not the outbox would be an event the platform never learns about.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin audit event transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	id, err := insertAuditEvent(ctx, tx, event)
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit audit event: %w", err)
+	}
+	return id, nil
 }
 
 // insertAuditEvent admits and writes one record through execer.
@@ -92,6 +115,11 @@ func insertAuditEvent(ctx context.Context, execer auditExecer, event AuditEvent)
 		return 0, fmt.Errorf("insert audit event: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	if event.Push != nil {
+		if err := insertAuditPush(ctx, execer, id, *event.Push); err != nil {
+			return 0, err
+		}
+	}
 	return id, nil
 }
 

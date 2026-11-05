@@ -18,8 +18,8 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/crypto"
-	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repokey"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
 var repoKeyTestCounter atomic.Uint64
@@ -221,6 +221,117 @@ func TestRepoKeyApplicationLifecycle(t *testing.T) {
 	}
 	if len(awaiting) != 0 {
 		t.Fatalf("a delivered application still waits for delivery: %+v", awaiting)
+	}
+}
+
+// Every recorded action also queues one event for the team audit platform, with the
+// application id as the trace that joins apply, approval and delivery (PRD 4.8). The
+// payload is checked for masks only: a key's value must never reach the platform.
+func TestRepoKeyActionsQueuePlatformAuditEvents(t *testing.T) {
+	service, gateway := newRepoKeyService(t)
+	ctx := callerContext("claude-hl", "laptop-a")
+	_, publicKey := newCallerKeyPair(t)
+
+	applied, err := service.ApplyRepoKey(ctx, RepoKeyApplyInput{
+		Repo: "LambdaTheory/oh-my-cpa", Purpose: "开发时调模型", PublicKey: publicKey,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ApproveRepoKeyApplication(context.Background(), applied.ApplicationID, "operator@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.FetchRepoKeyCiphertext(ctx, applied.ApplicationID, ""); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.Repo.GetRepoKeyApplication(context.Background(), applied.ApplicationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StopRepoKeyBinding(context.Background(), approved.BindingID, "operator@example.com", "rotate", "replacing the machine"); err != nil {
+		t.Fatal(err)
+	}
+
+	type queued struct {
+		toolName string
+		traceID  string
+		event    string
+		payload  string
+	}
+	rows, err := service.Repo.SQL().QueryContext(context.Background(),
+		`SELECT tool_name, trace_id, event, payload_json FROM audit_push_events ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var events []queued
+	for rows.Next() {
+		var item queued
+		if err := rows.Scan(&item.toolName, &item.traceID, &item.event, &item.payload); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, item)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Approving a repository with no key yet issues one, which is its own audited step.
+	wantTools := []string{
+		AuditRepoKeyApply, AuditRepoKeyReissue, AuditRepoKeyApprove, AuditRepoKeyDeliver, AuditRepoKeyStop,
+	}
+	if len(events) != len(wantTools) {
+		t.Fatalf("queued events = %d (%+v), want %d", len(events), events, len(wantTools))
+	}
+	for index, want := range wantTools {
+		if events[index].toolName != want {
+			t.Fatalf("event %d tool = %q, want %q", index, events[index].toolName, want)
+		}
+		if events[index].event != "tool.end" {
+			t.Fatalf("event %d name = %q, want tool.end", index, events[index].event)
+		}
+	}
+	// Apply, approval and delivery are one flow; issuance and stop belong to the binding.
+	for _, index := range []int{0, 2, 3} {
+		if events[index].traceID != applied.ApplicationID {
+			t.Fatalf("%s trace = %q, want the application id %q", events[index].toolName, events[index].traceID, applied.ApplicationID)
+		}
+	}
+	for _, index := range []int{1, 4} {
+		if events[index].traceID != approved.BindingID {
+			t.Fatalf("%s trace = %q, want the binding id %q", events[index].toolName, events[index].traceID, approved.BindingID)
+		}
+	}
+
+	// No key's value may appear in any queued payload; the mask is the only key text.
+	var full struct {
+		Entity struct {
+			Type string `json:"type"`
+			ID   string `json:"id"`
+		} `json:"entity"`
+		AgentID       string   `json:"agent_id"`
+		Status        string   `json:"status"`
+		ResultSummary string   `json:"result_summary"`
+		Tags          []string `json:"tags"`
+	}
+	if err := json.Unmarshal([]byte(events[0].payload), &full); err != nil {
+		t.Fatal(err)
+	}
+	if full.AgentID != "oh-my-cpa" || full.Status != "OK" {
+		t.Fatalf("payload identity = %+v", full)
+	}
+	if full.Entity.Type != "repo" || full.Entity.ID != "LambdaTheory/oh-my-cpa" {
+		t.Fatalf("payload entity = %+v", full.Entity)
+	}
+	if !containsString(full.Tags, "agent:claude-hl") || !containsString(full.Tags, "device:laptop-a") {
+		t.Fatalf("payload tags = %v", full.Tags)
+	}
+	for _, key := range gateway.clientKeys() {
+		for _, event := range events {
+			if strings.Contains(event.payload, key) {
+				t.Fatalf("%s payload carries a key value", event.toolName)
+			}
+		}
 	}
 }
 

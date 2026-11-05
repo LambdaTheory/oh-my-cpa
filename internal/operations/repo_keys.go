@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/oh-my-cpa/oh-my-cpa/internal/auditpush"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repokey"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
@@ -48,6 +52,58 @@ const (
 	AuditRepoKeyReissue  = "repo_key.reissue"
 	AuditRepoKeyReenable = "repo_key.reenable"
 )
+
+// repoKeyPush builds the team audit platform's copy of one recorded action (PRD 4.8).
+//
+// The copy is queued in the same transaction as the console's audit row, so the two
+// cannot disagree. A build error is a programming error - the action and trace are
+// compile-time constants and the status is always OK here - and it must not undo the
+// business step, so it returns nil and the console record remains the source of truth
+// (AC-32: push failure never changes a business result).
+func repoKeyPush(action, traceID, repoID, summary, channel string, tags []string) *repository.AuditPushEvent {
+	built, payload, err := auditpush.Build(auditpush.Description{
+		Action: action, TraceID: traceID, RepoID: repoID, Summary: summary, Channel: channel, Tags: tags,
+	})
+	if err != nil {
+		return nil
+	}
+	return &repository.AuditPushEvent{
+		Payload: payload, TraceID: built.TraceID, SpanID: built.SpanID,
+		ToolName: built.ToolName, Event: built.Event,
+	}
+}
+
+// repoKeyChannelFor names where a delivery came from: an operator present means the
+// console hand-out, otherwise the caller fetched its own envelope over MCP.
+func repoKeyChannelFor(operator string) string {
+	if strings.TrimSpace(operator) == "" {
+		return auditpush.ChannelMCP
+	}
+	return auditpush.ChannelConsole
+}
+
+// repoKeyChannelFromSource maps an application's recorded source onto the platform's
+// channel field. The application stores "agent" for the MCP path and "console" for the
+// console's proxy application; the platform reads the latter as the console.
+func repoKeyChannelFromSource(source string) string {
+	if strings.TrimSpace(source) == "console" {
+		return auditpush.ChannelConsole
+	}
+	return auditpush.ChannelMCP
+}
+
+// repoKeyTags puts the caller's agent and device on the platform event so the audit
+// platform can filter by them without parsing the summary (PRD 4.8).
+func repoKeyTags(agent, device string) []string {
+	tags := make([]string, 0, 2)
+	if agent = strings.TrimSpace(agent); agent != "" {
+		tags = append(tags, "agent:"+agent)
+	}
+	if device = strings.TrimSpace(device); device != "" {
+		tags = append(tags, "device:"+device)
+	}
+	return tags
+}
 
 // RepoKeyQueryInput asks whether a repository has a usable key (AC-3).
 type RepoKeyQueryInput struct {
@@ -256,6 +312,9 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 		return RepoKeyApplyResult{}, err
 	}
 	application := repository.RepoKeyApplication{
+		// The id is chosen here rather than inside the repository so the platform event
+		// can use it as the trace that ties apply, approval and delivery together.
+		ID:         uuid.NewString(),
 		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: hasRemote,
 		AgentName: agent, DeviceName: device, Purpose: purpose, Kind: kind,
 		PublicKey: publicKey, PublicKeyFingerprint: fingerprint, KeyAlgorithm: "x25519",
@@ -283,6 +342,9 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 			"public_key_fingerprint": fingerprint, "public_key_changed": publicKeyChanged,
 			"operator": params.Operator,
 		},
+		Push: repoKeyPush(AuditRepoKeyApply, application.ID, repoID,
+			fmt.Sprintf("applied (%s) for %s by %s@%s; waiting for approval", kind, repoID, agent, device),
+			repoKeyChannelFromSource(params.Source), repoKeyTags(agent, device)),
 	})
 	if err != nil {
 		return RepoKeyApplyResult{}, err
@@ -318,6 +380,10 @@ func (s *Service) autoApproveRepoKeyApplication(ctx context.Context, binding *re
 			"kind": "reuse", "auto_approved": true, "key_mask": binding.KeyMask,
 			"public_key_fingerprint": application.PublicKeyFingerprint,
 		},
+		Push: repoKeyPush(AuditRepoKeyApply, application.ID, application.RepoID,
+			fmt.Sprintf("applied (reuse) for %s by %s@%s; auto-approved, key %s",
+				application.RepoID, application.AgentName, application.DeviceName, binding.KeyMask),
+			repoKeyChannelFromSource(application.Source), repoKeyTags(application.AgentName, application.DeviceName)),
 	})
 }
 
@@ -415,6 +481,10 @@ func (s *Service) FetchRepoKeyCiphertext(ctx context.Context, applicationID, ope
 			"kind": deliveryKind, "key_mask": application.KeyMask,
 			"public_key_fingerprint": application.PublicKeyFingerprint, "operator": operator,
 		},
+		Push: repoKeyPush(AuditRepoKeyDeliver, application.ID, application.RepoID,
+			fmt.Sprintf("delivered the %s ciphertext of key %s to %s@%s",
+				deliveryKind, application.KeyMask, application.AgentName, application.DeviceName),
+			repoKeyChannelFor(operator), repoKeyTags(application.AgentName, application.DeviceName)),
 	}); err != nil {
 		return RepoKeyCiphertextResult{}, err
 	}
@@ -507,6 +577,10 @@ func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, 
 			"kind": kind, "key_mask": binding.KeyMask, "binding_id": binding.ID,
 			"public_key_fingerprint": application.PublicKeyFingerprint,
 		},
+		Push: repoKeyPush(AuditRepoKeyApprove, application.ID, application.RepoID,
+			fmt.Sprintf("approved (%s) for %s by %s@%s; key %s", kind, application.RepoID,
+				application.AgentName, application.DeviceName, binding.KeyMask),
+			auditpush.ChannelConsole, repoKeyTags(application.AgentName, application.DeviceName)),
 	})
 	if err != nil {
 		return repository.RepoKeyApplication{}, err
@@ -548,12 +622,18 @@ func (s *Service) repoKeyForApproval(ctx context.Context, client interface {
 		_, _ = s.removeRepoKeyFromGateway(ctx, client, keys, "")
 		return repository.RepoKeyBinding{}, "", "", err
 	}
+	bindingID := uuid.NewString()
 	binding, bindErr := s.Repo.CreateRepoKeyBinding(ctx, repository.RepoKeyBinding{
+		ID:         bindingID,
 		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: repoHasRemote,
 		KeyFingerprint: fingerprint, KeyMask: security.MaskSecret(secret), CreatedBy: "",
 	}, nowMS, repository.AuditEvent{
 		Action: AuditRepoKeyReissue, SourceSummary: "console",
 		Details: map[string]any{"repo": repoID, "key_mask": security.MaskSecret(secret), "new_key": true},
+		Push: repoKeyPush(AuditRepoKeyReissue, bindingID, repoID,
+			fmt.Sprintf("issued a new key %s for %s while approving an application",
+				security.MaskSecret(secret), repoID),
+			auditpush.ChannelConsole, nil),
 	})
 	if bindErr != nil {
 		// The key is in the gateway but has no owner; leaving it there would be an
@@ -597,6 +677,10 @@ func (s *Service) RejectRepoKeyApplication(ctx context.Context, applicationID, o
 			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
 			"kind": application.Kind, "reject_reason": reason,
 		},
+		Push: repoKeyPush(AuditRepoKeyReject, application.ID, application.RepoID,
+			fmt.Sprintf("rejected the application for %s from %s@%s: %s", application.RepoID,
+				application.AgentName, application.DeviceName, reason),
+			auditpush.ChannelConsole, repoKeyTags(application.AgentName, application.DeviceName)),
 	})
 }
 
@@ -630,6 +714,9 @@ func (s *Service) StopRepoKeyBinding(ctx context.Context, bindingID, operator, c
 			"repo": binding.RepoID, "key_mask": binding.KeyMask,
 			"category": category, "reason": reason,
 		},
+		Push: repoKeyPush(AuditRepoKeyStop, binding.ID, binding.RepoID,
+			fmt.Sprintf("stopped key %s for %s (%s): %s", binding.KeyMask, binding.RepoID, category, reason),
+			auditpush.ChannelConsole, nil),
 	})
 }
 
@@ -685,6 +772,9 @@ func (s *Service) ReenableRepoKeyBinding(ctx context.Context, bindingID, operato
 			"repo": binding.RepoID, "key_mask": binding.KeyMask,
 			"previous_category": binding.StopCategory, "reason": reason,
 		},
+		Push: repoKeyPush(AuditRepoKeyReenable, binding.ID, binding.RepoID,
+			fmt.Sprintf("re-enabled key %s for %s: %s", binding.KeyMask, binding.RepoID, reason),
+			auditpush.ChannelConsole, nil),
 	})
 	if err != nil {
 		_ = client.UpdateClientAPIKeys(ctx, keys)
@@ -721,6 +811,9 @@ func (s *Service) RevealRepoKeyPlaintext(ctx context.Context, bindingID, operato
 		Details: map[string]any{
 			"repo": binding.RepoID, "key_mask": binding.KeyMask, "operator": operator, "reason": reason,
 		},
+		Push: repoKeyPush(AuditRepoKeyReveal, binding.ID, binding.RepoID,
+			fmt.Sprintf("console reveal of key %s for %s: %s", binding.KeyMask, binding.RepoID, reason),
+			auditpush.ChannelConsole, nil),
 	}); err != nil {
 		return "", err
 	}

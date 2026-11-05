@@ -92,7 +92,11 @@ var TABLE_LIFECYCLES = map[string]TableLifecycle{
 	"quota_observations": {Kind: LifecycleRolling, Reason: "passive quota windows, read as history beside request records",
 		Rules: []LifecycleRule{{Policy: LifecycleQuotaObservations, Expired: `observed_at_ms < ?`}}},
 	"usage_facts_15m": {Kind: LifecyclePermanent, Reason: "the dashboard's history; about one row per active dimension tuple per quarter hour"}, "usage_facts_daily": {Kind: LifecyclePermanent, Reason: "the dashboard's history at the daily grain"},
-	"audit_events":      {Kind: LifecyclePermanent, Reason: "the audit trail grows with operator actions, not traffic"},
+	"audit_events": {Kind: LifecyclePermanent, Reason: "the audit trail grows with operator actions, not traffic"},
+	// The platform outbox is one row per audit_events row, so its growth is the same
+	// rate and already bounded by the trail beside it. Sent rows are kept because the
+	// last successful delivery time is what answers "is the platform receiving these".
+	"audit_push_events": {Kind: LifecyclePermanent, Reason: "one platform copy per audit record, with its delivery state"},
 	"repo_key_bindings": {Kind: LifecyclePermanent, Reason: "which repository owns a key, kept after the key stops so its usage stays attributable"},
 	"repo_key_callers":  {Kind: LifecycleReplaced, Reason: "one registration per agent and device, rewritten in place when the public key changes"},
 	"repo_key_recipients": {Kind: LifecyclePermanent,

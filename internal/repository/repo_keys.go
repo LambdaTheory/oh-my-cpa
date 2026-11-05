@@ -66,25 +66,25 @@ type RepoKeyCaller struct {
 // RepoKeyApplication is one request for a key. Status covers the human decision; the
 // delivery is a separate row so the ciphertext stays retrievable afterwards.
 type RepoKeyApplication struct {
-	ID                     string `json:"id"`
-	InstanceID             string `json:"instance_id"`
-	RepoID                 string `json:"repo_id"`
-	RepoHasRemote          bool   `json:"repo_has_remote"`
-	AgentName              string `json:"agent_name"`
-	DeviceName             string `json:"device_name"`
-	Purpose                string `json:"purpose"`
-	Kind                   string `json:"kind"`
-	Status                 string `json:"status"`
-	PublicKey              string `json:"public_key"`
-	PublicKeyFingerprint   string `json:"public_key_fingerprint"`
-	KeyAlgorithm           string `json:"key_algorithm"`
-	Source                 string `json:"source"`
-	BindingID              string `json:"binding_id"`
-	KeyFingerprint         string `json:"key_fingerprint"`
-	KeyMask                string `json:"key_mask"`
-	DecidedBy              string `json:"decided_by"`
-	DecidedAtMS            *int64 `json:"decided_at_ms,omitempty"`
-	RejectReason           string `json:"reject_reason"`
+	ID                   string `json:"id"`
+	InstanceID           string `json:"instance_id"`
+	RepoID               string `json:"repo_id"`
+	RepoHasRemote        bool   `json:"repo_has_remote"`
+	AgentName            string `json:"agent_name"`
+	DeviceName           string `json:"device_name"`
+	Purpose              string `json:"purpose"`
+	Kind                 string `json:"kind"`
+	Status               string `json:"status"`
+	PublicKey            string `json:"public_key"`
+	PublicKeyFingerprint string `json:"public_key_fingerprint"`
+	KeyAlgorithm         string `json:"key_algorithm"`
+	Source               string `json:"source"`
+	BindingID            string `json:"binding_id"`
+	KeyFingerprint       string `json:"key_fingerprint"`
+	KeyMask              string `json:"key_mask"`
+	DecidedBy            string `json:"decided_by"`
+	DecidedAtMS          *int64 `json:"decided_at_ms,omitempty"`
+	RejectReason         string `json:"reject_reason"`
 	// Ciphertext is the key sealed to this application's public key. It is returned to the
 	// caller and stored so the same envelope can be fetched again; it is never a plaintext
 	// OMC can read (PRD 4.4, AC-33).
@@ -292,7 +292,11 @@ func (r *Repository) CreateRepoKeyBinding(ctx context.Context, binding RepoKeyBi
 	if strings.TrimSpace(binding.RepoID) == "" || strings.TrimSpace(binding.KeyFingerprint) == "" {
 		return RepoKeyBinding{}, ErrRepoKeyInvalid
 	}
-	binding.ID = uuid.NewString()
+	// The caller may choose the id so its platform event can name this binding as the
+	// trace of the reissue.
+	if strings.TrimSpace(binding.ID) == "" {
+		binding.ID = uuid.NewString()
+	}
 	binding.Status = "active"
 	binding.CreatedAtMS = nowMS
 	binding.StoppedAtMS = nil
@@ -545,7 +549,11 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		strings.TrimSpace(application.Purpose) == "" || strings.TrimSpace(application.PublicKey) == "" {
 		return RepoKeyApplication{}, false, ErrRepoKeyInvalid
 	}
-	application.ID = uuid.NewString()
+	// A caller that already chose the id (so the audit platform event can name this
+	// application as its trace) keeps it; otherwise one is assigned here as before.
+	if strings.TrimSpace(application.ID) == "" {
+		application.ID = uuid.NewString()
+	}
 	application.Status = "pending"
 	application.CreatedAtMS = nowMS
 	application.UpdatedAtMS = nowMS
@@ -569,6 +577,11 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		// changed key still needs the human decision it is waiting for (AC-34).
 		if existing.PublicKeyFingerprint == application.PublicKeyFingerprint && existing.Purpose == application.Purpose {
 			return existing, false, nil
+		}
+		// The application being refreshed already exists, so the platform event must
+		// name it as its trace rather than the id the caller generated for a new row.
+		if audit.Push != nil {
+			audit.Push = audit.Push.WithTraceID(existing.ID)
 		}
 		if err = writeRepoKeyAuditTx(ctx, tx, audit, nowMS, bindingKeyTarget(application.RepoID, application.PublicKeyFingerprint), map[string]any{
 			"repo": application.RepoID, "agent": application.AgentName, "device": application.DeviceName,
@@ -665,7 +678,9 @@ func (r *Repository) CreateApprovedRepoKeyApplication(ctx context.Context, appli
 		strings.TrimSpace(application.Ciphertext) == "" {
 		return RepoKeyApplication{}, ErrRepoKeyInvalid
 	}
-	application.ID = uuid.NewString()
+	if strings.TrimSpace(application.ID) == "" {
+		application.ID = uuid.NewString()
+	}
 	application.Status = "approved"
 	application.CreatedAtMS = nowMS
 	application.UpdatedAtMS = nowMS

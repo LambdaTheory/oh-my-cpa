@@ -61,7 +61,11 @@ func auditBucketDTOs(buckets []repository.AuditBucket) []auditBucketDTO {
 func auditEventDTOs(events []repository.AuditEvent) []auditEventDTO {
 	out := make([]auditEventDTO, 0, len(events))
 	for _, event := range events {
-		out = append(out, auditEventDTO(event))
+		out = append(out, auditEventDTO{
+			ID: event.ID, OccurredAtMS: event.OccurredAtMS, Action: event.Action,
+			TargetType: event.TargetType, TargetID: event.TargetID, Result: event.Result,
+			RequestID: event.RequestID, SourceSummary: event.SourceSummary, Details: event.Details,
+		})
 	}
 	return out
 }
