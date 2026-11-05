@@ -300,11 +300,19 @@ recipients permit only that person's private queries. Query cards retain scoped 
 answers and stale-observation notices; an empty abnormal filter means no anomalies.
 
 The earliest summary slot always supplies the morning fallback. Prediction
-evaluation runs once per minute from stored data and only
-`will_exhaust` findings retain a tracked episode; forecast-only events stay silent
-outside the morning digest. Morning prediction cards also carry stored anomalies and open items. Explicit
-manual prediction sends retain both finding kinds, deliver only their new outbox
-row and never claim a scheduled minute. No finding returns `no_findings`.
+evaluation runs once per minute from stored data and only windows whose
+`lasts_until_reset` is false retain a tracked episode and reach the card;
+windows that last, stale readings and undecided rows are never pushed. Each row
+opens with the two numbers ("实际 X% · 期望 Y%") and the sentence after them
+states only the exhaustion instant and that the window will not last to the
+reset. The card title counts the windows ("N 个窗口撑不到重置") and its subtitle
+says only those windows are included. Immediately before sending, the digest
+re-reads the stored credential roster and drops any item whose credential was
+disabled, removed or no longer has a window. Forecast-only events stay silent
+outside the morning digest. Morning prediction cards also carry stored anomalies
+and open items. Explicit manual prediction sends apply the same findings filter,
+deliver only their new outbox row and never claim a scheduled minute. No finding
+returns `no_findings`.
 
 Button fields were checked against the [official JSON 2.0 button reference](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button).
 Design evidence is `pre_render_design`: structure, missing data, single-recipient

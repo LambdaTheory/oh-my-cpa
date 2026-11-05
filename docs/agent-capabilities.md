@@ -569,8 +569,9 @@ See [ADR 0044](adr/0044-browser-connections-subscribe-to-server-owned-runs.md).
 exceed 100. A read-only MCP principal must omit `auth_index`, receives no auth index in
 the result and sees `credential_label` through `accountLabelForCaller`. Agent and console
 callers retain both fields. The result is also bounded to 32 KiB and reports every removed
-tail row through `omitted`. The internal Feishu findings projection filters verdicts before
-these public result bounds, prioritises `will_exhaust`, and retains at most 178 findings to
+tail row through `omitted`. The internal Feishu findings projection keeps only
+`lasts_until_reset: false` rows, sorted by exhaustion ETA, before these public
+result bounds, and retains at most 178 findings to
 fit the card envelope while also applying the 32 KiB result bound. Its `omitted` count is
 disclosed in the prediction card footer, so a finding cannot disappear silently behind
 either a non-finding row, the byte bound or renderer truncation.
@@ -578,25 +579,44 @@ either a non-finding row, the byte bound or renderer truncation.
 Each item includes the source window identity (`window_id`, `window_scope` and optional
 `window_model`), stable within its credential and independent of forecast values. These
 additive fields distinguish model/group windows without changing the tool name or filters.
-Each item states the current used percentage, reset and observation times, data age,
-burn rate, projected used percentage at reset, optional projected tokens and cost,
-optional exhaustion ETA, verdict, evidence tier, reason codes and sample quality.
-Verdicts are `will_exhaust`, `under_used`, `on_track` and `unknown`; evidence is `fact`,
-`projection` or `unknown`. Boundary, stale/error reading, incomplete history, mid-cycle
-reset, `fewer_than_three_buckets`, `insufficient_coverage`, `observation_gap`, early-cycle
-non-positive trend, invalid percentages, unsafe arithmetic and unavailable usage are
-explicit reasons. `sample_count` counts the deduplicated five-minute buckets that
-participate in the fit, including the current reading; a zero means the sample was not
-evaluated because a fact or an earlier validation return settled the result, not that no
-history exists. `coverage_seconds` and `max_gap_seconds` stay null below two points. A
-fresh, valid 100 percent reading returns
-`will_exhaust`/`fact` even when history is incomplete or a reset was detected; stale or
-error status, a missing or invalid percentage, and an unknown or expired boundary still
-prevent that fact. `fewer_than_two_observations` remains a legacy reason code but the
-current path emits the bucket-specific reasons. A missing number is never serialized as
-a fabricated zero; model/group usage that cannot be assigned safely reports
-`scope_unknown`. Freshness is window-aware: at least the two-hour idle
-refresh cadence, one quarter of the window when longer, and no more than twenty-four hours.
+Each item carries the four conclusion fields, with one meaning on the console,
+the Feishu card and this capability: `used_percent`; `expected_used_percent`,
+the linear share the window should have used at the reading's instant;
+`exhaustion_eta_ms`, the instant the window reaches 100%, equal to the reading
+instant when it already has; and `lasts_until_reset`, true, false, or null when
+the evidence cannot decide. `reset_at_ms`, `observed_at_ms` and
+`data_age_seconds` place the reading in time. A number that cannot be computed
+is null and is rendered as "cannot be calculated", never as zero.
+
+`lasts_until_reset` is decided in a fixed order: a reading at 100% cannot last;
+a trend ETA earlier than the reset cannot last; a non-increasing trend, or an
+ETA at or after the reset, lasts; insufficient evidence is null with one of four
+reason classes - reading failed, insufficient history, unknown window boundary
+(which includes windows with no fixed period) and abnormal usage. A stale
+reading gets no ETA and is always null. A window with neither a reset nor a
+period stays in the result and reports the no-cycle reason.
+
+The deprecated prediction vocabulary remains for one release, computed from
+the same result so it cannot disagree: `verdict` is derived from
+`lasts_until_reset` (`will_exhaust` for false, `on_track` for true, `unknown`
+for null; `under_used` is retired), while `burn_rate_per_hour`,
+`projected_percent_at_reset`, `projected_tokens_at_reset`,
+`projected_cost_nanos_at_reset`, `evidence`, `reasons`, `sample_count`,
+`coverage_seconds` and `max_gap_seconds` keep their previous shape.
+`sample_count` counts the deduplicated five-minute buckets that participate in
+the fit, including the current reading; a zero means the sample was not
+evaluated because a fact or an earlier validation return settled the result, not
+that no history exists. `coverage_seconds` and `max_gap_seconds` stay null below
+two points. Model/group usage that cannot be assigned safely reports
+`scope_unknown`. Freshness is window-aware: at least the two-hour idle refresh
+cadence, one quarter of the window when longer, and no more than twenty-four
+hours. New callers should read the four fields and the identity, and ignore the
+deprecated group; the next release removes it. See ADR 0119 for the migration.
+
+Disabled credentials, credentials with no quota window, and credentials no
+longer in the stored roster do not enter `quota_prediction`, the Feishu digest
+or the dashboard prediction panel, and they are not counted in "windows that
+cannot last". The credential quota page still lists them with their reason.
 
 The dashboard reads the same computation through
 `GET /api/v1/management/dashboard/predictions`. This console projection retains the full
@@ -604,7 +624,11 @@ stored roster and operator-visible credential labels and auth indexes, groups it
 provider, and adds prediction-call duration `duration_ms` plus nullable cycle accounting
 (`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`,
 `remaining_window_hours`, `window_error_hours`, `remaining_tokens`,
-`capacity_error_percent` and optional `capacity_unavailable`). These
+`capacity_error_percent` and optional `capacity_unavailable`), plus the
+console-only `unavailable_reason` and `reading_stale` flags. `unavailable_reason`
+names the console's four-category vocabulary for an undecided row and
+`reading_stale` marks a reading past its freshness bound; both are excluded from
+capability JSON, MCP results and Feishu. These
 console fields are excluded from capability JSON and schemas. Dashboard-only unknown
 placeholders do not enter quota_prediction or digest results and cannot displace their
 actual windows. Providers without refresh support or stored window evidence are omitted.

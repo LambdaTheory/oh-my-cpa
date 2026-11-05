@@ -85,7 +85,7 @@ type QuotaPredictionResult struct {
 }
 
 func (s *Service) registerQuotaPrediction(registry *capability.Registry) error {
-	return read(registry, "quota_prediction", "Project each stored quota window to its reset from passive and active observations plus recorded usage. Separates fact, projection and unknown evidence; never refreshes quota or changes routing.", s.QuotaPrediction)
+	return read(registry, "quota_prediction", "Read each stored quota window's used and expected share, exhaustion ETA and whether it lasts until the reset, from passive and active observations plus recorded usage. Missing figures are null, never zero; never refreshes quota or changes routing.", s.QuotaPrediction)
 }
 
 func (s *Service) QuotaPrediction(ctx context.Context, input QuotaPredictionInput) (QuotaPredictionResult, error) {
