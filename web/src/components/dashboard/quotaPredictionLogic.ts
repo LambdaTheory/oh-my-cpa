@@ -90,6 +90,15 @@ export function summarizePredictions(items: DashboardPredictionItem[]): { cannot
 }
 
 /**
+ * How many distinct credentials the group covers. A credential can report more
+ * than one window, so counting rows would overstate it; the group header counts
+ * credentials and the rows underneath count windows.
+ */
+export function countCredentials(items: DashboardPredictionItem[]): number {
+  return new Set(items.map((item) => item.auth_index || item.credential_label)).size;
+}
+
+/**
  * The copy key for the one-line conclusion. It carries only what the row can
  * state: exhaustion and whether the window lasts; percentages live in the
  * numbers above the sentence.

@@ -18,6 +18,7 @@ import { LoadFailure, Notice, useToast } from '../feedback';
 import { SendOutlined } from '../icons';
 import styles from './QuotaPrediction.module.css';
 import {
+  countCredentials,
   formatPredictionDeviation,
   formatPredictionETA,
   formatPredictionPercent,
@@ -194,7 +195,7 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
                   <summary className={styles['group-head']}>
                     <ProviderBrandIcon iconId={credentialProviderIconId(group.provider === 'step' ? 'stepfun' : group.provider)} size={18} />
                     <strong>{providerLabel(group.provider, t)}</strong>
-                    <span>{t('dash.prediction.group_summary', { credentials: group.items.length, cannot: groupSummary.cannot })}</span>
+                    <span>{t('dash.prediction.group_summary', { credentials: countCredentials(group.items), cannot: groupSummary.cannot })}</span>
                     <Tag size="small" tone={groupSummary.cannot > 0 ? 'danger' : groupSummary.unknown > 0 ? 'neutral' : 'success'}>
                       {groupSummary.cannot > 0
                         ? t('dash.prediction.lasts.no')

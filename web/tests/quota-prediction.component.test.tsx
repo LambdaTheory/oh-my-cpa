@@ -121,6 +121,17 @@ describe('dashboard quota prediction', () => {
     expect(screen.getByText('Computed in 7 ms')).toBeTruthy();
   });
 
+  it('counts credentials in the group header, not quota windows', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'claude', items: [
+      item({ provider: 'claude', auth_index: 'auth-1', credential_label: 'work', window_kind: 'five_hour', window_id: 'five_hour' }),
+      item({ provider: 'claude', auth_index: 'auth-1', credential_label: 'work', window_kind: 'weekly', window_id: 'weekly' }),
+      item({ provider: 'claude', auth_index: 'auth-2', credential_label: 'personal', window_kind: 'weekly', window_id: 'weekly' }),
+    ] }])} />));
+    // Two credentials behind three windows: the header counts credentials and
+    // the rows underneath count windows.
+    expect(screen.getByText('2 credentials · 3 cannot last')).toBeTruthy();
+  });
+
   it('never renders inferred tokens, cost, or quota-hour estimates', () => {
     render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item()] }])} />));
     expandProviders();
@@ -332,7 +343,7 @@ describe('dashboard quota prediction', () => {
   it('renders missing readings explicitly, with an action for every unknown row', () => {
     render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
       lasts_until_reset: null, used_percent: null, expected_used_percent: null, reset_at_ms: null, data_age_seconds: null,
-      exhaustion_eta_ms: null, unavailable_reason: 'reading_failed', reasons: ['reading_error'], sample_count: null, coverage_seconds: null,
+      exhaustion_eta_ms: null, unavailable_reason: 'reading_failed', reasons: ['reading_error'], sample_count: 0, coverage_seconds: null,
     })] }])} />));
     expandProviders();
     expect(screen.getAllByText('Cannot be calculated').length).toBeGreaterThanOrEqual(2);

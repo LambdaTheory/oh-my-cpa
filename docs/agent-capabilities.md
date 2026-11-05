@@ -588,12 +588,13 @@ the evidence cannot decide. `reset_at_ms`, `observed_at_ms` and
 `data_age_seconds` place the reading in time. A number that cannot be computed
 is null and is rendered as "cannot be calculated", never as zero.
 
-`lasts_until_reset` is decided in a fixed order: a reading at 100% cannot last;
-a trend ETA earlier than the reset cannot last; a non-increasing trend, or an
-ETA at or after the reset, lasts; insufficient evidence is null with one of four
-reason classes - reading failed, insufficient history, unknown window boundary
-(which includes windows with no fixed period) and abnormal usage. A stale
-reading gets no ETA and is always null. A window with neither a reset nor a
+`lasts_until_reset` is decided in a fixed order: a stale reading gets no ETA and
+is always null, checked first so an old 100% reading never becomes an up-to-date
+conclusion; a current reading at 100% cannot last; a trend ETA earlier than the
+reset cannot last; a non-increasing trend, or an ETA at or after the reset,
+lasts; insufficient evidence is null with one of four reason classes - reading
+failed, insufficient history, unknown window boundary (which includes windows
+with no fixed period) and abnormal usage. A window with neither a reset nor a
 period stays in the result and reports the no-cycle reason.
 
 The deprecated prediction vocabulary remains for one release, computed from
