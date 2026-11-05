@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Input, Modal, Select, Tag } from 'antd';
+import { Button, Input, Modal, Select } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError, describeError } from '../../api/client';
@@ -8,6 +8,7 @@ import { isDemoMode } from '../../types/demoMode';
 import { useToast } from '../feedback';
 import { Panel } from '../common/Panel';
 import { ResponsiveList } from '../common/ResponsiveList';
+import { Tag } from '../common/Tag';
 import { SearchInput } from '../common/SearchInput';
 import { CopyButton } from '../common/CopyButton';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
@@ -262,7 +263,7 @@ export function RepoKeysPanel() {
       width: 120,
       render: (value: RepoKeyBinding['status'], row) =>
         value === 'active' ? (
-          <Tag color="green">{t('repo_keys.status_active')}</Tag>
+          <Tag tone="success">{t('repo_keys.status_active')}</Tag>
         ) : (
           <Tag>{t(`repo_keys.stop_${row.stop_category || 'other'}`)}</Tag>
         ),
