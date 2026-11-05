@@ -274,7 +274,7 @@
     "dashboard-predictions": {
       "status": 200,
       "content_type": "application/json; charset=utf-8",
-      "body": "{\"duration_ms\":1,\"generated_at_ms\":1767225600000,\"omitted\":0,\"providers\":[]}"
+      "body": "{\"duration_ms\":0,\"generated_at_ms\":1767225600000,\"omitted\":0,\"providers\":[]}"
     },
     "dashboard-providers-15m": {
       "status": 200,
