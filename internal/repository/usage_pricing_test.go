@@ -299,8 +299,6 @@ func TestCanonicalAccountingSurvivesPricingAndRetention(t *testing.T) {
 			verify("retained daily facts")
 			query.BucketMS = QuarterHourBucketMS
 			verify("retained fine facts")
-			// TODO(T24): restore the local-day rebuild check with the insights block
-			// (上游 #306); EnsureLocalUsageFacts and UsageCalendar land there.
 		})
 	}
 }

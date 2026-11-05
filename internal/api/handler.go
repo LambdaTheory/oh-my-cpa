@@ -286,6 +286,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/management/dashboard/models", h.dashboardModels)
 				v1.Get("/management/dashboard/providers", h.dashboardProviders)
 				v1.Get("/management/dashboard/predictions", h.dashboardPredictions)
+				v1.Get("/management/insights/cube", h.insightsCube)
+				v1.Get("/management/insights/rhythm", h.insightsRhythm)
 				v1.Get("/management/logs", h.managementLogs)
 				v1.Delete("/management/logs", h.clearManagementLogs)
 				v1.Get("/management/logs/status", h.managementLogsStatus)
