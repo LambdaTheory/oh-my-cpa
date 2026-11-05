@@ -50,6 +50,9 @@ func NewPredictionJob(service *Service, source PredictionSource) *PredictionJob 
 	if service == nil || source == nil {
 		return nil
 	}
+	// Handing the source to the service lets every delivery, including one a
+	// quiet hour or a retry delayed, re-check the roster and freshness first.
+	service.setPredictionSource(source)
 	return &PredictionJob{service: service, source: source, interval: defaultPredictionInterval}
 }
 

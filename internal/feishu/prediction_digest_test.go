@@ -76,7 +76,9 @@ func TestManualPredictionSendsOneCardWithoutClaimingSummaryMinute(t *testing.T) 
 	if err != nil || !sent {
 		t.Fatalf("manual prediction sent=%v err=%v", sent, err)
 	}
-	if reads != 1 {
+	if reads != 2 {
+		// One read to build the card, one immediately before sending, which is
+		// the roster and freshness check every delivery performs.
 		t.Fatalf("prediction source reads = %d", reads)
 	}
 	if sends, _ := sender.counts(); sends != 1 {
@@ -376,9 +378,11 @@ func TestPredictionMinuteSuppressesConcurrentStartupDigest(t *testing.T) {
 	})
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startOnce sync.Once
 	used := 60.0
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-		close(started)
+		// Delivery re-reads the digest before sending, so the source runs twice.
+		startOnce.Do(func() { close(started) })
 		<-release
 		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 	})
@@ -578,6 +582,97 @@ func TestPredictionDigestDisclosesOmittedFindingsWithinCardLimit(t *testing.T) {
 }
 
 const quotaPredictionFindingsForCardTest = 178
+
+func TestPredictionCardRowNamesCredentialAndWindow(t *testing.T) {
+	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
+	used := 60.0
+	items := []PredictionDigestItem{
+		{CredentialLabel: "work", Provider: "codex", Key: "a1", WindowID: "five_hour", WindowKind: "five_hour", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()},
+		{CredentialLabel: "work", Provider: "codex", Key: "a1", WindowID: "weekly", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()},
+	}
+	notification := predictionNotification(items, 0, readyPredictionConfig(), now)
+	card := NewPlainReportRenderer(time.UTC).Card(Message{Kind: notification.Kind, Alerts: notification.Alerts, GeneratedAt: notification.OccurredAt})
+	payload := marshalTestJSON(card)
+	// Same credential, two windows: the rows must be told apart by window type.
+	for _, want := range []string{"Codex · work · 5 小时", "Codex · work · 每周"} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("prediction card is missing row identity %q: %s", want, payload)
+		}
+	}
+}
+
+// A card that quiet hours or a retry held is re-checked right before sending.
+// When the fresh digest no longer reports the finding (the reading went stale,
+// the credential was disabled or removed, or the window now lasts to reset),
+// nothing is sent and the queued row is closed instead of retried forever.
+func TestPredictionCardDropsFindingsThatExpiredWhileQueued(t *testing.T) {
+	env := newTestEnv(t, Report{}, false)
+	now := *env.clock
+	used := 60.0
+	current := PredictionDigest{Items: []PredictionDigestItem{{
+		CredentialLabel: "account", Provider: "codex", Key: "a1", WindowID: "weekly", WindowKind: "weekly",
+		UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(),
+	}}}
+	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) { return current, nil })
+	env.sender.failSends = 2
+	if sent, err := job.SendNow(context.Background()); err == nil || sent {
+		t.Fatalf("failed prediction send sent=%v err=%v", sent, err)
+	}
+	state, err := env.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Outbox) != 1 || state.Outbox[0].State != NotifyPending {
+		t.Fatalf("queued prediction = %+v", state.Outbox)
+	}
+	// While the card waits for its retry the reading goes stale.
+	current = PredictionDigest{}
+	*env.clock = state.Outbox[0].NextAttemptAt
+	env.service.deliverOutbox(context.Background(), env.service.resolvedNow())
+	if sends, _ := env.sender.counts(); sends != 0 {
+		t.Fatalf("stale prediction card was sent %d times", sends)
+	}
+	state, err = env.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Outbox) != 1 || state.Outbox[0].State != NotifySent || state.Outbox[0].LastError != "" {
+		t.Fatalf("dropped prediction row = %+v", state.Outbox)
+	}
+}
+
+// Only the rows the fresh digest still reports go out; the rest of the card is
+// not sent again just because one row survived.
+func TestPredictionCardKeepsOnlyRowsThatAreStillFindings(t *testing.T) {
+	env := newTestEnv(t, Report{}, false)
+	now := *env.clock
+	used := 60.0
+	row := func(label, key, window string) PredictionDigestItem {
+		return PredictionDigestItem{CredentialLabel: label, Provider: "codex", Key: key, WindowID: window, WindowKind: "weekly",
+			UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}
+	}
+	alpha, beta := row("alpha", "a1", "weekly"), row("beta", "b1", "weekly")
+	current := PredictionDigest{Items: []PredictionDigestItem{alpha, beta}}
+	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) { return current, nil })
+	env.sender.failSends = 2
+	if sent, err := job.SendNow(context.Background()); err == nil || sent {
+		t.Fatalf("failed prediction send sent=%v err=%v", sent, err)
+	}
+	state, err := env.store.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = PredictionDigest{Items: []PredictionDigestItem{alpha}}
+	*env.clock = state.Outbox[0].NextAttemptAt
+	env.service.deliverOutbox(context.Background(), env.service.resolvedNow())
+	if sends, _ := env.sender.counts(); sends != 1 {
+		t.Fatalf("retried prediction sends = %d", sends)
+	}
+	payload := marshalTestJSON(env.sender.lastCard())
+	if !strings.Contains(payload, "alpha") || strings.Contains(payload, "beta") {
+		t.Fatalf("prediction card carried a row that is no longer a finding: %s", payload)
+	}
+}
 
 func marshalTestJSON(value any) string {
 	encoded, _ := json.Marshal(value)

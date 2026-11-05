@@ -48,13 +48,20 @@ type Notification struct {
 type Dispatcher struct {
 	channelUnavailableAfter time.Duration
 	source                  ReportSource
-	store                   Store
-	sender                  Sender
-	renderer                ReportRenderer
-	logger                  *slog.Logger
-	now                     func() time.Time
-	backoffBase             time.Duration
-	backoffMax              time.Duration
+	// predictionSource re-reads the prediction findings for a queued card. Quiet
+	// hours and the bounded retry can hold a notification for hours, so the
+	// roster and the reading freshness are checked again right before sending
+	// rather than trusting the state the card was queued with. Nil means the
+	// dispatcher was built without a prediction job and prediction cards are
+	// delivered as queued.
+	predictionSource PredictionSource
+	store            Store
+	sender           Sender
+	renderer         ReportRenderer
+	logger           *slog.Logger
+	now              func() time.Time
+	backoffBase      time.Duration
+	backoffMax       time.Duration
 }
 
 // NewDispatcher builds a dispatcher. A nil logger and nil clock fall back to the
@@ -102,6 +109,33 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 		if notification.NextAttemptAt.After(now) {
 			out[i] = notification
 			continue
+		}
+		if d.predictionSource != nil && strings.HasPrefix(notification.Kind, predictionKindPrefix) {
+			alerts, err := d.currentPredictionAlerts(ctx, notification.Alerts)
+			if err != nil {
+				notification.LastError = err.Error()
+				notification.Attempts++
+				notification.NextAttemptAt = now.Add(backoffDelay(notification.Attempts, d.backoffBase, d.backoffMax))
+				d.logger.WarnContext(ctx, "feishu prediction digest re-read failed",
+					"action", "notify", "kind", notification.Kind, "attempts", notification.Attempts, "error", err)
+				out[i] = notification
+				continue
+			}
+			if len(alerts) == 0 && len(notification.Pending) == 0 && len(notification.Tight) == 0 {
+				// Nothing the queued card claimed is still true: the reading went
+				// stale, the credential was disabled or removed, or the window now
+				// lasts to its reset. Sending nothing is the whole outcome; the
+				// row is marked sent so the outbox stops retrying it.
+				d.logger.InfoContext(ctx, "feishu prediction card has no current finding",
+					"action", "notify", "kind", notification.Kind, "result", "dropped")
+				notification.Alerts = alerts
+				notification.State = NotifySent
+				notification.LastError = ""
+				notification.SentAt = now
+				out[i] = notification
+				continue
+			}
+			notification.Alerts = alerts
 		}
 		msg := Message{
 			ChannelUnavailableAfter: d.channelUnavailableAfter,
@@ -167,6 +201,32 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 		out[i] = notification
 	}
 	return out
+}
+
+// currentPredictionAlerts keeps only the alerts a fresh digest still supports.
+// The digest is read by the operations layer, so a credential that has since
+// been disabled, deleted, left without a window or gone stale is already absent
+// from it; this is the "check the roster immediately before sending" step, run
+// on every delivery attempt rather than only when the card is queued. Alerts
+// that are not prediction rows (a morning digest can carry report alerts in the
+// same notification) are kept as they are.
+func (d *Dispatcher) currentPredictionAlerts(ctx context.Context, alerts []Alert) ([]Alert, error) {
+	digest, err := d.predictionSource(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(digest.Items))
+	for _, item := range predictionFindings(digest.Items, d.now()) {
+		live[predictionItemID(item)] = true
+	}
+	kept := make([]Alert, 0, len(alerts))
+	for _, alert := range alerts {
+		if alert.Kind == predictionKindPrefix && !live[alertItemID(alert)] {
+			continue
+		}
+		kept = append(kept, alert)
+	}
+	return kept, nil
 }
 
 // sendWithFallback posts the full card and, on failure, the simplified card. It
