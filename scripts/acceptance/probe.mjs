@@ -255,6 +255,13 @@ export function defaultRoutes() {
     // that are not about it see the page they were written against.
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/system/updater', (url, method) => createSystemUpdaterFixture({ state: 'not_containerised' })(url, method).json],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/api-keys', () => ({ keys: [], total: 0 })],
+    // The repository-key panel reads three lists when it mounts. Empty answers draw the
+    // real empty state, which is what every scenario that is not about repo keys expects;
+    // one that is about them supplies its own fixture first.
+    [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/repo-keys',
+      () => ({ keys: [], pending_applications: 0, awaiting_delivery: 0 })],
+    [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/repo-keys/applications',
+      () => ({ applications: [] })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/pricing/attention', () => ({ unpriced: [] })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/dashboard/models', () => ({ window: dashboardBody().window, total_tokens: 0, models: [], partial_errors: [] })],
     [(url, method) => method === 'GET' && url.pathname === '/omc/api/v1/management/dashboard/providers', () => ({ window: dashboardBody().window, providers: [], partial_errors: [] })],

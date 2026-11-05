@@ -23,6 +23,7 @@ import { useT } from '../i18n';
 import { isDemoMode } from '../types/demoMode';
 import { useOverlayHistory } from '../hooks/useOverlayHistory';
 import { ApiKeysList, type ApiKeyRecord } from '../components/keys/ApiKeysList';
+import { RepoKeysPanel } from '../components/keys/RepoKeysPanel';
 import { updateFieldWithBaseline, getFieldSemanticValue } from '../components/config/configDirty';
 import { computeConfigChanges } from '../components/config/configPatch';
 import { describeConfigSaveError } from '../components/config/configSaveErrors';
@@ -488,6 +489,11 @@ export const ApiKeysPage: React.FC = () => {
           />
         )}
       </Panel>
+
+      {/* Repository-owned keys: the same page, a different owner. The list above edits the
+          gateway's one shared key list; this panel holds the keys an agent applies for on a
+          repository's behalf and the decisions on those applications. */}
+      <RepoKeysPanel />
 
       {/* One editor for both of a key's editable parts: the secret CPA authenticates it with,
           and the name this console shows it by. */}

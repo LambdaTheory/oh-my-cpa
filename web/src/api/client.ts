@@ -1,6 +1,13 @@
 import type { WarmupCredential, WarmupPolicy, WarmupResult, WarmupSettings } from '../types/warmup';
 import type { ResetAnnouncement, ResetAnnouncementInput, ResetAnnouncementPage } from '../types/resetAnnouncements';
 import type { ModelSquareDirectory } from '../types/modelSquare';
+import type {
+  RepoKeyApplication,
+  RepoKeyApplicationStatus,
+  RepoKeyBinding,
+  RepoKeyBindingDetail,
+  RepoKeyListResponse,
+} from '../types/repoKeys';
 import type { CustomIcon } from '../types/customIcons';
 import type { InstalledFont } from '../types/fonts';
 import { getAppConfig } from '../types/config';
@@ -713,6 +720,100 @@ export const api = {
       `/management/client-key-usage${query ? `?${query}` : ''}`,
       { method: 'GET' },
     );
+  },
+
+  /**
+   * Repository-owned keys: the keys in service, the applications agents filed, and the
+   * lifecycle actions on one key.
+   *
+   * Every response is mask-only. The single call that returns a key's value is
+   * `revealRepoKeyPlaintext`, which requires a reason and is audited server-side.
+   */
+  async getRepoKeys(query = ''): Promise<RepoKeyListResponse> {
+    return request<RepoKeyListResponse>(`/management/repo-keys${query ? `?${query}` : ''}`, { method: 'GET' });
+  },
+
+  async getRepoKeyApplications(params: {
+    status?: RepoKeyApplicationStatus;
+    awaiting?: boolean;
+    limit?: number;
+  } = {}): Promise<{ applications: RepoKeyApplication[] }> {
+    const search = new URLSearchParams();
+    if (params.status) search.set('status', params.status);
+    if (params.awaiting) search.set('awaiting', 'true');
+    if (params.limit) search.set('limit', String(params.limit));
+    const query = search.toString();
+    return request<{ applications: RepoKeyApplication[] }>(
+      `/management/repo-keys/applications${query ? `?${query}` : ''}`,
+      { method: 'GET' },
+    );
+  },
+
+  async getRepoKeyApplication(id: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/applications/${encodeURIComponent(id)}`,
+      { method: 'GET' },
+    );
+  },
+
+  /** Files an application on an agent's behalf. It is queued like any other; the console cannot approve it here. */
+  async applyRepoKeyOnBehalf(payload: {
+    repo: string;
+    purpose: string;
+    public_key: string;
+    public_key_fingerprint?: string;
+    agent: string;
+  }): Promise<{ application_id: string; status: string; kind: string; approval_token?: string; approval_url?: string }> {
+    return request<{ application_id: string; status: string; kind: string; approval_token?: string; approval_url?: string }>(
+      '/management/repo-keys/applications',
+      { method: 'POST', body: JSON.stringify(payload) },
+    );
+  },
+
+  async approveRepoKeyApplication(id: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/applications/${encodeURIComponent(id)}/approve`,
+      { method: 'POST' },
+    );
+  },
+
+  async rejectRepoKeyApplication(id: string, reason: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/applications/${encodeURIComponent(id)}/reject`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  async getRepoKeyBinding(id: string): Promise<RepoKeyBindingDetail> {
+    return request<RepoKeyBindingDetail>(`/management/repo-keys/${encodeURIComponent(id)}`, { method: 'GET' });
+  },
+
+  async stopRepoKeyBinding(id: string, category: string, reason: string): Promise<{ key: RepoKeyBinding }> {
+    return request<{ key: RepoKeyBinding }>(`/management/repo-keys/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ category, reason }),
+    });
+  },
+
+  /**
+   * Puts a stopped key back into service.
+   *
+   * Oh My CPA stores no plaintext, so the operator supplies the key again; the server checks it
+   * against the stopped record's fingerprint and refuses a value that is not the same key.
+   */
+  async reenableRepoKeyBinding(id: string, reason: string, key: string): Promise<{ key: RepoKeyBinding }> {
+    return request<{ key: RepoKeyBinding }>(`/management/repo-keys/${encodeURIComponent(id)}/reenable`, {
+      method: 'POST',
+      body: JSON.stringify({ reason, key }),
+    });
+  },
+
+  /** The one place a key's value is read back: explicit, with a reason, and audited. */
+  async revealRepoKeyPlaintext(id: string, reason: string): Promise<{ key: string }> {
+    return request<{ key: string }>(`/management/repo-keys/${encodeURIComponent(id)}/reveal`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
   },
 
   async getManagementProviders(includeKeys = false): Promise<{ providers: ProviderItem[]; total: number }> {
