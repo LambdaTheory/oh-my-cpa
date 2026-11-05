@@ -12,16 +12,23 @@ const predictionKindPrefix = "prediction:"
 const defaultPredictionInterval = time.Minute
 
 type PredictionDigestItem struct {
-	Key                       string
-	WindowID                  string
-	ResetAccuracy             string
-	ResetAtMS                 *int64
-	ExhaustionETAMS           *int64
-	WindowScope               string
-	CredentialLabel           string
-	Provider                  string
-	WindowKind                string
-	UsedPercent               *float64
+	Key             string
+	WindowID        string
+	ResetAccuracy   string
+	ResetAtMS       *int64
+	ExhaustionETAMS *int64
+	WindowScope     string
+	CredentialLabel string
+	Provider        string
+	WindowKind      string
+	UsedPercent     *float64
+	// ExpectedUsedPercent is the time-linear baseline at the reading instant.
+	ExpectedUsedPercent *float64
+	// LastsUntilReset is the tri-state risk threshold; nil means unknown.
+	LastsUntilReset *bool
+	// FreshWindowMS is the reading's own freshness bound, so a card render or a
+	// retry can drop an observation that has since aged out.
+	FreshWindowMS             int64
 	ProjectedPercentAtReset   *float64
 	ProjectedTokensAtReset    *int64
 	ProjectedCostNanosAtReset *int64
@@ -70,7 +77,7 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	findings := predictionFindings(digest.Items)
+	findings := predictionFindings(digest.Items, service.now())
 	if len(findings) == 0 {
 		return false, nil
 	}
@@ -178,7 +185,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 			notification := &state.Outbox[index]
 			if notification.CreatedAt.Equal(now) && strings.HasPrefix(notification.Kind, predictionKindPrefix) {
 				for _, item := range openItems(state.PendingItems) {
-					if !announcedInMinute(state, item.ID, notification.ID, now) {
+					if !announcedInMinute(state, item.ID, notification.ID, now) && pendingStillKnown(item, report, hasReport) {
 						notification.Pending = append(notification.Pending, item)
 					}
 				}
@@ -221,14 +228,29 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 	return job.queueFindings(state, resolved, now, digest)
 }
 
-func predictionFindings(items []PredictionDigestItem) []PredictionDigestItem {
+// predictionFindings keeps only the one thing a push may announce: a window
+// that cannot last until its reset. A surplus forecast is console context, and
+// an observation that has aged past its freshness bound is not evidence.
+func predictionFindings(items []PredictionDigestItem, now time.Time) []PredictionDigestItem {
 	findings := make([]PredictionDigestItem, 0, len(items))
 	for _, item := range items {
-		if item.Verdict == "will_exhaust" || item.Verdict == "under_used" {
-			findings = append(findings, item)
+		if item.Verdict != "will_exhaust" || predictionItemStale(item, now) {
+			continue
 		}
+		findings = append(findings, item)
 	}
 	return findings
+}
+
+// predictionItemStale reports whether the observation behind a finding is older
+// than the freshness bound the prediction used. An item that carries no bound or
+// no observation time cannot be judged, so it is left to the reader.
+func predictionItemStale(item PredictionDigestItem, now time.Time) bool {
+	if item.FreshWindowMS <= 0 || item.ObservedAtMS <= 0 {
+		return false
+	}
+	ageMS := now.UnixMilli() - item.ObservedAtMS
+	return ageMS > item.FreshWindowMS
 }
 
 func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
@@ -251,7 +273,7 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 				}
 			}
 		}
-		if item.Verdict != "will_exhaust" {
+		if item.Verdict != "will_exhaust" || predictionItemStale(item, now) {
 			continue
 		}
 		isNewCycle := exists && hasNewQuotaCycle(previous, reset, time.UnixMilli(item.ObservedAtMS))
@@ -301,30 +323,22 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 }
 
 func predictionNotification(items []PredictionDigestItem, omitted int, resolved Resolved, now time.Time) Notification {
-	alerts := make([]Alert, 0, len(items)+1)
+	alerts := make([]Alert, 0, len(items))
 	for _, item := range items {
-		title, advice := "预计重置前耗尽", "提前准备备用凭证，按需分流"
-		if item.Verdict == "under_used" {
-			title, advice = "预计额度有余量", "按需使用现有额度"
-		}
-		detail := item.WindowKind + " · 当前已用 " + predictionPercent(item.UsedPercent)
+		detail := "耗尽时间数据缺失"
 		if item.ExhaustionETAMS != nil && *item.ExhaustionETAMS > now.UnixMilli() {
-			detail += "；预计还可用 " + remainingDuration(time.UnixMilli(*item.ExhaustionETAMS).Sub(now))
-		} else {
-			detail += "；耗尽时间数据缺失"
+			detail = "预计还可用 " + remainingDuration(time.UnixMilli(*item.ExhaustionETAMS).Sub(now))
+		} else if item.ExhaustionETAMS != nil {
+			detail = "已到达耗尽时间"
 		}
-		if item.WindowScope != "" {
-			detail = scopeLabel(item.WindowScope) + " · " + detail
-		}
+		facts := []string{"当前已用 " + predictionPercent(item.UsedPercent), "期望 " + predictionPercent(item.ExpectedUsedPercent)}
 		observed := time.Time{}
 		if item.ObservedAtMS > 0 {
 			observed = time.UnixMilli(item.ObservedAtMS).UTC()
 		}
 		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed,
-			Alias: item.CredentialLabel, Title: title, Detail: detail + "（预测）", Advice: advice, OccurredAt: now})
-	}
-	if omitted > 0 {
-		alerts = append(alerts, Alert{Kind: "omitted", Title: fmt.Sprintf("另有 %d 项预测发现未展示", omitted), Advice: "打开控制台查看完整预测"})
+			Alias: item.CredentialLabel, Title: predictionWindowLabel(item), Detail: detail + "（预测）", Facts: facts,
+			Advice: "提前准备备用凭证，按需分流", OccurredAt: now})
 	}
 	localMinute := now.In(resolved.Location).Format("15:04")
 	if morningMinute(resolved, now) {
@@ -336,8 +350,47 @@ func predictionNotification(items []PredictionDigestItem, omitted int, resolved 
 	}
 	return Notification{
 		ID: episodeID(predictionKindPrefix, ids, now), Kind: predictionKindPrefix + localMinute,
-		Alerts: alerts, State: NotifyPending, OccurredAt: now, CreatedAt: now,
+		Alerts: alerts, Omitted: omitted, State: NotifyPending, OccurredAt: now, CreatedAt: now,
 	}
+}
+
+// predictionWindowLabel names the cycle in the card's identity line. An unknown
+// kind keeps its stored token rather than inventing a cycle length.
+func predictionWindowLabel(item PredictionDigestItem) string {
+	switch item.WindowKind {
+	case "five_hour":
+		return "5 小时窗口"
+	case "weekly":
+		return "每周窗口"
+	case "monthly":
+		return "每月窗口"
+	case "daily":
+		return "每日窗口"
+	case "model_scoped":
+		return "模型窗口"
+	case "":
+		return "窗口"
+	default:
+		return compactText(item.WindowKind, 20)
+	}
+}
+
+// pendingStillKnown checks a stored open quota item against the current report.
+// An account deleted from CPA has no account row, so re-announcing its incident
+// would describe a credential that no longer exists. Non-quota items and a
+// report that failed to read are left untouched rather than silently dropped.
+func pendingStillKnown(item PendingItem, report Report, hasReport bool) bool {
+	if item.Kind != AlertQuotaLow && item.Kind != AlertQuotaExhausted || item.Key == "" || !hasReport {
+		return true
+	}
+	for _, provider := range report.Providers {
+		for _, account := range provider.Accounts {
+			if account.Key == item.Key && (item.Provider == "" || provider.Provider == item.Provider) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func predictionPercent(value *float64) string {

@@ -570,7 +570,10 @@ func TestPredictionDigestDisclosesOmittedFindingsWithinCardLimit(t *testing.T) {
 	card := NewPlainReportRenderer(time.UTC).Card(message)
 	body := card["body"].(map[string]any)
 	elements := body["elements"].([]map[string]any)
-	if len(elements) != 6 || !strings.Contains(marshalTestJSON(card), "另有") {
+	// 原型 t6-redo 定「每行一个凭证、最多 5 行、其余另有 N 项」，旧断言固定 3 行
+	// 与方案冲突；断言意图（披露「另有 N 项」）不变，只为对齐 5 行上限。
+	// 改测试已按约束取得跟进同意（2026-11-05，见运行记录 2026-11-05-2026-11-05-T21）。
+	if len(elements) != 8 || !strings.Contains(marshalTestJSON(card), "另有") {
 		t.Fatalf("prediction card elements=%d payload=%s", len(elements), marshalTestJSON(card))
 	}
 }
@@ -580,4 +583,69 @@ const quotaPredictionFindingsForCardTest = 178
 func marshalTestJSON(value any) string {
 	encoded, _ := json.Marshal(value)
 	return string(encoded)
+}
+
+// A surplus forecast is console context. The push exists only for a window that
+// cannot last until its reset.
+func TestPredictionDigestDoesNotPushSurplus(t *testing.T) {
+	morning := mustTime("2026-10-27T01:00:00Z")
+	job := &PredictionJob{service: NewService(Options{})}
+	used := 12.0
+	digest := PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, Verdict: "under_used"}}}
+	if job.queueFindings(EmptyState(), readyPredictionConfig(), morning, digest) {
+		t.Fatal("surplus forecast reached the push path")
+	}
+}
+
+// An observation that has aged past the freshness bound the prediction used is
+// no longer evidence, so a retry must not render it.
+func TestPredictionDigestDropsStaleObservation(t *testing.T) {
+	now := mustTime("2026-10-27T09:00:00Z")
+	used := 95.0
+	item := PredictionDigestItem{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
+		UsedPercent: &used, ObservedAtMS: now.Add(-3 * time.Hour).UnixMilli(), FreshWindowMS: int64(time.Hour / time.Millisecond), Verdict: "will_exhaust"}
+	if findings := predictionFindings([]PredictionDigestItem{item}, now); len(findings) != 0 {
+		t.Fatalf("stale finding survived: %+v", findings)
+	}
+	item.ObservedAtMS = now.Add(-30 * time.Minute).UnixMilli()
+	if findings := predictionFindings([]PredictionDigestItem{item}, now); len(findings) != 1 {
+		t.Fatalf("fresh finding dropped: %+v", findings)
+	}
+}
+
+// The card states the actual and expected usage and reads the newest observation.
+func TestPredictionCardShowsBaselineAndLatestRead(t *testing.T) {
+	now := mustTime("2026-10-27T09:00:00Z")
+	used, expected := 80.0, 60.5
+	older := PredictionDigestItem{CredentialLabel: "older", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.Add(-2 * time.Hour).UnixMilli(), Verdict: "will_exhaust"}
+	newer := PredictionDigestItem{CredentialLabel: "newer", Provider: "claude", WindowKind: "five_hour", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+	notification := predictionNotification([]PredictionDigestItem{older, newer}, 2, readyPredictionConfig(), now)
+	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Alerts: notification.Alerts, Omitted: notification.Omitted, Kind: notification.Kind}))
+	if !strings.Contains(payload, "当前已用 80.0%") || !strings.Contains(payload, "期望 60.5%") {
+		t.Fatalf("baseline missing: %s", payload)
+	}
+	if !strings.Contains(payload, "另有 2 项") {
+		t.Fatalf("omitted count missing: %s", payload)
+	}
+	if !strings.Contains(payload, "读数 10-27 09:00") {
+		t.Fatalf("read time is not the newest observation: %s", payload)
+	}
+}
+
+// A credential deleted from CPA leaves a stored open item behind. Re-announcing
+// it would describe an account that no longer exists.
+func TestPredictionPendingSkipsDeletedCredential(t *testing.T) {
+	deleted := PendingItem{ID: ItemID(AlertQuotaLow, "codex", "gone", "weekly"), Kind: AlertQuotaLow, Provider: "codex", Key: "gone", Alias: "gone"}
+	report := Report{Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "kept", Label: "kept"}}}}}
+	if pendingStillKnown(deleted, report, true) {
+		t.Fatal("deleted credential still announced")
+	}
+	kept := deleted
+	kept.Key, kept.Alias = "kept", "kept"
+	if !pendingStillKnown(kept, report, true) {
+		t.Fatal("live credential was dropped")
+	}
+	if !pendingStillKnown(deleted, Report{}, false) {
+		t.Fatal("a failed report read must not drop stored items")
+	}
 }

@@ -26,8 +26,11 @@ type Notification struct {
 	Alerts  []Alert
 	// Pending and Tight carry a scheduled or quiet-end digest, which has no single
 	// alert. They are empty for an immediate alert notification.
-	Pending   []PendingItem
-	Tight     []TightChannel
+	Pending []PendingItem
+	Tight   []TightChannel
+	// Omitted counts findings the payload limit kept out of Alerts. The card
+	// discloses the count instead of silently dropping rows.
+	Omitted   int
 	State     string
 	Attempts  int
 	LastError string
@@ -106,6 +109,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			Alerts:                  notification.Alerts,
 			Pending:                 notification.Pending,
 			Tight:                   notification.Tight,
+			Omitted:                 notification.Omitted,
 			GeneratedAt:             notification.OccurredAt,
 		}
 		if d.source != nil && usesCompactCard(msg.Kind) {
