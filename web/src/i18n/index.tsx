@@ -4542,6 +4542,7 @@ const DICT: Record<string, [string, string]> = {
   'insights.change_new': ['新增', 'New'],
   'insights.change_noise': ['在正常波动范围内', 'Within normal variation'],
   'insights.change_was': ['上期 {value}', 'Prev. {value}'],
+  'insights.change_was_same_stretch': ['上期同时段 {value}', 'Prev. same time {value}'],
   'insights.dim.key': ['密钥', 'Key'],
   'insights.dim.call_point': ['调用模型', 'Call model'],
   'insights.dim.model': ['请求模型', 'Requested model'],
