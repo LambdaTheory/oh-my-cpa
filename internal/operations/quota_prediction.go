@@ -41,36 +41,41 @@ type QuotaPredictionInput struct {
 }
 
 type QuotaPredictionItem struct {
-	Accounting                quota.PredictionAccounting `json:"-" jsonschema:"-"`
-	ResetAccuracy             string                     `json:"-" jsonschema:"-"`
-	CredentialLabel           string                     `json:"credential_label"`
-	Provider                  string                     `json:"provider"`
-	WindowKind                string                     `json:"window_kind"`
-	WindowID                  string                     `json:"window_id"`
-	WindowScope               string                     `json:"window_scope"`
-	WindowModel               string                     `json:"window_model,omitempty"`
-	AuthIndex                 string                     `json:"auth_index,omitempty"`
-	UsedPercent               *float64                   `json:"used_percent"`
-	ResetAtMS                 *int64                     `json:"reset_at_ms"`
-	ObservedAtMS              int64                      `json:"observed_at_ms"`
-	DataAgeSeconds            *int64                     `json:"data_age_seconds"`
-	BurnRatePerHour           *float64                   `json:"burn_rate_per_hour"`
-	ProjectedPercentAtReset   *float64                   `json:"projected_percent_at_reset"`
-	ProjectedTokensAtReset    *int64                     `json:"projected_tokens_at_reset"`
-	ProjectedCostNanosAtReset *int64                     `json:"projected_cost_nanos_at_reset"`
-	ExhaustionETAMS           *int64                     `json:"exhaustion_eta_ms"`
-	ExpectedUsedPercent       *float64                   `json:"expected_used_percent"`
-	LastsUntilReset           *bool                      `json:"lasts_until_reset"`
-	// FreshWindowMS is the reading's own freshness bound. It is internal: a
-	// digest uses it to drop a finding whose observation has aged out by the
-	// time the card is rendered or retried.
-	FreshWindowMS   int64    `json:"-" jsonschema:"-"`
-	Verdict         string   `json:"verdict"`
-	Evidence        string   `json:"evidence"`
-	Reasons         []string `json:"reasons"`
-	SampleCount     int      `json:"sample_count"`
-	CoverageSeconds *int64   `json:"coverage_seconds"`
-	MaxGapSeconds   *int64   `json:"max_gap_seconds"`
+	Accounting      quota.PredictionAccounting `json:"-" jsonschema:"-"`
+	ResetAccuracy   string                     `json:"-" jsonschema:"-"`
+	CredentialLabel string                     `json:"credential_label"`
+	Provider        string                     `json:"provider"`
+	WindowKind      string                     `json:"window_kind"`
+	WindowID        string                     `json:"window_id"`
+	WindowScope     string                     `json:"window_scope"`
+	WindowModel     string                     `json:"window_model,omitempty"`
+	AuthIndex       string                     `json:"auth_index,omitempty"`
+	UsedPercent     *float64                   `json:"used_percent"`
+	// ExpectedUsedPercent is the linear share the window should have used at the
+	// reading's instant. Nil means it cannot be calculated, not zero.
+	ExpectedUsedPercent *float64 `json:"expected_used_percent"`
+	ResetAtMS           *int64   `json:"reset_at_ms"`
+	ObservedAtMS        int64    `json:"observed_at_ms"`
+	DataAgeSeconds      *int64   `json:"data_age_seconds"`
+	// LastsUntilReset is true, false, or nil when the evidence cannot decide.
+	LastsUntilReset *bool `json:"lasts_until_reset"`
+	// FreshWindowMS is internal so delivery uses the prediction's own age bound.
+	FreshWindowMS int64 `json:"-" jsonschema:"-"`
+	// Everything from here to MaxGapSeconds is the deprecated prediction
+	// vocabulary. It stays for one release so existing callers keep working;
+	// remove it in the next version. Verdict is derived from LastsUntilReset, so
+	// the two never disagree.
+	BurnRatePerHour           *float64 `json:"burn_rate_per_hour"`
+	ProjectedPercentAtReset   *float64 `json:"projected_percent_at_reset"`
+	ProjectedTokensAtReset    *int64   `json:"projected_tokens_at_reset"`
+	ProjectedCostNanosAtReset *int64   `json:"projected_cost_nanos_at_reset"`
+	ExhaustionETAMS           *int64   `json:"exhaustion_eta_ms"`
+	Verdict                   string   `json:"verdict"`
+	Evidence                  string   `json:"evidence"`
+	Reasons                   []string `json:"reasons"`
+	SampleCount               int      `json:"sample_count"`
+	CoverageSeconds           *int64   `json:"coverage_seconds"`
+	MaxGapSeconds             *int64   `json:"max_gap_seconds"`
 }
 
 type QuotaPredictionResult struct {
@@ -114,7 +119,7 @@ func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput,
 		return QuotaPredictionResult{}, errors.New("capability_unavailable")
 	}
 	nowMS := capability.AnchorMS(ctx)
-	readings, err := s.storedPredictionQuotas(ctx, !shouldBound)
+	readings, err := s.storedPredictionQuotas(ctx)
 	if err != nil {
 		return QuotaPredictionResult{}, err
 	}
@@ -139,7 +144,7 @@ func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput,
 			}
 			storedKind := quota.WindowObservationKind(reading.Provider, window)
 			item := s.predictQuotaWindow(ctx, reading, window, reportedKind, storedKind, nowMS)
-			if input.FindingsOnly && !input.IncludeRecovery && item.Verdict != quota.PredictionVerdictWillExhaust && item.Verdict != quota.PredictionVerdictUnderUsed {
+			if input.FindingsOnly && !input.IncludeRecovery && (item.LastsUntilReset == nil || *item.LastsUntilReset) {
 				continue
 			}
 			candidates = append(candidates, predictionCandidate{
@@ -198,8 +203,12 @@ func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput,
 }
 
 // storedPredictionQuotas assembles the prediction roster from OMC persistence.
-// It never asks CPA which credentials exist or refreshes a quota window.
-func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissing bool) ([]Quota, error) {
+// It never asks CPA which credentials exist or refreshes a quota window. Rows
+// that cannot describe a live window - a disabled credential, or one with no
+// reported quota window - are left out entirely: the prediction panel, Feishu
+// and the external contract all count only windows that can be judged, and the
+// credential quota page is where a missing window is explained.
+func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 	metadata, err := s.Repo.ListFeishuCredentialMetadata(ctx)
 	if err != nil {
 		return nil, err
@@ -288,10 +297,11 @@ func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissi
 			}
 			windows = append(windows, predictionWindowFromPassive(observation))
 		}
-		// Placeholders are presentation-only. They must not spend the bounded
-		// capability payload and displace a real exhaustion finding.
-		if len(windows) == 0 && shouldIncludeMissing {
-			windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
+		// A credential with no reported window has nothing to predict. Its
+		// absence from this roster is what keeps every surface's "cannot last to
+		// reset" count over real windows only.
+		if len(windows) == 0 {
+			continue
 		}
 		result = append(result, Quota{
 			AuthIndex: entry.AuthIndex, Name: safeLabel(entry.Name), Provider: provider,
@@ -325,8 +335,10 @@ func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissi
 		if account.Status != "ok" && account.Status != "idle" && account.Status != "" {
 			reading.Status = "error"
 		}
-		if len(reading.Windows) == 0 && shouldIncludeMissing {
-			reading.Windows = []quota.QuotaWindow{{ID: "unknown", Kind: "unknown"}}
+		// An account that has never published a window is explained on the
+		// credential quota page, not counted here.
+		if len(reading.Windows) == 0 {
+			continue
 		}
 		result = append(result, reading)
 	}
@@ -355,7 +367,7 @@ func predictionWindowFromPassive(observation repository.QuotaObservationRecord) 
 }
 
 func predictionFindingRank(item QuotaPredictionItem) int {
-	if item.Verdict == quota.PredictionVerdictWillExhaust {
+	if item.LastsUntilReset != nil && !*item.LastsUntilReset {
 		return 0
 	}
 	return 1
@@ -469,11 +481,12 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 		Accounting:      predicted.Accounting,
 		CredentialLabel: reading.Name, Provider: reading.Provider, WindowKind: reportedKind, AuthIndex: reading.AuthIndex,
 		ResetAccuracy: window.ResetAccuracy, WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
-		UsedPercent: predicted.UsedPercent, ResetAtMS: predicted.ResetAtMS, ObservedAtMS: predicted.ObservedAtMS,
-		DataAgeSeconds: predicted.DataAgeSeconds, BurnRatePerHour: predicted.BurnRatePerHour,
+		UsedPercent: predicted.UsedPercent, ExpectedUsedPercent: predicted.ExpectedUsedPercent,
+		ResetAtMS: predicted.ResetAtMS, ObservedAtMS: predicted.ObservedAtMS,
+		DataAgeSeconds: predicted.DataAgeSeconds, LastsUntilReset: predicted.LastsUntilReset,
+		BurnRatePerHour:         predicted.BurnRatePerHour,
 		ProjectedPercentAtReset: predicted.ProjectedPercentAtReset, ProjectedTokensAtReset: predicted.ProjectedTokensAtReset,
 		ProjectedCostNanosAtReset: predicted.ProjectedCostNanosAtReset, ExhaustionETAMS: predicted.ExhaustionETAMS,
-		ExpectedUsedPercent: predicted.ExpectedUsedPercent, LastsUntilReset: predicted.LastsUntilReset,
 		FreshWindowMS: quota.PredictionFreshWindow(window).Milliseconds(),
 		Verdict:       predicted.Verdict, Evidence: predicted.Evidence, Reasons: predicted.Reasons,
 		SampleCount: predicted.SampleCount, CoverageSeconds: predicted.CoverageSeconds, MaxGapSeconds: predicted.MaxGapSeconds,

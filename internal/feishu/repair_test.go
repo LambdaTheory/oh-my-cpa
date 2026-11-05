@@ -55,7 +55,7 @@ func TestPredictionRecoveryRecurrenceAndPruning(t *testing.T) {
 		t.Run(accuracy, func(t *testing.T) {
 			now := mustTime("2026-10-26T12:00:00Z")
 			reset := now.Add(time.Hour).UnixMilli()
-			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast}
 			if accuracy != "" {
 				item.ResetAtMS = &reset
 			}
@@ -76,17 +76,17 @@ func TestPredictionRecoveryRecurrenceAndPruning(t *testing.T) {
 					t.Fatal("unchanged risk repeated")
 				}
 			}
-			item.Verdict = "unknown"
+			item.LastsUntilReset = nil
 			job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}})
 			if !state.PendingItems[0].ResolvedAt.IsZero() {
 				t.Fatal("unknown is not recovery")
 			}
-			item.Verdict = "on_track"
+			item.LastsUntilReset = &lastsToReset
 			job.queueFindings(state, cfg, now, PredictionDigest{Items: []PredictionDigestItem{item}})
 			if state.PendingItems[0].ResolvedAt.IsZero() {
 				t.Fatal("positive recovery has no finite timestamp")
 			}
-			item.Verdict = "will_exhaust"
+			item.LastsUntilReset = &cannotLast
 			got := job.queueFindings(state, cfg, now.Add(time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}})
 			if got {
 				t.Fatalf("recurrence queued=%v accuracy=%q", got, accuracy)
@@ -94,7 +94,7 @@ func TestPredictionRecoveryRecurrenceAndPruning(t *testing.T) {
 			if accuracy != "exact" && !state.PendingItems[0].ResolvedAt.IsZero() {
 				t.Fatal("recurrence did not reopen tracked forecast")
 			}
-			item.Verdict = "on_track"
+			item.LastsUntilReset = &lastsToReset
 			job.queueFindings(state, cfg, now.Add(2*time.Minute), PredictionDigest{Items: []PredictionDigestItem{item}})
 			state.prune(now.Add(30 * 24 * time.Hour))
 			if len(state.PendingItems) != 0 {
@@ -163,7 +163,7 @@ func TestMorningRecurrencePredictionFirst(t *testing.T) {
 				setReading(morning, 100, boundary)
 				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 					if hasForecast {
-						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "7d", Verdict: "will_exhaust"}}}, nil
+						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "7d"}}}, nil
 					}
 					return PredictionDigest{}, nil
 				})
@@ -214,7 +214,7 @@ func TestForecastLearnsLaterExactCycle(t *testing.T) {
 			now := mustTime("2026-10-26T12:00:00Z")
 			boundary := now.Add(time.Hour)
 			reset := boundary.UnixMilli()
-			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ResetAtMS: &reset, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ResetAtMS: &reset, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast}
 			state := EmptyState()
 			job := &PredictionJob{service: NewService(Options{})}
 			cfg := readyPredictionConfig()
@@ -344,7 +344,7 @@ func TestMorningPredictionPreservesObservedQuotaCycle(t *testing.T) {
 	env := newTestEnv(t, Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "claude", Accounts: []AccountReport{{Key: "low", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(100, &reset)}}}}}}, true)
 	*env.clock = now
 	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{Provider: "codex", Key: "forecast", WindowID: "7d", Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{Provider: "codex", Key: "forecast", WindowID: "7d"}}}, nil
 	})
 	job.Activate()
 	job.tick(context.Background())

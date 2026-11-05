@@ -21,11 +21,11 @@ func stringPointer(value string) *string { return &value }
 
 func TestPredictionDigestQueuesOnceAndSuppressesSummary(t *testing.T) {
 	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
-	used, projected := 60.0, 120.0
+	used := 60.0
 	reads := 0
 	job := &PredictionJob{service: NewService(Options{Web: Config{Enabled: true}, Overlay: Overlay{AppSecret: stringPointer("secret")}}), source: func(context.Context) (PredictionDigest, error) {
 		reads++
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 	}}
 	state := EmptyState()
 	resolved := readyPredictionConfig()
@@ -43,7 +43,7 @@ func TestPredictionDigestQueuesOnceAndSuppressesSummary(t *testing.T) {
 func TestPredictionDigestLeavesSummaryWhenNoFinding(t *testing.T) {
 	now := time.Date(2026, 10, 19, 17, 0, 0, 0, time.UTC)
 	job := &PredictionJob{service: NewService(Options{Web: Config{Enabled: true}, Overlay: Overlay{AppSecret: stringPointer("secret")}}), source: func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{Verdict: "on_track"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{LastsUntilReset: &lastsToReset}}}, nil
 	}}
 	state := EmptyState()
 	if job.maybeQueue(context.Background(), state, readyPredictionConfig(), now) || len(state.Outbox) != 0 || !state.LastSummaryAt.IsZero() {
@@ -62,14 +62,13 @@ func TestManualPredictionSendsOneCardWithoutClaimingSummaryMinute(t *testing.T) 
 		SenderFactory: func(Resolved) Sender { return sender },
 		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
-	used, projected := 60.0, 120.0
+	used := 60.0
 	reads := 0
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		reads++
 		return PredictionDigest{Items: []PredictionDigestItem{{
 			CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
-			UsedPercent: &used, ProjectedPercentAtReset: &projected,
-			ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+			UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(),
 		}}}, nil
 	})
 
@@ -103,7 +102,7 @@ func TestManualPredictionWithNoFindingSendsNothingAndKeepsState(t *testing.T) {
 		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{Verdict: "on_track"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{LastsUntilReset: &lastsToReset}}}, nil
 	})
 
 	sent, err := job.SendNow(context.Background())
@@ -134,7 +133,7 @@ func TestManualPredictionFailureRemainsPendingForRetry(t *testing.T) {
 		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{LastsUntilReset: &cannotLast, CredentialLabel: "account"}}}, nil
 	})
 	sent, err := job.SendNow(context.Background())
 	if sent || err == nil || !strings.Contains(err.Error(), "pending") {
@@ -171,7 +170,7 @@ func TestManualPredictionIsolatesOutboxAndPreservesScheduledDigest(t *testing.T)
 		SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{LastsUntilReset: &cannotLast, CredentialLabel: "account"}}}, nil
 	})
 	if sent, err := job.SendNow(context.Background()); err != nil || !sent {
 		t.Fatalf("explicit send during quiet hours sent=%v err=%v", sent, err)
@@ -221,7 +220,7 @@ func TestPredictionDigestUsesOutboxAndSuppressesScheduledSummary(t *testing.T) {
 	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
 	sender := newFakeSender()
 	store := NewMemoryStore()
-	used, projected := 60.0, 120.0
+	used := 60.0
 	service := NewService(Options{
 		Web: web, Overlay: overlay, Store: store,
 		Source: &fakeReportSource{report: Report{GeneratedAt: now, Providers: []ProviderReport{{
@@ -239,7 +238,7 @@ func TestPredictionDigestUsesOutboxAndSuppressesScheduledSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 	})
 	job.tick(context.Background())
 	if sends, _ := sender.counts(); sends != 1 {
@@ -281,7 +280,7 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 	now := time.Date(2026, 10, 19, 10, 0, 30, 0, time.UTC)
 	store := NewMemoryStore()
 	sender := newFakeSender()
-	used, projected := 60.0, 120.0
+	used := 60.0
 	service := NewService(Options{
 		Web: web, Overlay: overlay, Store: store, Now: func() time.Time { return now },
 		Source: &fakeReportSource{}, SenderFactory: func(Resolved) Sender { return sender },
@@ -290,7 +289,7 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		cancel()
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 	})
 	job.Activate()
 	if !service.predictionSchedulerActive.Load() {
@@ -312,7 +311,7 @@ func TestPredictionJobClaimsScheduleAndRunsImmediately(t *testing.T) {
 	if sends, _ := sender.counts(); sends != 1 {
 		t.Fatalf("prediction sends = %d", sends)
 	}
-	if payload := sender.lastCard(); payload == nil || !strings.Contains(marshalTestJSON(payload), "OMC 额度预测") {
+	if payload := sender.lastCard(); payload == nil || !strings.Contains(marshalTestJSON(payload), "1 个窗口撑不到重置") || !strings.Contains(marshalTestJSON(payload), "实际 60.0% · 期望 无法计算") {
 		t.Fatalf("prediction payload = %+v", payload)
 	}
 }
@@ -325,11 +324,11 @@ func TestPredictionJobBecomesReadyAfterReload(t *testing.T) {
 		Store: NewMemoryStore(), Source: &fakeReportSource{}, Now: func() time.Time { return now },
 		SenderFactory: func(Resolved) Sender { return sender }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
 	})
-	used, projected := 60.0, 120.0
+	used := 60.0
 	reads := make(chan struct{}, 1)
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		reads <- struct{}{}
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 	})
 	job.tick(context.Background())
 	if len(reads) != 0 {
@@ -377,11 +376,11 @@ func TestPredictionMinuteSuppressesConcurrentStartupDigest(t *testing.T) {
 	})
 	started := make(chan struct{})
 	release := make(chan struct{})
-	used, projected := 60.0, 120.0
+	used := 60.0
 	job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
 		close(started)
 		<-release
-		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 	})
 	job.Activate()
 	done := make(chan struct{})
@@ -501,9 +500,9 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 				lockBoundary <- isHeld
 			}
 			service.predictionSchedulerActive.Store(true)
-			used, projected := 60.0, 120.0
+			used := 60.0
 			job := NewPredictionJob(service, func(context.Context) (PredictionDigest, error) {
-				return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "prediction", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}}}, nil
+				return PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "prediction", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}}}, nil
 			})
 
 			serviceDone, predictionDone := make(chan struct{}), make(chan struct{})
@@ -560,10 +559,10 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 
 func TestPredictionDigestDisclosesOmittedFindingsWithinCardLimit(t *testing.T) {
 	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
-	used, projected := 60.0, 120.0
+	used := 60.0
 	items := make([]PredictionDigestItem, quotaPredictionFindingsForCardTest)
 	for index := range items {
-		items[index] = PredictionDigestItem{CredentialLabel: fmt.Sprintf("account-%03d", index), Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ProjectedPercentAtReset: &projected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+		items[index] = PredictionDigestItem{CredentialLabel: fmt.Sprintf("account-%03d", index), Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}
 	}
 	notification := predictionNotification(items, 3, readyPredictionConfig(), now)
 	message := Message{Kind: notification.Kind, Alerts: notification.Alerts, GeneratedAt: notification.OccurredAt}
@@ -591,7 +590,7 @@ func TestPredictionDigestDoesNotPushSurplus(t *testing.T) {
 	morning := mustTime("2026-10-27T01:00:00Z")
 	job := &PredictionJob{service: NewService(Options{})}
 	used := 12.0
-	digest := PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, Verdict: "under_used"}}}
+	digest := PredictionDigest{Items: []PredictionDigestItem{{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &lastsToReset}}}
 	if job.queueFindings(EmptyState(), readyPredictionConfig(), morning, digest) {
 		t.Fatal("surplus forecast reached the push path")
 	}
@@ -603,7 +602,7 @@ func TestPredictionDigestDropsStaleObservation(t *testing.T) {
 	now := mustTime("2026-10-27T09:00:00Z")
 	used := 95.0
 	item := PredictionDigestItem{CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
-		UsedPercent: &used, ObservedAtMS: now.Add(-3 * time.Hour).UnixMilli(), FreshWindowMS: int64(time.Hour / time.Millisecond), Verdict: "will_exhaust"}
+		UsedPercent: &used, ObservedAtMS: now.Add(-3 * time.Hour).UnixMilli(), FreshWindowMS: int64(time.Hour / time.Millisecond), LastsUntilReset: &cannotLast}
 	if findings := predictionFindings([]PredictionDigestItem{item}, now); len(findings) != 0 {
 		t.Fatalf("stale finding survived: %+v", findings)
 	}
@@ -617,8 +616,8 @@ func TestPredictionDigestDropsStaleObservation(t *testing.T) {
 func TestPredictionCardShowsBaselineAndLatestRead(t *testing.T) {
 	now := mustTime("2026-10-27T09:00:00Z")
 	used, expected := 80.0, 60.5
-	older := PredictionDigestItem{CredentialLabel: "older", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.Add(-2 * time.Hour).UnixMilli(), Verdict: "will_exhaust"}
-	newer := PredictionDigestItem{CredentialLabel: "newer", Provider: "claude", WindowKind: "five_hour", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust"}
+	older := PredictionDigestItem{CredentialLabel: "older", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.Add(-2 * time.Hour).UnixMilli(), LastsUntilReset: &cannotLast}
+	newer := PredictionDigestItem{CredentialLabel: "newer", Provider: "claude", WindowKind: "five_hour", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast}
 	notification := predictionNotification([]PredictionDigestItem{older, newer}, 2, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Alerts: notification.Alerts, Omitted: notification.Omitted, Kind: notification.Kind}))
 	if !strings.Contains(payload, "实际 80.0%") || !strings.Contains(payload, "期望 60.5%") {
@@ -641,7 +640,7 @@ func TestPredictionCardStatesAbsoluteExhaustionTime(t *testing.T) {
 	notification := predictionNotification([]PredictionDigestItem{{
 		CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
 		UsedPercent: &used, ExpectedUsedPercent: &expected, ExhaustionETAMS: &eta,
-		ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+		ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast,
 	}}, 0, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Kind: notification.Kind, Alerts: notification.Alerts}))
 	if !strings.Contains(payload, "实际 88.0%") || !strings.Contains(payload, "期望 52.0%") {
@@ -662,7 +661,7 @@ func TestPredictionCardKeepsNonPredictionAlerts(t *testing.T) {
 	used, expected := 80.0, 60.0
 	notification := predictionNotification([]PredictionDigestItem{{
 		CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
-		UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+		UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast,
 	}}, 0, readyPredictionConfig(), now)
 	channel := Alert{Kind: AlertChannelUnavailable, Provider: "claude", Title: "渠道不可用", Detail: "连续失败 3 次", ObservedAt: now}
 	card := NewPlainReportRenderer(time.UTC).Card(Message{

@@ -59,6 +59,28 @@ const (
 	PredictionReasonArithmeticUnsafe         = "arithmetic_unsafe"
 )
 
+// The four reasons a window's "lasts until reset" conclusion is unknown. They
+// are the operator-facing vocabulary; the older PredictionReason* codes stay
+// for the diagnostic details behind the same row.
+const (
+	// PredictionUnknownReadingFailed covers a failed read and a reading too old
+	// to reason from. Both mean "the newest reading cannot be trusted".
+	PredictionUnknownReadingFailed = "reading_failed"
+	// PredictionUnknownHistoryInsufficient covers a sample too short, too sparse
+	// or reset mid-cycle: there is not enough usable history for a trend.
+	PredictionUnknownHistoryInsufficient = "history_insufficient"
+	// PredictionUnknownBoundaryUnknown covers a window whose start or end cannot
+	// be derived, including one that already ended without a new reading.
+	PredictionUnknownBoundaryUnknown = "window_boundary_unknown"
+	// PredictionUnknownUsageAbnormal covers readings outside 0..100 and numeric
+	// results the projection cannot state safely.
+	PredictionUnknownUsageAbnormal = "usage_abnormal"
+	// PredictionUnknownNoCycle is a window with neither a reset instant nor a
+	// period. It belongs to the boundary category but carries its own copy,
+	// because no reading can ever supply a cycle to progress against.
+	PredictionUnknownNoCycle = "no_cycle"
+)
+
 type PredictionObservation struct {
 	ObservedAtMS int64
 	UsedPercent  float64
@@ -77,28 +99,31 @@ type PredictionInput struct {
 }
 
 type WindowPrediction struct {
-	Accounting                PredictionAccounting
-	UsedPercent               *float64
-	ResetAtMS                 *int64
-	ObservedAtMS              int64
-	DataAgeSeconds            *int64
+	Accounting  PredictionAccounting
+	UsedPercent *float64
+	// ExpectedUsedPercent is the linear share of the window that had elapsed at
+	// the reading's own instant. It is nil when the window boundary is unknown,
+	// never zero: a missing figure and "spent 0%" are different claims.
+	ExpectedUsedPercent *float64
+	ResetAtMS           *int64
+	ObservedAtMS        int64
+	DataAgeSeconds      *int64
+	// LastsUntilReset is the three-state conclusion: true, false, or nil when
+	// the evidence cannot decide. UnknownReason names which of the four
+	// categories blocked the answer.
+	LastsUntilReset           *bool
+	UnknownReason             string
 	BurnRatePerHour           *float64
 	ProjectedPercentAtReset   *float64
 	ProjectedTokensAtReset    *int64
 	ProjectedCostNanosAtReset *int64
 	ExhaustionETAMS           *int64
-	// ExpectedUsedPercent is the time-linear baseline at the reading instant:
-	// how much of the window a perfectly even spend would have used. It is a
-	// clock fact, not a forecast, so it survives an unfittable trend.
-	ExpectedUsedPercent *float64
-	// LastsUntilReset is the risk threshold: tri-state so "cannot tell" stays
-	// distinct from "will last". It never encodes a deviation from the baseline.
-	LastsUntilReset *bool
+	// Verdict, Evidence and the reason codes are the deprecated vocabulary kept
+	// for one release. They are derived from the new conclusion, never computed
+	// independently, so the two can never disagree.
 	Verdict         string
 	Evidence        string
 	Reasons         []string
-	// Quality evidence describes the sample the projection rests on. It is
-	// deliberately additive: omissions stay null rather than becoming zero.
 	SampleCount     int
 	CoverageSeconds *int64
 	MaxGapSeconds   *int64
@@ -115,19 +140,37 @@ type PredictionAccounting struct {
 	RemainingTokens                *int64   `json:"remaining_tokens"`
 	CapacityErrorPercent           *float64 `json:"capacity_error_percent"`
 	CapacityUnavailable            string   `json:"capacity_unavailable,omitempty"`
+	// UnavailableReason is the console's four-category vocabulary for an
+	// undecided row. It is never sent to MCP callers or Feishu; the copy that
+	// reaches the operator is the console's to choose.
+	UnavailableReason string `json:"unavailable_reason,omitempty"`
+	// ReadingStale marks a row whose newest reading is too old to reason from.
+	// The console keeps showing that reading, marked as expired, instead of
+	// pretending the row has no data.
+	ReadingStale bool `json:"reading_stale,omitempty"`
 }
 
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	defer func() {
 		result.Accounting = calculatePredictionAccounting(input, result)
 		result.ExpectedUsedPercent = predictionExpectedUsedPercent(input, result)
-		result.LastsUntilReset = predictionLastsUntilReset(result)
+	}()
+	// The deprecated verdict is a projection of the new conclusion, so the two
+	// vocabularies cannot drift apart during the deprecation window.
+	defer func() {
+		switch {
+		case result.LastsUntilReset == nil:
+			result.Verdict = PredictionVerdictUnknown
+		case !*result.LastsUntilReset:
+			result.Verdict = PredictionVerdictWillExhaust
+		default:
+			result.Verdict = PredictionVerdictOnTrack
+		}
 	}()
 	result = WindowPrediction{
 		UsedPercent:  nil,
 		ResetAtMS:    input.Window.ResetAtMS,
 		ObservedAtMS: input.ObservedAtMS,
-		Verdict:      PredictionVerdictUnknown,
 		Evidence:     PredictionEvidenceUnknown,
 		Reasons:      []string{},
 	}
@@ -140,101 +183,117 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		if input.Status == "stale" {
 			result.Reasons[0] = PredictionReasonReadingStale
 		}
+		result.UnknownReason = PredictionUnknownReadingFailed
 		return result
 	}
 	if input.Window.UsedPercent == nil {
 		result.Reasons = append(result.Reasons, CapacityReasonNoReading)
+		result.UnknownReason = PredictionUnknownReadingFailed
 		return result
 	}
 	if !validPredictionPercent(*input.Window.UsedPercent) {
 		result.Reasons = append(result.Reasons, PredictionReasonInvalidUsedPercent)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	usedPercent := *input.Window.UsedPercent
 	result.UsedPercent = &usedPercent
 	defer appendPredictionUsage(&result, input)
+	fromMS, toMS, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
+	boundaryKnown := reason == "" && input.ObservedAtMS >= fromMS &&
+		input.Window.ResetAtMS != nil && input.ObservedAtMS <= *input.Window.ResetAtMS
+	// A reading too old to project from cannot decide anything: the cycle may
+	// already have reset underneath it.
 	if input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS || input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
 		result.Reasons = append(result.Reasons, PredictionReasonReadingStale)
+		result.UnknownReason = PredictionUnknownReadingFailed
 		return result
 	}
-	fromMS, toMS, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
-	if reason != "" {
+	// A reading at the ceiling is already spent, whatever the reset instant says:
+	// the quota cannot become available without a reset, and a reset would have
+	// produced a new reading.
+	if usedPercent >= 100 {
+		result.LastsUntilReset = boolPointer(false)
+		result.ExhaustionETAMS = &result.ObservedAtMS
+		result.Evidence = PredictionEvidenceFact
+		return result
+	}
+	if !boundaryKnown {
 		if reason == CapacityReasonExpired {
-			reason = PredictionReasonCycleExpired
+			result.Reasons = append(result.Reasons, PredictionReasonCycleExpired)
 		} else {
-			reason = PredictionReasonBoundaryUnknown
+			result.Reasons = append(result.Reasons, PredictionReasonBoundaryUnknown)
 		}
-		result.Reasons = append(result.Reasons, reason)
-		return result
-	}
-	if input.ObservedAtMS < fromMS || input.Window.ResetAtMS == nil || input.ObservedAtMS > *input.Window.ResetAtMS {
-		result.Reasons = append(result.Reasons, PredictionReasonBoundaryUnknown)
+		if input.Window.ResetAtMS == nil && input.Window.PeriodHours == nil {
+			result.UnknownReason = PredictionUnknownNoCycle
+		} else {
+			result.UnknownReason = PredictionUnknownBoundaryUnknown
+		}
 		return result
 	}
 	// The current reading itself is the proof of exhaustion. This fact outranks
 	// incomplete or reset history, which describe older samples rather than the
 	// fresh reading that has already reached the ceiling.
-	if *input.Window.UsedPercent >= 100 {
-		result.Verdict = PredictionVerdictWillExhaust
-		result.Evidence = PredictionEvidenceFact
-		result.ExhaustionETAMS = &result.ObservedAtMS
-		return result
-	}
 	if input.Window.HasIncompleteHistory {
 		result.Reasons = append(result.Reasons, PredictionReasonIncompleteHistory)
+		result.UnknownReason = PredictionUnknownHistoryInsufficient
 		return result
 	}
 	observations, invalidObservations := collapsePredictionObservations(input, fromMS, toMS)
 	if invalidObservations {
 		result.Reasons = append(result.Reasons, PredictionReasonInvalidObservation)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	points := predictionPoints(observations, input.Window.ResetAtMS)
 	coverageMS, maxGapMS, evidenceSafe := applyPredictionEvidence(&result, points)
 	if !evidenceSafe {
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	if input.Window.HasMidCycleReset || predictionHasReset(observations) {
 		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
+		result.UnknownReason = PredictionUnknownHistoryInsufficient
 		return result
 	}
 	if reason, failed := predictionMinimumEvidence(input.Window, len(points), coverageMS, maxGapMS); failed {
 		result.Reasons = append(result.Reasons, reason)
+		if reason == PredictionReasonArithmeticUnsafe {
+			result.UnknownReason = PredictionUnknownUsageAbnormal
+		} else {
+			result.UnknownReason = PredictionUnknownHistoryInsufficient
+		}
 		return result
 	}
 	rate, ok := predictionSlope(points)
 	if !ok {
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	cycleDurationMS := *input.Window.ResetAtMS - fromMS
 	elapsedFraction := float64(input.ObservedAtMS-fromMS) / float64(cycleDurationMS)
 	if !isFinite(elapsedFraction) {
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	if rate <= 0 {
+		// A flat or falling trend never reaches the ceiling, so the window lasts
+		// to its reset. There is no ETA to state.
 		result.Reasons = append(result.Reasons, PredictionReasonNoPositiveTrend)
-		if elapsedFraction < 0.25 {
-			result.Verdict = PredictionVerdictUnknown
-			result.Evidence = PredictionEvidenceUnknown
-			result.Reasons = append(result.Reasons, PredictionReasonCycleTooEarly)
-			return result
-		}
+		result.LastsUntilReset = boolPointer(true)
 		result.Evidence = PredictionEvidenceProjection
 		result.BurnRatePerHour = floatPointer(0)
 		projected, ok := roundPrediction(*input.Window.UsedPercent, 2)
 		if !ok {
 			result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+			result.UnknownReason = PredictionUnknownUsageAbnormal
+			result.LastsUntilReset = nil
 			return result
 		}
 		result.ProjectedPercentAtReset = floatPointer(projected)
-		if input.Window.UsedPercent != nil && elapsedFraction > 0.5 && *input.Window.UsedPercent < 50 {
-			result.Verdict = PredictionVerdictUnderUsed
-		} else {
-			result.Verdict = PredictionVerdictOnTrack
-		}
 		return result
 	}
 
@@ -242,6 +301,7 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	roundedRate, ok := roundPrediction(rate, 4)
 	if !ok {
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	result.BurnRatePerHour = floatPointer(roundedRate)
@@ -251,6 +311,7 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	if !ok {
 		result.BurnRatePerHour = nil
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
+		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
 	result.ProjectedPercentAtReset = floatPointer(projected)
@@ -268,19 +329,32 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 	} else {
 		appendPredictionReason(&result, PredictionReasonArithmeticUnsafe)
 	}
-	switch {
-	case result.ExhaustionETAMS != nil && projected >= 100 && *result.ExhaustionETAMS < *input.Window.ResetAtMS:
-		result.Verdict = PredictionVerdictWillExhaust
-	case projected < 50 && elapsedFraction > 0.5:
-		result.Verdict = PredictionVerdictUnderUsed
-	default:
-		result.Verdict = PredictionVerdictOnTrack
+	if result.ExhaustionETAMS == nil {
+		result.UnknownReason = PredictionUnknownUsageAbnormal
+		return result
+	}
+	// An ETA exactly at the reset still lasts until it; only a strictly earlier
+	// ETA means the window runs out first.
+	lasts := *result.ExhaustionETAMS >= *input.Window.ResetAtMS
+	result.LastsUntilReset = &lasts
+	if !lasts {
+		result.Evidence = PredictionEvidenceProjection
 	}
 	return result
 }
 
 func calculatePredictionAccounting(input PredictionInput, prediction WindowPrediction) PredictionAccounting {
-	result := PredictionAccounting{}
+	result := PredictionAccounting{UnavailableReason: prediction.UnknownReason}
+	// Only a row that still shows a reading can be marked expired; a row with no
+	// reading at all is reported as a failed read instead.
+	if prediction.UsedPercent != nil {
+		for _, reason := range prediction.Reasons {
+			if reason == PredictionReasonReadingStale {
+				result.ReadingStale = true
+				break
+			}
+		}
+	}
 	fromMS, _, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
 	if reason == "" && input.ObservedAtMS >= fromMS {
 		result.WindowStartMS = &fromMS
@@ -368,26 +442,6 @@ func predictionExpectedUsedPercent(input PredictionInput, prediction WindowPredi
 		return nil
 	}
 	return floatPointer(min(100, max(0, expected)))
-}
-
-// predictionLastsUntilReset is the only risk threshold. A fresh reading at the
-// ceiling is a fact; a completed forecast that exhausts before the reset is a
-// projection; every reading the algorithm could not judge stays unknown.
-func predictionLastsUntilReset(prediction WindowPrediction) *bool {
-	if prediction.UsedPercent == nil {
-		return nil
-	}
-	if *prediction.UsedPercent >= 100 {
-		return boolPointer(false)
-	}
-	switch prediction.Verdict {
-	case PredictionVerdictWillExhaust:
-		return boolPointer(false)
-	case PredictionVerdictUnderUsed, PredictionVerdictOnTrack:
-		return boolPointer(true)
-	default:
-		return nil
-	}
 }
 
 func predictionPoints(observations []PredictionObservation, resetAtMS *int64) []PredictionObservation {

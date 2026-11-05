@@ -225,11 +225,11 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 		SenderFactory: func(feishu.Resolved) feishu.Sender { return sender },
 		SourceFactory: func(feishu.Resolved) feishu.EventSource { return nil },
 	})
-	used, projected := 60.0, 120.0
+	used := 60.0
 	digest := feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{
 		CredentialLabel: "operator", Provider: "codex", WindowKind: "weekly",
-		UsedPercent: &used, ProjectedPercentAtReset: &projected,
-		ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+		UsedPercent: &used, LastsUntilReset: &cannotLast,
+		ObservedAtMS: now.UnixMilli(),
 	}}}
 	api := &FeishuAPI{service: service}
 	api.prediction = feishu.NewPredictionJob(service, func(context.Context) (feishu.PredictionDigest, error) { return digest, nil })
@@ -250,7 +250,7 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 		t.Fatalf("manual send changed last summary: %s", state.LastSummaryAt)
 	}
 
-	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{Verdict: "on_track"}}}
+	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{LastsUntilReset: &lastsToReset}}}
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil))
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"sent":false`) || !strings.Contains(recorder.Body.String(), `"reason":"no_findings"`) {
@@ -262,7 +262,7 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 
 	now = now.Add(time.Minute)
 	sender.err = errors.New("simulated sender failure")
-	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{CredentialLabel: "operator", Verdict: "will_exhaust"}}}
+	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{CredentialLabel: "operator", LastsUntilReset: &cannotLast}}}
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil))
 	var failed struct {
