@@ -180,6 +180,12 @@ type AuditQuery struct {
 	Outcome string
 	// Search is a case-insensitive substring of the action, target or request id.
 	Search string
+	// Repo keeps rows whose details name exactly this repository, and Agent keeps rows
+	// whose details name exactly this agent. The repository-key trail records both as
+	// structured detail keys, and AC-23 asks for them as filters of their own rather
+	// than one free-text match that also catches unrelated mentions.
+	Repo  string
+	Agent string
 	// SinceMS keeps rows at or after this instant; zero keeps everything.
 	SinceMS int64
 	// FoldAttempts hides an `attempt` row once the same request has recorded the
@@ -326,6 +332,16 @@ func auditFilterClauses(query AuditQuery) ([]string, []any) {
 		// agent and the device there, and AC-23 asks the audit page to filter by them.
 		where = append(where, `(lower(e.action) LIKE ? ESCAPE '\' OR lower(e.target_type) LIKE ? ESCAPE '\' OR lower(e.target_id) LIKE ? ESCAPE '\' OR lower(e.request_id) LIKE ? ESCAPE '\' OR lower(COALESCE(e.details_json, '')) LIKE ? ESCAPE '\')`)
 		args = append(args, pattern, pattern, pattern, pattern, pattern)
+	}
+	// The structured filters read the same detail keys the trail writes, so a repository or
+	// agent name matches its own events and not every event that happens to mention it (AC-23).
+	if repo := strings.TrimSpace(query.Repo); repo != "" {
+		where = append(where, "json_extract(e.details_json, '$.repo') = ?")
+		args = append(args, repo)
+	}
+	if agent := strings.TrimSpace(query.Agent); agent != "" {
+		where = append(where, "json_extract(e.details_json, '$.agent') = ?")
+		args = append(args, agent)
 	}
 	if query.FoldAttempts {
 		// The request-id pairing is exact. The second arm pairs rows written before
