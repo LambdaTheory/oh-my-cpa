@@ -475,3 +475,58 @@ func TestPredictWindowReportsEvidenceQuality(t *testing.T) {
 		t.Fatalf("one-point quality evidence = %+v", onePoint)
 	}
 }
+
+// The baseline is the time-linear share of the cycle at the reading instant, not
+// a forecast: it must be available even when no trend can be fitted, and the risk
+// threshold must stay tri-state.
+func TestPredictionTimeLinearBaselineAndLastsUntilReset(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	window, reset := predictionWindow(start, 30)
+	observed := start.Add(4 * time.Hour)
+	observations := []PredictionObservation{
+		{ObservedAtMS: start.Add(time.Hour).UnixMilli(), UsedPercent: 8, ResetAtMS: &reset},
+		{ObservedAtMS: start.Add(2 * time.Hour).UnixMilli(), UsedPercent: 15, ResetAtMS: &reset},
+		{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 22, ResetAtMS: &reset},
+	}
+
+	onTrack := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(), Observations: observations})
+	if onTrack.Verdict != PredictionVerdictOnTrack {
+		t.Fatalf("verdict = %s, want on_track", onTrack.Verdict)
+	}
+	if onTrack.ExpectedUsedPercent == nil || *onTrack.ExpectedUsedPercent != 40 {
+		t.Fatalf("expected baseline = %v, want 40", onTrack.ExpectedUsedPercent)
+	}
+	if onTrack.LastsUntilReset == nil || !*onTrack.LastsUntilReset {
+		t.Fatalf("on-track lasts until reset = %v", onTrack.LastsUntilReset)
+	}
+
+	exhaustingWindow, _ := predictionWindow(start, 30)
+	exhaustingWindow.UsedPercent = floatPointer(95)
+	exhausting := PredictWindow(PredictionInput{Window: exhaustingWindow, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(), Observations: observations})
+	if exhausting.Verdict != PredictionVerdictWillExhaust || exhausting.LastsUntilReset == nil || *exhausting.LastsUntilReset {
+		t.Fatalf("exhausting verdict=%s lasts=%v", exhausting.Verdict, exhausting.LastsUntilReset)
+	}
+	if exhausting.ExpectedUsedPercent == nil || *exhausting.ExpectedUsedPercent != 40 {
+		t.Fatalf("exhausting baseline = %v", exhausting.ExpectedUsedPercent)
+	}
+
+	spentWindow, _ := predictionWindow(start, 30)
+	spentWindow.UsedPercent = floatPointer(100)
+	spent := PredictWindow(PredictionInput{Window: spentWindow, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(), Observations: observations})
+	if spent.Verdict != PredictionVerdictWillExhaust || spent.LastsUntilReset == nil || *spent.LastsUntilReset {
+		t.Fatalf("spent verdict=%s lasts=%v", spent.Verdict, spent.LastsUntilReset)
+	}
+
+	stale := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.Add(3 * time.Hour).UnixMilli(), Observations: observations})
+	if stale.ExpectedUsedPercent != nil || stale.LastsUntilReset != nil {
+		t.Fatalf("stale reading kept baseline=%v lasts=%v", stale.ExpectedUsedPercent, stale.LastsUntilReset)
+	}
+
+	unknown := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli()})
+	if unknown.Verdict != PredictionVerdictUnknown || unknown.LastsUntilReset != nil {
+		t.Fatalf("unfittable history verdict=%s lasts=%v", unknown.Verdict, unknown.LastsUntilReset)
+	}
+	if unknown.ExpectedUsedPercent == nil || *unknown.ExpectedUsedPercent != 40 {
+		t.Fatalf("unfittable history baseline = %v", unknown.ExpectedUsedPercent)
+	}
+}

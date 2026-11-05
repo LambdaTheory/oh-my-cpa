@@ -972,3 +972,62 @@ func seedQuotaObservationRows(t *testing.T, repo *repository.Repository, authInd
 		t.Fatal(err)
 	}
 }
+
+// A disabled credential is not expected to answer, so it must not enter the
+// prediction roster at all: keeping it would turn deliberate silence into a
+// reading failure and can push a shortage warning for an account that is off.
+func TestQuotaPredictionSkipsDisabledCredentials(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-disabled.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	now := time.Date(2026, 10, 19, 6, 0, 0, 0, time.UTC)
+	reset := now.Add(4 * time.Hour).UnixMilli()
+	period := 10.0
+	used := 60.0
+
+	enabled := predictionResource("auth-enabled", "enabled@example.test", "codex")
+	disabled := predictionResource("auth-disabled", "disabled@example.test", "codex")
+	disabled.Details = domain.ResourceDetails{Disabled: true}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{enabled, disabled})
+	for _, authIndex := range []string{"auth-enabled", "auth-disabled"} {
+		seedPredictionSnapshot(t, repo, authIndex, "codex", now.UnixMilli(), []quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	}
+
+	for _, account := range []struct {
+		id      string
+		label   string
+		enabled bool
+	}{{"ollama-on", "ollama-on@example.test", true}, {"ollama-off", "ollama-off@example.test", false}} {
+		created, createErr := repo.CreateOllamaAccount(context.Background(), repository.OllamaAccountCreate{ID: account.id, Label: account.label, Enabled: account.enabled, Ciphertext: []byte("synthetic"), Nonce: []byte("synthetic"), NowMS: now.UnixMilli()})
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		window := quota.QuotaWindow{ID: "five_hour", Kind: "five_hour", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, ResetAccuracy: "exact"}
+		encoded, marshalErr := json.Marshal(quota.NormalizedQuota{AuthIndex: "ollama:" + created.ID, Provider: "ollama", Status: "healthy", ObservedAtMS: now.UnixMilli(), Windows: []quota.QuotaWindow{window}})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, _, recordErr := repo.RecordOllamaResult(context.Background(), repository.OllamaCollectionResult{ID: created.ID, Status: "ok", ObservedAtMS: now.UnixMilli(), IsSuccess: true, SnapshotJSON: string(encoded)}); recordErr != nil {
+			t.Fatal(recordErr)
+		}
+	}
+
+	service := &Service{Repo: repo}
+	result, err := service.DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, item := range result.Items {
+		seen[item.AuthIndex] = true
+	}
+	if !seen["auth-enabled"] || seen["auth-disabled"] {
+		t.Fatalf("auth-file roster = %v", seen)
+	}
+	if !seen["ollama:ollama-on"] || seen["ollama:ollama-off"] {
+		t.Fatalf("ollama roster = %v", seen)
+	}
+}

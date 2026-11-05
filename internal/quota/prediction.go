@@ -87,9 +87,16 @@ type WindowPrediction struct {
 	ProjectedTokensAtReset    *int64
 	ProjectedCostNanosAtReset *int64
 	ExhaustionETAMS           *int64
-	Verdict                   string
-	Evidence                  string
-	Reasons                   []string
+	// ExpectedUsedPercent is the time-linear baseline at the reading instant:
+	// how much of the window a perfectly even spend would have used. It is a
+	// clock fact, not a forecast, so it survives an unfittable trend.
+	ExpectedUsedPercent *float64
+	// LastsUntilReset is the risk threshold: tri-state so "cannot tell" stays
+	// distinct from "will last". It never encodes a deviation from the baseline.
+	LastsUntilReset *bool
+	Verdict         string
+	Evidence        string
+	Reasons         []string
 	// Quality evidence describes the sample the projection rests on. It is
 	// deliberately additive: omissions stay null rather than becoming zero.
 	SampleCount     int
@@ -111,7 +118,11 @@ type PredictionAccounting struct {
 }
 
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
-	defer func() { result.Accounting = calculatePredictionAccounting(input, result) }()
+	defer func() {
+		result.Accounting = calculatePredictionAccounting(input, result)
+		result.ExpectedUsedPercent = predictionExpectedUsedPercent(input, result)
+		result.LastsUntilReset = predictionLastsUntilReset(result)
+	}()
 	result = WindowPrediction{
 		UsedPercent:  nil,
 		ResetAtMS:    input.Window.ResetAtMS,
@@ -338,6 +349,47 @@ func calculatePredictionAccounting(input PredictionInput, prediction WindowPredi
 	return result
 }
 
+// predictionExpectedUsedPercent answers "how much should have been used by now"
+// from the elapsed share of the cycle alone. It reuses the accounting's cycle
+// start, so a stale reading, an expired cycle or an unknown boundary yields no
+// baseline rather than a fabricated one.
+func predictionExpectedUsedPercent(input PredictionInput, prediction WindowPrediction) *float64 {
+	// RemainingPercent is withheld for a stale reading or an expired cycle, which
+	// is exactly when the elapsed share stops describing the current cycle.
+	if prediction.Accounting.WindowStartMS == nil || prediction.Accounting.RemainingPercent == nil || input.Window.ResetAtMS == nil {
+		return nil
+	}
+	startMS, resetMS := *prediction.Accounting.WindowStartMS, *input.Window.ResetAtMS
+	if resetMS <= startMS || input.ObservedAtMS < startMS || input.ObservedAtMS > resetMS {
+		return nil
+	}
+	expected, isSafe := roundPrediction(float64(input.ObservedAtMS-startMS)/float64(resetMS-startMS)*100, 1)
+	if !isSafe {
+		return nil
+	}
+	return floatPointer(min(100, max(0, expected)))
+}
+
+// predictionLastsUntilReset is the only risk threshold. A fresh reading at the
+// ceiling is a fact; a completed forecast that exhausts before the reset is a
+// projection; every reading the algorithm could not judge stays unknown.
+func predictionLastsUntilReset(prediction WindowPrediction) *bool {
+	if prediction.UsedPercent == nil {
+		return nil
+	}
+	if *prediction.UsedPercent >= 100 {
+		return boolPointer(false)
+	}
+	switch prediction.Verdict {
+	case PredictionVerdictWillExhaust:
+		return boolPointer(false)
+	case PredictionVerdictUnderUsed, PredictionVerdictOnTrack:
+		return boolPointer(true)
+	default:
+		return nil
+	}
+}
+
 func predictionPoints(observations []PredictionObservation, resetAtMS *int64) []PredictionObservation {
 	points := make([]PredictionObservation, 0, len(observations))
 	for _, observation := range observations {
@@ -512,6 +564,13 @@ func roundPrediction(value float64, places int) (float64, bool) {
 }
 
 func floatPointer(value float64) *float64 { return &value }
+
+func boolPointer(value bool) *bool { return &value }
+
+// PredictionFreshWindow is the age beyond which a reading stops being evidence.
+// Callers outside the prediction package need the same bound when a rendered
+// card revisits a reading that was fresh when it was read.
+func PredictionFreshWindow(window QuotaWindow) time.Duration { return predictionFreshWindow(window) }
 
 func predictionFreshWindow(window QuotaWindow) time.Duration {
 	bound := predictionMinimumFreshWindow
