@@ -76,11 +76,8 @@ const ROUTE_READS = {
   '/model-groups/:id': ['model-groups'],
   // The add page reads the directory as well; at the demonstration's literal placeholder id the group is gone, but both reads still run.
   '/model-groups/:id/add': ['model-groups', 'model-square'],
-  // The retired Playground page is no longer a routed console route: it redirects to the
-  // dashboard, so it declares no reads. Its captured API responses (`playground-models`,
-  // `playground-run-active`) stay in the dataset as retained backend fixtures - the
-  // demonstration still serves them, and the Agent workspace's model picker shares the
-  // gateway read - so they are deliberately not removed to make this check narrower.
+  // Playground stays closed in the public demo: its address redirects to the dashboard.
+  // Its captured directory and active-run responses remain fixture reads shared with Agent.
   '/agent': ['api-keys', 'capabilities', 'agent-session'],
   '/ai-providers': ['providers', 'dashboard-providers-24h'],
   '/api-keys': ['api-keys', 'client-key-aliases'],

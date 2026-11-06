@@ -275,10 +275,8 @@ async function main() {
       }
     }
 
-    // The retired Playground address is no longer a page of its own: the built console must
-    // send a visitor on to the dashboard, and the surviving conversation workspace must still
-    // open. Neither is a route in the table above, so both are checked here - driving the
-    // obsolete page's example control would wait forever on a page that no longer exists.
+    // Reopening self-hosted Playground must not open the public demo's workspace.
+    // Check the redirect separately from the pages the demo actually renders.
     const dashboardRoute = DEMO_ROUTES.find((route) => route.path === '/dashboard');
     const redirectReads = watchDemoReads(page, BASE, dashboardRoute.reads, NAVIGATION_TIMEOUT_MS);
     try {
@@ -289,9 +287,12 @@ async function main() {
       if (!landed.endsWith('/dashboard')) {
         throw new Error(`did not redirect to the dashboard (landed on ${new URL(page.url()).pathname})`);
       }
+      if (await page.locator('[data-testid="playground-page"], [data-route-path="/playground"]').count() !== 0) {
+        throw new Error('the public demo exposed a Playground workspace or navigation entry');
+      }
       await page.goto(`${BASE}/agent`, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT_MS });
       await page.getByTestId('agent-empty').waitFor({ state: 'visible', timeout: NAVIGATION_TIMEOUT_MS });
-      console.log('[demo] /playground: redirects to the dashboard, and the Agent workspace still opens');
+      console.log('[demo] /playground: stays closed with no navigation entry; Agent still opens');
     } catch (error) {
       failures.push(`/playground: ${error.message}`);
     } finally {

@@ -567,8 +567,9 @@ calls and are automatically discovered by the existing Go test lane.
 Agent/Playground recovery assertions belong at the lowest boundary that owns the behaviour:
 channel-driven facade tests for execution lifetime and replay, injectable transport logic tests
 for connection failures, and the existing `agent-live` probe for the Agent's actual browser
-reload and rendering. The `playground` probe owns the retired address's redirect to the
-dashboard instead: the hidden page has no live recovery surface to drive. Live elapsed labels are independent external-store consumers: their clock
+reload and rendering. The `playground` probe covers the reopened self-hosted workspace's
+reload, reconnect and persisted conversation, as well as sending, diagnostics and cancellation.
+Live elapsed labels are independent external-store consumers: their clock
 and hidden-tab suspension are logic tests, while the Agent probe checks visible tenths and the
 light Stop border. Stream-coalescing probes exclude only elapsed-label mutations, not answer
 mutations, because the clock does not publish through the transcript's run hook.
@@ -1394,8 +1395,9 @@ reference times and equivalent instants in other time zones. `scripts/check-demo
 public recording privacy. `scripts/test-agent-workspace.ts` owns send admission: target-free
 demo replay, required live targets, and approval blocking in both modes.
 Built `scripts/verify-demo.mjs` sends the Agent example and must settle its generated
-interface; the retired `/playground` address is not a route of its own, so the run instead
-drives it to the dashboard and then opens the Agent workspace. The Agent example and
+interface; the public demo keeps `/playground` closed even though self-hosted consoles
+reopen it, so demo acceptance checks its dashboard redirect and the absence of a navigation
+entry, then opens the Agent workspace. The Agent example and
 capability-directory actions use locale-independent identities; built acceptance exercises the
 Agent in English while the other route headings remain Chinese. Because the generated interface
 is an opaque sandbox, the check seeds theme storage only in frames with an origin and tolerates

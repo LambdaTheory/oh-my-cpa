@@ -105,6 +105,8 @@ func TestDemoPolicyRefusesTheDangerousSurface(t *testing.T) {
 		{http.MethodPut, "/api/v1/management/config/source"},
 		{http.MethodPut, "/api/v1/management/config/debug"},
 		{http.MethodPost, "/api/v1/playground/chat"},
+		{http.MethodGet, "/api/v1/playground/runs/fixture-run"},
+		{http.MethodPost, "/api/v1/playground/runs/fixture-run/cancel"},
 		{http.MethodPost, "/api/v1/management/api-keys"},
 		{http.MethodDelete, "/api/v1/management/api-keys/0"},
 		{http.MethodPost, "/api/v1/management/quota/reset"},
@@ -292,6 +294,8 @@ func TestDemoGuardRefusesOverHTTP(t *testing.T) {
 		method, path, body string
 	}{
 		{http.MethodPost, "/omc/api/v1/playground/chat", `{}`},
+		{http.MethodGet, "/omc/api/v1/playground/runs/fixture-run", ""},
+		{http.MethodPost, "/omc/api/v1/playground/runs/fixture-run/cancel", `{}`},
 		{http.MethodPost, "/omc/api/v1/management/oauth/start", `{"provider":"codex"}`},
 		{http.MethodPost, "/omc/api/v1/management/auth-files", `{"type":"codex"}`},
 		{http.MethodGet, "/omc/api/v1/management/auth-files/download?name=x.json", ""},

@@ -97,7 +97,7 @@ describe('sidebar visibility panel', () => {
     // The console's groups, then the plugins group before Control, because that is where the rail
     // puts them.
     expect(titles).toEqual([
-      'Dashboard', 'Agent', 'Model Square', 'Model Groups',
+      'Dashboard', 'Agent', 'Playground', 'Model Square', 'Model Groups',
       'AI providers', 'OAuth management', 'Key management',
       'Request Events', 'Cost & Usage', 'Logs', 'Audit trail',
       'Plugin management', 'Plugin store',
@@ -113,6 +113,18 @@ describe('sidebar visibility panel', () => {
     expect(descriptions).toContain('This entry keeps account automation and Ollama management reachable, so it always shows.');
     expect(descriptions).toContain('This entry manages the sidebar, so it always shows.');
     // Nothing is hidden on a fresh deployment, so the reset has nothing to put back.
+    expect((screen.getByRole('button', { name: 'Show all' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps Playground out of the demo settings panel and hidden-entry count', async () => {
+    window.__OMCPA_CONFIG__ = { demo: true };
+    stored.omc_nav_hidden = ['/playground'];
+    const { container } = mount();
+    const dialog = await openPanel();
+    expect([...dialog.querySelectorAll('.settings-toggle-title')].map(node => node.textContent)).not.toContain('Playground');
+    expect(screen.queryByRole('switch', { name: 'Playground' })).toBeNull();
+    expect(screen.getByRole('switch', { name: 'Agent' })).not.toBeNull();
+    expect(container.querySelector('[data-testid="sidebar-nav-settings"] .settings-toggle-desc')?.textContent).toBe('Every entry is shown');
     expect((screen.getByRole('button', { name: 'Show all' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
