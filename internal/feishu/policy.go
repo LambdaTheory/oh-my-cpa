@@ -30,23 +30,22 @@ const (
 // Alert is one immediate notification unit. It is secret-free: it carries the
 // opaque credential key and the display alias, never a cookie or token.
 type Alert struct {
-	Scope      string
-	ObservedAt time.Time
-	Kind       string
-	Severity   string
-	Provider   string
-	Key        string
-	Alias      string
-	Title      string
-	Detail     string
-	Facts      []string
-	Advice     string
-	OccurredAt time.Time
-	// FreshWindowMS is the freshness bound the reading was judged by when the
-	// alert was queued. A retry or a quiet-hours release may render hours later,
-	// so delivery re-checks the age against this bound instead of trusting the
-	// queue-time decision. Zero means the alert carries no bound.
-	FreshWindowMS int64
+	// FreshWindowMS bounds the age of the evidence, not the notification's age.
+	// Missing bounds or observation times cannot establish a current risk.
+	FreshWindowMS  int64
+	EvidenceSource string
+	Scope          string
+	ObservedAt     time.Time
+	Kind           string
+	Severity       string
+	Provider       string
+	Key            string
+	Alias          string
+	Title          string
+	Detail         string
+	Facts          []string
+	Advice         string
+	OccurredAt     time.Time
 }
 
 // PendingItem is one structured "something needs a human" record. ID is stable
@@ -96,11 +95,13 @@ type PolicyConfig struct {
 // which is why a quiet-opened item is stamped notified here and its alert is still
 // returned.
 type PolicyInput struct {
-	Report   Report
-	Prev     []PendingItem
-	Tracks   map[string]ChannelTrack
-	Now      time.Time
-	Quiet    bool
+	Report Report
+	Prev   []PendingItem
+	Tracks map[string]ChannelTrack
+	Now    time.Time
+	Quiet  bool
+	// InFlight is reconstructed from the outbox, not persisted as policy state.
+	InFlight map[string]time.Time
 	recovery map[string]recoveryProgress
 }
 
@@ -144,7 +145,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	desired, alertFor := policySignals(info, in.Now)
 	if cfg.EnableAttention {
 		for _, alert := range attentionSignals(in.Report, cfg.TightRemainingPercent, in.Now) {
-			if alert.Kind == AlertReadingMissing && !hasFreshAttempt(in.Report, alert, in.Now) {
+			// A recent failed attempt is diagnostic context, not a new missing-quota
+			// episode. Sustained collection failures retain monitor_down's thresholds.
+			if alert.EvidenceSource == EvidenceAttempt {
 				continue
 			}
 			id := alertItemID(alert)
@@ -184,13 +187,24 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			if item.CycleResetAt.IsZero() && !cycleReset.IsZero() {
 				item.CycleResetAt = cycleReset
 			}
-			if item.NotifiedAt.IsZero() {
-				if _, has := alertFor[id]; has {
-					item.NotifiedAt = in.Now
-				}
+			// A discarded delivery releases its reservation, not ownership. New
+			// qualifying evidence may then admit one send on the same open incident.
+			isEscalation := sig.Kind == AlertQuotaExhausted && prev.Kind != AlertQuotaExhausted
+			queuedAt, isQueued := in.InFlight[deliveryClaimKey(id, sig.Kind)]
+			if !isQueued {
+				queuedAt, isQueued = in.InFlight[deliveryClaimKey(id, KindAlertBatch)]
+			}
+			// Legacy queues can lack NotifiedAt. Reuse their reservation instead
+			// of admitting a second row that would race quiet-end promotion.
+			if isQueued && (item.NotifiedAt.IsZero() || isEscalation) && isMonitoringTimeValid(queuedAt) {
+				item.NotifiedAt = queuedAt
+			}
+			needsDelivery := alertFor[id] != nil && !isQueued && (item.NotifiedAt.IsZero() || isEscalation)
+			if needsDelivery {
+				item.NotifiedAt = in.Now
 			}
 			items = append(items, item)
-			if sig.Kind == AlertQuotaExhausted && prev.Kind != AlertQuotaExhausted {
+			if needsDelivery {
 				opened = append(opened, item)
 			}
 			continue
@@ -270,21 +284,6 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	return res
 }
 
-// Untimed or long-stale missing data retains the established monitor-down grace.
-func hasFreshAttempt(rep Report, alert Alert, now time.Time) bool {
-	for _, provider := range rep.Providers {
-		if provider.Provider != alert.Provider {
-			continue
-		}
-		for _, account := range provider.Accounts {
-			if account.Key == alert.Key {
-				return observationFresh(account, now, defaultFreshWindow)
-			}
-		}
-	}
-	return false
-}
-
 // policySignals builds the desired pending items from the report, plus the alert
 // to attach to each item the first time it opens.
 func policySignals(info reportInfo, now time.Time) (map[string]PendingItem, map[string]*Alert) {
@@ -293,7 +292,7 @@ func policySignals(info reportInfo, now time.Time) (map[string]PendingItem, map[
 
 	for _, p := range info.providers {
 		for _, account := range p.accounts {
-			if account.Disabled || p.states[account.Key] != StateInvalid {
+			if account.Disabled || !account.HasFreshAuthFailure(now) {
 				continue
 			}
 			id := ItemID(AlertCredential, p.provider, account.Key, "")
@@ -337,6 +336,8 @@ func credentialAlert(provider string, account AccountReport, now time.Time) Aler
 		label = providerName(provider)
 	}
 	return Alert{
+		FreshWindowMS: defaultFreshWindow.Milliseconds(), EvidenceSource: EvidenceAuthentication,
+		ObservedAt: account.AuthSignalObservedAt,
 		Kind:       AlertCredential,
 		Severity:   SeverityUrgent,
 		Provider:   provider,
@@ -357,7 +358,7 @@ func channelAlert(p providerInfo, now time.Time) Alert {
 		facts = append(facts, "无自动恢复时间")
 	}
 	return Alert{
-		Kind:       AlertChannelUnavailable,
+		Kind: AlertChannelUnavailable, EvidenceSource: EvidenceAvailability, FreshWindowMS: defaultFreshWindow.Milliseconds(), ObservedAt: p.evidenceObserved,
 		Severity:   SeverityUrgent,
 		Provider:   p.provider,
 		Title:      providerName(p.provider) + " 渠道不可用",
@@ -371,7 +372,7 @@ func channelAlert(p providerInfo, now time.Time) Alert {
 func monitorAlert(p providerInfo, now time.Time) Alert {
 	facts := []string{"最后有效数据: " + displayTime(p.latestSuccess)}
 	return Alert{
-		Kind:       AlertMonitorDown,
+		Kind: AlertMonitorDown, EvidenceSource: EvidenceMonitoring,
 		ObservedAt: p.latestSuccess,
 		Severity:   SeverityWarn,
 		Provider:   p.provider,
@@ -411,6 +412,7 @@ type providerInfo struct {
 	monitorDown      bool
 	hasValid         bool
 	latestSuccess    time.Time
+	evidenceObserved time.Time
 }
 
 // reportInfo is the per-round projection used for reconciliation.
@@ -420,6 +422,7 @@ type reportInfo struct {
 	unavailable map[string]bool
 	hasValid    map[string]bool
 	hasKey      map[string]bool
+	available   map[string]bool
 	unmonitored map[string]bool
 	// recoveredKeys are the credentials with positive recovery evidence: a valid
 	// reading this round. Absent evidence is not recovery, so an item only resolves
@@ -433,6 +436,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		unavailable:   map[string]bool{},
 		hasValid:      map[string]bool{},
 		hasKey:        map[string]bool{},
+		available:     map[string]bool{},
 		unmonitored:   map[string]bool{},
 		recoveredKeys: map[string]bool{},
 	}
@@ -467,20 +471,29 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 				pi.hasValid = true
 			} else {
 				sawFailure = true
-				if account.State != StateInvalid && !account.AuthFailed {
+				if account.State != StateInvalid && !account.AuthFailed || hasNonAuthCollectionFailure(account, now) {
 					authOnly = false
 				}
 			}
 			// An exhausted account reports OK true with a maxed window, so the
 			// availability check runs for every enabled account.
 			if u, recovery := accountUnavailable(account, now); u {
+				observed := account.ObservedAt
+				if account.HasFreshAuthFailure(now) {
+					observed = account.AuthSignalObservedAt
+				}
+				if pi.evidenceObserved.IsZero() || observed.Before(pi.evidenceObserved) {
+					pi.evidenceObserved = observed
+				}
 				unavail++
-				if account.State != StateInvalid {
+				if !account.HasFreshAuthFailure(now) {
 					nonAuthUnavail++
 				}
 				if recovery != nil {
 					earliest = earlierTime(earliest, recovery)
 				}
+			} else if hasFreshQuotaReading(account, now) {
+				info.available[p.Provider] = true
 			}
 		}
 
@@ -497,6 +510,9 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		if enabled > 0 && unavail == enabled && nonAuthUnavail > 0 {
 			pi.channelUnavailable = earliest == nil || earliest.After(now.Add(cfg.ChannelUnavailableAfter))
 			pi.earliestRecovery = earliest
+			if !pi.channelUnavailable {
+				info.available[p.Provider] = true
+			}
 		}
 
 		// Distinct collection failures and elapsed time must both reach their
@@ -540,7 +556,7 @@ func (info reportInfo) resolvedByEvidence(item PendingItem) bool {
 		if !info.present[item.Provider] {
 			return false
 		}
-		return !info.unavailable[item.Provider]
+		return info.available[item.Provider] || info.unmonitored[item.Provider]
 	case AlertMonitorDown:
 		if !info.present[item.Provider] {
 			return false
@@ -555,8 +571,11 @@ func (info reportInfo) resolvedByEvidence(item PendingItem) bool {
 // back. A model- or group-scoped window running out does NOT make the account
 // unusable. nil recovery means no automatic recovery is known.
 func accountUnavailable(account AccountReport, now time.Time) (bool, *time.Time) {
-	if account.State == StateInvalid {
+	if account.HasFreshAuthFailure(now) {
 		return true, nil
+	}
+	if !observationFresh(account, now, defaultFreshWindow) {
+		return false, nil
 	}
 	if account.CooldownUntil != nil && account.CooldownUntil.After(now) {
 		return true, account.CooldownUntil

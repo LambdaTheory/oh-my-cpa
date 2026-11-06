@@ -142,6 +142,8 @@ test('explicit route entries under mapped directories retain narrow lazy plans',
     'web/src/pages/playground/PlaygroundPage.tsx',
     'web/src/pages/oauthManagement/OAuthManagementPage.tsx',
     'web/src/pages/pricing/PricingPage.tsx',
+    'web/src/pages/insights/InsightsPage.tsx',
+    'web/src/pages/repo-key/RepoKeyApplyPage.tsx',
   ]) {
     const impact = impactOf({
       ...LAZY_CONSOLE,
@@ -375,6 +377,20 @@ test('every page the router loads has a scenario rule', () => {
   const routed = discoverRoutedPages(realGraph);
   const unnamed = routed.filter((file) => planScenarios([file], ALL, { ...realGraph, isAdditionOnly: () => false }).ids.length === ALL.length);
   assert.deepEqual(unnamed, []);
+});
+
+test('Insights and repository approvals select the scenarios that open their routes', () => {
+  for (const [files, ids] of [
+    [['web/src/pages/insights/InsightsPage.tsx', 'web/src/pages/insights/components/KeyDetailDrawer.tsx', 'web/src/pages/insights/insights.module.css'], ['insights']],
+    [['web/src/pages/repo-key/RepoKeyApplyPage.tsx', 'web/src/pages/repo-key/RepoKeyApplyPage.module.css'], ['repo-key-apply', 'repo-key-approval']],
+  ]) {
+    for (const id of ids) {
+      assert.ok(ALL.includes(id), `${id} must be a registered browser scenario`);
+    }
+    for (const file of files) {
+      assert.deepEqual(planScenarios([file], ALL, { ...realGraph, isAdditionOnly: () => false }).ids, ids, file);
+    }
+  }
 });
 
 test('the real registry can be attributed', () => {

@@ -31,33 +31,20 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 			elements = append(elements, markdown(msg.Notice))
 		}
 	}
-	count := min(len(alerts), maxDecisionPoints)
-	for _, alert := range alerts[:count] {
-		elements = append(elements, markdown("• "+decisionPoint(alert)))
+	risks := decisionRiskAlerts(alerts)
+	count := min(len(risks), maxDecisionPoints)
+	for _, alert := range risks[:count] {
+		elements = append(elements, markdown("• "+decisionPoint(alert)+"\n"+r.alertClock(alert)))
 	}
-	observedAt := time.Time{}
-	if msg.Report != nil {
-		observedAt = msg.Report.GeneratedAt
+	meta := "时间仅对应标注的证据来源"
+	if len(risks) == 0 && msg.Report != nil && reportEvidenceHealthy(*msg.Report, messageTime(msg)) {
+		meta = r.healthyClock(msg)
 	}
-	for _, alert := range alerts {
-		if !alert.ObservedAt.IsZero() && (observedAt.IsZero() || alert.ObservedAt.Before(observedAt)) {
-			observedAt = alert.ObservedAt
-		}
+	if len(risks) > count {
+		meta += fmt.Sprintf(" · 另有 %d 项，请在控制台查看", len(risks)-count)
 	}
-	meta := "观察时间数据缺失"
-	if !observedAt.IsZero() {
-		meta = "观察时间 " + r.formatTime(observedAt)
-	}
-	if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
-		// The card carries risk only: stale, undecidable and lasting windows stay in
-		// the console, so say so in the subtitle.
-		meta = "只推撑不到重置的窗口 · " + meta
-	}
-	if msg.Freshness != "" {
-		meta += " · " + compactText(msg.Freshness, 40)
-	}
-	if len(alerts) > count {
-		meta += fmt.Sprintf(" · 另有 %d 项，请在控制台查看", len(alerts)-count)
+	if diagnostic := r.diagnosticText(msg, risks[:count]); diagnostic != "" {
+		meta += "\n" + diagnostic
 	}
 	elements = append(elements, markdown(meta))
 	elements = append(elements, r.consoleButton())
@@ -97,14 +84,22 @@ func cardColor(msg Message) string {
 
 // This marker distinguishes a healthy morning digest from absent report data.
 const statusHealthy = "status_healthy"
+const statusUnknown = "status_data_unknown"
+
+func unknownDataAlert(now time.Time) Alert {
+	return Alert{Kind: statusUnknown, Title: "数据缺失或已过期，当前状态未知", Advice: "查看数据质量诊断与最近采集结果", OccurredAt: now}
+}
 
 func reportDecisionAlerts(rep Report, has bool, now time.Time) []Alert {
 	if !has || len(rep.Providers) == 0 {
-		return []Alert{{Kind: AlertReadingMissing, Title: "数据缺失", Advice: "检查采集链路后再决定额度安排", Severity: SeverityWarn, OccurredAt: now}}
+		return []Alert{unknownDataAlert(now)}
 	}
 	alerts := decisionAlerts(Message{Report: &rep, EvaluatedAt: now})
 	if len(alerts) == 0 {
-		return []Alert{{Kind: statusHealthy, Title: "当前读数未发现异常", Advice: "保持现有额度安排", OccurredAt: now, ObservedAt: rep.GeneratedAt}}
+		if !reportEvidenceHealthy(rep, now) {
+			return []Alert{unknownDataAlert(now)}
+		}
+		return []Alert{{Kind: statusHealthy, Title: "当前读数未发现异常", Advice: "保持现有额度安排", OccurredAt: now}}
 	}
 	return alerts
 }

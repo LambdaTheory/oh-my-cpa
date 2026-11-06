@@ -9,6 +9,7 @@ import (
 const (
 	ServiceTierFromResponse = "response"
 	ServiceTierFromRequest  = "request"
+	ServiceTierFromOutbound = "outbound"
 )
 
 // serviceTierAuto is the caller's "let the upstream decide": it names no tier,
@@ -21,7 +22,8 @@ func NormalizeServiceTier(value string) string {
 }
 
 // BilledServiceTier names the service tier a request is priced on and where it
-// came from. The tier the upstream reports it answered on is authoritative: a
+// came from under the original response-first policy. Historical cost snapshots
+// without a stored selection retain this policy. For providers other than Codex a
 // requested priority tier can be served on the default lane. An older gateway
 // or an upstream that reports nothing leaves only the requested tier, which is
 // then used as the caller's explicit choice. Auto and empty name no tier, so
@@ -34,6 +36,31 @@ func BilledServiceTier(response, requested string) (tier, source string) {
 		return tier, ServiceTierFromRequest
 	}
 	return "", ""
+}
+
+// ResolveServiceTier keeps provider-specific evidence separate from the raw
+// request and response. Codex reports default/auto even for Fast requests, so
+// the final outbound tier takes precedence over its client choice. Missing
+// outbound evidence retains the prior policy; explicit auto never falls through.
+func ResolveServiceTier(provider, executor, response, requested, effective string) (tier, source string) {
+	isCodex := NormalizeServiceTier(provider) == "codex"
+	switch NormalizeServiceTier(executor) {
+	case "codexexecutor", "codexwebsocketsexecutor":
+		isCodex = true
+	}
+	if tier = NormalizeServiceTier(effective); isCodex && tier != "" {
+		if tier == serviceTierAuto {
+			tier = ""
+		}
+		return tier, ServiceTierFromOutbound
+	}
+	if tier = NormalizeServiceTier(requested); isCodex && tier != "" {
+		if tier == serviceTierAuto {
+			tier = ""
+		}
+		return tier, ServiceTierFromRequest
+	}
+	return BilledServiceTier(response, requested)
 }
 
 // matchesServiceTier reports whether a tier's service-tier condition holds; a

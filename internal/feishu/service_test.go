@@ -274,7 +274,7 @@ func waitSignal(t *testing.T, ch chan struct{}) bool {
 func invalidReport(now time.Time) Report {
 	return Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", Label: "acct", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
+		Accounts: []AccountReport{{Key: "a1", Label: "acct", State: StateInvalid, AuthSignalObservedAt: now, LastSuccessAt: now.Add(-time.Hour)}},
 	}}}
 }
 
@@ -373,6 +373,7 @@ func TestQuietQueueMergesAndSendsAtQuietEnd(t *testing.T) {
 	}
 
 	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
+	env.source.report = invalidReport(*env.clock)
 	service.tick(context.Background())
 	if sends, _ := env.sender.counts(); sends != 1 {
 		t.Fatalf("quiet end should send the merged notification, got %d", sends)
@@ -724,7 +725,7 @@ func notificationOfKind(outbox []Notification, kind string) (Notification, bool)
 func invalidReportWith(now time.Time, accounts ...string) Report {
 	reports := make([]AccountReport, 0, len(accounts))
 	for _, key := range accounts {
-		reports = append(reports, AccountReport{Key: key, Label: key, State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)})
+		reports = append(reports, AccountReport{Key: key, Label: key, State: StateInvalid, AuthSignalObservedAt: now, LastSuccessAt: now.Add(-time.Hour)})
 	}
 	return Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "codex", Accounts: reports}}}
 }
@@ -744,6 +745,9 @@ func mixedReport(now time.Time, states map[string]string) Report {
 		account := AccountReport{
 			Key: key, Label: key, State: state,
 			OK: state == StateHealthy, LastSuccessAt: now.Add(-time.Hour),
+		}
+		if account.State == StateInvalid {
+			account.AuthSignalObservedAt = now
 		}
 		if account.OK {
 			account.ObservedAt, account.LastSuccessAt = now, now
@@ -917,6 +921,7 @@ func TestFailedMergedQuietSendRetriesWithoutLosingOrDuplicating(t *testing.T) {
 
 	env.sender.failSends = 2 // fail the full card and its simplified fallback
 	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
+	env.source.report = invalidReportWith(*env.clock, "a1", "a2")
 	service.tick(context.Background())
 	if sends, _ := env.sender.counts(); sends != 0 {
 		t.Fatalf("a failed batch send must not count as sent, got %d", sends)

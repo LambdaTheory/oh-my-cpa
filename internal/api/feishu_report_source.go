@@ -79,6 +79,10 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 		if err != nil {
 			h.logger.Warn("feishu report: collection signal read failed", "error", err)
 		}
+		attempts, err := h.repo.GetQuotaRefreshAttempts(ctx, authIndexes)
+		if err != nil {
+			h.logger.Warn("feishu report: refresh attempt read failed", "error", err)
+		}
 		cooldowns, err := h.repo.BatchCorrelatedCooldowns(ctx, authIndexes, nowMS)
 		if err != nil {
 			h.logger.Warn("feishu report: cooldown read failed", "error", err)
@@ -86,6 +90,7 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 		for _, entry := range metadata {
 			snapshot := snapshots[entry.AuthIndex]
 			account := feishuAccountReport(entry, snapshot, signals[entry.AuthIndex], now)
+			applyQuotaRefreshAttempt(&account, attempts[entry.AuthIndex])
 			if cooldown, ok := cooldowns[entry.AuthIndex]; ok && cooldown.IsActive {
 				account.CooldownUntil = timeFromMS(cooldown.RecoverAtMS)
 			}
@@ -110,7 +115,11 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	// outage evidence because there is nothing for an operator to repair.
 	if ollamaAccounts, err := h.repo.ListOllamaAccounts(ctx); err == nil {
 		for _, account := range ollamaAccounts {
-			accountsByProvider[ollama.Provider] = append(accountsByProvider[ollama.Provider], ollamaAccountReport(account))
+			projected := ollamaAccountReport(account)
+			if projected.AuthFailed && !projected.HasFreshAuthFailure(now) {
+				projected.State = feishu.StateStale
+			}
+			accountsByProvider[ollama.Provider] = append(accountsByProvider[ollama.Provider], projected)
 		}
 	} else {
 		h.logger.Warn("feishu report: ollama account read failed", "error", err)
@@ -202,6 +211,13 @@ func feishuAccountReport(meta repository.FeishuCredentialMetadata, snapshot repo
 		account.State = feishu.StateStale
 	}
 	applyQuotaSignal(&account, signal, hasSnapshot, now)
+	if account.State == feishu.StateInvalid && !account.AuthFailed {
+		account.AuthFailed = true
+		account.AuthSignalObservedAt = account.ObservedAt
+		if !account.HasFreshAuthFailure(now) {
+			account.State = feishu.StateStale
+		}
+	}
 	return account
 }
 
@@ -213,20 +229,22 @@ func applyQuotaSignal(account *feishu.AccountReport, signal repository.FeishuAcc
 	if account == nil {
 		return
 	}
-	account.AttemptedAt = signal.ObservedAt
 	account.CollectionFailed = signal.State == repository.FeishuSignalTransport || signal.State == repository.FeishuSignalParse || signal.State == repository.FeishuSignalUnknown
-	if account.ObservedAt.After(account.AttemptedAt) {
-		account.AttemptedAt = account.ObservedAt
+	if account.CollectionFailed {
+		account.CollectionSignalObservedAt = signal.ObservedAt
+	}
+	if account.OK && account.ObservedAt.After(signal.ObservedAt) {
 		account.CollectionFailed = false
 	}
 	switch strings.TrimSpace(signal.State) {
 	case repository.FeishuSignalAuthInvalid:
+		account.AuthSignalObservedAt = signal.ObservedAt
 		// A successful reading newer than the auth failure is positive recovery.
 		if hasSnapshot && account.OK && account.ObservedAt.After(signal.ObservedAt) {
 			return
 		}
 		account.AuthFailed = true
-		if signalFresh(signal.ObservedAt, now) {
+		if account.HasFreshAuthFailure(now) {
 			account.State = feishu.StateInvalid
 		} else {
 			// Stale auth: do not raise a new alert, and do not claim recovery.
@@ -247,17 +265,28 @@ func applyQuotaSignal(account *feishu.AccountReport, signal repository.FeishuAcc
 	}
 }
 
-// signalFresh reports whether a collection signal's observation instant is recent
-// enough to be current evidence. A zero instant is unknown, never fresh.
-func signalFresh(observedAt, now time.Time) bool {
-	if observedAt.IsZero() {
-		return false
+// applyQuotaRefreshAttempt keeps collection health independent of an auth signal
+// that may intentionally remain latched through later non-auth failures. Only
+// bounded outcome/reason enums enter the notification projection, never summaries.
+func applyQuotaRefreshAttempt(account *feishu.AccountReport, attempt repository.QuotaRefreshAttempt) {
+	if attempt.AttemptedAtMS <= 0 {
+		return
 	}
-	age := now.Sub(observedAt)
-	if age < 0 {
-		age = 0
+	account.AttemptedAt = time.UnixMilli(attempt.AttemptedAtMS).UTC()
+	switch attempt.Outcome {
+	case "success", "failed", "rate_limited":
+		account.AttemptOutcome = attempt.Outcome
+	default:
+		account.AttemptOutcome = "unknown"
 	}
-	return age <= feishu.DefaultFreshWindow
+	switch attempt.Reason {
+	case "auth", "timeout", "network", "http", "parse", "unknown":
+		account.AttemptReason = attempt.Reason
+	}
+	account.CollectionFailed = account.AttemptOutcome != "success"
+	if account.OK && account.ObservedAt.After(account.AttemptedAt) {
+		account.CollectionFailed = false
+	}
 }
 
 // ollamaAccountReport projects one persisted Ollama account. It reads only the
@@ -275,14 +304,29 @@ func ollamaAccountReport(account repository.OllamaAccount) feishu.AccountReport 
 		report.AttemptedAt = time.UnixMilli(*account.LastObservedAtMS).UTC()
 	}
 	report.CollectionFailed = account.Status == ollama.StatusTransportError || account.Status == ollama.StatusParseError
+	report.AuthFailed = account.Status == ollama.StatusAuthInvalid
+	if report.AuthFailed {
+		report.AuthSignalObservedAt = report.AttemptedAt
+	}
+	report.AttemptOutcome = "unknown"
+	if account.Status == ollama.StatusOK {
+		report.AttemptOutcome = "success"
+	} else if report.CollectionFailed || report.AuthFailed {
+		report.AttemptOutcome = "failed"
+		if report.AuthFailed {
+			report.AttemptReason = "auth"
+		} else if account.Status == ollama.StatusParseError {
+			report.AttemptReason = "parse"
+		} else {
+			report.AttemptReason = "unknown"
+		}
+	}
 	report.OK = strings.EqualFold(strings.TrimSpace(account.Status), ollama.StatusOK) && hasNumericWindow(windows)
 	if account.LastSuccessAtMS != nil && *account.LastSuccessAtMS > 0 {
 		report.LastSuccessAt = time.UnixMilli(*account.LastSuccessAtMS).UTC()
 	}
 	if account.QuotaObservedAtMS != nil && *account.QuotaObservedAtMS > 0 {
 		report.ObservedAt = time.UnixMilli(*account.QuotaObservedAtMS).UTC()
-	} else if account.LastObservedAtMS != nil && *account.LastObservedAtMS > 0 {
-		report.ObservedAt = time.UnixMilli(*account.LastObservedAtMS).UTC()
 	}
 	return report
 }

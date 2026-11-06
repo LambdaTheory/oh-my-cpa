@@ -146,6 +146,10 @@ func (h *Handler) createClientAPIKey(writer http.ResponseWriter, request *http.R
 	createdIndex, err := h.operationsService().CreateKey(request.Context(), newKey, "")
 	if err != nil {
 		_ = h.recordAudit(request, "api_key.create", "client_api_key", fmt.Sprintf("index:%d", len(currentKeys)), "failure", map[string]any{"error": err.Error()})
+		if err.Error() == "resource_conflict" {
+			writeError(writer, http.StatusConflict, "the key already exists or belongs to a repository; use the repository approval flow")
+			return
+		}
 		writeCPAFacadeError(writer, err)
 		return
 	}

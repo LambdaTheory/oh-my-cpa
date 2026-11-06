@@ -76,8 +76,8 @@ export function RepoKeyApplyPage() {
 
   return (
     <div className="auth-shell" data-testid="repo-key-apply-page">
-      <main className="auth-main">
-        <section className={`auth-card ${styles['card']}`} aria-labelledby="repo-key-apply-title" aria-busy={review.isPending || undefined}>
+      <main className={`auth-main ${styles['main']}`}>
+        <section className={`auth-card ${styles['card']}`} aria-labelledby="repo-key-apply-title" aria-busy={(canRead && review.isPending) || undefined}>
           <h1 id="repo-key-apply-title" className="terminal-title auth-title">{title}</h1>
 
           {isDemo && <p className={styles['intro']}>{t('repo_keys.subtitle')}</p>}
@@ -94,7 +94,7 @@ export function RepoKeyApplyPage() {
                 <dl className={styles['facts']}>
                   <div>
                     <dt>{t('repo_keys.col_repo')}</dt>
-                    <dd className={styles['mono']}>{application.repo}</dd>
+                    <dd className={styles['mono']}>{application.repo_display || application.repo}</dd>
                   </div>
                   <div>
                     <dt>{t('repo_keys.col_caller')}</dt>

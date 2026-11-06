@@ -74,6 +74,7 @@ type RepoKeyApplication struct {
 	ID                   string `json:"id"`
 	InstanceID           string `json:"instance_id"`
 	RepoID               string `json:"repo_id"`
+	RepoDisplay          string `json:"repo_display"`
 	RepoHasRemote        bool   `json:"repo_has_remote"`
 	AgentName            string `json:"agent_name"`
 	DeviceName           string `json:"device_name"`
@@ -147,7 +148,7 @@ const repoKeyApplicationColumns = `id, instance_id, repo_id, repo_has_remote, ag
 	purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source, binding_id,
 	key_fingerprint, key_mask, decided_by, decided_at_ms, reject_reason, authorization_token_hash,
 	ciphertext, token_expires_at_ms, first_delivered_at_ms, created_at_ms, updated_at_ms,
-	request_kind, target_binding_id, decision_reason`
+	request_kind, target_binding_id, decision_reason, repo_display`
 
 func scanRepoKeyBinding(scanner interface{ Scan(...any) error }) (RepoKeyBinding, error) {
 	var binding RepoKeyBinding
@@ -179,7 +180,7 @@ func scanRepoKeyApplication(scanner interface{ Scan(...any) error }) (RepoKeyApp
 		&application.DecidedBy, &decidedAt, &application.RejectReason,
 		&application.AuthorizationTokenHash, &application.Ciphertext, &application.TokenExpiresAtMS, &deliveredAt,
 		&application.CreatedAtMS, &application.UpdatedAtMS,
-		&application.RequestKind, &application.TargetBindingID, &application.DecisionReason,
+		&application.RequestKind, &application.TargetBindingID, &application.DecisionReason, &application.RepoDisplay,
 	)
 	application.RepoHasRemote = hasRemote == 1
 	if decidedAt.Valid {
@@ -305,11 +306,25 @@ func (r *Repository) ListRepoKeyBindings(ctx context.Context, instanceID string)
 // hold at most one active key; the partial unique index turns a second one into a
 // refusal instead of a silent duplicate.
 func (r *Repository) CreateRepoKeyBinding(ctx context.Context, binding RepoKeyBinding, nowMS int64, audit AuditEvent) (RepoKeyBinding, error) {
+	tx, err := r.SQL().BeginTx(ctx, nil)
+	if err != nil {
+		return RepoKeyBinding{}, fmt.Errorf("begin create repo key binding: %w", err)
+	}
+	defer tx.Rollback()
+	binding, err = createRepoKeyBindingTx(ctx, tx, binding, nowMS, audit)
+	if err != nil {
+		return RepoKeyBinding{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return RepoKeyBinding{}, fmt.Errorf("commit create repo key binding: %w", err)
+	}
+	return binding, nil
+}
+
+func createRepoKeyBindingTx(ctx context.Context, tx *sql.Tx, binding RepoKeyBinding, nowMS int64, audit AuditEvent) (RepoKeyBinding, error) {
 	if strings.TrimSpace(binding.RepoID) == "" || strings.TrimSpace(binding.KeyFingerprint) == "" {
 		return RepoKeyBinding{}, ErrRepoKeyInvalid
 	}
-	// The caller may choose the id so its platform event can name this binding as the
-	// trace of the reissue.
 	if strings.TrimSpace(binding.ID) == "" {
 		binding.ID = uuid.NewString()
 	}
@@ -319,18 +334,12 @@ func (r *Repository) CreateRepoKeyBinding(ctx context.Context, binding RepoKeyBi
 	binding.StoppedBy = ""
 	binding.StopCategory = ""
 	binding.StopReason = ""
-
-	tx, err := r.SQL().BeginTx(ctx, nil)
-	if err != nil {
-		return RepoKeyBinding{}, fmt.Errorf("begin create repo key binding: %w", err)
-	}
-	defer tx.Rollback()
-	if err = writeRepoKeyAuditTx(ctx, tx, audit, nowMS, bindingKeyTarget(binding.RepoID, binding.KeyFingerprint), map[string]any{
+	if err := writeRepoKeyAuditTx(ctx, tx, audit, nowMS, bindingKeyTarget(binding.RepoID, binding.KeyFingerprint), map[string]any{
 		"repo": binding.RepoID, "repo_has_remote": binding.RepoHasRemote, "key_mask": binding.KeyMask,
 	}); err != nil {
 		return RepoKeyBinding{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO repo_key_bindings (id, instance_id, repo_id, repo_has_remote, key_fingerprint, key_mask,
 			status, created_at_ms, created_by, key_sealed)
 		VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
@@ -340,9 +349,6 @@ func (r *Repository) CreateRepoKeyBinding(ctx context.Context, binding RepoKeyBi
 			return RepoKeyBinding{}, ErrRepoKeyConflict
 		}
 		return RepoKeyBinding{}, fmt.Errorf("create repo key binding: %w", err)
-	}
-	if err = tx.Commit(); err != nil {
-		return RepoKeyBinding{}, fmt.Errorf("commit create repo key binding: %w", err)
 	}
 	return binding, nil
 }
@@ -630,7 +636,8 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		// is refreshed: delivery must go to the key the operator is shown, and a
 		// changed key still needs the human decision it is waiting for (AC-34).
 		unchanged := existing.PublicKeyFingerprint == application.PublicKeyFingerprint &&
-			existing.Purpose == application.Purpose &&
+			existing.DeviceName == application.DeviceName && existing.Source == application.Source &&
+			existing.Purpose == application.Purpose && existing.RepoDisplay == application.RepoDisplay &&
 			existing.RequestKind == application.RequestKind &&
 			existing.TargetBindingID == application.TargetBindingID
 		if !unchanged {
@@ -650,16 +657,20 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 			}
 			if _, err = tx.ExecContext(ctx, `
 				UPDATE repo_key_applications SET purpose = ?, public_key = ?, public_key_fingerprint = ?,
-					key_algorithm = ?, request_kind = ?, target_binding_id = ?, updated_at_ms = ? WHERE id = ?`,
+					key_algorithm = ?, device_name = ?, source = ?, kind = ?, request_kind = ?, target_binding_id = ?, repo_display = ?, updated_at_ms = ? WHERE id = ?`,
 				application.Purpose, application.PublicKey, application.PublicKeyFingerprint,
-				application.KeyAlgorithm, application.RequestKind, application.TargetBindingID,
-				nowMS, existing.ID); err != nil {
+				application.KeyAlgorithm, application.DeviceName, application.Source, application.Kind, application.RequestKind, application.TargetBindingID,
+				application.RepoDisplay, nowMS, existing.ID); err != nil {
 				return RepoKeyApplication{}, false, fmt.Errorf("refresh pending repo key application: %w", err)
 			}
+			existing.RepoDisplay = application.RepoDisplay
 			existing.Purpose = application.Purpose
 			existing.PublicKey = application.PublicKey
 			existing.PublicKeyFingerprint = application.PublicKeyFingerprint
 			existing.KeyAlgorithm = application.KeyAlgorithm
+			existing.DeviceName = application.DeviceName
+			existing.Source = application.Source
+			existing.Kind = application.Kind
 			existing.RequestKind = application.RequestKind
 			existing.TargetBindingID = application.TargetBindingID
 		}
@@ -695,13 +706,13 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		INSERT INTO repo_key_applications (id, instance_id, repo_id, repo_has_remote, agent_name, device_name,
 			purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source,
 			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms,
-			request_kind, target_binding_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			request_kind, target_binding_id, repo_display)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		application.ID, application.InstanceID, application.RepoID, boolToInt(application.RepoHasRemote),
 		application.AgentName, application.DeviceName, application.Purpose, application.Kind,
 		application.PublicKey, application.PublicKeyFingerprint, application.KeyAlgorithm, application.Source,
 		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS,
-		application.RequestKind, application.TargetBindingID); err != nil {
+		application.RequestKind, application.TargetBindingID, application.RepoDisplay); err != nil {
 		if isUniqueViolation(err) {
 			return RepoKeyApplication{}, false, ErrRepoKeyApplicationPending
 		}
@@ -711,6 +722,18 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		return RepoKeyApplication{}, false, fmt.Errorf("commit create repo key application: %w", err)
 	}
 	return application, true, nil
+}
+
+// PendingRepoKeyApplication returns the queue entry AC-28 requires callers to reuse.
+func (r *Repository) PendingRepoKeyApplication(ctx context.Context, instanceID, repoID, agentName string) (RepoKeyApplication, error) {
+	application, err := scanRepoKeyApplication(r.SQL().QueryRowContext(ctx, `
+		SELECT `+repoKeyApplicationColumns+` FROM repo_key_applications
+		WHERE instance_id = ? AND repo_id = ? AND agent_name = ? AND status = 'pending'`,
+		instanceID, repoID, agentName))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RepoKeyApplication{}, ErrRepoKeyApplicationNotFound
+	}
+	return application, err
 }
 
 // GetRepoKeyApplication reads one application by id.
@@ -827,13 +850,13 @@ func (r *Repository) CreateApprovedRepoKeyApplication(ctx context.Context, appli
 		INSERT INTO repo_key_applications (id, instance_id, repo_id, repo_has_remote, agent_name, device_name,
 			purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source,
 			binding_id, key_fingerprint, key_mask, decided_at_ms, ciphertext,
-			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms, repo_display)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		application.ID, application.InstanceID, application.RepoID, boolToInt(application.RepoHasRemote),
 		application.AgentName, application.DeviceName, application.Purpose, application.Kind,
 		application.PublicKey, application.PublicKeyFingerprint, application.KeyAlgorithm, application.Source,
 		application.BindingID, application.KeyFingerprint, application.KeyMask, nowMS, application.Ciphertext,
-		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS); err != nil {
+		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS, application.RepoDisplay); err != nil {
 		return RepoKeyApplication{}, fmt.Errorf("create approved repo key application: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -897,6 +920,9 @@ type ApplicationDecision struct {
 	// Ciphertext is the envelope sealed to the application's public key, written together
 	// with the approval so an approved application is always fetchable.
 	Ciphertext string
+	// NewBinding joins provisional CPA issuance to the winning decision's transaction.
+	NewBinding   *RepoKeyBinding
+	BindingAudit AuditEvent
 }
 
 // DecideRepoKeyApplication applies the operator's decision exactly once.
@@ -927,6 +953,11 @@ func (r *Repository) DecideRepoKeyApplication(ctx context.Context, decision Appl
 		// keeps "one action, two places" from becoming a second approval (AC-8).
 		return application, nil
 	}
+	if decision.Approve && decision.NewBinding != nil {
+		if _, err = createRepoKeyBindingTx(ctx, tx, *decision.NewBinding, nowMS, decision.BindingAudit); err != nil {
+			return RepoKeyApplication{}, err
+		}
+	}
 	target := bindingKeyTarget(application.RepoID, application.PublicKeyFingerprint)
 	details := map[string]any{"repo": application.RepoID, "agent": application.AgentName, "kind": application.Kind}
 	if !decision.Approve {
@@ -951,6 +982,26 @@ func (r *Repository) DecideRepoKeyApplication(ctx context.Context, decision Appl
 			kind, decision.BindingID, decision.KeyFingerprint, decision.KeyMask,
 			decision.DecidedBy, nowMS, decision.DecisionReason, decision.Ciphertext, nowMS, applicationID); err != nil {
 			return RepoKeyApplication{}, fmt.Errorf("approve repo key application: %w", err)
+		}
+		// Only a committed approval may change the key used by future applications or
+		// grant automatic access. Rejections and failed audit writes leave both intact.
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO repo_key_callers (id, instance_id, agent_name, device_name, public_key,
+				public_key_fingerprint, key_algorithm, created_at_ms, updated_at_ms)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(instance_id, agent_name, device_name) DO UPDATE SET
+				public_key = excluded.public_key, public_key_fingerprint = excluded.public_key_fingerprint,
+				key_algorithm = excluded.key_algorithm, updated_at_ms = excluded.updated_at_ms`,
+			uuid.NewString(), application.InstanceID, application.AgentName, application.DeviceName,
+			application.PublicKey, application.PublicKeyFingerprint, application.KeyAlgorithm, nowMS, nowMS); err != nil {
+			return RepoKeyApplication{}, fmt.Errorf("register approved repo key caller: %w", err)
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO repo_key_recipients (instance_id, repo_id, agent_name, device_name, approved_at_ms, approved_by)
+			VALUES (?, ?, ?, ?, ?, ?)
+			ON CONFLICT(instance_id, repo_id, agent_name, device_name) DO NOTHING`,
+			application.InstanceID, application.RepoID, application.AgentName, application.DeviceName, nowMS, decision.DecidedBy); err != nil {
+			return RepoKeyApplication{}, fmt.Errorf("register approved repo key recipient: %w", err)
 		}
 	} else {
 		if _, err = tx.ExecContext(ctx, `
@@ -1175,9 +1226,8 @@ func (r *Repository) ListRepoKeyBindingAgentNames(ctx context.Context, instanceI
 	return agents, rows.Err()
 }
 
-// LatestRepoKeyApplicationForCaller returns the most recent application of one agent on one
-// device, whatever its outcome. The approval page compares its public-key fingerprint with
-// the one being applied for now, which is how a changed identity becomes visible (AC-34).
+// LatestRepoKeyApplicationForCaller retains a submitted key for another manual
+// application when the caller has no approved registration. It grants no access.
 func (r *Repository) LatestRepoKeyApplicationForCaller(ctx context.Context, instanceID, agentName, deviceName string) (RepoKeyApplication, error) {
 	application, err := scanRepoKeyApplication(r.SQL().QueryRowContext(ctx, `
 		SELECT `+repoKeyApplicationColumns+` FROM repo_key_applications
@@ -1191,6 +1241,22 @@ func (r *Repository) LatestRepoKeyApplicationForCaller(ctx context.Context, inst
 		return RepoKeyApplication{}, fmt.Errorf("read latest repo key application: %w", err)
 	}
 	return application, nil
+}
+
+// LatestApprovedRepoKeyApplicationForCaller is the last human-confirmed key, never a
+// pending replacement or an automatic application. An empty repoID spans repositories.
+func (r *Repository) LatestApprovedRepoKeyApplicationForCaller(ctx context.Context, instanceID, repoID, agentName, deviceName, exceptID string) (RepoKeyApplication, error) {
+	application, err := scanRepoKeyApplication(r.SQL().QueryRowContext(ctx, `
+		SELECT `+repoKeyApplicationColumns+` FROM repo_key_applications
+		WHERE instance_id = ? AND agent_name = ? AND device_name = ?
+			AND status = 'approved' AND decided_by <> '' AND public_key_fingerprint <> ''
+			AND id <> ? AND (? = '' OR repo_id = ?)
+		ORDER BY decided_at_ms DESC, created_at_ms DESC, rowid DESC LIMIT 1`,
+		instanceID, agentName, deviceName, exceptID, repoID, repoID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RepoKeyApplication{}, ErrRepoKeyApplicationNotFound
+	}
+	return application, err
 }
 
 func writeRepoKeyAuditTx(ctx context.Context, tx *sql.Tx, audit AuditEvent, nowMS int64, targetID string, details map[string]any) error {

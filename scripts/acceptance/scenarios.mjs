@@ -1,6 +1,9 @@
 import { modelSquare, modelSquareFixtures, modelSquareLedgerFixtures } from './probes/modelSquare.mjs';
 import { modelGroups, modelGroupsFixtures } from './probes/modelGroups.mjs';
+import { repoKeyApproval, repoKeyApprovalFixtures } from './probes/repoKeyApproval.mjs';
 import { mobileConsole } from './probes/mobileConsole.mjs';
+import { insights, insightsFixtures } from './probes/insights.mjs';
+import { repoKeyApply } from './probes/repoKeyApply.mjs';
 import { routeRenderError, routeLazyError } from './probes/routeError.mjs';
 import { agentWorkspace, agentExternal, agentFailureCopy, agentStream, agentNarrow, agentLive, agentQuestion, agentViews, agentReplace, agentAttach, agentFixtures } from './probes/agent.mjs';
 import { playground, playgroundFixtures, playgroundNarrow } from './probes/playground.mjs';
@@ -116,18 +119,6 @@ const routeErrorFixtures = () => [
   [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
 ];
 
-/**
- * The dashboard reads a redirected `/playground` lands on. The retired address now
- * renders the dashboard, so the two redirect scenarios own the same panel fixtures the
- * dashboard scenarios do rather than reaching the default shell with an undeclared read.
- */
-const retiredPlaygroundDashboardRoutes = () => [
-  [(url) => url.pathname.endsWith('/dashboard'), () => chartDashboard],
-  [(url) => url.pathname.endsWith('/dashboard/tail'), () => chartDashboard],
-  [(url) => url.pathname.endsWith('/dashboard/token-heatmap'), () => chartTokenHeatmap],
-  [(url) => url.pathname.endsWith('/dashboard/models'), () => chartDashboardModels],
-];
-
 // Shared list data keeps the phone sweep on the same wire shapes as the list scenario.
 const PHONE_LIST_ROUTES = [
   [(url) => url.pathname.endsWith('/management/api-keys'), () => ({
@@ -179,6 +170,18 @@ const PHONE_LIST_ROUTES = [
 
 export const SCENARIOS = [
   {
+    id: 'insights',
+    name: 'Insights paints its spend, opens key details and follows native Back on desktop and phones',
+    options: { routes: insightsFixtures() },
+    run: insights,
+  },
+  {
+    id: 'repo-key-apply',
+    name: 'a repository approval link fits a phone and replaces its controls after a reasoned decision',
+    options: { viewport: { width: 375, height: 844 } },
+    run: repoKeyApply,
+  },
+  {
     id: 'route-render-error',
     name: 'route render failures show branded recovery in every language and theme',
     options: { routes: routeErrorFixtures() },
@@ -207,6 +210,7 @@ export const SCENARIOS = [
   },
   { id: 'agent', name: 'Agent opens on a centred composer, names its model there, authorizes inline, remembers its target and recovers the server conversation', options: { routes: agentFixtures() }, run: agentWorkspace },
   { id: 'agent-external', name: 'an external agent\'s approval link opens a standalone consent screen, and Agent shows how to connect one over MCP', options: { routes: agentFixtures() }, run: agentExternal },
+  { id: 'repo-key-approval', name: 'repository approval facts, decisions and settled outcomes remain readable and hit-testable on desktop and phone', options: { routes: repoKeyApprovalFixtures() }, run: repoKeyApproval },
   { id: 'agent-question', name: 'Agent asks a question in the composer and continues once it is answered', options: { routes: agentFixtures() }, run: agentQuestion },
   { id: 'agent-live', name: 'Agent shows a sent message at once, queues the next one and keeps its reasoning', options: { routes: agentFixtures() }, run: agentLive },
   { id: 'agent-views', name: 'Agent draws a canvas from frozen rows, fills the viewport with it and saves it as an image', options: { routes: agentFixtures() }, run: agentViews },
@@ -215,8 +219,8 @@ export const SCENARIOS = [
   { id: 'agent-failure', name: 'Agent hands a refused message back and reports a failure as a sentence, not a code', options: { routes: agentFixtures() }, run: agentFailureCopy },
   { id: 'agent-stream', name: 'Agent coalesces tokens and follows live reasoning through Markdown layout changes', options: { routes: agentFixtures() }, run: agentStream },
   { id: 'agent-narrow', name: 'Agent keeps its model named in the composer and its drawer follows native Back on phones', options: { routes: agentFixtures(), viewport: { width: 320, height: 850 } }, run: agentNarrow },
-  { id: 'playground', name: 'the retired playground address redirects to the dashboard and the Agent workspace stays reachable', options: { routes: [...agentFixtures(), ...retiredPlaygroundDashboardRoutes()] }, run: playground },
-  { id: 'playground-narrow', name: 'the retired playground address redirects on a phone and the phone navigation offers no entry to it', options: { routes: [...agentFixtures(), ...retiredPlaygroundDashboardRoutes()], viewport: { width: 320, height: 850 } }, run: playgroundNarrow },
+  { id: 'playground', name: 'the authenticated Playground streams, inspects, persists and recovers model requests', options: { routes: agentFixtures() }, run: playground },
+  { id: 'playground-narrow', name: 'Playground settings follow native Back, fit a phone and remain reachable from navigation', options: { routes: agentFixtures(), viewport: { width: 320, height: 850 } }, run: playgroundNarrow },
   {
     id: 'omc-settings',
     name: 'OMC settings and the unit style it governs',
@@ -784,7 +788,10 @@ export const SCENARIOS = [
     options: {
       routes: [
         ...systemFixtures(),
-        [(url) => url.pathname.endsWith('/usage/facets'), () => alignmentFacets],
+        [(url) => url.pathname.endsWith('/usage/facets'), () => ({ facets: {
+          ...alignmentFacets,
+          resolved_service_tiers: [{ value: 'priority', requests: 125 }],
+        } })],
         [
           (url) => /\/usage\/events\/\d+$/.test(url.pathname),
           (url) => interactionRecordDetail(Number(url.pathname.split('/').pop())),

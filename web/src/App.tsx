@@ -27,8 +27,10 @@ import {
   ProvidersPage,
   ApiKeysPage,
   DashboardPage,
+  InsightsPage,
   AgentPage,
   AuthorizePage,
+  PlaygroundPage,
   RepoKeyApplyPage,
   ModelSquarePage,
   ModelGroupsPage,
@@ -127,7 +129,7 @@ const ThemedShell: React.FC = () => {
   );
 };
 
-const AppRoutes: React.FC = () => {
+export const AppRoutes: React.FC = () => {
   const config = getAppConfig();
   const router = React.useMemo(() => createBrowserRouter(
     [{
@@ -141,7 +143,8 @@ const AppRoutes: React.FC = () => {
       children: [
         { index: true, element: <Navigate to="/dashboard" replace /> },
         { path: 'dashboard', element: <DashboardPage /> },
-        { path: 'playground', element: <Navigate to="/dashboard" replace /> },
+        { path: 'insights', element: <InsightsPage /> },
+        { path: 'playground', element: config.demo ? <Navigate to="/dashboard" replace /> : <PlaygroundPage /> },
         { path: 'agent', element: <AgentPage /> },
         { path: 'model-square', element: <ModelSquarePage /> },
         { path: 'model-groups', element: <ModelGroupsPage /> },
@@ -180,7 +183,7 @@ const AppRoutes: React.FC = () => {
       ],
     }],
     { basename: config.basePath || undefined },
-  ), [config.basePath]);
+  ), [config.basePath, config.demo]);
 
   return (
     <AuthGate>

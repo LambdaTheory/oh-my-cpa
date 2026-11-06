@@ -102,9 +102,9 @@ func TestNormalizeRepo(t *testing.T) {
 		want      string
 		hasRemote bool
 	}{
-		{"LambdaTheory/oh-my-cpa", "LambdaTheory/oh-my-cpa", true},
-		{"https://github.com/LambdaTheory/oh-my-cpa.git", "LambdaTheory/oh-my-cpa", true},
-		{"git@github.com:LambdaTheory/oh-my-cpa.git", "LambdaTheory/oh-my-cpa", true},
+		{"LambdaTheory/oh-my-cpa", "lambdatheory/oh-my-cpa", true},
+		{"https://github.com/LambdaTheory/oh-my-cpa.git", "lambdatheory/oh-my-cpa", true},
+		{"git@github.com:LambdaTheory/oh-my-cpa.git", "lambdatheory/oh-my-cpa", true},
 		{"https://gitlab.com/team/project/", "gitlab.com/team/project", true},
 		{"E:/works/my-local-project", "my-local-project", false},
 		{"C:\\Users\\me\\scratch", "scratch", false},

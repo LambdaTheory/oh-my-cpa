@@ -53,6 +53,9 @@ type Handler struct {
 	auth       *auth.Manager
 	// usage reports the background capture pipeline; nil when ingestion is off.
 	usage usagePipeline
+	// usageMaintenance folds and rolls stored usage; nil in a demonstration and in
+	// handler tests, where retention is reported from configuration alone.
+	usageMaintenance UsageMaintenance
 	// pricing serves model prices and the OpenRouter sync; nil until SetPricing.
 	pricing PricingManager
 	// release observes both products' published versions; nil until SetRelease. Nil
@@ -286,6 +289,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/management/dashboard/models", h.dashboardModels)
 				v1.Get("/management/dashboard/providers", h.dashboardProviders)
 				v1.Get("/management/dashboard/predictions", h.dashboardPredictions)
+				v1.Get("/management/insights/cube", h.insightsCube)
+				v1.Get("/management/insights/rhythm", h.insightsRhythm)
 				v1.Get("/management/logs", h.managementLogs)
 				v1.Delete("/management/logs", h.clearManagementLogs)
 				v1.Get("/management/logs/status", h.managementLogsStatus)
@@ -441,6 +446,8 @@ func (h *Handler) routes() chi.Router {
 				v1.Get("/management/system/maintenance", h.getSystemMaintenance)
 				v1.Post("/management/system/maintenance/checkpoint", h.postSystemMaintenanceCheckpoint)
 				v1.Post("/management/system/maintenance/vacuum", h.postSystemMaintenanceVacuum)
+				v1.Get("/management/system/data-retention", h.getDataRetention)
+				v1.Put("/management/system/data-retention", h.putDataRetention)
 				v1.Get("/management/plugins", h.listPlugins)
 				v1.Get("/management/plugins/settings", h.getPluginSettings)
 				v1.Put("/management/plugins/settings", h.putPluginSettings)

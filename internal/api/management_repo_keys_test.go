@@ -196,7 +196,7 @@ func TestManagementRepoKeyEndpoints(t *testing.T) {
 	if err := json.Unmarshal(payload, &listed); err != nil || len(listed.Keys) != 1 {
 		t.Fatalf("listed keys = %s", payload)
 	}
-	if listed.Keys[0].Status != "active" || listed.Keys[0].Repo != "LambdaTheory/oh-my-cpa" ||
+	if listed.Keys[0].Status != "active" || listed.Keys[0].Repo != "lambdatheory/oh-my-cpa" ||
 		listed.Keys[0].KeyMask == "" || listed.Keys[0].KeyMask == issued {
 		t.Fatalf("listed key = %+v", listed.Keys[0])
 	}
@@ -433,7 +433,7 @@ func TestManagementRepoKeyRepoStatusEndpointShape(t *testing.T) {
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		t.Fatalf("repo status is not JSON: %s", payload)
 	}
-	if envelope.Repo == nil || envelope.Repo.State != "none" || envelope.Repo.Repo != "LambdaTheory/oh-my-cpa" {
+	if envelope.Repo == nil || envelope.Repo.State != "none" || envelope.Repo.Repo != "lambdatheory/oh-my-cpa" {
 		t.Fatalf("repo status = %s", payload)
 	}
 	if envelope.State != nil {

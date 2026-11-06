@@ -98,14 +98,22 @@ export function buildRequestExport(input: RequestExportInput): RequestExportDocu
     if (!masks.has('mode')) {
       put('reasoning_effort', event.reasoning_effort);
       put('service_tier', event.service_tier);
+      put('effective_service_tier', event.effective_service_tier);
       put('response_service_tier', event.response_service_tier);
+      put('resolved_service_tier', event.resolved_service_tier);
+      put('resolved_service_tier_source', event.resolved_service_tier_source);
       put('stream', event.stream);
     }
     if (!masks.has('latency')) {
       put('latency_ms', event.latency_ms);
       put('ttft_ms', event.ttft_ms);
     }
-    if (!masks.has('tps')) put('tokens_per_second', eventTokensPerSecond(event, input.tpsMode).tps);
+    if (!masks.has('tps')) {
+      const rate = eventTokensPerSecond(event, input.tpsMode);
+      put('tokens_per_second', rate.tps);
+      put('tps_basis', rate.basis);
+      put('tps_mode', input.tpsMode);
+    }
     if (!masks.has('tokens')) {
       const { cached, cache_read: cacheRead, cache_creation: cacheCreation, ...counts } = event.tokens;
       put('tokens', masks.has('cache') ? counts : { ...counts, cached, cache_read: cacheRead, cache_creation: cacheCreation });

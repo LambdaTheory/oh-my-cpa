@@ -127,7 +127,7 @@ func TestNotificationRecipientIsOnePerson(t *testing.T) {
 func TestPredictionUsesExhaustionClockAndSurplusIsQuiet(t *testing.T) {
 	now := mustTime("2026-10-26T17:00:00Z")
 	eta := now.Add(90 * time.Minute).UnixMilli()
-	item := PredictionDigestItem{Provider: "codex", CredentialLabel: "work", LastsUntilReset: &cannotLast, ExhaustionETAMS: &eta}
+	item := PredictionDigestItem{Provider: "codex", CredentialLabel: "work", LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), ExhaustionETAMS: &eta}
 	notification := predictionNotification([]PredictionDigestItem{item}, 0, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Alerts: notification.Alerts, Kind: notification.Kind}))
 	if !strings.Contains(payload, "预计 10-26 18:30 耗尽 · 撑不到重置") || !strings.Contains(payload, "实际 无法计算 · 期望 无法计算") {
@@ -176,7 +176,7 @@ func TestDecisionMergesForecastWithReadingAndKeepsStaleAuthUnknown(t *testing.T)
 func TestPredictionEpisodePersistsAndSharesLowQuotaIdentity(t *testing.T) {
 	now := mustTime("2026-10-26T12:00:00Z")
 	reset := now.Add(12 * time.Hour).UnixMilli()
-	item := PredictionDigestItem{Key: "synthetic", Provider: "codex", CredentialLabel: "work", WindowID: "7d", WindowKind: "weekly", ResetAtMS: &reset, LastsUntilReset: &cannotLast}
+	item := PredictionDigestItem{Key: "synthetic", Provider: "codex", CredentialLabel: "work", WindowID: "7d", WindowKind: "weekly", ResetAtMS: &reset, LastsUntilReset: &cannotLast, FreshWindowMS: (2 * time.Hour).Milliseconds()}
 	item.ResetAccuracy = "exact"
 	item.ObservedAtMS = now.UnixMilli()
 	job := &PredictionJob{service: NewService(Options{})}
@@ -193,6 +193,7 @@ func TestPredictionEpisodePersistsAndSharesLowQuotaIdentity(t *testing.T) {
 		t.Fatal("persisted event repeated")
 	}
 	morning := mustTime("2026-10-27T10:00:00Z")
+	item.ObservedAtMS = morning.UnixMilli()
 	if !job.queueFindings(reloaded, readyPredictionConfig(), morning, PredictionDigest{Items: []PredictionDigestItem{item}}) {
 		t.Fatal("morning recap lost an ongoing prediction")
 	}
@@ -218,7 +219,7 @@ func TestMorningPredictionFirstDoesNotRepeatLowQuota(t *testing.T) {
 	env := newTestEnv(t, Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "claude", Accounts: []AccountReport{{Key: "low", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(95, nil)}}}}}}, true)
 	*env.clock = now
 	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{Key: "forecast", Provider: "codex", LastsUntilReset: &cannotLast}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{Key: "forecast", Provider: "codex", LastsUntilReset: &cannotLast, ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
 	})
 	job.Activate()
 	job.tick(context.Background())
@@ -246,7 +247,7 @@ func TestMissingReportMorningDoesNotLeaveGlobalIncident(t *testing.T) {
 	env := newTestEnv(t, Report{}, false)
 	*env.clock = now
 	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{Key: "forecast", Provider: "codex", LastsUntilReset: &cannotLast}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{Key: "forecast", Provider: "codex", LastsUntilReset: &cannotLast, ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
 	})
 	job.tick(context.Background())
 	state, _ := env.store.Load(context.Background())

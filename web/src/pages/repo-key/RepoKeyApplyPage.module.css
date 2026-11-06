@@ -1,6 +1,11 @@
 /* The one-time approval link's screen. The shell, column and title are the sign-in page's
    (`auth-*` in index.css); these are the parts only this screen has. */
 
+/* This screen has no header child; keep its scroll pane out of the shell's fixed header row. */
+.main {
+  grid-row: 2;
+}
+
 .card {
   max-width: 520px;
 }
