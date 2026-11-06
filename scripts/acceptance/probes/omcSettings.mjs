@@ -236,6 +236,7 @@ export async function omcSettings({ base, page, check, context, expectProblem })
     'Model icons in request list',
     'Scheduled quota refresh',
     'Refresh after a quota resets',
+    'Request records',
     'Oh My CPA plugin registry',
     'Theme mode',
     'Light-mode palette',
