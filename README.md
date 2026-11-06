@@ -295,6 +295,7 @@ troubleshooting.
 <details>
 <summary><b>Observability</b></summary>
 
+- **Insights**: per-key, per-model, per-provider and per-credential comparison over today, yesterday, this or last week and month, rolling spans or custom ranges, each against the previous period, with each key's model mix, a traffic flow and an hour-of-day usage rhythm.
 - **Dashboard**: request volume, token throughput, cache hit rate and cost over presets from 15 minutes to 90 days, an all-time window since installation, or any custom range, plus a year-long token heatmap. Statistics are kept permanently; request records roll out of a configurable retention.
 - **Live routing**: a rolling minute of which models were called and which credentials and providers CPA sent them to. Each new request travels the map out to its credential and back, rerouted attempts and cooldowns included. The panel updates as records are stored, falls back to a short poll when the live stream is unavailable, and is shown on desktop widths.
 - **Model panels**: token trend and usage ring by call model or by requested model, with cost shares.
@@ -414,6 +415,8 @@ trusted agents and serve the console over HTTPS before connecting one remotely.
 | `OMCPA_DATA_DIR` | `./data` | Directory of the SQLite database; the Compose files set `/data` |
 | `OMCPA_PUBLIC_URL` | unset | The address browsers use; `https://` marks the session cookie `Secure` |
 | `OMCPA_USAGE_INGEST_MODE` | `auto` | `off` when another service collects this CPA's usage |
+| `OMCPA_USAGE_RETENTION_DAYS` | `90` | Days request records are kept, `0` for all; OMC Settings → Data retention overrides it. Dashboard statistics are permanent |
+| `OMCPA_USAGE_INBOX_RETENTION_DAYS` | `7` | Days captured payloads (raw records kept for re-decoding) are kept, `0` to follow request records |
 | `TZ` | system zone | Server calendar; keep it equal to CPA's. Containers default to UTC |
 
 The full reference, with deployment constraints and operational notes, is

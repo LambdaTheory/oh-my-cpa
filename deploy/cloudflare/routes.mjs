@@ -42,6 +42,23 @@ export function dashboardPresetOf(url) {
 }
 
 /**
+ * The Insights replay windows. The Worker rejects unsupported queries before
+ * serving the relative-preset or all-time snapshot selected here.
+ */
+const INSIGHTS_PRESETS = new Set([
+  '24h', '7d', '30d', '90d', 'all',
+]);
+
+/** The Insights preset a request is asking for. */
+export function insightsPresetOf(url) {
+  const preset = (url.searchParams.get('preset') ?? '').trim().toLowerCase();
+  return INSIGHTS_PRESETS.has(preset) ? preset : '7d';
+}
+
+/** Insights reads are calendar reads, which the Worker moves by whole weeks. */
+export const INSIGHTS_PATH_PREFIX = '/api/v1/management/insights/';
+
+/**
  * Routes that take no parameter, mapped from their path.
  *
  * A route whose answer does not depend on the query is served from a fixed name, which
@@ -76,11 +93,15 @@ const FIXED_ROUTES = new Map([
   ['/api/v1/management/system/updates', 'system-updates'],
   ['/api/v1/management/system/updater', 'system-updater'],
   ['/api/v1/management/system/maintenance', 'system-maintenance'],
+  ['/api/v1/management/system/data-retention', 'system-data-retention'],
   ['/api/v1/management/config', 'config'],
   ['/api/v1/management/config/source', 'config-source'],
   ['/api/v1/management/config/backups', 'config-backups'],
   ['/api/v1/management/providers', 'providers'],
   ['/api/v1/management/api-keys', 'api-keys'],
+  ['/api/v1/management/repo-keys', 'repo-keys'],
+  ['/api/v1/management/repo-keys/applications', 'repo-key-applications'],
+  ['/api/v1/management/repo-keys/audit-push', 'repo-key-audit-push'],
   ['/api/v1/management/client-key-aliases', 'client-key-aliases'],
   ['/api/v1/management/plugins', 'plugins'],
   ['/api/v1/management/plugins/settings', 'plugins-settings'],
@@ -168,6 +189,8 @@ const PARAMETERISED_ROUTES = [
         ? 'dashboard-token-heatmap-utc'
         : 'dashboard-token-heatmap-kuala-lumpur',
   },
+  { path: '/api/v1/management/insights/cube', resolve: (url) => `insights-cube-${insightsPresetOf(url)}` },
+  { path: '/api/v1/management/insights/rhythm', resolve: (url) => `insights-rhythm-${insightsPresetOf(url)}` },
   {
     path: '/api/v1/management/dashboard/models',
     resolve: (url) => {

@@ -45,6 +45,7 @@ const INPUTS = demoInputs;
  */
 const CONSOLE_ROUTES = [
   '/dashboard',
+  '/insights',
   '/model-square',
   '/model-groups',
   '/model-groups/:id',
@@ -71,6 +72,7 @@ const CONSOLE_ROUTES = [
  */
 const ROUTE_READS = {
   '/dashboard': ['overview', 'pricing-attention', 'dashboard-24h', 'dashboard-tail-24h', 'dashboard-models-call-24h', 'dashboard-models-model-24h', 'dashboard-token-heatmap-utc', 'dashboard-predictions', 'usage-routing', 'usage-live'],
+  '/insights': ['insights-cube-7d', 'insights-rhythm-7d', 'auth-files', 'providers'],
   '/model-square': ['model-square', 'pricing', 'usage-facets'],
   '/model-groups': ['model-groups', 'model-group-readings'],
   '/model-groups/:id': ['model-groups', 'model-group-readings'],

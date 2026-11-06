@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../src/i18n';
 import { UpdateAction, UpdateStatusLine, UpdaterSetup, UPDATER_INSTALL_COMMAND } from '../src/pages/SystemPage/UpdateControls';
+import { DataRetention } from '../src/pages/SystemPage/DataRetention';
 import { UPDATE_WATCH_LIMIT_MS, UPDATER_QUERY_KEY, useConsoleUpdate, type UpdateOutcome } from '../src/pages/SystemPage/useConsoleUpdate';
 import { deriveUpdateOffer } from '../src/pages/SystemPage/versionPresentation';
 import type { SystemProductVersion } from '../src/types/system';
@@ -231,4 +232,26 @@ it('offers the install command only to a deployment that can use it', async () =
   await screen.findByTestId('sys-updater-rejected');
   expect(screen.queryByTestId('sys-updater-setup')).toBeNull();
   rejected.close();
+});
+
+it('reports full auto-vacuum as returning space without a rebuild', async () => {
+  vi.stubGlobal('fetch', async (path: string) => {
+    if (String(path).includes('/management/system/data-retention')) {
+      return new Response(JSON.stringify({
+        request_record_days: 90, payload_days: 7, source: 'environment',
+        scheduled: true, next_pass_at_ms: null, last_pass_at_ms: null,
+        oldest_request_record_ms: null, policies: [],
+        storage: { auto_vacuum: 'full', free_page_bytes: 4096 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({}), { status: 404, headers: { 'Content-Type': 'application/json' } });
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const surface = render(
+    <React.StrictMode><App><QueryClientProvider client={client}><I18nProvider><DataRetention /></I18nProvider></QueryClientProvider></App></React.StrictMode>,
+  );
+  await screen.findByText('Returned after each cleanup');
+  expect(screen.queryByText('Returned once rebuilt')).toBeNull();
+  surface.unmount();
+  client.clear();
 });

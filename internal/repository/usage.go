@@ -252,17 +252,7 @@ func (r *Repository) CommitUsageDecoded(ctx context.Context, decoded []UsageDeco
 	}
 	defer observationWriter.close()
 
-	insert, err := tx.PrepareContext(ctx, `
-		INSERT INTO usage_events (
-			instance_id, event_key, api_group_key, api_group_label, api_key_mask, provider, endpoint, auth_type, request_id,
-			client_ip, x_forwarded_for, user_agent, model, model_alias, reasoning_effort,
-			service_tier, response_service_tier, executor_type, timestamp_ms, source, auth_index,
-			failed, generate, latency_ms, ttft_ms,
-			input_tokens, output_tokens, reasoning_tokens, cached_tokens,
-			cache_read_tokens, cache_creation_tokens, total_tokens, created_at_ms, cost_nanos, price_version_id, pricing_status,
-			stream, channel_version_id, price_tier, response_model, model_substituted,
-			fail_status_code, fail_body, response_headers, access_provider, is_native_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	insert, err := tx.PrepareContext(ctx, usageEventInsertPrefix+usageEventPlaceholders)
 	if err != nil {
 		return 0, fmt.Errorf("prepare usage event insert: %w", err)
 	}
@@ -285,18 +275,7 @@ func (r *Repository) CommitUsageDecoded(ctx context.Context, decoded []UsageDeco
 		if err != nil {
 			return 0, err
 		}
-		if _, errExec := insert.ExecContext(ctx,
-			event.InstanceID, event.EventKey, event.APIGroupKey, event.APIGroupLabel, event.APIKeyMask,
-			event.Provider, event.Endpoint,
-			event.AuthType, event.RequestID, event.ClientIP, event.XForwardedFor, event.UserAgent,
-			event.Model, event.ModelAlias, event.ReasoningEffort, event.ServiceTier,
-			event.ResponseServiceTier, event.ExecutorType, event.TimestampMS, event.Source,
-			event.AuthIndex, boolInt(event.Failed), boolInt(event.Generate), event.LatencyMS,
-			event.TTFTMS, event.InputTokens, event.OutputTokens, event.ReasoningTokens,
-			event.CachedTokens, event.CacheReadTokens, event.CacheCreationTokens,
-			event.TotalTokens, createdMS, locked.cost, locked.version, locked.status, boolPtrInt(event.Stream),
-			locked.channelVersion, locked.tier, event.ResponseModel, boolInt(event.ModelSubstituted),
-			event.FailStatusCode, event.FailBody, event.ResponseHeaders, event.AccessProvider, boolInt(event.IsNativeKey)); errExec != nil {
+		if _, errExec := insert.ExecContext(ctx, usageEventValues(event, locked, createdMS)...); errExec != nil {
 			return 0, fmt.Errorf("insert usage event %s: %w", event.EventKey, errExec)
 		}
 		if _, errExec := mark.ExecContext(ctx, event.EventKey, createdMS, item.InboxID); errExec != nil {
@@ -466,6 +445,42 @@ func (r *Repository) PendingUsageInboxCount(ctx context.Context) (int64, error) 
 	return count, nil
 }
 
+// usageEventInsertPrefix and usageEventValues are the one column list both insert
+// paths write, so the two cannot drift apart.
+const usageEventInsertPrefix = `
+		INSERT INTO usage_events (
+			instance_id, event_key, api_group_key, api_group_label, api_key_mask, provider, endpoint, auth_type, request_id,
+			client_ip, x_forwarded_for, user_agent, model, model_alias, reasoning_effort,
+			service_tier, effective_service_tier, response_service_tier, executor_type, timestamp_ms, source, auth_index,
+			failed, generate, latency_ms, ttft_ms,
+			input_tokens, output_tokens, reasoning_tokens, cached_tokens,
+			cache_read_tokens, cache_creation_tokens, total_tokens, created_at_ms, cost_nanos, price_version_id, pricing_status,
+			stream, channel_version_id, price_tier, response_model, model_substituted,
+			fail_status_code, fail_body, response_headers, access_provider, is_native_key,
+			billed_service_tier, billed_service_tier_source, token_accounting
+		) VALUES `
+
+const usageEventColumnCount = 50
+
+var usageEventPlaceholders = "(" + strings.TrimSuffix(strings.Repeat("?, ", usageEventColumnCount), ", ") + ")"
+
+func usageEventValues(event usage.Event, locked lockedPrice, createdMS int64) []any {
+	return []any{
+		event.InstanceID, event.EventKey, event.APIGroupKey, event.APIGroupLabel, event.APIKeyMask,
+		event.Provider, event.Endpoint,
+		event.AuthType, event.RequestID, event.ClientIP, event.XForwardedFor, event.UserAgent,
+		event.Model, event.ModelAlias, event.ReasoningEffort, event.ServiceTier, event.EffectiveServiceTier,
+		event.ResponseServiceTier, event.ExecutorType, event.TimestampMS, event.Source,
+		event.AuthIndex, boolInt(event.Failed), boolInt(event.Generate), event.LatencyMS,
+		event.TTFTMS, event.InputTokens, event.OutputTokens, event.ReasoningTokens,
+		event.CachedTokens, event.CacheReadTokens, event.CacheCreationTokens,
+		event.TotalTokens, createdMS, locked.cost, locked.version, locked.status, boolPtrInt(event.Stream),
+		locked.channelVersion, locked.tier, event.ResponseModel, boolInt(event.ModelSubstituted),
+		event.FailStatusCode, event.FailBody, event.ResponseHeaders, event.AccessProvider, boolInt(event.IsNativeKey),
+		locked.serviceTier, locked.serviceTierSource, encodeTokenAccounting(event.Accounting),
+	}
+}
+
 // InsertUsageEvents stores decoded events and returns the highest row id, which
 // the aggregation checkpoint uses as its watermark.
 func (r *Repository) InsertUsageEvents(ctx context.Context, events []usage.Event) (int64, error) {
@@ -481,17 +496,7 @@ func (r *Repository) InsertUsageEvents(ctx context.Context, events []usage.Event
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	statement, err := tx.PrepareContext(ctx, `
-		INSERT INTO usage_events (
-			instance_id, event_key, api_group_key, api_group_label, api_key_mask, provider, endpoint, auth_type, request_id,
-			client_ip, x_forwarded_for, user_agent, model, model_alias, reasoning_effort,
-			service_tier, response_service_tier, executor_type, timestamp_ms, source, auth_index,
-			failed, generate, latency_ms, ttft_ms,
-			input_tokens, output_tokens, reasoning_tokens, cached_tokens,
-			cache_read_tokens, cache_creation_tokens, total_tokens, created_at_ms, cost_nanos, price_version_id, pricing_status,
-			stream, channel_version_id, price_tier, response_model, model_substituted,
-			fail_status_code, fail_body, response_headers, access_provider, is_native_key
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	statement, err := tx.PrepareContext(ctx, usageEventInsertPrefix+usageEventPlaceholders)
 	if err != nil {
 		return 0, fmt.Errorf("prepare usage event insert: %w", err)
 	}
@@ -505,18 +510,7 @@ func (r *Repository) InsertUsageEvents(ctx context.Context, events []usage.Event
 		if err != nil {
 			return 0, err
 		}
-		result, errExec := statement.ExecContext(ctx,
-			event.InstanceID, event.EventKey, event.APIGroupKey, event.APIGroupLabel, event.APIKeyMask,
-			event.Provider, event.Endpoint,
-			event.AuthType, event.RequestID, event.ClientIP, event.XForwardedFor, event.UserAgent,
-			event.Model, event.ModelAlias, event.ReasoningEffort, event.ServiceTier,
-			event.ResponseServiceTier, event.ExecutorType, event.TimestampMS, event.Source,
-			event.AuthIndex, boolInt(event.Failed), boolInt(event.Generate), event.LatencyMS,
-			event.TTFTMS, event.InputTokens, event.OutputTokens, event.ReasoningTokens,
-			event.CachedTokens, event.CacheReadTokens, event.CacheCreationTokens,
-			event.TotalTokens, createdMS, locked.cost, locked.version, locked.status, boolPtrInt(event.Stream),
-			locked.channelVersion, locked.tier, event.ResponseModel, boolInt(event.ModelSubstituted),
-			event.FailStatusCode, event.FailBody, event.ResponseHeaders, event.AccessProvider, boolInt(event.IsNativeKey))
+		result, errExec := statement.ExecContext(ctx, usageEventValues(event, locked, createdMS)...)
 		if errExec != nil {
 			return lastID, fmt.Errorf("insert usage event: %w", errExec)
 		}
@@ -637,6 +631,7 @@ func (r *Repository) sanitizeUsageEvent(event usage.Event) usage.Event {
 	event.ModelAlias = persistedPointer(event.ModelAlias, 256)
 	event.ReasoningEffort = persistedText(event.ReasoningEffort, 128)
 	event.ServiceTier = persistedText(event.ServiceTier, 128)
+	event.EffectiveServiceTier = persistedText(event.EffectiveServiceTier, 128)
 	event.ResponseServiceTier = persistedText(event.ResponseServiceTier, 128)
 	event.ResponseModel = persistedText(event.ResponseModel, 256)
 	// Redaction can blank the served model; a verdict about a name the record no
