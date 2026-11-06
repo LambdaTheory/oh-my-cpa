@@ -24,7 +24,7 @@ func TestPredictionDeliveryClearsOmittedWhenOnlyOtherAlertsSurvive(t *testing.T)
 				CredentialLabel: "removed", Key: "gone", Provider: "codex", WindowKind: "weekly", WindowID: "weekly",
 				LastsUntilReset: &cannotLast, ObservedAtMS: now.Add(-3 * time.Hour).UnixMilli(), FreshWindowMS: time.Hour.Milliseconds(),
 			}}, 3, readyPredictionConfig(), now)
-			notification.Alerts = append(notification.Alerts, Alert{Kind: AlertChannelUnavailable, Provider: "claude", Title: "渠道不可用", ObservedAt: now})
+			notification.Alerts = append(notification.Alerts, Alert{Kind: AlertChannelUnavailable, Provider: "claude", Title: "渠道不可用", ObservedAt: now, EvidenceSource: EvidenceAvailability, FreshWindowMS: defaultFreshWindow.Milliseconds()})
 
 			out := dispatcher.deliverDue(context.Background(), "chat", []Notification{notification})
 			if sends, _ := sender.counts(); sends != 1 || out[0].State != NotifySent {

@@ -697,6 +697,7 @@ func (s *Service) tick(ctx context.Context) {
 		Tracks:   state.ChannelTracks,
 		Now:      now,
 		Quiet:    quiet,
+		InFlight: pendingDeliveryClaims(state.Outbox),
 		recovery: s.attentionRecovery,
 	})
 	state.PendingItems = result.Items
@@ -957,6 +958,10 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 			}
 		}
 	}
+	beforeByID := make(map[string]Notification, len(due))
+	for _, notification := range due {
+		beforeByID[notification.ID] = notification
+	}
 	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, due)
 	s.lockStateTransition()
 	defer s.unlockStateTransition()
@@ -972,6 +977,14 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	for index, notification := range latest.Outbox {
 		if updated, ok := byID[notification.ID]; ok {
 			latest.Outbox[index] = updated
+		}
+	}
+	// Apply all acknowledgements first, so a delivered row protects an overlapping
+	// episode even when another row was discarded in the same delivery cycle.
+	for _, outcome := range delivered {
+		if before, exists := beforeByID[outcome.ID]; exists && before.State != NotifySent {
+			acknowledgeDeliveredClaims(latest, outcome)
+			releaseDiscardedClaims(latest, before, outcome)
 		}
 	}
 	now := s.now()

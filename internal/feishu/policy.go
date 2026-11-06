@@ -95,11 +95,13 @@ type PolicyConfig struct {
 // which is why a quiet-opened item is stamped notified here and its alert is still
 // returned.
 type PolicyInput struct {
-	Report   Report
-	Prev     []PendingItem
-	Tracks   map[string]ChannelTrack
-	Now      time.Time
-	Quiet    bool
+	Report Report
+	Prev   []PendingItem
+	Tracks map[string]ChannelTrack
+	Now    time.Time
+	Quiet  bool
+	// InFlight is reconstructed from the outbox, not persisted as policy state.
+	InFlight map[string]time.Time
 	recovery map[string]recoveryProgress
 }
 
@@ -173,8 +175,6 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		prev, ok := prevAll[id]
 		cycleReset, cycleObserved := quotaCycleEvidence(sig, in.Report)
 		isNewCycle := ok && hasNewQuotaCycle(prev, cycleReset, cycleObserved)
-		// TODO(T12/N1106-23): keep dev's existing-open policy unchanged until the
-		// coordinator decides how an unsent closure may qualify for one later send.
 		if ok && prev.Status == PendingOpen && !isNewCycle {
 			item := prev
 			item.Kind = sig.Kind
@@ -187,13 +187,24 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 			if item.CycleResetAt.IsZero() && !cycleReset.IsZero() {
 				item.CycleResetAt = cycleReset
 			}
-			if item.NotifiedAt.IsZero() {
-				if _, has := alertFor[id]; has {
-					item.NotifiedAt = in.Now
-				}
+			// A discarded delivery releases its reservation, not ownership. New
+			// qualifying evidence may then admit one send on the same open incident.
+			isEscalation := sig.Kind == AlertQuotaExhausted && prev.Kind != AlertQuotaExhausted
+			queuedAt, isQueued := in.InFlight[deliveryClaimKey(id, sig.Kind)]
+			if !isQueued {
+				queuedAt, isQueued = in.InFlight[deliveryClaimKey(id, KindAlertBatch)]
+			}
+			// Legacy queues can lack NotifiedAt. Reuse their reservation instead
+			// of admitting a second row that would race quiet-end promotion.
+			if isQueued && (item.NotifiedAt.IsZero() || isEscalation) && isMonitoringTimeValid(queuedAt) {
+				item.NotifiedAt = queuedAt
+			}
+			needsDelivery := alertFor[id] != nil && !isQueued && (item.NotifiedAt.IsZero() || isEscalation)
+			if needsDelivery {
+				item.NotifiedAt = in.Now
 			}
 			items = append(items, item)
-			if sig.Kind == AlertQuotaExhausted && prev.Kind != AlertQuotaExhausted {
+			if needsDelivery {
 				opened = append(opened, item)
 			}
 			continue

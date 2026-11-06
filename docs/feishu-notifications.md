@@ -228,7 +228,21 @@ expiry alone never resolves a credential or channel incident. A notification wit
 no eligible risk closes without an actual send or delivery timestamp; explicit
 status queries and daily summaries may still explain unknown data. Discarded rows
 are not announcement or cooldown evidence and use creation time for bounded
-retention, rather than an invented send time.
+retention, rather than an invented send time. Discarding also releases only the
+covered episodes' undelivered notification reservations. A genuinely fresh,
+qualified observation can then alert once on the still-open episode; it does not
+reset `Since`, declare recovery, or replay an episode actually delivered already.
+A still-pending or quiet-queued risk keeps its delivery reservation across restart,
+including legacy rows without `NotifiedAt`; policy does not queue a duplicate before
+quiet-end promotion. This admission check is reconstructed from the existing outbox.
+Historical summary selectors and lower-severity forecasts do not reserve a new
+exhaustion alert. Only actually delivered risk rows may acknowledge a missing legacy
+reservation; diagnostic-only selectors cannot do so.
+Delivery outcomes are reconciled before retention cleanup, and a newer reservation
+cannot be cleared by an older send's outcome. Discarded morning rows release the
+scheduled-minute reservation only when no other pending or delivered morning owns
+it. These rules use existing timestamps and identities, without a new state value
+or storage field.
 
 ## Integration
 

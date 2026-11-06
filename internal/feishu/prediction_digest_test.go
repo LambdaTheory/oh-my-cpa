@@ -587,8 +587,8 @@ func TestPredictionCardRowNamesCredentialAndWindow(t *testing.T) {
 	now := time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)
 	used := 60.0
 	items := []PredictionDigestItem{
-		{CredentialLabel: "work", Provider: "codex", Key: "a1", WindowID: "five_hour", WindowKind: "five_hour", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()},
-		{CredentialLabel: "work", Provider: "codex", Key: "a1", WindowID: "weekly", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()},
+		{CredentialLabel: "work", Provider: "codex", Key: "a1", WindowID: "five_hour", WindowKind: "five_hour", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()},
+		{CredentialLabel: "work", Provider: "codex", Key: "a1", WindowID: "weekly", WindowKind: "weekly", UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()},
 	}
 	notification := predictionNotification(items, 0, readyPredictionConfig(), now)
 	card := NewPlainReportRenderer(time.UTC).Card(Message{Kind: notification.Kind, Alerts: notification.Alerts, GeneratedAt: notification.OccurredAt})
@@ -611,7 +611,7 @@ func TestPredictionCardDropsFindingsThatExpiredWhileQueued(t *testing.T) {
 	used := 60.0
 	current := PredictionDigest{Omitted: 3, Items: []PredictionDigestItem{{
 		CredentialLabel: "account", Provider: "codex", Key: "a1", WindowID: "weekly", WindowKind: "weekly",
-		UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(),
+		UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(),
 	}}}
 	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) { return current, nil })
 	env.sender.failSends = 2
@@ -649,7 +649,7 @@ func TestPredictionCardKeepsOnlyRowsThatAreStillFindings(t *testing.T) {
 	used := 60.0
 	row := func(label, key, window string) PredictionDigestItem {
 		return PredictionDigestItem{CredentialLabel: label, Provider: "codex", Key: key, WindowID: window, WindowKind: "weekly",
-			UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli()}
+			UsedPercent: &used, LastsUntilReset: &cannotLast, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}
 	}
 	alpha, beta := row("alpha", "a1", "weekly"), row("beta", "b1", "weekly")
 	current := PredictionDigest{Items: []PredictionDigestItem{alpha, beta}}
@@ -711,8 +711,8 @@ func TestPredictionDigestDropsStaleObservation(t *testing.T) {
 func TestPredictionCardShowsBaselineAndLatestRead(t *testing.T) {
 	now := mustTime("2026-10-27T09:00:00Z")
 	used, expected := 80.0, 60.5
-	older := PredictionDigestItem{CredentialLabel: "older", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.Add(-2 * time.Hour).UnixMilli(), LastsUntilReset: &cannotLast}
-	newer := PredictionDigestItem{CredentialLabel: "newer", Provider: "claude", WindowKind: "five_hour", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast}
+	older := PredictionDigestItem{CredentialLabel: "older", Provider: "codex", WindowKind: "weekly", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.Add(-2 * time.Hour).UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), LastsUntilReset: &cannotLast}
+	newer := PredictionDigestItem{CredentialLabel: "newer", Provider: "claude", WindowKind: "five_hour", UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), LastsUntilReset: &cannotLast}
 	notification := predictionNotification([]PredictionDigestItem{older, newer}, 2, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Alerts: notification.Alerts, Omitted: notification.Omitted, Kind: notification.Kind}))
 	if !strings.Contains(payload, "实际 80.0%") || !strings.Contains(payload, "期望 60.5%") {
@@ -735,7 +735,7 @@ func TestPredictionCardStatesAbsoluteExhaustionTime(t *testing.T) {
 	notification := predictionNotification([]PredictionDigestItem{{
 		CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
 		UsedPercent: &used, ExpectedUsedPercent: &expected, ExhaustionETAMS: &eta,
-		ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast,
+		ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), LastsUntilReset: &cannotLast,
 	}}, 0, readyPredictionConfig(), now)
 	payload := marshalTestJSON(NewPlainReportRenderer(time.UTC).Card(Message{Kind: notification.Kind, Alerts: notification.Alerts}))
 	if !strings.Contains(payload, "实际 88.0%") || !strings.Contains(payload, "期望 52.0%") {
@@ -756,9 +756,9 @@ func TestPredictionCardKeepsNonPredictionAlerts(t *testing.T) {
 	used, expected := 80.0, 60.0
 	notification := predictionNotification([]PredictionDigestItem{{
 		CredentialLabel: "account", Provider: "codex", WindowKind: "weekly",
-		UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast,
+		UsedPercent: &used, ExpectedUsedPercent: &expected, ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), LastsUntilReset: &cannotLast,
 	}}, 0, readyPredictionConfig(), now)
-	channel := Alert{Kind: AlertChannelUnavailable, Provider: "claude", Title: "渠道不可用", Detail: "连续失败 3 次", ObservedAt: now}
+	channel := Alert{Kind: AlertChannelUnavailable, Provider: "claude", Title: "渠道不可用", Detail: "连续失败 3 次", ObservedAt: now, EvidenceSource: EvidenceAvailability, FreshWindowMS: defaultFreshWindow.Milliseconds()}
 	card := NewPlainReportRenderer(time.UTC).Card(Message{
 		Kind: notification.Kind, Alerts: append(notification.Alerts, channel),
 	})
@@ -778,8 +778,8 @@ func TestPredictionDeliveryDropsExpiredRows(t *testing.T) {
 	sender := newFakeSender()
 	dispatcher := NewDispatcher(sender, NewPlainReportRenderer(time.UTC), nil).withClock(func() time.Time { return now })
 	bound := int64((time.Hour / time.Millisecond))
-	stale := Alert{Kind: predictionKindPrefix, Provider: "codex", Title: "每周窗口", ObservedAt: now.Add(-3 * time.Hour), FreshWindowMS: bound}
-	fresh := Alert{Kind: predictionKindPrefix, Provider: "claude", Title: "5 小时窗口", ObservedAt: now.Add(-10 * time.Minute), FreshWindowMS: bound}
+	stale := Alert{Kind: predictionKindPrefix, Provider: "codex", Title: "每周窗口", ObservedAt: now.Add(-3 * time.Hour), EvidenceSource: EvidenceQuota, FreshWindowMS: bound}
+	fresh := Alert{Kind: predictionKindPrefix, Provider: "claude", Title: "5 小时窗口", ObservedAt: now.Add(-10 * time.Minute), EvidenceSource: EvidenceQuota, FreshWindowMS: bound}
 	outbox := []Notification{
 		{ID: "stale", Kind: predictionKindPrefix + KindMorning, Alerts: []Alert{stale}, State: NotifyPending, OccurredAt: now.Add(-3 * time.Hour), CreatedAt: now.Add(-3 * time.Hour)},
 		{ID: "mixed", Kind: predictionKindPrefix + KindMorning, Alerts: []Alert{stale, fresh}, State: NotifyPending, OccurredAt: now, CreatedAt: now},

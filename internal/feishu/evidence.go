@@ -171,9 +171,11 @@ func (s *Service) revalidateNewNotifications(state *State, resolved Resolved, re
 	for index := range state.Outbox {
 		notification := &state.Outbox[index]
 		if notification.CreatedAt.Equal(now) && (notification.State == NotifyPending || notification.State == NotifyQueued) {
+			before := *notification
 			notification.Alerts = eligibleNotificationAlerts(*notification, stored, state.ChannelTracks, cfg, now)
 			if !notificationHasContent(*notification) {
 				discardNotification(notification)
+				releaseDiscardedClaims(state, before, *notification)
 			}
 		}
 	}
