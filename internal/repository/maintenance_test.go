@@ -247,7 +247,7 @@ func TestRetentionGivesFreedPagesBackToTheFilesystem(t *testing.T) {
 	}
 	// The file may shrink by more than the released page count. SQLite keeps one
 	// pointer-map page per 820 data pages; this schema is already past its first
-	// boundary after migration 064, and when incremental vacuum truncates across
+	// boundary after migration 067, and when incremental vacuum truncates across
 	// that boundary the now-unneeded pointer-map page is reclaimed without being
 	// added to the freelist. So the assertion is "nothing left free, and at least
 	// the released pages actually left the file" — an exact equality would pin an

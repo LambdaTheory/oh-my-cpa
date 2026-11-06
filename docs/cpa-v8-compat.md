@@ -19,7 +19,7 @@ and exposes the same interpretation through console and Agent/MCP request/cost
 reads. Raw output 30 plus separate reasoning 10 becomes canonical output 40;
 reasoning-inclusive raw output 40 remains 40. Missing evidence retains the legacy
 policy. Unsupported, malformed, inconsistent and unclassified evidence is
-explicit and unpriced. Migration `063_usage_token_accounting.sql` adds evidence
+explicit and unpriced. Migration `066_usage_token_accounting.sql` adds evidence
 without reinterpreting historical rows or changing their locked amounts.
 Verification is against pinned CPA source and hermetic decoder, persistence,
 pricing and retained-fact regressions, not measured production traffic.

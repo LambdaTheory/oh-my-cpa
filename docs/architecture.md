@@ -1456,7 +1456,7 @@ reasoning exactly once: an Interactions record with raw input 100, output 30,
 reasoning 10 and total 140 therefore stores input 100 and output 40. A dialect
 whose raw output is already 40 stores the same output, not 50.
 
-Migration `063_usage_token_accounting.sql` adds nullable, immutable
+Migration `066_usage_token_accounting.sql` adds nullable, immutable
 `usage_events.token_accounting` evidence: the version, validation status, typed
 breakdown and original vendor token counts. Existing rows remain NULL and retain
 their original counts and locked prices. Missing evidence is explicitly legacy;
@@ -1653,7 +1653,7 @@ offset is zero throughout the window.
 
 **Local-day facts.** A non-UTC deployment reading ninety days by local day would otherwise
 group every fifteen-minute row of the window, which measured about three seconds. Migration
-062 adds `usage_facts_local_daily`, the same measures per local day of one zone, behind the
+065 adds `usage_facts_local_daily`, the same measures per local day of one zone, behind the
 checkpoint marker `facts_local:<zone>`. `EnsureLocalUsageFacts` rebuilds it from the
 fifteen-minute facts in one transaction when the OMC Time Zone changes. The same fold that
 advances `facts` keeps it current. A read takes local days only while the marker names its
@@ -2232,14 +2232,14 @@ client tier may use the response, while explicit client `auto` selects no lane.
 Other providers remain response-first with request fallback. Provider identity or a concrete Codex executor identifies this policy,
 never a model name or provider display label.
 
-Migration 060 locks the selected `billed_service_tier` and its
+Migration 063 locks the selected `billed_service_tier` and its
 `billed_service_tier_source` beside the amount, including an empty selection.
 Both are immutable. NULL identifies historical snapshots, whose breakdown keeps
 the original response-first policy. The API exposes the current interpretation
 as `resolved_service_tier`/`resolved_service_tier_source` for mode indicators and
 exports; a deterministic SQLite function calls the same resolver for filters and
 facets, including historical rows. The cost breakdown instead explains the
-selection originally locked. Migration 061 preserves all request fields, indexes,
+selection originally locked. Migration 064 preserves all request fields, indexes,
 immutability triggers and the request-id high-water mark while adding
 `effective_service_tier` and allowing the `outbound` snapshot source. Missing
 telemetry keeps the existing per-record policy, including for older CPA, mixed
@@ -2772,7 +2772,7 @@ transient codes and pending notifications, and preserves every job and historica
 | Table group | Tables | Notes |
 | --- | --- | --- |
 | Instances & identity | `cpa_instances`, `discovered_resources`, `resource_overrides`, `connections`, `cpa_bindings` | Encrypted management key; bindings survive upstream removal. `connections` is provisioned by migration 006 for the Connection entity but no code reads or writes it yet — treat it as reserved, not as a live table |
-| Usage | `usage_inboxes`, `usage_events`, `error_events`, `ingest_gaps`, `usage_facts_15m`, `usage_facts_daily`, `usage_aggregation_checkpoints`, `data_lifecycle_state` | Milliseconds; raw payloads encrypted, and stored once: with a cipher configured `raw_message` is empty and only the ciphertext is kept. Migration 035 replaces the hourly and daily overview rollups with the permanent usage facts and adds `data_lifecycle_state` (what each rolling policy has removed, and up to which instant). Every table declares its lifecycle in `TABLE_LIFECYCLES` (`internal/repository/lifecycle.go`). Migration 034 adds `usage_events.response_model` (the model the upstream reported serving, empty when unknown) and `model_substituted`, decided at ingestion by `usage.IsModelSubstituted`, with a partial index for the substituted rows; earlier rows stay unknown. Migration 037 adds `usage_events.fail_status_code` and `fail_body` (the status a failed request ended with and the upstream's redacted, bounded error body, from the `fail` block of CPA's usage record); `0` and empty mean unknown, and the list projection carries the status only. Migration 038 adds `usage_events.response_headers`, the filtered upstream header snapshot as a JSON object (`usage.FilterResponseHeaders` drops transport and credential-bearing headers and bounds the rest); only `GetUsageEvent` reads it. Migration 039 adds `usage_events.access_provider` and `is_native_key` (which access provider authenticated the caller and whether the caller's key is CPA's native configured key, from CPA's usage record); an empty `access_provider` means a gateway that predates them, while `is_native_key` is meaningful whenever a path is present, and only `GetUsageEvent` reads them. Migration 064 adds `usage_retention_settings`, the single row holding the request-record horizon the operator chose in OMC Settings and, when the API set one, a payload horizon (NULL follows the environment); no row means the environment's horizons apply |
+| Usage | `usage_inboxes`, `usage_events`, `error_events`, `ingest_gaps`, `usage_facts_15m`, `usage_facts_daily`, `usage_aggregation_checkpoints`, `data_lifecycle_state` | Milliseconds; raw payloads encrypted, and stored once: with a cipher configured `raw_message` is empty and only the ciphertext is kept. Migration 035 replaces the hourly and daily overview rollups with the permanent usage facts and adds `data_lifecycle_state` (what each rolling policy has removed, and up to which instant). Every table declares its lifecycle in `TABLE_LIFECYCLES` (`internal/repository/lifecycle.go`). Migration 034 adds `usage_events.response_model` (the model the upstream reported serving, empty when unknown) and `model_substituted`, decided at ingestion by `usage.IsModelSubstituted`, with a partial index for the substituted rows; earlier rows stay unknown. Migration 037 adds `usage_events.fail_status_code` and `fail_body` (the status a failed request ended with and the upstream's redacted, bounded error body, from the `fail` block of CPA's usage record); `0` and empty mean unknown, and the list projection carries the status only. Migration 038 adds `usage_events.response_headers`, the filtered upstream header snapshot as a JSON object (`usage.FilterResponseHeaders` drops transport and credential-bearing headers and bounds the rest); only `GetUsageEvent` reads it. Migration 039 adds `usage_events.access_provider` and `is_native_key` (which access provider authenticated the caller and whether the caller's key is CPA's native configured key, from CPA's usage record); an empty `access_provider` means a gateway that predates them, while `is_native_key` is meaningful whenever a path is present, and only `GetUsageEvent` reads them. Migration 067 adds `usage_retention_settings`, the single row holding the request-record horizon the operator chose in OMC Settings and, when the API set one, a payload horizon (NULL follows the environment); no row means the environment's horizons apply |
 | Custom icons | `custom_icons` | Migration 032 adds durable sanitized image BLOBs, stable IDs and content revisions; confirmed deletion atomically clears matching provider overrides and deletes the asset |
 | Font library | `fonts`, `font_faces` | Migration 047: one row per installed family (`source` `google` or `upload`) and one per `@font-face` (weight range, style, `unicode-range`, container format, file BLOB, position). Faces cascade with their family; deletion clears the `omc_fonts` roles that used it in the same transaction. Both tables are hidden from `database_query` |
 | Pricing | `model_prices`, `model_price_versions`, `pricing_sync_state`, `pricing_model_catalog`, `pricing_catalog_state`, `pricing_model_links`, `pricing_upstream_catalog`, `pricing_channels`, `pricing_channel_versions`, `pricing_match_reviews` | Price and channel versions are append-only via triggers; migration 028 added tiers, links, the stored OpenRouter snapshot and channels, and `usage_events.channel_version_id`/`price_tier`. Migration 029 added `pricing_catalog_state.providers_json`; the pricing repository refuses to run before migration 29. Migration 031 added `pricing_match_reviews` (the OpenRouter model last answered for a custom or linked price); match-review reads and writes refuse to run before migration 31 |

@@ -11,7 +11,7 @@ func TestOutboundTierMigrationPreservesRecordsAndSequence(t *testing.T) {
 	for _, isEmpty := range []bool{false, true} {
 		t.Run(fmt.Sprintf("empty=%t", isEmpty), func(t *testing.T) {
 			ctx := context.Background()
-			db, err := Open(ctx, fmt.Sprintf("file:outbound_upgrade_%d?mode=memory&cache=shared", usageDSNCounter.Add(1)), withMigrationsUntil(60))
+			db, err := Open(ctx, fmt.Sprintf("file:outbound_upgrade_%d?mode=memory&cache=shared", usageDSNCounter.Add(1)), withMigrationsUntil(63))
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -99,7 +99,7 @@ rounding to nanos, so a request with no tiers and a 1× channel costs exactly
 what the pre-tier formula charged (`FuzzQuoteLegacyParity`).
 
 The resolved service tier and its outbound/request/response source are saved with new
-request costs (migration 060). Historical records without that selection retain
+request costs (migration 063). Historical records without that selection retain
 the original response-first policy when their locked cost is explained. Neither
 amounts nor price versions are rewritten. Mode indicators and the
 `resolved_service_tier` filter use the current provider-aware interpretation;
@@ -110,7 +110,7 @@ request after translation and payload rules. Codex prefers this evidence, includ
 explicit `default` downgrades; outbound `auto` selects no service-tier price and
 never revives the original client priority. Missing or empty outbound evidence
 retains the existing request-aware resolver, without a gateway-version gate.
-Other providers retain response-first pricing. Migration 061 adds the raw field
+Other providers retain response-first pricing. Migration 064 adds the raw field
 and extends the immutable snapshot source with `outbound`, preserving old rows,
 amounts and explanations. CPA omits an empty outbound tier, so an old publisher
 and a payload rule that removed the tier are indistinguishable. OMC does not
@@ -403,5 +403,5 @@ which the cost explanation and Agent/MCP request reads also return. Missing
 evidence retains legacy accounting. Supplied unresolved accounting is unpriced
 rather than guessed, and editing prices never backfills it. Existing recorded
 counts, amounts and append-only price versions are unchanged by migration
-`063_usage_token_accounting.sql`; the permanent facts preserve corrected usage
+`066_usage_token_accounting.sql`; the permanent facts preserve corrected usage
 and raw-evidence measures after request-detail retention.

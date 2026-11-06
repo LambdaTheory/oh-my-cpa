@@ -29,7 +29,7 @@ const (
 	usageFactsFineTable  = "usage_facts_15m"
 	usageFactsDailyTable = "usage_facts_daily"
 	// usageFactsLocalTable holds whole local days in the one zone its checkpoint
-	// marker names; see migration 062.
+	// marker names; see migration 065.
 	usageFactsLocalTable = "usage_facts_local_daily"
 	// localFactsMarkerPrefix names the checkpoint row that says which zone the
 	// local grain is built for. The row exists exactly when the grain is complete.
