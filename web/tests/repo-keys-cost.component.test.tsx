@@ -2,9 +2,9 @@ import React from 'react';
 import { App as AntdApp } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { I18nProvider } from '../src/i18n';
+import { I18nProvider, languageLocale, type Lang } from '../src/i18n';
 import { RepoKeysPanel } from '../src/components/keys/RepoKeysPanel';
 import type { RepoKeyApplication, RepoKeyBinding, RepoKeyReview } from '../src/types/repoKeys';
 
@@ -117,6 +117,9 @@ describe.each([
     // The deferred catalogs (ms, zh-Hant) arrive in an effect, so their first paint and
     // first read settle after render() returns; act keeps that rendezvous inside the mount.
     await act(async () => { mount(isPhone, language); });
+    // The document language is the provider's readiness signal: it is only written once
+    // the requested catalog (or the base dictionary) is the language being rendered.
+    await waitFor(() => expect(document.documentElement.lang).toBe(languageLocale(language as Lang)));
     const identity = await screen.findByText('example/cost-regression');
     const row = identity.closest(isPhone ? 'article' : 'tr') as HTMLElement;
     expect(within(row).getByText('$0.0123')).toBeTruthy();
