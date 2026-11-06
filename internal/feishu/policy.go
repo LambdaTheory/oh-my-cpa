@@ -30,18 +30,22 @@ const (
 // Alert is one immediate notification unit. It is secret-free: it carries the
 // opaque credential key and the display alias, never a cookie or token.
 type Alert struct {
-	Scope      string
-	ObservedAt time.Time
-	Kind       string
-	Severity   string
-	Provider   string
-	Key        string
-	Alias      string
-	Title      string
-	Detail     string
-	Facts      []string
-	Advice     string
-	OccurredAt time.Time
+	// FreshWindowMS bounds the age of the evidence, not the notification's age.
+	// Missing bounds or observation times cannot establish a current risk.
+	FreshWindowMS  int64
+	EvidenceSource string
+	Scope          string
+	ObservedAt     time.Time
+	Kind           string
+	Severity       string
+	Provider       string
+	Key            string
+	Alias          string
+	Title          string
+	Detail         string
+	Facts          []string
+	Advice         string
+	OccurredAt     time.Time
 }
 
 // PendingItem is one structured "something needs a human" record. ID is stable
