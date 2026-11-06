@@ -230,6 +230,9 @@ func applyQuotaSignal(account *feishu.AccountReport, signal repository.FeishuAcc
 		return
 	}
 	account.CollectionFailed = signal.State == repository.FeishuSignalTransport || signal.State == repository.FeishuSignalParse || signal.State == repository.FeishuSignalUnknown
+	if account.CollectionFailed {
+		account.CollectionSignalObservedAt = signal.ObservedAt
+	}
 	if account.OK && account.ObservedAt.After(signal.ObservedAt) {
 		account.CollectionFailed = false
 	}

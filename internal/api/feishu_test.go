@@ -229,7 +229,7 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 	digest := feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{
 		CredentialLabel: "operator", Provider: "codex", WindowKind: "weekly",
 		UsedPercent: &used, ProjectedPercentAtReset: &projected,
-		ObservedAtMS: now.UnixMilli(), Verdict: "will_exhaust",
+		ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), Verdict: "will_exhaust",
 	}}}
 	api := &FeishuAPI{service: service}
 	api.prediction = feishu.NewPredictionJob(service, func(context.Context) (feishu.PredictionDigest, error) { return digest, nil })
@@ -262,7 +262,7 @@ func TestFeishuPredictionTestRouteSendsOneCardAndReportsNoFindings(t *testing.T)
 
 	now = now.Add(time.Minute)
 	sender.err = errors.New("simulated sender failure")
-	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{CredentialLabel: "operator", Verdict: "will_exhaust"}}}
+	digest = feishu.PredictionDigest{Items: []feishu.PredictionDigestItem{{CredentialLabel: "operator", ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), Verdict: "will_exhaust"}}}
 	recorder = httptest.NewRecorder()
 	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/feishu/prediction-test", nil))
 	var failed struct {

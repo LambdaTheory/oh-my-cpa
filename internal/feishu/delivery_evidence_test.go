@@ -9,6 +9,34 @@ import (
 	"time"
 )
 
+func TestDeliveryLegacyNonAuthFailuresQualifyOngoingMonitoringWithoutLatestAttempt(t *testing.T) {
+	base := mustTime("2026-11-06T12:00:00Z")
+	env := newTestEnv(t, Report{Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "synthetic", State: StateStale, CollectionFailed: true}}}}}, true)
+	account := &env.source.report.Providers[0].Accounts[0]
+	for index, elapsed := range []time.Duration{0, 20 * time.Minute, 30*time.Minute + time.Second} {
+		*env.clock = base.Add(elapsed)
+		account.CollectionSignalObservedAt = *env.clock
+		env.service.tick(context.Background())
+		state, _ := env.store.Load(context.Background())
+		if state.ChannelTracks["codex"].ConsecutiveFailures != index+1 {
+			t.Fatalf("distinct legacy failure lost: %+v", state.ChannelTracks)
+		}
+		if !account.AttemptedAt.IsZero() || !account.ObservedAt.IsZero() {
+			t.Fatal("monitoring invented a latest attempt or a numeric observation")
+		}
+	}
+	state, _ := env.store.Load(context.Background())
+	if sends, _ := env.sender.counts(); sends != 1 || len(state.Outbox) != 1 || state.Outbox[0].State != NotifySent || state.Outbox[0].Alerts[0].Kind != AlertMonitorDown {
+		t.Fatalf("ongoing monitor event failed delivery: sends=%d state=%+v", sends, state)
+	}
+	*env.clock = env.clock.Add(time.Minute)
+	env.service.tick(context.Background())
+	state, _ = env.store.Load(context.Background())
+	if state.ChannelTracks["codex"].ConsecutiveFailures != 3 {
+		t.Fatalf("cached signal manufactured another failure: %+v", state.ChannelTracks)
+	}
+}
+
 func TestDeliveryStoredRereadCannotExtendTheSameObservation(t *testing.T) {
 	now := mustTime("2026-11-06T02:00:00Z")
 	observed := now.Add(-2 * time.Minute)

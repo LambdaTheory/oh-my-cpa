@@ -6,7 +6,25 @@ import (
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
+
+func TestFeishuLegacyNonAuthSignalRetainsItsOwnMonitoringClock(t *testing.T) {
+	now := time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC)
+	for _, state := range []string{repository.FeishuSignalTransport, repository.FeishuSignalParse, repository.FeishuSignalUnknown, repository.FeishuSignalAuthInvalid} {
+		account := feishuAccountReport(repository.FeishuCredentialMetadata{AuthIndex: "synthetic", Driver: "codex"}, repository.QuotaSnapshotRecord{}, repository.FeishuAccountSignal{State: state, ObservedAt: now}, now)
+		if !account.AttemptedAt.IsZero() || !account.ObservedAt.IsZero() {
+			t.Fatalf("signal invented a latest attempt or numeric observation: %+v", account)
+		}
+		if state == repository.FeishuSignalAuthInvalid {
+			if !account.CollectionSignalObservedAt.IsZero() || !account.AuthSignalObservedAt.Equal(now) {
+				t.Fatalf("authentication latch became a collection failure event: %+v", account)
+			}
+		} else if !account.CollectionFailed || !account.CollectionSignalObservedAt.Equal(now) {
+			t.Fatalf("non-auth monitoring event lost its real clock: %+v", account)
+		}
+	}
+}
 
 func TestFeishuDeliveryEvidenceAndSuppressionSurviveSQLiteReload(t *testing.T) {
 	_, repo, _, _ := newFeishuAPITest(t)

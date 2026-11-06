@@ -1139,7 +1139,12 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			}
 			isMonitored = true
 			attempt := account.AttemptedAt
-			if attempt.IsZero() {
+			if !isMonitoringTimeValid(attempt) && account.CollectionFailed {
+				// A legacy non-auth signal is a real failure event, not a renewed
+				// authentication latch or an invented latest refresh attempt.
+				attempt = account.CollectionSignalObservedAt
+			}
+			if !isMonitoringTimeValid(attempt) {
 				attempt = account.ObservedAt
 			}
 			if attempt.After(lastAttempt) {

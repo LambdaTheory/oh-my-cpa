@@ -54,6 +54,10 @@ type AccountReport struct {
 	AttemptOutcome   string
 	AttemptReason    string
 	CollectionFailed bool
+	// CollectionSignalObservedAt dates a stored non-auth collection failure when
+	// no independent attempt record exists. It is not the latest-attempt clock and
+	// must never be populated from a retained authentication incident.
+	CollectionSignalObservedAt time.Time
 	// Key is the opaque credential identity (the auth index). It is a
 	// persistence key, not text for a person.
 	Key string
