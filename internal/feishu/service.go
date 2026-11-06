@@ -985,6 +985,7 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 		if before, exists := beforeByID[outcome.ID]; exists && before.State != NotifySent {
 			acknowledgeDeliveredClaims(latest, outcome)
 			releaseDiscardedClaims(latest, before, outcome)
+			releaseUndeliveredClaims(latest, before, outcome)
 		}
 	}
 	now := s.now()
