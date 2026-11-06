@@ -11,6 +11,8 @@ import (
 
 type compactBlock struct {
 	provider, kind     string
+	evidenceSource     string
+	hasUnknownTime     bool
 	accounts           map[string]bool
 	alias              string
 	remaining          []float64
@@ -49,7 +51,7 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 	if msg.Report != nil {
 		for _, provider := range msg.Report.Providers {
 			for _, account := range provider.Accounts {
-				if !account.Disabled && !account.IsUnmonitored && account.CollectionFailed {
+				if !account.Disabled && !account.IsUnmonitored && !account.HasFreshAuthFailure(messageTime(msg)) && !hasFreshQuotaReading(account, messageTime(msg)) {
 					omitted[provider.Provider+"/"+AlertReadingMissing] = true
 				}
 			}
@@ -82,7 +84,7 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 	}
 	for _, alert := range alerts {
 		if !isActionableKind(alert.Kind) && !(msg.Kind == KindQuery && alert.Kind == AlertQuotaLow) {
-			if alert.Kind != statusHealthy && alert.Kind != statusReported {
+			if alert.Kind != statusHealthy && alert.Kind != statusUnknown && alert.Kind != statusReported {
 				omitted[alert.Provider+"/"+alert.Kind] = true
 			}
 			continue
@@ -93,8 +95,16 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 		}
 		block := groups[identity]
 		if block == nil {
-			block = &compactBlock{provider: alert.Provider, kind: alert.Kind, accounts: map[string]bool{}}
+			block = &compactBlock{provider: alert.Provider, kind: alert.Kind, evidenceSource: alert.EvidenceSource, accounts: map[string]bool{}}
 			groups[identity] = block
+		}
+		if block.evidenceSource != alert.EvidenceSource {
+			block.evidenceSource = ""
+		}
+		if !isMonitoringTimeValid(alert.ObservedAt) {
+			block.hasUnknownTime = true
+		} else if block.observed.IsZero() || alert.ObservedAt.Before(block.observed) {
+			block.observed = alert.ObservedAt
 		}
 		key := alert.Key
 		if alert.Kind == AlertMonitorDown {
@@ -104,16 +114,10 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 			key = alert.Provider
 		}
 		if block.accounts[key] {
-			if !alert.ObservedAt.IsZero() && (block.observed.IsZero() || alert.ObservedAt.Before(block.observed)) {
-				block.observed = alert.ObservedAt
-			}
 			continue
 		}
 		block.accounts[key] = true
 		block.alias = alert.Alias
-		if !alert.ObservedAt.IsZero() && (block.observed.IsZero() || alert.ObservedAt.Before(block.observed)) {
-			block.observed = alert.ObservedAt
-		}
 		if alert.Kind == AlertQuotaExhausted {
 			block.remaining = append(block.remaining, 0)
 		}
@@ -128,7 +132,7 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 							block.recovery = *recovery
 						}
 					}
-					if account.Key != alert.Key {
+					if account.Key != alert.Key || (alert.Kind != AlertQuotaLow && alert.Kind != AlertQuotaExhausted) || !observationFresh(account, messageTime(msg), defaultFreshWindow) {
 						continue
 					}
 					remaining, reset, has := compactAccountNumbers(account, alert.Kind)
@@ -137,9 +141,6 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 					}
 					if !reset.IsZero() && (block.recovery.IsZero() || reset.Before(block.recovery)) {
 						block.recovery = reset
-					}
-					if alert.Kind == AlertMonitorDown && !account.LastSuccessAt.IsZero() && (block.observed.IsZero() || account.LastSuccessAt.Before(block.observed)) {
-						block.observed = account.LastSuccessAt
 					}
 				}
 			}
@@ -262,29 +263,32 @@ func (r *PlainReportRenderer) compactBlockLines(block compactBlock) (string, str
 }
 
 func compactHealthy(msg Message) (string, int, float64) {
+	best, count, average, _ := compactHealthyEvidence(msg)
+	return best, count, average
+}
+
+func compactHealthyEvidence(msg Message) (string, int, float64, time.Time) {
 	if msg.Report == nil {
-		return "", 0, 0
+		return "", 0, 0, time.Time{}
 	}
 	now := msg.EvaluatedAt
 	if now.IsZero() {
 		now = msg.GeneratedAt
 	}
 	type candidate struct {
-		name  string
-		sum   float64
-		count int
+		name     string
+		sum      float64
+		count    int
+		observed time.Time
 	}
 	var candidates []candidate
+	var earliest time.Time
 	total, accounts := 0.0, 0
+	alerts := decisionAlerts(msg)
 	for _, provider := range msg.Report.Providers {
 		hasOpenProblem := false
-		for _, alert := range msg.Alerts {
+		for _, alert := range alerts {
 			if alert.Provider == provider.Provider && isActionableKind(alert.Kind) {
-				hasOpenProblem = true
-			}
-		}
-		for _, item := range msg.Pending {
-			if item.Provider == provider.Provider && isActionableKind(item.Kind) {
 				hasOpenProblem = true
 			}
 		}
@@ -307,8 +311,14 @@ func compactHealthy(msg Message) (string, int, float64) {
 			}
 			value.sum += remaining
 			value.count++
+			if value.observed.IsZero() || account.ObservedAt.Before(value.observed) {
+				value.observed = account.ObservedAt
+			}
 		}
 		if isHealthy && value.count > 0 {
+			if earliest.IsZero() || value.observed.Before(earliest) {
+				earliest = value.observed
+			}
 			candidates = append(candidates, value)
 			total += value.sum
 			accounts += value.count
@@ -331,7 +341,7 @@ func compactHealthy(msg Message) (string, int, float64) {
 	if accounts > 0 {
 		average = total / float64(accounts)
 	}
-	return best, len(candidates), average
+	return best, len(candidates), average, earliest
 }
 
 func compactConclusion(msg Message, blocks []compactBlock) string {
@@ -360,7 +370,7 @@ func compactConclusion(msg Message, blocks []compactBlock) string {
 	}
 	for _, block := range blocks {
 		if block.kind == AlertCredential {
-			return "部分账号需要处理，渠道仍可用"
+			return "存在当前认证拒绝，请处理相关账号"
 		}
 	}
 	for _, block := range blocks {
@@ -381,14 +391,8 @@ func compactConclusion(msg Message, blocks []compactBlock) string {
 			}
 		}
 	}
-	if msg.Report != nil {
-		now := msg.EvaluatedAt
-		if now.IsZero() {
-			now = msg.GeneratedAt
-		}
-		if fresh := freshnessOf(*msg.Report, defaultFreshWindow, now); fresh.expired || !fresh.available {
-			return "数据待确认，额度状态暂不可信"
-		}
+	if msg.Report == nil || !reportEvidenceHealthy(*msg.Report, messageTime(msg)) {
+		return "数据待确认，额度状态暂不可信"
 	}
 	return "今天暂不需要调整，未发现异常"
 }
@@ -405,7 +409,7 @@ func (r *PlainReportRenderer) compactCard(msg Message) map[string]any {
 	color, hasAction := "blue", false
 	for _, block := range blocks[:count] {
 		first, second := r.compactBlockLines(block)
-		elements = append(elements, markdown(first+"\n<font color='grey'>"+second+"</font>"))
+		elements = append(elements, markdown(first+"\n<font color='grey'>"+second+"\n"+r.compactBlockClock(block)+"</font>"))
 		if isActionableKind(block.kind) {
 			hasAction = true
 			color = "red"
@@ -419,33 +423,32 @@ func (r *PlainReportRenderer) compactCard(msg Message) map[string]any {
 			elements = append(elements, markdown(fmt.Sprintf("%d 个渠道 全部正常 平均 %.0f%%", healthy, math.Round(average))))
 		}
 	}
-	observed := msg.GeneratedAt
-	if msg.Report != nil {
-		observed = msg.Report.GeneratedAt
+	meta := "时间按各项来源标注"
+	if len(blocks) == 0 {
+		meta = "证据时间未知"
 	}
-	for _, block := range blocks {
-		if !block.observed.IsZero() && (observed.IsZero() || block.observed.Before(observed)) {
-			observed = block.observed
+	if msg.Kind == KindQuery {
+		_, healthy, _ := compactHealthy(msg)
+		if healthy > 0 {
+			meta = r.healthyClock(msg)
 		}
-	}
-	meta := "观察时间未知"
-	if !observed.IsZero() {
-		meta = "观察 " + observed.In(r.location()).Format("15:04")
-	}
-	now := msg.EvaluatedAt
-	if now.IsZero() {
-		now = msg.GeneratedAt
-	}
-	if !observed.IsZero() && now.Sub(observed) > defaultFreshWindow {
-		meta += fmt.Sprintf(" · 数据 %d 分钟前", int(now.Sub(observed).Minutes()))
 	}
 	if omitted > 0 {
 		meta += fmt.Sprintf(" · 另有 %d 项见控制台", omitted)
 	}
-	if compactLength(meta) > 24 && !observed.IsZero() && now.Sub(observed) > defaultFreshWindow {
-		meta = "观察 " + observed.In(r.location()).Format("15:04") + fmt.Sprintf(" · 过期%d分", int(now.Sub(observed).Minutes()))
-		if omitted > 0 {
-			meta += fmt.Sprintf(" · 另有 %d 项见控制台", omitted)
+	visible := []Alert{}
+	for _, alert := range decisionAlerts(msg) {
+		for _, block := range blocks[:count] {
+			if block.kind == alert.Kind && (block.provider == alert.Provider || block.kind == AlertMonitorDown) {
+				visible = append(visible, alert)
+				break
+			}
+		}
+	}
+	if diagnostic := r.diagnosticText(msg, visible); diagnostic != "" {
+		meta += "\n" + diagnostic
+		if color == "blue" {
+			color = "orange"
 		}
 	}
 	elements = append(elements, markdown(meta))

@@ -241,6 +241,9 @@ func decisionConclusion(msg Message, alerts []Alert) string {
 	if len(alerts) == 1 && alerts[0].Kind == statusHealthy {
 		return "今天暂不需要调整额度，未发现异常"
 	}
+	if len(decisionRiskAlerts(alerts)) == 0 && (msg.Report == nil || !reportEvidenceHealthy(*msg.Report, messageTime(msg))) {
+		return "数据缺失或已过期，当前额度与认证状态未知"
+	}
 	for _, alert := range alerts {
 		if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || strings.HasPrefix(alert.Kind, predictionKindPrefix) && alert.Title != "预计额度有余量" || alert.Kind == AlertChannelUnavailable {
 			return "今天需要调整额度安排，请处理以下风险"
@@ -340,14 +343,19 @@ func decisionPoint(alert Alert) string {
 	if alert.Kind == statusHealthy {
 		identity = "额度"
 	}
-	if alert.Alias != "" {
+	if alert.Alias != "" && alert.Alias != identity {
 		identity += " · " + alert.Alias
+	}
+	title := strings.TrimPrefix(alert.Title, providerName(alert.Provider)+" ")
+	text := identity + "：" + title
+	if alert.Detail != "" {
+		text += "。" + alert.Detail
 	}
 	advice := alert.Advice
 	if advice == "" {
 		advice = "检查控制台中的最新读数"
 	}
-	return compactText(identity+"："+alert.Title+"。"+alert.Detail, 180) + "；建议：" + compactText(advice, 70)
+	return compactText(text, 180) + "；建议：" + compactText(advice, 70)
 }
 
 func compactText(value string, limit int) string {

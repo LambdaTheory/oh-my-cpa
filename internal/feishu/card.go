@@ -28,28 +28,20 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 			elements = append(elements, markdown(msg.Notice))
 		}
 	}
-	count := min(len(alerts), maxDecisionPoints)
-	for _, alert := range alerts[:count] {
-		elements = append(elements, markdown("• "+decisionPoint(alert)))
+	risks := decisionRiskAlerts(alerts)
+	count := min(len(risks), maxDecisionPoints)
+	for _, alert := range risks[:count] {
+		elements = append(elements, markdown("• "+decisionPoint(alert)+"\n"+r.alertClock(alert)))
 	}
-	observedAt := time.Time{}
-	if msg.Report != nil {
-		observedAt = msg.Report.GeneratedAt
+	meta := "时间仅对应标注的证据来源"
+	if len(risks) == 0 && msg.Report != nil && reportEvidenceHealthy(*msg.Report, messageTime(msg)) {
+		meta = r.healthyClock(msg)
 	}
-	for _, alert := range alerts {
-		if !alert.ObservedAt.IsZero() && (observedAt.IsZero() || alert.ObservedAt.Before(observedAt)) {
-			observedAt = alert.ObservedAt
-		}
+	if len(risks) > count {
+		meta += fmt.Sprintf(" · 另有 %d 项，请在控制台查看", len(risks)-count)
 	}
-	meta := "观察时间数据缺失"
-	if !observedAt.IsZero() {
-		meta = "观察时间 " + r.formatTime(observedAt)
-	}
-	if msg.Freshness != "" {
-		meta += " · " + compactText(msg.Freshness, 40)
-	}
-	if len(alerts) > count {
-		meta += fmt.Sprintf(" · 另有 %d 项，请在控制台查看", len(alerts)-count)
+	if diagnostic := r.diagnosticText(msg, risks[:count]); diagnostic != "" {
+		meta += "\n" + diagnostic
 	}
 	elements = append(elements, markdown(meta))
 	elements = append(elements, r.consoleButton())

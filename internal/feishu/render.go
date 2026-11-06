@@ -61,7 +61,8 @@ type Message struct {
 	// channels. They are display-only.
 	Pending []PendingItem
 	Tight   []TightChannel
-	// GeneratedAt is the report's observation time.
+	// GeneratedAt is caller context (report aggregation or notification creation),
+	// never a substitute for any individual evidence clock.
 	GeneratedAt time.Time
 	EvaluatedAt time.Time
 }
@@ -127,13 +128,13 @@ func (r *PlainReportRenderer) Title(msg Message) string {
 func (r *PlainReportRenderer) Text(msg Message) string {
 	var b strings.Builder
 	b.WriteString("【" + r.Title(msg) + "】")
-	if !msg.GeneratedAt.IsZero() {
-		b.WriteString(r.formatTime(msg.GeneratedAt))
-	}
 	if msg.Freshness != "" {
-		b.WriteString(" · " + msg.Freshness)
+		b.WriteString(" · 报告缓存标签 " + msg.Freshness)
 	}
 	b.WriteByte('\n')
+	if conclusion := decisionConclusion(msg, decisionAlerts(msg)); conclusion != msg.Body {
+		b.WriteString(conclusion + "\n")
+	}
 	if msg.Notice != "" {
 		b.WriteString("⚠️ " + oneLine(msg.Notice) + "\n")
 	}
@@ -142,19 +143,16 @@ func (r *PlainReportRenderer) Text(msg Message) string {
 		b.WriteByte('\n')
 	}
 	if msg.Report != nil && len(msg.Report.Providers) > 0 {
-		b.WriteString(r.textProviders(msg.Report, msg.Detailed))
+		b.WriteString(r.textProviders(msg.Report, msg.Detailed, messageTime(msg)))
 	}
-	for _, alert := range msg.Alerts {
+	for _, alert := range decisionRiskAlerts(decisionAlerts(msg)) {
 		b.WriteString(r.textAlert(alert))
 	}
-	if len(msg.Pending) > 0 {
-		b.WriteString("\n待处理：\n")
-		for _, item := range msg.Pending {
-			fmt.Fprintf(&b, "[%s] %s\n", item.Kind, oneLine(item.Action))
-		}
+	if diagnostic := r.diagnosticText(msg, decisionAlerts(msg)); diagnostic != "" {
+		b.WriteString("\n" + diagnostic + "\n")
 	}
 	if len(msg.Tight) > 0 {
-		b.WriteString("\n额度偏紧：\n")
+		b.WriteString("\n历史渠道汇总（当前资格未知）：\n")
 		for _, tight := range msg.Tight {
 			fmt.Fprintf(&b, "%s 最佳账号剩余 %.0f%%\n", providerName(tight.Provider), tight.BestRemaining)
 		}
@@ -165,15 +163,15 @@ func (r *PlainReportRenderer) Text(msg Message) string {
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
-func (r *PlainReportRenderer) textProviders(rep *Report, detailed bool) string {
+func (r *PlainReportRenderer) textProviders(rep *Report, detailed bool, now time.Time) string {
 	var b strings.Builder
 	for _, p := range rep.Providers {
-		b.WriteString(r.providerLine(p, detailed))
+		b.WriteString(r.providerLine(p, detailed, now))
 	}
 	return b.String()
 }
 
-func (r *PlainReportRenderer) providerLine(p ProviderReport, detailed bool) string {
+func (r *PlainReportRenderer) providerLine(p ProviderReport, detailed bool, now time.Time) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", providerName(p.Provider))
 	if p.Error != "" {
@@ -185,7 +183,12 @@ func (r *PlainReportRenderer) providerLine(p ProviderReport, detailed bool) stri
 		if label == "" {
 			label = "账号"
 		}
-		fmt.Fprintf(&b, "  · %s [%s]%s\n", label, stateLabel(account.State), disabledSuffix(account.Disabled))
+		status := stateLabel(account.State)
+		if !hasFreshQuotaReading(account, now) {
+			status = "历史读数，当前状态待确认"
+		}
+		fmt.Fprintf(&b, "  · %s [%s]%s\n", oneLine(label), status, disabledSuffix(account.Disabled))
+		fmt.Fprintf(&b, "      %s\n", r.diagnosticClock("额度观察", account.ObservedAt, now))
 		shown := account.Windows
 		if !detailed && len(shown) > 2 {
 			shown = shown[:2]
@@ -203,6 +206,7 @@ func (r *PlainReportRenderer) providerLine(p ProviderReport, detailed bool) stri
 func (r *PlainReportRenderer) textAlert(alert Alert) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n[%s] %s\n", severityLabel(alert.Severity), oneLine(alert.Title))
+	fmt.Fprintf(&b, "  %s\n", r.alertClock(alert))
 	if alert.Detail != "" {
 		fmt.Fprintf(&b, "  %s\n", oneLine(alert.Detail))
 	}

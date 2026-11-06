@@ -15,7 +15,7 @@ func renderReport() Report {
 		Providers: []ProviderReport{{
 			Provider: "codex",
 			Accounts: []AccountReport{{
-				Key: "a1", Label: "work", State: StateWarning, OK: true,
+				Key: "a1", Label: "work", State: StateWarning, OK: true, ObservedAt: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC),
 				Windows: []Window{{Name: "7d", Label: "7d", Scope: ScopeAccount, UsedPercent: &used, ResetAt: &reset}},
 			}},
 		}},

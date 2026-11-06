@@ -27,8 +27,8 @@ const (
 // domain model, so this package depends on neither the API layer nor the quota
 // package and therefore cannot trigger an upstream refresh.
 //
-// GeneratedAt is the observation time of the newest evaluation. A query shows
-// it and grades its age; it is never replaced by "now".
+// GeneratedAt summarizes the newest stored quota sample in the report. It is not
+// independent evidence for any account, authentication signal or collection attempt.
 type Report struct {
 	GeneratedAt time.Time
 	Providers   []ProviderReport
