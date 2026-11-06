@@ -23,22 +23,27 @@ func attentionSignals(rep Report, threshold float64, now time.Time) []Alert {
 	var alerts []Alert
 	for _, provider := range rep.Providers {
 		if provider.Error != "" || len(provider.Accounts) == 0 {
-			alerts = append(alerts, Alert{Kind: AlertReadingMissing, Provider: provider.Provider, Title: "数据缺失", Advice: "检查采集链路后再决定额度安排", Severity: SeverityWarn, OccurredAt: now})
 			continue
 		}
 		for _, account := range provider.Accounts {
-			if account.Disabled || account.IsUnmonitored || account.State == StateInvalid {
+			if account.Disabled || account.IsUnmonitored || account.HasFreshAuthFailure(now) {
 				continue
 			}
-			alert := Alert{Provider: provider.Provider, Key: account.Key, Alias: account.Label, Severity: SeverityWarn, OccurredAt: now}
-			alert.ObservedAt = account.ObservedAt
-			if account.AuthFailed {
-				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（认证状态待确认）", "检查凭证认证与最新采集结果"
+			alert := Alert{Provider: provider.Provider, Key: account.Key, Alias: account.Label, Severity: SeverityWarn, OccurredAt: now,
+				ObservedAt: account.ObservedAt, FreshWindowMS: defaultFreshWindow.Milliseconds(), EvidenceSource: EvidenceQuota}
+			if account.CollectionFailed && evidenceFresh(account.AttemptedAt, now, defaultFreshWindow) {
+				alert.ObservedAt, alert.EvidenceSource = account.AttemptedAt, EvidenceAttempt
+				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（最新采集失败，认证状态未知）", "检查最新采集结果与采集链路"
 				alerts = append(alerts, alert)
 				continue
 			}
-			if !account.OK || !observationFresh(account, now, defaultFreshWindow) || !usableState(account.State) && account.State != StateExhausted {
-				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（读数异常或已过期）", "检查采集链路后再决定额度安排"
+			// An unresolved incident is ownership, not renewed authentication evidence.
+			// Long-stale or untimed readings belong to diagnostics and monitor_down.
+			if !observationFresh(account, now, defaultFreshWindow) {
+				continue
+			}
+			if account.AuthFailed || !account.OK || !usableState(account.State) && account.State != StateExhausted {
+				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（读数异常，当前状态待确认）", "检查采集链路后再决定额度安排"
 				alerts = append(alerts, alert)
 				continue
 			}
@@ -191,7 +196,7 @@ func decisionAlerts(msg Message) []Alert {
 		alerts = append(alerts, attentionSignals(*msg.Report, DefaultTightRemainingPercent, msg.EvaluatedAt)...)
 		for _, provider := range msg.Report.Providers {
 			for _, account := range provider.Accounts {
-				if !account.Disabled && account.State == StateInvalid {
+				if !account.Disabled && account.HasFreshAuthFailure(msg.EvaluatedAt) {
 					alerts = append(alerts, credentialAlert(provider.Provider, account, msg.EvaluatedAt))
 				}
 			}
@@ -211,36 +216,8 @@ func decisionAlerts(msg Message) []Alert {
 		merged = append(merged, alert)
 	}
 	alerts = merged
-	for _, item := range msg.Pending {
-		found := false
-		for _, alert := range alerts {
-			if alertItemID(alert) == item.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			title := defaultTitles[item.Kind]
-			if item.Kind == AlertQuotaLow {
-				title = "额度偏紧，最新读数待确认"
-			}
-			if item.Kind == AlertQuotaExhausted {
-				title = "额度耗尽，恢复待确认"
-			}
-			if item.Kind == AlertReadingMissing {
-				title = "数据缺失"
-			}
-			if title == "" {
-				title = "异常仍待确认"
-			}
-			alerts = append(alerts, Alert{Kind: item.Kind, Provider: item.Provider, Key: item.Key, Alias: item.Alias, Title: title, Advice: item.Action, Severity: SeverityWarn})
-		}
-	}
-	for _, tight := range msg.Tight {
-		if len(alerts) == 0 {
-			alerts = append(alerts, Alert{Kind: AlertQuotaLow, Provider: tight.Provider, Title: "额度偏紧", Detail: "凭证明细数据缺失", Advice: "准备备用凭证并检查最新读数", Severity: SeverityWarn})
-		}
-	}
+	// Pending ownership and channel summaries carry no current per-item evidence.
+	// They remain available as diagnostic context, never as synthetic risk rows.
 	if len(alerts) > 1 {
 		filtered := alerts[:0]
 		for _, alert := range alerts {

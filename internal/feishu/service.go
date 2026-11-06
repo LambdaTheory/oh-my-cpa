@@ -1141,7 +1141,7 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			if attempt.After(lastAttempt) {
 				lastAttempt = attempt
 			}
-			isExplicitProblem := account.State == StateInvalid || account.AuthFailed || account.CooldownUntil != nil && account.CooldownUntil.After(now)
+			isExplicitProblem := (account.State == StateInvalid || account.AuthFailed) && !hasNonAuthCollectionFailure(account, now) || account.AttemptReason == "auth" || account.CooldownUntil != nil && account.CooldownUntil.After(now)
 			if !isExplicitProblem {
 				hasFailure = hasFailure || account.CollectionFailed || !account.OK
 				hasValid = hasValid || account.OK && !account.CollectionFailed && observationFresh(account, now, defaultFreshWindow)

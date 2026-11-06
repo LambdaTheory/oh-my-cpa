@@ -17,7 +17,7 @@ func TestCredentialInvalidAlertsOncePerEpisode(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	rep := Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", Label: "acct", State: StateInvalid, OK: false, LastSuccessAt: now.Add(-time.Hour)}},
+		Accounts: []AccountReport{{Key: "a1", Label: "acct", State: StateInvalid, AuthSignalObservedAt: now, OK: false, LastSuccessAt: now.Add(-time.Hour)}},
 	}}}
 
 	first := evaluatePolicy(policyCfg(), PolicyInput{Report: rep, Now: now})
@@ -64,7 +64,7 @@ func TestCredentialItemNotRecoveredWhileAuthFailed(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	invalid := Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", State: StateInvalid, OK: false, LastSuccessAt: now.Add(-time.Hour)}},
+		Accounts: []AccountReport{{Key: "a1", State: StateInvalid, AuthSignalObservedAt: now, OK: false, LastSuccessAt: now.Add(-time.Hour)}},
 	}}}
 	first := evaluatePolicy(policyCfg(), PolicyInput{Report: invalid, Now: now})
 
@@ -91,7 +91,7 @@ func TestOpenCredentialItemIsRetainedWithoutPositiveRecovery(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
 	invalid := Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", State: StateInvalid, OK: false, LastSuccessAt: now.Add(-time.Hour)}},
+		Accounts: []AccountReport{{Key: "a1", State: StateInvalid, AuthSignalObservedAt: now, OK: false, LastSuccessAt: now.Add(-time.Hour)}},
 	}}}
 	first := evaluatePolicy(policyCfg(), PolicyInput{Report: invalid, Now: now})
 	if len(first.Items) != 1 || first.Items[0].Status != PendingOpen {
@@ -186,7 +186,7 @@ func TestQuietStillProducesTheAlertForTheCallerToHold(t *testing.T) {
 	now := time.Date(2026, 10, 15, 23, 30, 0, 0, time.UTC)
 	rep := Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", State: StateInvalid}},
+		Accounts: []AccountReport{{Key: "a1", State: StateInvalid, AuthSignalObservedAt: now}},
 	}}}
 	res := evaluatePolicy(policyCfg(), PolicyInput{Report: rep, Now: now, Quiet: true})
 	// The classification is the same during quiet: the alert is produced and the

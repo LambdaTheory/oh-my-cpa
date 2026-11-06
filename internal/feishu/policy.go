@@ -143,7 +143,9 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	desired, alertFor := policySignals(info, in.Now)
 	if cfg.EnableAttention {
 		for _, alert := range attentionSignals(in.Report, cfg.TightRemainingPercent, in.Now) {
-			if alert.Kind == AlertReadingMissing && !hasFreshAttempt(in.Report, alert, in.Now) {
+			// A recent failed attempt is diagnostic context, not a new missing-quota
+			// episode. Sustained collection failures retain monitor_down's thresholds.
+			if alert.EvidenceSource == EvidenceAttempt {
 				continue
 			}
 			id := alertItemID(alert)
@@ -269,21 +271,6 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 	return res
 }
 
-// Untimed or long-stale missing data retains the established monitor-down grace.
-func hasFreshAttempt(rep Report, alert Alert, now time.Time) bool {
-	for _, provider := range rep.Providers {
-		if provider.Provider != alert.Provider {
-			continue
-		}
-		for _, account := range provider.Accounts {
-			if account.Key == alert.Key {
-				return observationFresh(account, now, defaultFreshWindow)
-			}
-		}
-	}
-	return false
-}
-
 // policySignals builds the desired pending items from the report, plus the alert
 // to attach to each item the first time it opens.
 func policySignals(info reportInfo, now time.Time) (map[string]PendingItem, map[string]*Alert) {
@@ -292,7 +279,7 @@ func policySignals(info reportInfo, now time.Time) (map[string]PendingItem, map[
 
 	for _, p := range info.providers {
 		for _, account := range p.accounts {
-			if account.Disabled || p.states[account.Key] != StateInvalid {
+			if account.Disabled || !account.HasFreshAuthFailure(now) {
 				continue
 			}
 			id := ItemID(AlertCredential, p.provider, account.Key, "")
@@ -336,6 +323,8 @@ func credentialAlert(provider string, account AccountReport, now time.Time) Aler
 		label = providerName(provider)
 	}
 	return Alert{
+		FreshWindowMS: defaultFreshWindow.Milliseconds(), EvidenceSource: EvidenceAuthentication,
+		ObservedAt: account.AuthSignalObservedAt,
 		Kind:       AlertCredential,
 		Severity:   SeverityUrgent,
 		Provider:   provider,
@@ -466,7 +455,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 				pi.hasValid = true
 			} else {
 				sawFailure = true
-				if account.State != StateInvalid && !account.AuthFailed {
+				if account.State != StateInvalid && !account.AuthFailed || hasNonAuthCollectionFailure(account, now) {
 					authOnly = false
 				}
 			}

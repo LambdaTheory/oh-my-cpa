@@ -274,7 +274,7 @@ func waitSignal(t *testing.T, ch chan struct{}) bool {
 func invalidReport(now time.Time) Report {
 	return Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "codex",
-		Accounts: []AccountReport{{Key: "a1", Label: "acct", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
+		Accounts: []AccountReport{{Key: "a1", Label: "acct", State: StateInvalid, AuthSignalObservedAt: now, LastSuccessAt: now.Add(-time.Hour)}},
 	}}}
 }
 
@@ -724,7 +724,7 @@ func notificationOfKind(outbox []Notification, kind string) (Notification, bool)
 func invalidReportWith(now time.Time, accounts ...string) Report {
 	reports := make([]AccountReport, 0, len(accounts))
 	for _, key := range accounts {
-		reports = append(reports, AccountReport{Key: key, Label: key, State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)})
+		reports = append(reports, AccountReport{Key: key, Label: key, State: StateInvalid, AuthSignalObservedAt: now, LastSuccessAt: now.Add(-time.Hour)})
 	}
 	return Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "codex", Accounts: reports}}}
 }
@@ -744,6 +744,9 @@ func mixedReport(now time.Time, states map[string]string) Report {
 		account := AccountReport{
 			Key: key, Label: key, State: state,
 			OK: state == StateHealthy, LastSuccessAt: now.Add(-time.Hour),
+		}
+		if account.State == StateInvalid {
+			account.AuthSignalObservedAt = now
 		}
 		if account.OK {
 			account.ObservedAt, account.LastSuccessAt = now, now

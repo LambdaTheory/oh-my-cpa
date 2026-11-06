@@ -415,7 +415,7 @@ func TestPredictionOwnershipDoesNotSuppressImmediateAlert(t *testing.T) {
 	service := NewService(Options{
 		Web: web, Overlay: overlay, Store: NewMemoryStore(),
 		Source: &fakeReportSource{report: Report{GeneratedAt: now, Providers: []ProviderReport{{
-			Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
+			Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, AuthSignalObservedAt: now, LastSuccessAt: now.Add(-time.Hour)}},
 		}}}, has: true},
 		Renderer: NewPlainReportRenderer(time.UTC), Now: func() time.Time { return now },
 		SenderFactory: func(Resolved) Sender { return sender }, SourceFactory: func(Resolved) EventSource { return &fakeEventSource{} },
@@ -482,7 +482,7 @@ func TestRuntimeDocumentTransitionsPreserveBothSchedulerWrites(t *testing.T) {
 			web.QuietStart, web.QuietEnd = "00:00", "23:59"
 			store := newBlockingFirstLoadStore()
 			reportSource := &fakeReportSource{has: true, report: Report{GeneratedAt: now, Providers: []ProviderReport{{
-				Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, LastSuccessAt: now.Add(-time.Hour)}},
+				Provider: "claude", Accounts: []AccountReport{{Key: "a1", Label: "account", State: StateInvalid, AuthSignalObservedAt: now, LastSuccessAt: now.Add(-time.Hour)}},
 			}}}}
 			service := NewService(Options{
 				Web: web, Overlay: overlay, Store: store, Source: reportSource, Now: func() time.Time { return now },
