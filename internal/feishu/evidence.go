@@ -83,8 +83,18 @@ func eligibleNotificationAlerts(notification Notification, report *Report, track
 	for _, pending := range notification.Pending {
 		selectionIDs = append(selectionIDs, pending.ID)
 	}
+	// A selected identity without a stored alert was reserved by this row's own
+	// creation instant, not by whenever a retry re-reads the report. Keeping the
+	// instant stable lets a later discard match the pending item's NotifiedAt.
+	claimAt := notification.OccurredAt
+	if !isMonitoringTimeValid(claimAt) {
+		claimAt = notification.CreatedAt
+	}
 	for _, id := range selectionIDs {
 		if alert, ok := current[id]; ok && !selected[id] {
+			if isMonitoringTimeValid(claimAt) {
+				alert.OccurredAt = claimAt
+			}
 			candidates = append(candidates, alert)
 			selected[id] = true
 		}
@@ -104,7 +114,7 @@ func eligibleNotificationAlerts(notification Notification, report *Report, track
 			if !exists || refreshed.Kind != AlertMonitorDown {
 				continue
 			}
-			alert = refreshed
+			alert = retainClaimInstant(refreshed, alert)
 		default:
 			if !strings.HasPrefix(alert.Kind, predictionKindPrefix) && report != nil {
 				refreshed, exists := current[alertItemID(alert)]
@@ -116,7 +126,7 @@ func eligibleNotificationAlerts(notification Notification, report *Report, track
 				if alert.ObservedAt.Equal(refreshed.ObservedAt) && alert.FreshWindowMS > 0 && alert.FreshWindowMS < refreshed.FreshWindowMS {
 					refreshed.FreshWindowMS = alert.FreshWindowMS
 				}
-				alert = refreshed
+				alert = retainClaimInstant(refreshed, alert)
 			}
 			if !alertEvidenceFresh(alert, now) {
 				continue
@@ -129,6 +139,16 @@ func eligibleNotificationAlerts(notification Notification, report *Report, track
 		}
 	}
 	return eligible
+}
+
+// The claim instant belongs to the reservation, not to the evidence. A retry
+// re-reads the report and requalifies the alert, but moving OccurredAt would
+// make a later discard fail to match the pending item's frozen NotifiedAt.
+func retainClaimInstant(refreshed, stored Alert) Alert {
+	if isMonitoringTimeValid(stored.OccurredAt) {
+		refreshed.OccurredAt = stored.OccurredAt
+	}
+	return refreshed
 }
 
 func reportEvidenceHealthy(report Report, now time.Time) bool {
