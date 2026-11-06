@@ -803,7 +803,7 @@ const DICT: Record<string, [string, string]> = {
   'agent.capability.model_groups_list': ["查看模型组", "Read model groups"],
   'agent.capability.model_groups_list.description': ["列出运营人员定义的模型组名称和成员数；只读，不修改分组。", "List the operator's model groups by name and member count. Read-only; group names feed the per-group read."],
   'agent.capability.model_groups_models': ["按组查看模型", "Read models in a group"],
-  'agent.capability.model_groups_models.description': ["读取一个模型组的成员、可用档位、最近 7 天日均用量和组内位置，按可用到不可用排序；沿用模型建议的判定，只读。", "Read one model group's members with availability, seven-day daily usage and position, sorted available to unavailable. Uses model advice's verdicts; read-only."],
+  'agent.capability.model_groups_models.description': ["读取一个模型组的成员、可用档位、余额和组内位置，按可用到不可用排序；沿用模型建议的判定，只读。", "Read one model group's members with availability, balance and position, sorted available to unavailable. Uses model advice's verdicts; read-only."],
   'agent.capability.quota_prediction': ["额度预测", "Quota prediction"],
   'agent.capability.reset_advice': ["重置建议", "Reset advice"],
   'agent.capability.reset_advice.description': ["根据已记录的重置次数、到期时间与额度读数建议到期前使用或留作应急；不刷新额度或领取重置。", "Advise whether to use resets before expiry or keep them for recovery from stored entitlements and quota readings; never refreshes quota or redeems resets."],
@@ -4446,6 +4446,16 @@ const DICT: Record<string, [string, string]> = {
   'model_groups.order_failed_description': ['列表已回到上次保存的顺序，可以重试。', 'The list is back to the last saved order; you can retry.'],
   'model_groups.members_empty_title': ['这个组还没有模型', 'This group has no models yet'],
   'model_groups.members_empty_description': ['加入模型后可以手动调整顺序。', 'Add models, then put them in order.'],
+  'model_groups.availability': ['可用性', 'Availability'],
+  'model_groups.availability.available': ['可用', 'Available'],
+  'model_groups.availability.tight': ['可用但快用完', 'Usable, nearly spent'],
+  'model_groups.availability.unknown': ['不确定', 'Unknown'],
+  'model_groups.availability.unavailable': ['不可用', 'Unavailable'],
+  'model_groups.balance': ['余额', 'Balance'],
+  'model_groups.band_counts': ['成员按可用性分档的计数', 'Members by availability band'],
+  'model_groups.sort_note': ['表格按你排的顺序显示。按组查询按「可用 → 可用但快用完 → 不确定 → 不可用」排序，同一档内按组内顺序。', 'The table follows your order. Per-group reads sort available, nearly spent, unknown, then unavailable, and keep your order within a band.'],
+  'model_groups.readings_failed': ['无法读取可用性和余额', 'Could not read availability and balances'],
+  'model_groups.readings_failed_description': ['模型组本身不受影响，刷新可以重试。', 'The groups themselves are unaffected; refresh to retry.'],
 };
 
 export type TFunc = (key: string, vars?: Record<string, string | number>) => string;

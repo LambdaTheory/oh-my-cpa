@@ -3,6 +3,7 @@ import type {
   ModelGroup,
   ModelGroupAddResult,
   ModelGroupList,
+  ModelGroupReadings,
   ModelGroupRestoreResult,
 } from '../../types/modelGroups';
 
@@ -27,6 +28,11 @@ function groupPath(id: string): string {
 export const modelGroupApi = {
   list(): Promise<ModelGroupList> {
     return read<ModelGroupList>('/management/model-groups', { method: 'GET' });
+  },
+
+  /** Availability and balance for every group member and every advertised model. */
+  readings(): Promise<ModelGroupReadings> {
+    return read<ModelGroupReadings>('/management/model-groups/readings', { method: 'GET' });
   },
 
   create(name: string): Promise<ModelGroup> {

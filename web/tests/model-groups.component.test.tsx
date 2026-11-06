@@ -38,6 +38,9 @@ function labor() {
 }
 
 let groups: unknown[];
+let readings: unknown[];
+let readingsFailure: boolean;
+let readingsRequests: number;
 let orderRequests: string[][];
 let createRequests: string[];
 let deleteRequests: string[];
@@ -120,6 +123,12 @@ function dragOnto(dragged: string, target: string) {
 beforeEach(() => {
   window.localStorage.setItem('omc-lang', 'en');
   groups = [labor()];
+  readings = [
+    { model: 'claude-sonnet', availability: 'tight', balance: { amount: '3.2', currency: 'USD' } },
+    { model: 'gpt-5', availability: 'available', balance: null },
+  ];
+  readingsFailure = false;
+  readingsRequests = 0;
   orderRequests = [];
   createRequests = [];
   deleteRequests = [];
@@ -143,6 +152,13 @@ beforeEach(() => {
     let response: Response;
     if (input === '/omc/api/v1/management/model-groups' && method === 'GET') {
       response = jsonResponse({ groups });
+    } else if (input === '/omc/api/v1/management/model-groups/readings' && method === 'GET') {
+      // The readings are a second read of the same page, not a substitute for the list: an
+      // answer that fails here must leave the groups on screen.
+      readingsRequests += 1;
+      response = readingsFailure
+        ? jsonResponse({ error: 'readings_unavailable' }, 500)
+        : jsonResponse({ models: readings });
     } else if (input === '/omc/api/v1/management/model-groups' && method === 'POST') {
       const name = JSON.parse(String(options.body)).name;
       createRequests.push(name);
@@ -185,6 +201,71 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const client of clients.splice(0)) client.clear();
+});
+
+describe('model group readings', () => {
+  /** The band counts a card draws: the band it names and the number it printed. */
+  function drawnBands(): Array<[string | null, string]> {
+    return [...document.querySelectorAll('[data-model-group-band]')].map((node) => [
+      node.getAttribute('data-model-group-band'),
+      node.lastElementChild?.textContent ?? '',
+    ]);
+  }
+
+  it('counts a card’s members by band and states the preferred model’s balance', async () => {
+    mountList();
+    await screen.findByText('Labor');
+
+    await waitFor(() => expect(drawnBands()).toEqual([
+      ['available', '1'],
+      ['tight', '1'],
+      ['unknown', '0'],
+      ['unavailable', '0'],
+    ]));
+    const preferred = document.querySelector('[data-model-group-preferred]') as HTMLElement;
+    // The first member is the group's preference, and its reading is what the card prints.
+    expect(preferred.getAttribute('data-model-group-preferred')).toBe('claude-sonnet');
+    expect(within(preferred).getByText('claude-sonnet')).toBeTruthy();
+    expect(within(preferred).getByText('$3.20')).toBeTruthy();
+  });
+
+  it('draws each member’s band and balance on the detail table', async () => {
+    mountDetail();
+    await screen.findByText('claude-sonnet');
+
+    await waitFor(() => expect(within(rowOf('claude-sonnet')).getByText('Usable, nearly spent')).toBeTruthy());
+    expect(within(rowOf('claude-sonnet')).getByText('$3.20')).toBeTruthy();
+    expect(within(rowOf('gpt-5')).getByText('Available')).toBeTruthy();
+    // A member with no published balance draws the blank cell, not a zero.
+    expect(within(rowOf('gpt-5')).getByText('—')).toBeTruthy();
+  });
+
+  it('draws a member the server did not report as unknown with no balance, rather than inventing one', async () => {
+    groups = [{
+      ...labor(),
+      members: [member('claude-sonnet', 1), member('gemini', 2)],
+    }];
+    mountDetail();
+    await screen.findByText('gemini');
+
+    // A name with no reading is the same answer as a reading the server could not measure:
+    // the unknown band and the blank balance cell.
+    await waitFor(() => expect(within(rowOf('gemini')).getByText('Unknown')).toBeTruthy());
+    expect(within(rowOf('gemini')).getByText('—')).toBeTruthy();
+    expect(within(rowOf('claude-sonnet')).getByText('Usable, nearly spent')).toBeTruthy();
+  });
+
+  it('keeps the groups on screen and says so when the readings cannot be read', async () => {
+    readingsFailure = true;
+    mountList();
+    await screen.findByText('Labor');
+
+    await screen.findByText('Could not read availability and balances');
+    expect(readingsRequests).toBeGreaterThan(0);
+    // No reading means no band counts: the card must not draw four zeroes as if it had looked.
+    expect(drawnBands()).toEqual([]);
+    expect(screen.getByRole('button', { name: 'Open' })).toBeTruthy();
+  });
 });
 
 describe('model group detail order', () => {

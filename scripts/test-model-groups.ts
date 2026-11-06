@@ -2,8 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   MODEL_GROUP_NAME_LIMIT,
+  countModelGroupAvailability,
+  emptyModelGroupAvailabilityCounts,
+  formatModelGroupBalance,
   modelGroupById,
   modelGroupNameError,
+  modelGroupReading,
   modelGroupRefusalCode,
   moveModelGroupMember,
   reorderModelGroupInList,
@@ -12,6 +16,7 @@ import {
   withModelOrder,
   withoutModelGroup,
   type ModelGroup,
+  type ModelGroupReadings,
 } from '../web/src/types/modelGroups.ts';
 
 function group(id: string, name: string, models: readonly string[], isPreset = false): ModelGroup {
@@ -111,4 +116,63 @@ test('a refusal code is read from the server’s error body and absent from an u
   assert.equal(modelGroupRefusalCode({ data: {} }), undefined);
   assert.equal(modelGroupRefusalCode(new Error('offline')), undefined);
   assert.equal(modelGroupRefusalCode(null), undefined);
+});
+
+function readings(): ModelGroupReadings {
+  return {
+    models: [
+      { model: 'gpt-5', availability: 'available', balance: { amount: '12.5', currency: 'USD' } },
+      { model: 'claude-sonnet', availability: 'tight', balance: null },
+      { model: 'kimi', availability: 'unavailable', balance: { amount: '0', currency: 'USD' } },
+    ],
+  };
+}
+
+test('a name joins its reading, and a name the server did not report is drawn as unknown', () => {
+  assert.deepEqual(modelGroupReading(readings(), 'gpt-5'), {
+    model: 'gpt-5',
+    availability: 'available',
+    balance: { amount: '12.5', currency: 'USD' },
+  });
+  // No reading at all and no reading for this name are the same answer: unknown, no balance.
+  assert.deepEqual(modelGroupReading(readings(), 'gemini'), { model: 'gemini', availability: 'unknown', balance: null });
+  assert.deepEqual(modelGroupReading(undefined, 'gpt-5'), { model: 'gpt-5', availability: 'unknown', balance: null });
+});
+
+test('the band counts add up to the group, with an unreported member counted as unknown', () => {
+  const counts = countModelGroupAvailability(['gpt-5', 'claude-sonnet', 'kimi', 'gemini'], readings());
+  assert.deepEqual(counts, { available: 1, tight: 1, unknown: 1, unavailable: 1 });
+  assert.equal(Object.values(counts).reduce((sum, count) => sum + count, 0), 4);
+  // An empty group and a page that could not read readings both start from all zeros.
+  assert.deepEqual(countModelGroupAvailability([], readings()), emptyModelGroupAvailabilityCounts());
+  assert.deepEqual(countModelGroupAvailability(['gpt-5'], undefined), {
+    available: 0,
+    tight: 0,
+    unknown: 1,
+    unavailable: 0,
+  });
+});
+
+test('each count is its own record, so counting one group cannot leak into the next', () => {
+  const first = emptyModelGroupAvailabilityCounts();
+  first.available = 7;
+  assert.equal(emptyModelGroupAvailabilityCounts().available, 0);
+});
+
+test('a balance is drawn in its own currency, and an absent or empty one as the blank cell', () => {
+  // The page draws its own dash for an empty string, so an absent balance must be empty, not "—".
+  assert.equal(formatModelGroupBalance(null), '');
+  assert.equal(formatModelGroupBalance(undefined), '');
+  assert.equal(formatModelGroupBalance({ amount: '', currency: 'USD' }), '');
+  assert.equal(formatModelGroupBalance({ amount: '12.5', currency: 'USD' }), '$12.50');
+  assert.equal(formatModelGroupBalance({ amount: '150', currency: 'USD' }), '$150.00');
+  assert.equal(formatModelGroupBalance({ amount: '12.5', currency: 'EUR' }), new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'EUR',
+  }).format(12.5));
+  // An amount the page cannot parse, or a currency it cannot format, is shown verbatim rather
+  // than swallowed: an unreadable number is still a fact the server stated.
+  assert.equal(formatModelGroupBalance({ amount: 'lots', currency: 'USD' }), 'lots USD');
+  // A currency `Intl` refuses is stated as the server sent it, not dropped.
+  assert.equal(formatModelGroupBalance({ amount: '12.5', currency: 'US' }), '12.5 US');
 });

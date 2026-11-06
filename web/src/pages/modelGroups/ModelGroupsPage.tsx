@@ -8,10 +8,15 @@ import { PageLoading } from '../../components/common/PageLoading';
 import { RefreshButton } from '../../components/common/RefreshButton';
 import { EmptyState } from '../../components/common/EmptyState';
 import { ConfirmAction } from '../../components/common/ConfirmAction';
-import { LoadFailure, useToast } from '../../components/feedback';
+import { LoadFailure, Notice, useToast } from '../../components/feedback';
 import { PlusOutlined } from '../../components/icons';
 import {
+  MODEL_GROUP_AVAILABILITY_BANDS,
+  MODEL_GROUP_READINGS_QUERY_KEY,
   MODEL_GROUPS_QUERY_KEY,
+  countModelGroupAvailability,
+  formatModelGroupBalance,
+  modelGroupReading,
   modelGroupRefusalCode,
   withoutModelGroup,
   type ModelGroup,
@@ -19,6 +24,7 @@ import {
   type ModelGroupRestoreResult,
 } from '../../types/modelGroups';
 import { modelGroupApi } from './api';
+import { ModelGroupAvailabilityTag } from './ModelGroupAvailabilityTag';
 import { ModelGroupNameDialog } from './ModelGroupNameDialog';
 import styles from './ModelGroups.module.css';
 
@@ -27,10 +33,12 @@ type NameDialog = { mode: 'create' } | { mode: 'rename'; group: ModelGroup };
 /**
  * The operator's model groups, one card each.
  *
- * A group is a name and an ordered list of model names, so the card states the two facts a
- * reader needs to decide which one to open: how it is called and how many models it holds.
- * Availability and usage figures are not drawn here because no management read exposes them;
- * the card would otherwise state numbers the page cannot verify.
+ * A group is a name and an ordered list of model names, so the card states the facts a reader
+ * needs to decide which one to open: how it is called, how many models it holds, how they fall
+ * across the four availability bands, and which model comes first with its balance. The bands
+ * come from `GET /management/model-groups/readings`, the same projection the per-group query
+ * reports, so a card and a caller never read the same model differently. When no readings could
+ * be loaded the card says so instead of drawing every member as "unknown".
  */
 export const ModelGroupsPage: React.FC = () => {
   const t = useT();
@@ -45,8 +53,16 @@ export const ModelGroupsPage: React.FC = () => {
     queryFn: modelGroupApi.list,
   });
   const groups = groupsQuery.data?.groups ?? [];
+  const readingsQuery = useQuery({
+    queryKey: MODEL_GROUP_READINGS_QUERY_KEY,
+    queryFn: modelGroupApi.readings,
+  });
+  const readings = readingsQuery.data;
 
-  const refresh = () => { void groupsQuery.refetch(); };
+  const refresh = () => {
+    void groupsQuery.refetch();
+    void readingsQuery.refetch();
+  };
   const settleList = () => { void queryClient.invalidateQueries({ queryKey: MODEL_GROUPS_QUERY_KEY }); };
 
   /** A refusal the inline checks could not predict, in the reader's language. */
@@ -145,6 +161,10 @@ export const ModelGroupsPage: React.FC = () => {
         }
       />
 
+      {readingsQuery.isError && !readings && (
+        <Notice tone="warning" title={t('model_groups.readings_failed')} description={t('model_groups.readings_failed_description')} />
+      )}
+
       {groupsQuery.isLoading ? (
         <PageLoading variant="block" />
       ) : groupsQuery.isError && !groupsQuery.data ? (
@@ -164,32 +184,56 @@ export const ModelGroupsPage: React.FC = () => {
         </EmptyState>
       ) : (
         <div className={styles['cards']}>
-          {groups.map((group) => (
-            <article key={group.id} className={styles['card']} data-model-group-card={group.id}>
-              <div className={styles['card-head']}>
-                <h2 className={styles['card-name']}>{group.name}</h2>
-              </div>
-              <p className={styles['card-meta']}>{t('model_groups.member_count', { count: group.members.length })}</p>
-              <div className={styles['card-actions']}>
-                <Button onClick={() => navigate(`/model-groups/${encodeURIComponent(group.id)}`)}>
-                  {t('model_groups.open')}
-                </Button>
-                <Button type="text" size="small" onClick={() => openDialog({ mode: 'rename', group })}>
-                  {t('model_groups.rename')}
-                </Button>
-                <ConfirmAction
-                  title={t('model_groups.delete_title', { name: group.name })}
-                  description={t('model_groups.delete_description')}
-                  confirmLabel={t('common.delete')}
-                  isDanger
-                  isConfirming={deleteMutation.isPending}
-                  onConfirm={() => deleteMutation.mutate(group)}
-                >
-                  <Button type="text" size="small" danger>{t('common.delete')}</Button>
-                </ConfirmAction>
-              </div>
-            </article>
-          ))}
+          {groups.map((group) => {
+            const preferred = group.members[0];
+            const counts = countModelGroupAvailability(group.members.map((member) => member.model), readings);
+            const preferredReading = preferred ? modelGroupReading(readings, preferred.model) : undefined;
+            return (
+              <article key={group.id} className={styles['card']} data-model-group-card={group.id}>
+                <div className={styles['card-head']}>
+                  <h2 className={styles['card-name']}>{group.name}</h2>
+                </div>
+                <p className={styles['card-meta']}>{t('model_groups.member_count', { count: group.members.length })}</p>
+                {readings && group.members.length > 0 && (
+                  <>
+                    <ul className={styles['card-bands']} aria-label={t('model_groups.band_counts')}>
+                      {MODEL_GROUP_AVAILABILITY_BANDS.map((band) => (
+                        <li key={band} className={styles['card-band']} data-model-group-band={band}>
+                          <ModelGroupAvailabilityTag availability={band} />
+                          <span className={styles['card-band-count']}>{counts[band]}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className={styles['card-preferred']} data-model-group-preferred={preferred.model}>
+                      <span className={styles['card-preferred-label']}>{t('model_groups.preferred')}</span>
+                      <code className={styles['model-name']}>{preferred.model}</code>
+                      <span className={styles['card-balance']}>
+                        {formatModelGroupBalance(preferredReading?.balance) || '—'}
+                      </span>
+                    </p>
+                  </>
+                )}
+                <div className={styles['card-actions']}>
+                  <Button onClick={() => navigate(`/model-groups/${encodeURIComponent(group.id)}`)}>
+                    {t('model_groups.open')}
+                  </Button>
+                  <Button type="text" size="small" onClick={() => openDialog({ mode: 'rename', group })}>
+                    {t('model_groups.rename')}
+                  </Button>
+                  <ConfirmAction
+                    title={t('model_groups.delete_title', { name: group.name })}
+                    description={t('model_groups.delete_description')}
+                    confirmLabel={t('common.delete')}
+                    isDanger
+                    isConfirming={deleteMutation.isPending}
+                    onConfirm={() => deleteMutation.mutate(group)}
+                  >
+                    <Button type="text" size="small" danger>{t('common.delete')}</Button>
+                  </ConfirmAction>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
 

@@ -183,6 +183,7 @@ var demoPolicy = []demoPolicyRule{
 	// database and touching no gateway. Reads are served from the fixture; writes move
 	// the fixture's in-memory groups, which the demo header marks as not durable.
 	{http.MethodGet, "/api/v1/management/model-groups", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/model-groups/readings", demoAllow, ""},
 	{http.MethodPost, "/api/v1/management/model-groups", demoAllow, ""},
 	{http.MethodPost, "/api/v1/management/model-groups/restore-defaults", demoAllow, ""},
 	{http.MethodPatch, "/api/v1/management/model-groups/{id}", demoAllow, ""},

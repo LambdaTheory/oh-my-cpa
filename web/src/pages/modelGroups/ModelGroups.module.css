@@ -43,6 +43,65 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The four bands in their fixed order; a band is a label and a count, not a filter. */
+.card-bands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card-band {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.card-band-count {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The group's first model is the one a caller would take first, so the card states it. */
+.card-preferred {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin: 0;
+  min-width: 0;
+}
+
+.card-preferred-label {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.card-balance {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The member table is in the operator's order; this says what the caller's read sorts by. */
+.sort-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.model-balance {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+}
+
 /* The actions sit at the card's floor, so cards of different name lengths line up. */
 .card-actions {
   display: flex;

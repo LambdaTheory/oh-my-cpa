@@ -19,11 +19,14 @@ import {
   type ModelSquareEntry,
 } from '../../types/modelSquare';
 import {
+  MODEL_GROUP_READINGS_QUERY_KEY,
   MODEL_GROUPS_QUERY_KEY,
   modelGroupById,
+  modelGroupReading,
   withModelGroup,
   type ModelGroupList,
 } from '../../types/modelGroups';
+import { ModelGroupAvailabilityTag } from './ModelGroupAvailabilityTag';
 import styles from './ModelGroups.module.css';
 
 /**
@@ -52,6 +55,11 @@ export const ModelGroupAddPage: React.FC = () => {
     queryFn: api.getModelSquare,
     staleTime: 30_000,
   });
+  const readingsQuery = useQuery({
+    queryKey: MODEL_GROUP_READINGS_QUERY_KEY,
+    queryFn: modelGroupApi.readings,
+  });
+  const readings = readingsQuery.data;
   const group = modelGroupById(groupsQuery.data, id);
 
   const memberKey = group?.members.map((member) => member.model).join('\u0000') ?? '';
@@ -158,6 +166,16 @@ export const ModelGroupAddPage: React.FC = () => {
           </span>
         );
       },
+    },
+    {
+      key: 'availability',
+      title: t('model_groups.availability'),
+      width: 132,
+      render: (_value, entry) => (
+        <ModelGroupAvailabilityTag
+          availability={readings ? modelGroupReading(readings, entry.identity).availability : undefined}
+        />
+      ),
     },
   ];
 

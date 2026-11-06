@@ -4177,9 +4177,17 @@ read rather than a second by-id route, and the add page's candidates come from
 `GET /management/model-square` - the advertised call names and aliases - with models already
 in the group left out. A move saves the complete order on the click and is optimistic; a
 refused save puts the last stored order back under a retry notice. No page states which
-other groups hold a model, and none draws availability or balances: the management API
-exposes no per-model reading for either, so drawing them would state numbers the console
-cannot verify.
+other groups hold a model.
+
+`GET /management/model-groups/readings` answers one availability band and one balance per
+model, for the union of every group's members and every model the directory advertises:
+the list page counts the bands and states the preferred model's balance, the detail page
+states both beside each member, and the add page states availability on each candidate.
+The operations layer projects that answer with the same verdict and balance calculation
+`model_groups_models` and `model_advice` report, so a card and a caller cannot disagree
+about the same model, and evidence that cannot be read degrades to `unknown` and a null
+balance rather than a guess. The route is a console read under the session and same-origin
+guard; it registers no capability and touches no gateway.
 
 ## Reset announcement evidence
 

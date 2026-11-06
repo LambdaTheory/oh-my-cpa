@@ -270,6 +270,7 @@ func (h *Handler) routes() chi.Router {
 				// and nowhere else. Grouped under the management tree because the write
 				// side is a management action, sibling to the model square's read.
 				v1.Get("/management/model-groups", h.listModelGroups)
+				v1.Get("/management/model-groups/readings", h.listModelGroupReadings)
 				v1.Post("/management/model-groups", h.createModelGroup)
 				v1.Post("/management/model-groups/restore-defaults", h.restoreDefaultModelGroups)
 				v1.Patch("/management/model-groups/{id}", h.renameModelGroup)

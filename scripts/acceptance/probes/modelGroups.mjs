@@ -55,6 +55,14 @@ function modelGroupsFixture() {
 
   return [
     [(url, method) => method === 'GET' && url.pathname.endsWith('/management/model-groups'), () => ({ groups: ordered().map(clone) })],
+    // Availability and balance beside each model. The fixture holds no gateway evidence, so
+    // every model is `unknown` with no balance - the same answer the real projection gives
+    // when it cannot read one, and the state the pages must state rather than invent.
+    [(url, method) => method === 'GET' && url.pathname.endsWith('/management/model-groups/readings'), () => {
+      const names = new Set(DIRECTORY.models.map((model) => model.id));
+      for (const group of groups) for (const member of group.members) names.add(member.model);
+      return { models: [...names].sort().map((model) => ({ model, availability: 'unknown', balance: null })) };
+    }],
     [(url, method) => method === 'POST' && url.pathname.endsWith('/management/model-groups/restore-defaults'), () => {
       const created = [];
       for (const preset of PRESETS) {
@@ -198,6 +206,12 @@ export async function modelGroups({ base, page, check }) {
   // The same model in a second group, ordered differently: each group has its own positions.
   await page.goto(`${base}/model-groups`, { waitUntil: 'domcontentloaded' });
   await page.locator('.model-groups-page').waitFor();
+  // The card states the reading the caller's query reports: four bands and a preferred model.
+  const countedCard = page.locator('[data-model-group-card="created-1"]');
+  await until(async () => await countedCard.locator('[data-model-group-band]').count() === 4, { label: 'the card’s four bands' });
+  const unknownBand = (await countedCard.locator('[data-model-group-band="unknown"]').innerText()).trim();
+  check('a group card counts its members across the four availability bands', unknownBand.endsWith('3'), unknownBand);
+  check('a group card names the preferred model with its reading', (await countedCard.locator('[data-model-group-preferred]').innerText()).includes('claude-sonnet-5-5'));
   await openGroup(page, 'preset-labor');
   await page.locator('.empty-state').getByRole('button', { name: 'Add models' }).click();
   await addModels(page, ['gpt-5', 'gemini-3-pro']);
