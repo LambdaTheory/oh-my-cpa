@@ -98,6 +98,50 @@ func TestListAuditEventsReturnsEmptySlice(t *testing.T) {
 	}
 }
 
+// The repository and agent filters read the structured detail keys the repository-key trail
+// writes, so a name matches its own events rather than every row that mentions it (AC-23).
+func TestQueryAuditEventsFiltersByRepositoryAndAgent(t *testing.T) {
+	repo, _ := testRepository(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC).UnixMilli()
+	rows := []AuditEvent{
+		{Action: "repo_key.apply", TargetType: "repo_api_key", TargetID: "org/a", Result: "success",
+			Details: map[string]any{"repo": "org/a", "agent": "claude"}},
+		{Action: "repo_key.apply", TargetType: "repo_api_key", TargetID: "org/b", Result: "success",
+			Details: map[string]any{"repo": "org/b", "agent": "codex"}},
+		// A free-text mention of the repository that is not a repository-key event.
+		{Action: "config.update", TargetType: "config", TargetID: "note", Result: "success",
+			Details: map[string]any{"note": "org/a"}},
+	}
+	for i, row := range rows {
+		row.OccurredAtMS = base + int64(i)*1000
+		if _, err := repo.RecordAuditEvent(ctx, row); err != nil {
+			t.Fatalf("record %d: %v", i, err)
+		}
+	}
+	actions := func(query AuditQuery) []string {
+		t.Helper()
+		page, err := repo.QueryAuditEvents(ctx, query)
+		if err != nil {
+			t.Fatalf("query %#v: %v", query, err)
+		}
+		out := make([]string, 0, len(page.Events))
+		for _, event := range page.Events {
+			out = append(out, event.Action)
+		}
+		return out
+	}
+	if got := actions(AuditQuery{Repo: "org/a"}); strings.Join(got, ",") != "repo_key.apply" {
+		t.Fatalf("repo filter = %v, want the repository-key event only", got)
+	}
+	if got := actions(AuditQuery{Agent: "codex"}); strings.Join(got, ",") != "repo_key.apply" {
+		t.Fatalf("agent filter = %v, want the codex event only", got)
+	}
+	if got := actions(AuditQuery{Repo: "org/a", Agent: "codex"}); len(got) != 0 {
+		t.Fatalf("repo+agent filter = %v, want nothing", got)
+	}
+}
+
 func TestQueryAuditEventsFiltersFoldsAndPages(t *testing.T) {
 	repo, _ := testRepository(t)
 	ctx := context.Background()

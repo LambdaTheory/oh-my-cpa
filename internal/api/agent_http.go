@@ -18,6 +18,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/agent"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/agui"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/mcpbridge"
 )
 
 // mcpPrincipal is the authority of a caller holding the management key: every capability
@@ -159,12 +160,39 @@ func (h *Handler) invokeCapability(writer http.ResponseWriter, request *http.Req
 	if !readAgentInput(writer, request, &input) {
 		return
 	}
-	result, err := h.agent.executor.Invoke(request.Context(), principal, input.Name, input.Arguments, "")
+	// The caller reached this deployment, so the console address is known here: capabilities
+	// that answer with a link for a person (repo_key_apply's one-time approval link, AC-8)
+	// build it from this, not from a configured host.
+	ctx := capability.WithConsoleURL(capability.WithCaller(request.Context(), requestCaller(request)), h.consoleURL(request))
+	result, err := h.agent.executor.Invoke(ctx, principal, input.Name, input.Arguments, "")
 	if err != nil {
 		writePlaygroundError(writer, 400, capability.ErrorCode(err))
 		return
 	}
 	writeJSON(writer, 200, result)
+}
+
+// requestCaller reads the self-reported agent and device from the request headers. It is
+// caller data, never an authorization decision: nothing is granted on it, and a capability
+// that needs it records it for a human to confirm.
+func requestCaller(request *http.Request) capability.Caller {
+	return capability.Caller{
+		Agent:  callerHeader(request, mcpbridge.CALLER_AGENT_HEADER),
+		Device: callerHeader(request, mcpbridge.CALLER_DEVICE_HEADER),
+	}
+}
+
+func callerHeader(request *http.Request, name string) string {
+	value := strings.TrimSpace(request.Header.Get(name))
+	if len(value) > 128 {
+		value = value[:128]
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, value)
 }
 func (h *Handler) getCapabilityOperation(writer http.ResponseWriter, request *http.Request) {
 	if !h.readyAgent(writer) {

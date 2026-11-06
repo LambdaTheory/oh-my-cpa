@@ -11,6 +11,9 @@ func (r *PlainReportRenderer) Card(msg Message) map[string]any       { return r.
 func (r *PlainReportRenderer) CardSimple(msg Message) map[string]any { return r.card(msg, false) }
 
 func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
+	if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+		return r.predictionCard(msg)
+	}
 	if usesCompactCard(msg.Kind) {
 		return r.compactCard(msg)
 	}
@@ -44,6 +47,11 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 	meta := "观察时间数据缺失"
 	if !observedAt.IsZero() {
 		meta = "观察时间 " + r.formatTime(observedAt)
+	}
+	if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+		// The card carries risk only: stale, undecidable and lasting windows stay in
+		// the console, so say so in the subtitle.
+		meta = "只推撑不到重置的窗口 · " + meta
 	}
 	if msg.Freshness != "" {
 		meta += " · " + compactText(msg.Freshness, 40)

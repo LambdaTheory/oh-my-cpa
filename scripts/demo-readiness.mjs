@@ -2,10 +2,10 @@
 export const DEMO_ROUTES = [
   { path: '/dashboard', heading: '仪表盘', reads: ['/management/dashboard', '/management/dashboard/models', '/management/dashboard/token-heatmap', '/management/overview', '/management/dashboard/providers', '/management/dashboard/predictions', '/management/auth-files', '/management/quota', '/usage/routing'], content: '.heatmap-panel .heatmap-grid' },
   { path: '/model-square', heading: '模型广场', reads: ['/management/model-square', '/pricing', '/usage/facets'], content: '.model-square-page [data-model-identity]' },
-  { path: '/model-groups', heading: '模型组', reads: ['/management/model-groups'], content: '[data-model-group-card]' },
+  { path: '/model-groups', heading: '模型组', reads: ['/management/model-groups', '/management/model-groups/readings'], content: '[data-model-group-card]' },
   // The demonstration is read-only, so a literal placeholder id is the honest address: the page states that the group is gone, which is all a visitor could ever do here.
-  { path: '/model-groups/:id', heading: '模型组', reads: ['/management/model-groups'], content: '.empty-state' },
-  { path: '/model-groups/:id/add', heading: '加入模型', reads: ['/management/model-groups', '/management/model-square'], content: '.empty-state' },
+  { path: '/model-groups/:id', heading: '模型组', reads: ['/management/model-groups', '/management/model-groups/readings'], content: '.empty-state' },
+  { path: '/model-groups/:id/add', heading: '加入模型', reads: ['/management/model-groups', '/management/model-square', '/management/model-groups/readings'], content: '.empty-state' },
   { path: '/agent', heading: 'Oh My CPA', headingSelector: '[data-testid="agent-empty"] [aria-label="Oh My CPA"]', reads: ['/agent/session', '/capabilities'], content: '[data-testid="agent-empty"]' },
   // Nothing can be prepared in the demonstration, so the page states that instead of reading an operation.
   { path: '/authorize/:id', heading: '授权外部 Agent', reads: [], content: '[data-testid="agent-authorize-demo"]' },

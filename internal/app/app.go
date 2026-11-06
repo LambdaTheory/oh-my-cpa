@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/api"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/auditpush"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/auth"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/automation"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/config"
@@ -64,6 +65,9 @@ type App struct {
 	// upstream is the in-process CPA fixture. It is non-nil only in demo mode, and
 	// it is the reason a demo deployment can boot with no gateway at all.
 	upstream *demo.Upstream
+	// auditPush forwards the audit trail to the team audit platform. Nil when no
+	// ingest URL is configured or in demo mode; the local trail is written regardless.
+	auditPush *auditpush.Pusher
 }
 
 func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, error) {
@@ -290,6 +294,23 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 		}
 	}
 
+	// The audit platform link is built only when a URL is configured, and never in a
+	// demo: a demonstration must not make outbound requests. The local audit trail is
+	// written either way (PRD 4.8).
+	var auditPusher *auditpush.Pusher
+	if !cfg.IsDemoMode && strings.TrimSpace(cfg.AuditPush.URL) != "" {
+		auditPusher, err = auditpush.NewPusher(repo, auditpush.Config{
+			URL:          cfg.AuditPush.URL,
+			Timeout:      cfg.AuditPush.Timeout,
+			RetryEnabled: cfg.AuditPush.RetryEnabled,
+			MaxBatch:     cfg.AuditPush.MaxBatch,
+		}, logger)
+		if err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
+
 	return &App{
 		cfg:     cfg,
 		db:      db,
@@ -307,6 +328,7 @@ func newApp(ctx context.Context, cfg config.Config, logger *slog.Logger) (*App, 
 		ollama:      ollamaCollector,
 		feishu:      feishuService,
 		prediction:  predictionJob,
+		auditPush:   auditPusher,
 	}, nil
 }
 
@@ -603,6 +625,21 @@ func (a *App) Run(ctx context.Context) error {
 		}()
 	}
 
+	// The audit platform link is a side channel: a platform that cannot be reached
+	// leaves events queued and never fails the process or a business result (AC-32,
+	// AC-37). The loop is joined before the database closes so its final attempt cannot
+	// find the store gone.
+	auditPushDone := make(chan struct{})
+	if a.auditPush == nil {
+		close(auditPushDone)
+	} else {
+		go func() {
+			defer close(auditPushDone)
+			a.logger.Info("audit platform push started", "endpoint", a.cfg.AuditPush.URL)
+			_ = a.auditPush.Run(runCtx)
+		}()
+	}
+
 	var runErr error
 	hasPipelineReturned := a.pipeline == nil
 	select {
@@ -631,6 +668,20 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// One bounded final attempt so a result recorded just before shutdown is not left
+	// only in the queue until the next start. A failure here is logged, never surfaced.
+	select {
+	case <-auditPushDone:
+	case <-shutdownContext.Done():
+		a.logger.Warn("audit platform push did not stop before the shutdown deadline")
+	}
+	if a.auditPush != nil {
+		flushContext, cancelFlush := context.WithTimeout(context.Background(), 3*time.Second)
+		if err := a.auditPush.Flush(flushContext); err != nil {
+			a.logger.Warn("final audit push did not deliver every queued event", "error", err)
+		}
+		cancelFlush()
+	}
 	a.handler.CloseBrowserRuns()
 	a.handler.CloseUpdateWatchers()
 	if err := a.httpServer.Shutdown(shutdownContext); err != nil && runErr == nil {

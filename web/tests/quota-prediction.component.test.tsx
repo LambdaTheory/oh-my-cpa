@@ -12,7 +12,16 @@ import {
 } from '../src/components/dashboard/QuotaPrediction';
 import { api } from '../src/api/client';
 import type { DashboardPredictionsResponse, DashboardPredictionItem } from '../src/types/quotaPrediction';
-import { assessPrediction, classifyPredictionFailure, summarizePredictions } from '../src/components/dashboard/quotaPredictionLogic';
+import {
+  formatPredictionDeviation,
+  formatPredictionETA,
+  predictionConclusion,
+  predictionDeviation,
+  predictionLasts,
+  sortPredictions,
+  summarizePredictions,
+} from '../src/components/dashboard/quotaPredictionLogic';
+import { useT } from '../src/i18n';
 
 vi.mock('../src/api/client', async (importOriginal) => ({
   ...await importOriginal<typeof import('../src/api/client')>(),
@@ -30,21 +39,21 @@ const item = (overrides: Partial<DashboardPredictionItem> = {}): DashboardPredic
   window_scope: 'standard',
   auth_index: 'auth-1',
   used_percent: 65,
-  remaining_tokens: 125000,
-  capacity_error_percent: 1.2,
-  remaining_window_hours: 58.8,
-  window_error_hours: 0.84,
+  expected_used_percent: 50,
   reset_at_ms: Date.parse('2026-10-21T08:00:00Z'),
   observed_at_ms: Date.parse('2026-10-20T08:00:00Z'),
   data_age_seconds: 300,
+  lasts_until_reset: false,
+  exhaustion_eta_ms: Date.parse('2026-10-21T06:00:00Z'),
   burn_rate_per_hour: 4.2,
   projected_percent_at_reset: 110,
   projected_tokens_at_reset: 125000,
   projected_cost_nanos_at_reset: 125000000,
-  exhaustion_eta_ms: Date.parse('2026-10-21T06:00:00Z'),
   verdict: 'will_exhaust',
   evidence: 'projection',
   reasons: ['no_price'],
+  sample_count: 12,
+  coverage_seconds: 7200,
   ...overrides,
 });
 
@@ -76,6 +85,12 @@ function expandProviders() {
   for (const summary of document.querySelectorAll('summary')) fireEvent.click(summary);
 }
 
+function instant(value: number): string {
+  const date = new Date(value);
+  const pad = (number: number) => String(number).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
@@ -83,10 +98,10 @@ beforeEach(() => {
 });
 
 describe('dashboard quota prediction', () => {
-  it('groups providers in dashboard order and renders full row evidence', () => {
+  it('groups providers in dashboard order and states the four fields per row', () => {
     render(surface(<QuotaPredictionPanel data={response([
       { provider: 'codex', items: [item()] },
-      { provider: 'antigravity', items: [item({ provider: 'antigravity', credential_label: 'gravity' })] },
+      { provider: 'antigravity', items: [item({ provider: 'antigravity', credential_label: 'gravity', lasts_until_reset: true, exhaustion_eta_ms: null })] },
     ])} />));
     const groups = screen.getAllByRole('region');
     expect(groups.map((group) => group.getAttribute('aria-label'))).toEqual(['Antigravity', 'Codex']);
@@ -95,11 +110,36 @@ describe('dashboard quota prediction', () => {
     expect([...document.querySelectorAll('details')].every((details) => details.open)).toBe(true);
     const codex = groups[1];
     expect(within(codex).getByText('operator@example.com')).toBeTruthy();
-    expect(within(codex).getByText('35.0%')).toBeTruthy();
-    expect(within(codex).getByText('About 22.0 hours')).toBeTruthy();
-    expect(screen.getByText('2 providers insufficient')).toBeTruthy();
-    expect(within(codex).getByText(/125,000 tokens/)).toBeTruthy();
+    expect(within(codex).getByText('Actual')).toBeTruthy();
+    expect(within(codex).getByText('65.0%')).toBeTruthy();
+    expect(within(codex).getByText('Expected')).toBeTruthy();
+    expect(within(codex).getByText('50.0%')).toBeTruthy();
+    expect(within(codex).getByText('15.0 pts over')).toBeTruthy();
+    expect(within(codex).getAllByText('Cannot last').length).toBeGreaterThan(0);
+    expect(within(codex).getByText(/Projected to run out at \d\d-\d\d \d\d:\d\d, before the reset/)).toBeTruthy();
+    expect(screen.getByText('1 windows cannot last until reset · 0 undecidable')).toBeTruthy();
     expect(screen.getByText('Computed in 7 ms')).toBeTruthy();
+  });
+
+  it('counts credentials in the group header, not quota windows', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'claude', items: [
+      item({ provider: 'claude', auth_index: 'auth-1', credential_label: 'work', window_kind: 'five_hour', window_id: 'five_hour' }),
+      item({ provider: 'claude', auth_index: 'auth-1', credential_label: 'work', window_kind: 'weekly', window_id: 'weekly' }),
+      item({ provider: 'claude', auth_index: 'auth-2', credential_label: 'personal', window_kind: 'weekly', window_id: 'weekly' }),
+    ] }])} />));
+    // Two credentials behind three windows: the header counts credentials and
+    // the rows underneath count windows.
+    expect(screen.getByText('2 credentials · 3 cannot last')).toBeTruthy();
+  });
+
+  it('never renders inferred tokens, cost, or quota-hour estimates', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item()] }])} />));
+    expandProviders();
+    expect(screen.queryByText(/125,000 tokens/)).toBeNull();
+    expect(screen.queryByText(/quota-hours/)).toBeNull();
+    expect(screen.queryByText(/Projected tokens/)).toBeNull();
+    expect(screen.queryByText(/Time remaining at current pace/)).toBeNull();
+    expect(screen.queryByText(/24 hours/)).toBeNull();
   });
 
   it('keeps the required foreground-only five-minute refresh configuration', () => {
@@ -119,13 +159,31 @@ describe('dashboard quota prediction', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
 
     rerender(surface(<QuotaPredictionPanel data={response([{ provider: 'claude', items: [item({
-      provider: 'claude', verdict: 'unknown', used_percent: null, projected_percent_at_reset: null,
-      projected_tokens_at_reset: null, projected_cost_nanos_at_reset: null,
-      data_age_seconds: 90000, reasons: ['stale_reading', 'fewer_than_two_observations'],
+      provider: 'claude',
+      lasts_until_reset: null,
+      used_percent: 40,
+      expected_used_percent: 38,
+      exhaustion_eta_ms: null,
+      unavailable_reason: 'history_insufficient',
+      reasons: ['fewer_than_two_observations'],
     })] }])} />));
     expandProviders();
-    expect(screen.getByText('Reading failed')).toBeTruthy();
-    expect(screen.queryByText('Quota reading is stale')).toBeNull();
+    expect(screen.getAllByText('Undecidable').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Not enough observations to estimate a trend/).length).toBeGreaterThan(0);
+    expect(screen.getByText('Cannot be estimated')).toBeTruthy();
+    expect(screen.queryByText('Data missing')).toBeNull();
+
+    rerender(surface(<QuotaPredictionPanel data={response([{ provider: 'claude', items: [item({
+      provider: 'claude',
+      lasts_until_reset: null,
+      reading_stale: true,
+      unavailable_reason: 'reading_failed',
+      exhaustion_eta_ms: null,
+      reasons: ['stale_reading'],
+    })] }])} />));
+    expandProviders();
+    expect(screen.getByText('The reading is stale, so it is not estimated.')).toBeTruthy();
+    expect(screen.getAllByText('Stale').length).toBeGreaterThan(0);
   });
 
   it('confirms the Feishu action before calling it', async () => {
@@ -166,12 +224,12 @@ describe('dashboard quota prediction', () => {
     }
   });
 
-  it.each([['fallback-auth', 'fallback-auth'], [undefined, 'Unknown credential']])('names the combined reading with the resolved identity %s', (authIndex, label) => {
+  it.each([['fallback-auth', 'fallback-auth'], [undefined, 'Unknown credential']])('names the row with the resolved identity %s', (authIndex, label) => {
     render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ credential_label: '', auth_index: authIndex })] }])} />));
     expandProviders();
     expect(screen.getByText(label)).toBeTruthy();
-    expect(screen.getByText('Remaining quota')).toBeTruthy();
-    expect(screen.getByText('Time remaining at current pace')).toBeTruthy();
+    expect(screen.getByText('Actual')).toBeTruthy();
+    expect(screen.getByText('Expected')).toBeTruthy();
   });
 
   it('keeps one refresh in flight through rapid clicks and renders its final result', async () => {
@@ -190,7 +248,7 @@ describe('dashboard quota prediction', () => {
     await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(true));
     expect(api.getDashboardPredictions).toHaveBeenCalledTimes(2);
     complete(response([{ provider: 'codex', items: [item({ used_percent: 72 })] }]));
-    await screen.findByText('28.0%');
+    await screen.findByText('72.0%');
     await waitFor(() => expect((refresh as HTMLButtonElement).disabled).toBe(false));
     expect(api.getDashboardPredictions).toHaveBeenCalledTimes(2);
   });
@@ -223,101 +281,130 @@ describe('dashboard quota prediction', () => {
     expect(screen.queryByText('Prediction summary sent to Feishu')).toBeNull();
   });
 
-  it('uses 24-hour urgency before reset risk and never certifies partial providers', () => {
-    const generatedAtMS = response([]).generated_at_ms;
-    const late = item({ reset_at_ms: generatedAtMS + 72 * 3_600_000, exhaustion_eta_ms: generatedAtMS + 48 * 3_600_000 });
-    expect(summarizePredictions([late], generatedAtMS)).toEqual({ today: 'enough', untilReset: 'insufficient' });
-    expect(summarizePredictions([item({ exhaustion_eta_ms: generatedAtMS + 24 * 3_600_000 })], generatedAtMS).today).toBe('insufficient');
-    const healthy = item({ verdict: 'on_track', projected_percent_at_reset: 80 });
-    expect(summarizePredictions([healthy], generatedAtMS, true).today).toBe('unknown');
-    expect(summarizePredictions([healthy, item({ verdict: 'unknown' })], generatedAtMS).today).toBe('unknown');
-    expect(summarizePredictions([healthy, item()], generatedAtMS).today).toBe('insufficient');
+  it('derives the three-state conclusion only from lasts_until_reset', () => {
+    expect(predictionLasts(item({ lasts_until_reset: true }))).toBe('yes');
+    expect(predictionLasts(item({ lasts_until_reset: false }))).toBe('no');
+    expect(predictionLasts(item({ lasts_until_reset: null }))).toBe('unknown');
+    // The deprecated verdict must never override the three-state field.
+    expect(predictionLasts(item({ lasts_until_reset: true, verdict: 'will_exhaust' }))).toBe('yes');
+    expect(predictionLasts(item({ lasts_until_reset: false, verdict: 'on_track' }))).toBe('no');
   });
 
-  it('marks ten-percent headroom independently from history and counts providers once', () => {
-    const generatedAtMS = response([]).generated_at_ms;
-    const low = item({ used_percent: 90, verdict: 'unknown', reasons: ['fewer_than_three_buckets'], exhaustion_eta_ms: null });
-    expect(assessPrediction(low, generatedAtMS).untilReset).toBe('insufficient');
-    expect(assessPrediction({ ...low, used_percent: 89.99 }, generatedAtMS).untilReset).toBe('unknown');
-    expect(assessPrediction({ ...low, reasons: ['reading_error'] }, generatedAtMS).untilReset).toBe('unknown');
-    expect(assessPrediction({ ...low, reset_at_ms: generatedAtMS, reasons: ['boundary_unknown'] }, generatedAtMS).untilReset).toBe('unknown');
-    render(surface(<QuotaPredictionPanel data={response([
-      { provider: 'codex', items: [low, { ...low, auth_index: 'second', window_id: 'five_hour' }] },
-      { provider: 'step', items: [item({ provider: 'step', verdict: 'on_track', exhaustion_eta_ms: null })] },
-      { provider: 'ollama', items: [item({ provider: 'ollama', verdict: 'unknown', reset_at_ms: null, reasons: ['boundary_unknown'] })] },
-    ])} />));
-    expect(screen.getByText('1 providers insufficient')).toBeTruthy();
-    expect(screen.getByText('Step')).toBeTruthy();
-    expect(screen.getByText('Ollama')).toBeTruthy();
-    expandProviders();
-    expect(screen.getAllByText(/At most 10% remains/)).toHaveLength(2);
-    expect(screen.getByText('Unknown cycle')).toBeTruthy();
-  });
-
-  it.each([
-    ['reading_error', 'reading_failed'],
-    ['fewer_than_three_buckets', 'history_insufficient'],
-    ['boundary_unknown', 'cycle_unknown'],
-    ['mid_cycle_reset', 'usage_abnormal'],
-    ['invalid_used_percent', 'usage_abnormal'],
-  ])('groups %s into one actionable failure class', (reason, category) => {
-    expect(classifyPredictionFailure(item({ verdict: 'unknown', reasons: [reason] }), response([]).generated_at_ms)).toBe(category);
-  });
-
-  it('bounds endurance to the current cycle and keeps omitted summaries unknown', () => {
-    const generatedAtMS = response([]).generated_at_ms;
-    const healthy = item({ verdict: 'on_track', reset_at_ms: generatedAtMS + 3_600_000, exhaustion_eta_ms: generatedAtMS + 10 * 3_600_000 });
-    expect(assessPrediction(healthy, generatedAtMS).enduranceMS).toBeNull();
-    render(surface(<QuotaPredictionPanel data={{ ...response([{ provider: 'codex', items: [healthy] }]), omitted: 1 }} />));
-    expect(screen.queryByText('No known shortage')).toBeNull();
-    expandProviders();
-    expect(screen.getByText('Through the next reset')).toBeTruthy();
-    expect(screen.queryByText('About 10.0 hours')).toBeNull();
-  });
-
-  it('keeps a valid flat forecast readable when low balance independently triggers shortage', () => {
-    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ used_percent: 95, verdict: 'on_track', exhaustion_eta_ms: null, reasons: ['no_positive_trend'] })] }])} />));
-    expandProviders();
-    expect(screen.getByText('Through the next reset')).toBeTruthy();
-    expect(screen.getByText('1 providers insufficient')).toBeTruthy();
-  });
-
-  it('describes an elapsed exhaustion ETA without a zero-hour countdown', () => {
-    const generatedAtMS = response([]).generated_at_ms;
-    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ exhaustion_eta_ms: generatedAtMS - 60_000 })] }])} />));
-    expandProviders();
-    expect(screen.getByText('Exhausted')).toBeTruthy();
-    expect(screen.getByText(/Estimated exhaustion time has passed/)).toBeTruthy();
-    expect(screen.queryByText(/within 0 hours|About 0.0 hours/)).toBeNull();
-  });
-
-  it('renders missing readings explicitly, with an action for every forecast', () => {
+  it('computes the actual-minus-expected deviation and renders missing values as dashes', () => {
+    expect(predictionDeviation(item({ used_percent: 65, expected_used_percent: 50 }))).toBe(15);
+    expect(predictionDeviation(item({ used_percent: 30, expected_used_percent: 50 }))).toBe(-20);
+    expect(predictionDeviation(item({ used_percent: null, expected_used_percent: 50 }))).toBeNull();
     render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
-      verdict: 'unknown', used_percent: null, reset_at_ms: null, data_age_seconds: null,
-      projected_percent_at_reset: null, projected_tokens_at_reset: null, projected_cost_nanos_at_reset: null,
-      exhaustion_eta_ms: null, reasons: ['reading_error'],
+      used_percent: 30, expected_used_percent: 50, lasts_until_reset: true, exhaustion_eta_ms: null,
     })] }])} />));
     expandProviders();
-    expect(screen.getAllByText('Data missing').length).toBeGreaterThanOrEqual(3);
-    expect(screen.queryAllByRole('meter')).toHaveLength(0);
-    expect(screen.queryByText('0.0%')).toBeNull();
-    expect(screen.getByText('Reading failed')).toBeTruthy();
-    expect(screen.getByText('Suggestion: check quota readings and history before deciding.')).toBeTruthy();
+    expect(screen.getByText('20.0 pts under')).toBeTruthy();
   });
 
-  it('labels inferred allowance with error and groups a just-reset window as history', () => {
-    const data = response([{ provider: 'codex', items: [{ ...item({ verdict: 'unknown', reasons: ['fewer_than_three_buckets'] }),
-      window_start_ms: Date.parse('2026-10-20T07:59:00Z'), remaining_percent: 35, uniform_projected_percent_at_reset: null, remaining_tokens: null,
-    }] }]);
-    const { rerender } = render(surface(<QuotaPredictionPanel data={data} />));
+  it('sorts by exhaustion risk and keeps undecidable rows last', () => {
+    const generatedAtMS = response([]).generated_at_ms;
+    const exhausted = item({ auth_index: 'a', used_percent: 100, lasts_until_reset: false, exhaustion_eta_ms: generatedAtMS });
+    const past = item({ auth_index: 'b', used_percent: 90, lasts_until_reset: false, exhaustion_eta_ms: generatedAtMS - 60_000 });
+    const cannot = item({ auth_index: 'c', used_percent: 80, lasts_until_reset: false, exhaustion_eta_ms: generatedAtMS + 3_600_000 });
+    const can = item({ auth_index: 'd', used_percent: 20, lasts_until_reset: true, exhaustion_eta_ms: null });
+    const unknown = item({ auth_index: 'e', used_percent: 20, lasts_until_reset: null, exhaustion_eta_ms: null });
+    const sorted = sortPredictions([unknown, can, cannot, past, exhausted], generatedAtMS);
+    expect(sorted.map((row) => row.auth_index)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    expect(summarizePredictions([exhausted, cannot, can, unknown])).toEqual({ cannot: 2, unknown: 1 });
+  });
+
+  it('renders exhausted windows with the reading instant and the waiting copy', () => {
+    const reading = Date.parse('2026-10-20T08:00:00Z');
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
+      used_percent: 100, expected_used_percent: 70, lasts_until_reset: false, exhaustion_eta_ms: reading,
+    })] }])} />));
     expandProviders();
-    expect(screen.getByText('Insufficient history')).toBeTruthy();
-    expect(screen.getByText(/58.8 quota-hours · error ±0.84/)).toBeTruthy();
-    expect(screen.queryByText('Projected at reset')).toBeNull();
-    expect(screen.getByText('35.0%')).toBeTruthy();
-    rerender(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({ verdict: 'on_track' })] }])} />));
-    expect(screen.getByText('No action needed.')).toBeTruthy();
-    rerender(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item()] }])} />));
-    expect(screen.getByText(/Exhaustion within 22 hours/)).toBeTruthy();
+    expect(screen.getByText('Quota used up; waiting for the reset.')).toBeTruthy();
+    expect(screen.getByText(instant(reading))).toBeTruthy();
+  });
+
+  it('renders no-cycle amounts as cannot estimate without a zero percent', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'ollama', items: [item({
+      provider: 'ollama',
+      used_percent: 3.2,
+      expected_used_percent: null,
+      reset_at_ms: null,
+      lasts_until_reset: null,
+      exhaustion_eta_ms: null,
+      unavailable_reason: 'no_cycle',
+      reasons: ['boundary_unknown'],
+    })] }])} />));
+    expandProviders();
+    expect(screen.getAllByText('Cannot estimate: no cycle.').length).toBeGreaterThan(0);
+    expect(screen.getByText('Cannot be calculated')).toBeTruthy();
+    expect(screen.queryByText('0.0%')).toBeNull();
+  });
+
+  it('renders missing readings explicitly, with an action for every unknown row', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
+      lasts_until_reset: null, used_percent: null, expected_used_percent: null, reset_at_ms: null, data_age_seconds: null,
+      exhaustion_eta_ms: null, unavailable_reason: 'reading_failed', reasons: ['reading_error'], sample_count: 0, coverage_seconds: null,
+    })] }])} />));
+    expandProviders();
+    expect(screen.getAllByText('Cannot be calculated').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('0.0%')).toBeNull();
+    expect(screen.getByText('Cannot be estimated')).toBeTruthy();
+    expect(screen.getAllByText(/The latest quota read failed/).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Data missing')).toBeNull();
+  });
+
+  it('groups every unknown category into the four actionable classes plus no-cycle', () => {
+    const cases: Array<[DashboardPredictionItem['unavailable_reason'], string]> = [
+      ['reading_failed', 'The latest quota read failed; check credential auth and upstream status, then retry.'],
+      ['history_insufficient', 'Not enough observations to estimate a trend; wait for the next collection. This is normal right after a reset or after onboarding.'],
+      ['window_boundary_unknown', 'The window boundaries are unknown, so progress cannot be calculated; check whether upstream returns a reset time. Quotas without a fixed period belong here.'],
+      ['usage_abnormal', 'The reading or trend is abnormal, so no conclusion is given; check for out-of-range values or a mid-window reset.'],
+      ['no_cycle', 'Cannot estimate: no cycle.'],
+    ];
+    for (const [reason, copy] of cases) {
+      expect(predictionConclusion(item({ lasts_until_reset: null, exhaustion_eta_ms: null, unavailable_reason: reason }), 0).key)
+        .toBe(`dash.prediction.unknown.${reason}`);
+      const { unmount } = render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
+        lasts_until_reset: null, used_percent: 30, expected_used_percent: 25, exhaustion_eta_ms: null, unavailable_reason: reason,
+      })] }])} />));
+      expandProviders();
+      expect(screen.getAllByText(copy).length).toBeGreaterThan(0);
+      unmount();
+    }
+  });
+
+  it('states a flat trend as will-not-exhaust and a stale reading as expired', () => {
+    render(surface(<QuotaPredictionPanel data={response([{ provider: 'codex', items: [item({
+      used_percent: 20, expected_used_percent: 25, lasts_until_reset: true, exhaustion_eta_ms: null,
+    })] }])} />));
+    expandProviders();
+    expect(screen.getByText('At the current pace it lasts until the reset.')).toBeTruthy();
+    expect(screen.getByText('Will not exhaust')).toBeTruthy();
+    expect(screen.getAllByText('Lasts until reset').length).toBeGreaterThan(0);
+  });
+
+  it('formats the ETA and deviation copy for every tri-state branch', () => {
+    let t!: ReturnType<typeof useT>;
+    function Capture() {
+      t = useT();
+      return null;
+    }
+    render(<I18nProvider><Capture /></I18nProvider>);
+    const eta = Date.parse('2026-10-20T09:30:00Z');
+    expect(formatPredictionETA(item({ exhaustion_eta_ms: eta }), t)).toBe(instant(eta));
+    expect(formatPredictionETA(item({ lasts_until_reset: true, exhaustion_eta_ms: null }), t)).toBe('Will not exhaust');
+    expect(formatPredictionETA(item({ lasts_until_reset: null, exhaustion_eta_ms: null }), t)).toBe('Cannot be estimated');
+    expect(formatPredictionDeviation(item({ used_percent: 65, expected_used_percent: 50 }), t)).toBe('15.0 pts over');
+    expect(formatPredictionDeviation(item({ used_percent: null, expected_used_percent: 50 }), t)).toBe('—');
+  });
+
+  it('counts only rows present, keeping omitted totals out of the shortage count', () => {
+    render(surface(<QuotaPredictionPanel data={{ ...response([
+      { provider: 'codex', items: [item({ lasts_until_reset: false }), item({ auth_index: 'ok', lasts_until_reset: true })] },
+    ]), omitted: 1 }} />));
+    expandProviders();
+    expect(screen.getByText(/1 windows cannot last until reset · 0 undecidable/)).toBeTruthy();
+    expect(screen.getByText(/1 more not shown/)).toBeTruthy();
   });
 });

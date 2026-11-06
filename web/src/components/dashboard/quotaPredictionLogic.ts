@@ -1,48 +1,156 @@
-import type { DashboardPredictionItem } from '../../types/quotaPrediction';
+import type { TFunc } from '../../i18n';
+import type { DashboardPredictionItem, QuotaPredictionUnavailableReason } from '../../types/quotaPrediction';
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const INVALID_READING_REASONS = new Set(['stale_reading', 'reading_error', 'cycle_expired', 'invalid_used_percent']);
+const HOUR_MS = 60 * 60 * 1000;
 
-export type PredictionSufficiency = 'enough' | 'insufficient' | 'unknown';
-export type PredictionFailure = 'reading_failed' | 'history_insufficient' | 'cycle_unknown' | 'usage_abnormal';
+export type PredictionLasts = 'yes' | 'no' | 'unknown';
 
-export function assessPrediction(item: DashboardPredictionItem, generatedAtMS: number) {
-  const hasReading = item.used_percent !== null && Number.isFinite(item.used_percent)
-    && item.used_percent >= 0 && item.used_percent <= 100
-    && (item.reset_at_ms === null || item.reset_at_ms > generatedAtMS)
-    && !item.reasons.some((reason) => INVALID_READING_REASONS.has(reason));
-  const remainingPercent = hasReading ? 100 - item.used_percent! : null;
-  const isLow = remainingPercent !== null && remainingPercent <= 10;
-  const hasForecast = hasReading && item.verdict !== 'unknown'
-    && item.reset_at_ms !== null && item.reset_at_ms > generatedAtMS;
-  const willExhaust = hasForecast && item.verdict === 'will_exhaust';
-  const untilReset: PredictionSufficiency = isLow || willExhaust ? 'insufficient' : hasForecast ? 'enough' : 'unknown';
-  const isUrgent = isLow || (willExhaust && item.exhaustion_eta_ms !== null
-    && item.exhaustion_eta_ms <= generatedAtMS + DAY_MS);
-  const today: PredictionSufficiency = isUrgent ? 'insufficient' : !hasForecast
-    || (willExhaust && item.exhaustion_eta_ms === null) ? 'unknown' : 'enough';
-  const enduranceMS = hasForecast && item.exhaustion_eta_ms !== null && item.exhaustion_eta_ms < item.reset_at_ms!
-    ? Math.max(0, item.exhaustion_eta_ms - generatedAtMS) : null;
-  return { untilReset, today, isUrgent, isLow, hasForecast, remainingPercent, enduranceMS };
+/** The three-state answer a row states, never derived from the deprecated verdict. */
+export function predictionLasts(item: DashboardPredictionItem): PredictionLasts {
+  if (item.lasts_until_reset === true) return 'yes';
+  if (item.lasts_until_reset === false) return 'no';
+  return 'unknown';
 }
 
-export function classifyPredictionFailure(item: DashboardPredictionItem, generatedAtMS: number): PredictionFailure | null {
-  const reasons = item.reasons;
-  if (reasons.some((reason) => ['reading_error', 'stale_reading', 'no_reading'].includes(reason))) return 'reading_failed';
-  if (reasons.some((reason) => ['mid_cycle_reset', 'invalid_used_percent', 'invalid_observation', 'arithmetic_unsafe', 'scope_unknown'].includes(reason))
-    || (item.used_percent != null && (!Number.isFinite(item.used_percent) || item.used_percent < 0 || item.used_percent > 100))) return 'usage_abnormal';
-  if (item.used_percent == null) return 'reading_failed';
-  if (reasons.some((reason) => ['boundary_unknown', 'cycle_expired'].includes(reason))
-    || item.reset_at_ms === null || item.reset_at_ms <= generatedAtMS) return 'cycle_unknown';
-  return item.verdict === 'unknown' ? 'history_insufficient' : null;
+export function isExhausted(item: DashboardPredictionItem): boolean {
+  return !isStaleReading(item) && item.used_percent !== null && Number.isFinite(item.used_percent) && item.used_percent >= 100;
 }
 
-export function summarizePredictions(items: DashboardPredictionItem[], generatedAtMS: number, hasMissingData = false) {
-  const assessments = items.map((item) => assessPrediction(item, generatedAtMS));
-  const summarize = (key: 'today' | 'untilReset'): PredictionSufficiency => {
-    if (assessments.some((assessment) => assessment[key] === 'insufficient')) return 'insufficient';
-    if (hasMissingData || assessments.length === 0 || assessments.some((assessment) => assessment[key] === 'unknown')) return 'unknown';
-    return 'enough';
-  };
-  return { today: summarize('today'), untilReset: summarize('untilReset') };
+/**
+ * The reading's own age, shown as "expired" only when the server marked it so.
+ * The client must not invent its own freshness rule: the server owns the
+ * window-length-dependent threshold.
+ */
+export function isStaleReading(item: DashboardPredictionItem): boolean {
+  return item.reading_stale === true;
+}
+
+/** Actual minus expected, in points, when both percentages are known. */
+export function predictionDeviation(item: DashboardPredictionItem): number | null {
+  if (item.used_percent === null || item.expected_used_percent === null) return null;
+  if (!Number.isFinite(item.used_percent) || !Number.isFinite(item.expected_used_percent)) return null;
+  return Math.round((item.used_percent - item.expected_used_percent) * 10) / 10;
+}
+
+/**
+ * What the Feishu push leaves out. Stale rows have their own bucket instead of
+ * also counting as unknown, so the footer counts stay disjoint.
+ */
+export function summarizeUnpushed(items: DashboardPredictionItem[]) {
+  let lasts = 0;
+  let unknown = 0;
+  let stale = 0;
+  for (const item of items) {
+    if (isStaleReading(item)) {
+      stale += 1;
+      continue;
+    }
+    const answer = predictionLasts(item);
+    if (answer === 'yes') lasts += 1;
+    else if (answer === 'unknown') unknown += 1;
+  }
+  return { lasts, unknown, stale };
+}
+
+/**
+ * Sort by how soon the window runs out: already spent, then past its ETA, then
+ * an ETA before the reset, then "will not exhaust", then rows that cannot be
+ * estimated. Ties keep a stable identity order.
+ */
+export function predictionRank(item: DashboardPredictionItem, generatedAtMS: number): number {
+  if (isExhausted(item)) return 0;
+  if (item.exhaustion_eta_ms !== null && item.exhaustion_eta_ms <= generatedAtMS) return 1;
+  if (item.lasts_until_reset === false) return 2;
+  if (item.lasts_until_reset === true) return 3;
+  return 4;
+}
+
+export function sortPredictions(items: DashboardPredictionItem[], generatedAtMS: number): DashboardPredictionItem[] {
+  return [...items].sort((left, right) => {
+    const rank = predictionRank(left, generatedAtMS) - predictionRank(right, generatedAtMS);
+    if (rank !== 0) return rank;
+    const leftETA = left.exhaustion_eta_ms ?? Number.POSITIVE_INFINITY;
+    const rightETA = right.exhaustion_eta_ms ?? Number.POSITIVE_INFINITY;
+    if (leftETA !== rightETA) return leftETA - rightETA;
+    return left.credential_label.localeCompare(right.credential_label)
+      || left.window_id.localeCompare(right.window_id);
+  });
+}
+
+/** Window counts for the panel summary. Only real, current windows are counted. */
+export function summarizePredictions(items: DashboardPredictionItem[]): { cannot: number; unknown: number } {
+  let cannot = 0;
+  let unknown = 0;
+  for (const item of items) {
+    const lasts = predictionLasts(item);
+    if (lasts === 'no') cannot += 1;
+    else if (lasts === 'unknown') unknown += 1;
+  }
+  return { cannot, unknown };
+}
+
+/**
+ * How many distinct credentials the group covers. A credential can report more
+ * than one window, so counting rows would overstate it; the group header counts
+ * credentials and the rows underneath count windows.
+ */
+export function countCredentials(items: DashboardPredictionItem[]): number {
+  return new Set(items.map((item) => item.auth_index || item.credential_label)).size;
+}
+
+/**
+ * The copy key for the one-line conclusion. It carries only what the row can
+ * state: exhaustion and whether the window lasts; percentages live in the
+ * numbers above the sentence.
+ */
+export function predictionConclusion(item: DashboardPredictionItem, nowMS: number): { key: string; vars?: Record<string, string | number> } {
+  if (isExhausted(item)) return { key: 'dash.prediction.line_exhausted' };
+  const lasts = predictionLasts(item);
+  if (lasts === 'no') {
+    const eta = item.exhaustion_eta_ms;
+    return eta !== null && eta > nowMS
+      ? { key: 'dash.prediction.line_cannot', vars: { time: formatInstant(eta) } }
+      : { key: 'dash.prediction.line_cannot_past' };
+  }
+  if (lasts === 'yes') return { key: 'dash.prediction.line_can' };
+  if (isStaleReading(item)) return { key: 'dash.prediction.line_expired' };
+  return { key: `dash.prediction.unknown.${item.unavailable_reason || 'usage_abnormal'}` };
+}
+
+export function predictionUnavailableKey(reason: QuotaPredictionUnavailableReason | undefined): string {
+  return `dash.prediction.unknown.${reason || 'usage_abnormal'}`;
+}
+
+/** ETA copy: a concrete instant, "will not exhaust", or "cannot be estimated". */
+export function formatPredictionETA(item: DashboardPredictionItem, t: TFunc): string {
+  if (item.exhaustion_eta_ms !== null && item.exhaustion_eta_ms > 0) {
+    return t('dash.prediction.eta_at', { time: formatInstant(item.exhaustion_eta_ms) });
+  }
+  if (predictionLasts(item) === 'yes') return t('dash.prediction.eta_none');
+  return t('dash.prediction.eta_unknown');
+}
+
+export function formatPredictionPercent(value: number | null | undefined, t: TFunc): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return t('dash.prediction.cannot_calculate');
+  if (value > 0 && value < 0.1) return '<0.1%';
+  return `${value.toFixed(1)}%`;
+}
+
+export function formatPredictionDeviation(item: DashboardPredictionItem, t: TFunc): string {
+  const deviation = predictionDeviation(item);
+  if (deviation === null) return t('dash.prediction.deviation_unknown');
+  if (deviation > 0.05) return t('dash.prediction.deviation_over', { n: Math.abs(deviation).toFixed(1) });
+  if (deviation < -0.05) return t('dash.prediction.deviation_under', { n: Math.abs(deviation).toFixed(1) });
+  return t('dash.prediction.deviation_even');
+}
+
+function formatInstant(value: number): string {
+  const date = new Date(value);
+  const pad = (number: number) => String(number).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** Hours a window still has, used only for the diagnostics sample line. */
+export function predictionCoverageHours(item: DashboardPredictionItem): number | null {
+  return item.coverage_seconds == null ? null : Math.round((item.coverage_seconds / (HOUR_MS / 1000)) * 10) / 10;
 }

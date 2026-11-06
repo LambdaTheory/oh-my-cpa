@@ -979,6 +979,20 @@ caller's own `X-Request-ID` is never the pairing key - one value sent on two req
 would pair an attempt with another request's outcome - and is recorded on the audit
 row as `client_request_id` for correlation instead.
 
+A deployment may also hand a copy of these events to a company audit platform
+(`OMCPA_AUDIT_INGEST_URL`). `internal/auditpush` builds the platform's event envelope for
+the repository-key actions, and `internal/repository/audit_push.go` writes it to
+`audit_push_events` inside the same transaction as the audit row, so an event the trail
+records is an event the platform is owed and the converse is also true: if the queue row
+cannot be written, the action fails rather than proceed unrecorded. The queued payload is
+stored exactly as it will be sent and never rebuilt, because the platform rejects a
+retried `ts` that differs from the first attempt; the HTTP body, the batch size, the
+backoff and the `sent`/`quarantined` states live in `internal/auditpush/pusher.go`. A
+payload the platform refuses as malformed is quarantined with the platform's reason
+rather than retried forever, and the backlog is visible in the log and through
+`AuditPushStatusOf`. Nothing in a business request waits for delivery: the outbox is
+pumped on its own interval (ADR 0119).
+
 ### Quota resolution and partial-success boundary
 
 Plugin quota resolution requires a matching quota identifier, plugin ID, or auth
@@ -3778,15 +3792,20 @@ mutation is introduced. See ADR 0109 and `docs/agent-capabilities.md` for the co
 
 `internal/quota/prediction.go` owns deterministic window math. It accepts the newest
 reading of each current-cycle five-minute bucket plus the current reading and usage joined
-for the same half-open cycle. It derives boundaries through `WindowCycleRange`, returns a
-fresh valid 100 percent reading as `will_exhaust`/`fact` before consulting history, and then
-rejects stale, incomplete or reset history. A projection needs at least three points,
+for the same half-open cycle. It derives boundaries through `WindowCycleRange` and answers
+four fields: used percentage, expected used percentage (the linear share elapsed at the
+reading instant), exhaustion ETA at 100% and the three-state `lasts_until_reset`. A fresh
+valid 100 percent reading is a fact before history is consulted; a stale reading is
+undecided and gets no ETA. A projection needs at least three points,
 coverage of `max(30 minutes, 5% of the cycle)` and no adjacent gap above
 `max(30 minutes, coverage / 2)`. `sample_count`, `coverage_seconds` and `max_gap_seconds`
 describe that sample; the interval fields stay null below two points, a zero sample count
 means the sample was not evaluated because an earlier return settled the result, and
 missing numbers remain null reasoned evidence. The pure layer still runs its
-`predictionHasReset` cross-point check.
+`predictionHasReset` cross-point check. Undecided rows carry one of four reason classes -
+reading failed, insufficient history, unknown window boundary (including no fixed period)
+or abnormal usage - and the old verdict/evidence/reason/estimate group is derived from the
+same result for one release (ADR 0119).
 
 `internal/operations/quota_prediction.go` owns capability validation, filters, identity
 projection and the 100-row/32-KiB bounds. It assembles inputs only from persisted safe
@@ -3803,9 +3822,15 @@ effective reading. Operations combines that flag with adjacent bucket minima and
 readings, and compares the current snapshot with the bucket it replaces, to set
 `HasMidCycleReset`.
 Read-only MCP masking happens after deterministic sorting by hidden stored identity, and
-those identities are not returned. The internal Feishu projection filters first, prioritises
-exhaustion findings, and caps the card input at 178 rows while carrying an omitted count to
-the renderer.
+those identities are not returned. Disabled credentials, credentials with no quota window
+and credentials no longer in the roster are excluded from capabilities, the digest and the
+dashboard panel, so they never count as "cannot last". The internal Feishu projection keeps
+only rows whose `lasts_until_reset` is false and whose reading is not stale, orders them by
+exhaustion ETA, and caps the card input at 178 rows while carrying an omitted count to
+the dedicated renderer. It displays at most five prediction rows and discloses the
+remaining count. Every delivery attempt, including retries, re-reads the stored roster
+and applies the reading's original freshness bound, so disabled, deleted, windowless
+or stale rows are dropped without suppressing the morning card's other alerts.
 
 `internal/api/management_dashboard_predictions.go` exposes the same stored computation to
 the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler
@@ -3813,11 +3838,16 @@ uses the complete operator projection (credential labels and auth indexes are re
 by provider and measures the actual computation duration. It does not refresh quota or call
 CPA. `web/src/components/dashboard/QuotaPrediction.tsx` renders that response as a
 reorderable dashboard panel, refreshes it every five minutes only while the page is visible,
-and keeps explicit empty, unknown and stale states.
+and keeps explicit empty, unknown and stale states. Each row shows the four fields, the
+deviation between actual and expected, the reset time and one conclusion sentence; the
+diagnostics collapse by default. Rows are ordered by ETA within each provider group and the
+semantic colours distinguish only cannot-last, lasts and undecided (ADR 0119).
 The dashboard DTO includes nullable console accounting: window start, remaining share,
 remaining quota-hours and their absolute rounding error, and optional inferred remaining
 tokens with relative rounding error. These values are computed beside the same prediction
-from its observation, period and current-cycle usage. The operations item's accounting
+from its observation, period and current-cycle usage, and are displayed only in the
+collapsed diagnostics. The dashboard also carries the console-only `unavailable_reason`
+and `reading_stale` flags. The operations item's accounting
 field is excluded from JSON and capability schema generation. The quota_prediction wire
 contract, evidence thresholds, 100-row / 32-KiB limits and read-only masking stay intact.
 The dashboard reads the complete roster before grouping, so a later provider cannot be
@@ -4163,9 +4193,17 @@ read rather than a second by-id route, and the add page's candidates come from
 `GET /management/model-square` - the advertised call names and aliases - with models already
 in the group left out. A move saves the complete order on the click and is optimistic; a
 refused save puts the last stored order back under a retry notice. No page states which
-other groups hold a model, and none draws availability or balances: the management API
-exposes no per-model reading for either, so drawing them would state numbers the console
-cannot verify.
+other groups hold a model.
+
+`GET /management/model-groups/readings` answers one availability band and one balance per
+model, for the union of every group's members and every model the directory advertises:
+the list page counts the bands and states the preferred model's balance, the detail page
+states both beside each member, and the add page states availability on each candidate.
+The operations layer projects that answer with the same verdict and balance calculation
+`model_groups_models` and `model_advice` report, so a card and a caller cannot disagree
+about the same model, and evidence that cannot be read degrades to `unknown` and a null
+balance rather than a guess. The route is a console read under the session and same-origin
+guard; it registers no capability and touches no gateway.
 
 ## Reset announcement evidence
 

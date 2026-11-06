@@ -489,3 +489,109 @@ func TestModelGroupsModelsReturnsSummedBalances(t *testing.T) {
 		})
 	}
 }
+
+// TestModelGroupReadingsMatchThePerGroupProjection is AC-6 and AC-11's claim: the
+// console's read and model_groups_models report the same band for the same name, and
+// the read covers the gateway's advertised models because the add page lists them as
+// candidates.
+func TestModelGroupReadingsMatchThePerGroupProjection(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok", "model-avoid")
+
+	readings, err := service.ModelGroupReadings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byModel := map[string]ModelGroupReading{}
+	for _, reading := range readings.Models {
+		byModel[reading.Model] = reading
+	}
+	want := map[string]string{
+		"model-ok":      ModelGroupAvailabilityAvailable,
+		"model-tight":   ModelGroupAvailabilityTight,
+		"model-unknown": ModelGroupAvailabilityUnknown,
+		"model-avoid":   ModelGroupAvailabilityUnavailable,
+	}
+	for model, band := range want {
+		if byModel[model].Availability != band {
+			t.Errorf("%s console availability = %q, want %q", model, byModel[model].Availability, band)
+		}
+	}
+	for index := 1; index < len(readings.Models); index++ {
+		if readings.Models[index-1].Model >= readings.Models[index].Model {
+			t.Fatalf("readings are not ordered by name: %v", readings.Models)
+		}
+	}
+
+	projected := invokeModelGroupCapability(t, service, ctx, "model_groups_models", `{"group":"力工组"}`)
+	if projected.Status != "success" {
+		t.Fatalf("result = %+v", projected)
+	}
+	var output ModelGroupsModelsResult
+	if err := json.Unmarshal(projected.Data, &output); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range output.Models {
+		if byModel[item.Model].Availability != item.Availability {
+			t.Errorf("%s: console says %q, per-group read says %q", item.Model, byModel[item.Model].Availability, item.Availability)
+		}
+	}
+}
+
+// TestModelGroupReadingsSurviveUnreadableQuota is AC-21's console half: when the
+// evidence cannot be read the names still come back, unknown with a null balance.
+func TestModelGroupReadingsSurviveUnreadableQuota(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	service.AdviceDirectory = func(context.Context) (ModelSquareDirectory, error) {
+		return ModelSquareDirectory{}, fmt.Errorf("directory unavailable")
+	}
+	service.AdviceCredentials = func(context.Context) ([]AdviceCredential, error) {
+		return nil, fmt.Errorf("credentials unavailable")
+	}
+	service.Quotas = func(context.Context) ([]Quota, error) {
+		return nil, fmt.Errorf("quota store unavailable")
+	}
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok", "model-avoid")
+
+	readings, err := service.ModelGroupReadings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(readings.Models) != 2 {
+		t.Fatalf("readings = %+v, want the two group members", readings.Models)
+	}
+	for _, reading := range readings.Models {
+		if reading.Availability != ModelGroupAvailabilityUnknown || reading.Balance != nil {
+			t.Errorf("%s = %+v, want unknown with no balance", reading.Model, reading)
+		}
+	}
+}
+
+// TestModelGroupReadingsSumBalances proves the console draws the same money figure the
+// per-group read reports: one account's balance, then the sum across serving accounts.
+func TestModelGroupReadingsSumBalances(t *testing.T) {
+	service, ctx, nowMS := modelGroupsFixture(t)
+	groupWithMembers(t, service, ctx, nowMS, "力工组", "model-ok")
+	directory, credentials, quotas := service.modelGroupAdviceInputs(ctx)
+	for index, amount := range []string{"41.14", "0.86"} {
+		authIndex := fmt.Sprintf("balance-%d", index)
+		credentials = append(credentials, AdviceCredential{AuthIndex: authIndex, ProviderID: "provider-1", Models: []string{"upstream-model-ok"}})
+		quotas = append(quotas, Quota{AuthIndex: authIndex, Balance: &ModelGroupBalance{Amount: amount, Currency: "USD"}})
+	}
+	service.AdviceDirectory = func(context.Context) (ModelSquareDirectory, error) { return directory, nil }
+	service.AdviceCredentials = func(context.Context) ([]AdviceCredential, error) { return credentials, nil }
+	service.Quotas = func(context.Context) ([]Quota, error) { return quotas, nil }
+
+	readings, err := service.ModelGroupReadings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reading := range readings.Models {
+		if reading.Model != "model-ok" {
+			continue
+		}
+		if reading.Balance == nil || reading.Balance.Amount != "42.00" || reading.Balance.Currency != "USD" {
+			t.Fatalf("balance = %+v, want 42.00 summed across serving accounts", reading.Balance)
+		}
+	}
+}

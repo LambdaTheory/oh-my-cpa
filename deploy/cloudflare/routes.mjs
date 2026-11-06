@@ -66,6 +66,9 @@ const FIXED_ROUTES = new Map([
   // The model group list. The demonstration seeds the five preset groups empty, so this
   // is what a visitor sees before they add anything.
   ['/api/v1/management/model-groups', 'model-groups'],
+  // The availability and balance the group pages draw beside each model. The demonstration
+  // holds no gateway readings, so its capture is the pages' "cannot be read" state.
+  ['/api/v1/management/model-groups/readings', 'model-group-readings'],
   ['/api/v1/management/overview', 'overview'],
   ['/api/v1/management/system', 'system'],
   ['/api/v1/management/system/releases', 'system-releases'],

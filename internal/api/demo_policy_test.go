@@ -109,6 +109,20 @@ func TestDemoPolicyRefusesTheDangerousSurface(t *testing.T) {
 		{http.MethodPost, "/api/v1/playground/runs/fixture-run/cancel"},
 		{http.MethodPost, "/api/v1/management/api-keys"},
 		{http.MethodDelete, "/api/v1/management/api-keys/0"},
+		// A repository key decision issues or reuses a real gateway key, and a reveal
+		// prints one: both are refused in a public demonstration.
+		{http.MethodPost, "/api/v1/management/repo-keys/applications"},
+		{http.MethodPost, "/api/v1/management/repo-keys/applications/41/approve"},
+		{http.MethodPost, "/api/v1/management/repo-keys/applications/41/reject"},
+		{http.MethodPost, "/api/v1/management/repo-keys/41/stop"},
+		{http.MethodPost, "/api/v1/management/repo-keys/41/reenable-request"},
+		{http.MethodPost, "/api/v1/management/repo-keys/41/reveal"},
+		// An envelope is key material sealed to a caller, and the one-time link's two
+		// answers decide an application: none of the three belongs in a demonstration.
+		{http.MethodPost, "/api/v1/management/repo-keys/applications/41/ciphertext"},
+		{http.MethodPost, "/api/v1/management/repo-keys/applications/41/approval-link"},
+		{http.MethodPost, "/api/v1/management/repo-keys/apply-link/some-token/approve"},
+		{http.MethodPost, "/api/v1/management/repo-keys/apply-link/some-token/reject"},
 		{http.MethodPost, "/api/v1/management/quota/reset"},
 		{http.MethodPost, "/api/v1/management/quota/clear-cooldown"},
 		{http.MethodPost, "/api/v1/management/quota/redeem-credit"},

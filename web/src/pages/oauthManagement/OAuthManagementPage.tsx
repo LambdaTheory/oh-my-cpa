@@ -581,6 +581,7 @@ export const OAuthManagementPage: React.FC = () => {
       />
       <PageHeader
         title={t('nav.auth_files')}
+        subtitle={t('quota.page_subtitle')}
         mobileActions={(
           <>
             <ActionMenu>
@@ -992,6 +993,10 @@ export const OAuthManagementPage: React.FC = () => {
           </div>
         </>
       )}
+
+      {/* The prediction panel and Feishu only list credentials that can be predicted, so this
+          page is the one place where a disabled or windowless credential still shows up. */}
+      <p className={styles['quota-scope-note']} data-testid="quota-scope-note">{t('quota.scope_note')}</p>
 
       <ResetAnnouncements />
 

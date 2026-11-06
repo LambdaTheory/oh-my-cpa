@@ -311,6 +311,7 @@ func TestModelGroupRoutesRequireTheConsoleSession(t *testing.T) {
 	anonymous := &http.Client{}
 	for _, route := range []struct{ method, path, body string }{
 		{http.MethodGet, modelGroupBase, ""},
+		{http.MethodGet, modelGroupBase + "/readings", ""},
 		{http.MethodPost, modelGroupBase, `{"name":"x"}`},
 		{http.MethodPost, modelGroupBase + "/restore-defaults", ""},
 	} {
@@ -451,5 +452,53 @@ func TestModelGroupAuditKeepsTheCallersCorrelationID(t *testing.T) {
 	}
 	if row.RequestID == "" || row.RequestID == callerID {
 		t.Fatalf("request_id = %q: the server-side id must be its own, distinct from the caller's", row.RequestID)
+	}
+}
+
+// TestModelGroupReadingsExposeBandAndBalance is the console's wire contract for the
+// figures the group pages draw: a name, one of the four bands, and an explicit balance
+// object or null. Group members are included even when the gateway cannot be read, so
+// the page never loses a row to missing quota evidence.
+func TestModelGroupReadingsExposeBandAndBalance(t *testing.T) {
+	client, base, _ := startDashboardTestServer(t, nil)
+	_, payload := modelGroupRequest(t, client, base, http.MethodGet, modelGroupBase, "")
+	list := decodeModelGroupList(t, payload)
+	if len(list.Groups) == 0 {
+		t.Fatal("expected at least one preset group")
+	}
+	group := list.Groups[0]
+	status, body := modelGroupRequest(t, client, base, http.MethodPost, modelGroupBase+"/"+group.ID+"/members", `{"models":["claude-sonnet"]}`)
+	requireStatus(t, status, body, http.StatusOK)
+
+	status, body = modelGroupRequest(t, client, base, http.MethodGet, modelGroupBase+"/readings", "")
+	requireStatus(t, status, body, http.StatusOK)
+	var readings struct {
+		Models []struct {
+			Model        string `json:"model"`
+			Availability string `json:"availability"`
+			Balance      *struct {
+				Amount   string `json:"amount"`
+				Currency string `json:"currency"`
+			} `json:"balance"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &readings); err != nil {
+		t.Fatalf("decode readings %s: %v", body, err)
+	}
+	found := false
+	for _, reading := range readings.Models {
+		if reading.Model != "claude-sonnet" {
+			continue
+		}
+		found = true
+		if reading.Availability != "unknown" {
+			t.Errorf("availability = %q, want unknown without a gateway reading", reading.Availability)
+		}
+		if reading.Balance != nil {
+			t.Errorf("balance = %+v, want null without a gateway reading", reading.Balance)
+		}
+	}
+	if !found {
+		t.Fatalf("claude-sonnet is missing from %s", body)
 	}
 }

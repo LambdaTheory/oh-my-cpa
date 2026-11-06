@@ -14,8 +14,11 @@ import { Tag } from '../../components/common/Tag';
 import { Notice, LoadFailure, useToast } from '../../components/feedback';
 import { ArrowLeftOutlined, CloseOutlined, DownOutlined, HolderOutlined, PlusOutlined, UpOutlined } from '../../components/icons';
 import {
+  MODEL_GROUP_READINGS_QUERY_KEY,
   MODEL_GROUPS_QUERY_KEY,
+  formatModelGroupBalance,
   modelGroupById,
+  modelGroupReading,
   modelGroupRefusalCode,
   moveModelGroupMember,
   reorderModelGroupInList,
@@ -26,6 +29,7 @@ import {
   type ModelGroupMember,
 } from '../../types/modelGroups';
 import { modelGroupApi } from './api';
+import { ModelGroupAvailabilityTag } from './ModelGroupAvailabilityTag';
 import { ModelGroupNameDialog } from './ModelGroupNameDialog';
 import styles from './ModelGroups.module.css';
 
@@ -67,9 +71,17 @@ export const ModelGroupDetailPage: React.FC = () => {
     queryKey: MODEL_GROUPS_QUERY_KEY,
     queryFn: modelGroupApi.list,
   });
+  const readingsQuery = useQuery({
+    queryKey: MODEL_GROUP_READINGS_QUERY_KEY,
+    queryFn: modelGroupApi.readings,
+  });
+  const readings = readingsQuery.data;
   const group = modelGroupById(groupsQuery.data, id);
 
-  const refresh = () => { void groupsQuery.refetch(); };
+  const refresh = () => {
+    void groupsQuery.refetch();
+    void readingsQuery.refetch();
+  };
   const settleList = () => { void queryClient.invalidateQueries({ queryKey: MODEL_GROUPS_QUERY_KEY }); };
 
   const reorderMutation = useMutation<ModelGroup, unknown, string[], { previousOrder?: string[] }>({
@@ -258,6 +270,26 @@ export const ModelGroupDetailPage: React.FC = () => {
       ),
     },
     {
+      key: 'availability',
+      title: t('model_groups.availability'),
+      width: 132,
+      render: (_value, member) => (
+        <ModelGroupAvailabilityTag
+          availability={readings ? modelGroupReading(readings, member.model).availability : undefined}
+        />
+      ),
+    },
+    {
+      key: 'balance',
+      title: t('model_groups.balance'),
+      width: 132,
+      render: (_value, member) => (
+        <span className={styles['model-balance']}>
+          {readings ? (formatModelGroupBalance(modelGroupReading(readings, member.model).balance) || '—') : '—'}
+        </span>
+      ),
+    },
+    {
       key: 'actions',
       title: '',
       width: 156,
@@ -311,6 +343,10 @@ export const ModelGroupDetailPage: React.FC = () => {
         <p className={styles['phone-title']} aria-hidden="true">{group.name}</p>
       </PageHeader>
 
+      {readingsQuery.isError && !readings && (
+        <Notice tone="warning" title={t('model_groups.readings_failed')} description={t('model_groups.readings_failed_description')} />
+      )}
+
       {orderFailed && (
         <Notice
           tone="warning"
@@ -330,7 +366,9 @@ export const ModelGroupDetailPage: React.FC = () => {
           <Button type="primary" icon={<PlusOutlined />} onClick={openAdd}>{t('model_groups.add_models')}</Button>
         </EmptyState>
       ) : (
-        <ResponsiveList
+        <>
+          <p className={styles['sort-note']}>{t('model_groups.sort_note')}</p>
+          <ResponsiveList
           columns={columns}
           dataSource={group.members}
           rowKey={(member) => member.model}
@@ -373,7 +411,8 @@ export const ModelGroupDetailPage: React.FC = () => {
               onDragEnd: clearDrag,
             }),
           }}
-        />
+          />
+        </>
       )}
 
       <ModelGroupNameDialog

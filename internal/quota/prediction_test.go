@@ -191,7 +191,7 @@ func TestPredictionFreshnessFollowsWindowCadence(t *testing.T) {
 			Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.Add(test.age).UnixMilli(),
 			Observations: observations,
 		})
-		if got.Verdict != PredictionVerdictUnderUsed || slices.Contains(got.Reasons, PredictionReasonReadingStale) {
+		if got.LastsUntilReset == nil || !*got.LastsUntilReset || slices.Contains(got.Reasons, PredictionReasonReadingStale) {
 			t.Fatalf("%s cadence prediction = %+v", test.name, got)
 		}
 	}
@@ -274,7 +274,7 @@ func TestPredictWindowProjectionAndPricedUsage(t *testing.T) {
 	}
 }
 
-func TestPredictWindowUnderUsedAndUsageReasons(t *testing.T) {
+func TestPredictWindowFlatTrendLastsAndUsageReasons(t *testing.T) {
 	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
 	window, reset := predictionWindow(start, 20)
 	observed := start.Add(6 * time.Hour).UnixMilli()
@@ -287,8 +287,10 @@ func TestPredictWindowUnderUsedAndUsageReasons(t *testing.T) {
 		},
 		Usage: &WindowUsage{Requests: 10, PricedRequests: 5, Tokens: 100},
 	})
-	if got.Verdict != PredictionVerdictUnderUsed || got.Evidence != PredictionEvidenceProjection || got.ProjectedPercentAtReset == nil || !slices.Contains(got.Reasons, PredictionReasonNoPositiveTrend) || !slices.Contains(got.Reasons, PredictionReasonInsufficientPricedUsage) {
-		t.Fatalf("under-used = %+v", got)
+	// A flat trend never reaches the ceiling, so the row lasts until reset even
+	// though it has no positive trend and no ETA.
+	if got.LastsUntilReset == nil || !*got.LastsUntilReset || got.ExhaustionETAMS != nil || got.Evidence != PredictionEvidenceProjection || got.ProjectedPercentAtReset == nil || !slices.Contains(got.Reasons, PredictionReasonNoPositiveTrend) || !slices.Contains(got.Reasons, PredictionReasonInsufficientPricedUsage) {
+		t.Fatalf("flat trend = %+v", got)
 	}
 
 	low, _ := predictionWindow(start, 4)
@@ -392,10 +394,12 @@ func TestPredictWindowFactTakesPriorityOverHistory(t *testing.T) {
 		}
 	}
 
+	// A full reading outranks an unknown or already-ended boundary: the quota is
+	// spent now regardless of what the window says.
 	unknownBoundary, _ := predictionWindow(start, 100)
 	unknownBoundary.ResetAtMS = nil
 	got := PredictWindow(PredictionInput{Window: unknownBoundary, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli()})
-	if got.Evidence == PredictionEvidenceFact || !slices.Contains(got.Reasons, PredictionReasonBoundaryUnknown) {
+	if got.LastsUntilReset == nil || *got.LastsUntilReset || got.Evidence != PredictionEvidenceFact {
 		t.Fatalf("unknown boundary prediction = %+v", got)
 	}
 
@@ -403,7 +407,7 @@ func TestPredictWindowFactTakesPriorityOverHistory(t *testing.T) {
 	expiredReset := observed.Add(-time.Hour).UnixMilli()
 	expired.ResetAtMS = &expiredReset
 	got = PredictWindow(PredictionInput{Window: expired, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli()})
-	if got.Evidence == PredictionEvidenceFact || !slices.Contains(got.Reasons, PredictionReasonCycleExpired) {
+	if got.LastsUntilReset == nil || *got.LastsUntilReset || got.Evidence != PredictionEvidenceFact {
 		t.Fatalf("expired boundary prediction = %+v", got)
 	}
 
@@ -474,4 +478,163 @@ func TestPredictWindowReportsEvidenceQuality(t *testing.T) {
 	if onePoint.SampleCount != 1 || onePoint.CoverageSeconds != nil || onePoint.MaxGapSeconds != nil {
 		t.Fatalf("one-point quality evidence = %+v", onePoint)
 	}
+}
+
+// The baseline is the time-linear share of the cycle at the reading instant, not
+// a forecast: it must be available even when no trend can be fitted, and the risk
+// threshold must stay tri-state.
+func TestPredictionTimeLinearBaselineAndLastsUntilReset(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	window, reset := predictionWindow(start, 30)
+	observed := start.Add(4 * time.Hour)
+	observations := []PredictionObservation{
+		{ObservedAtMS: start.Add(time.Hour).UnixMilli(), UsedPercent: 8, ResetAtMS: &reset},
+		{ObservedAtMS: start.Add(2 * time.Hour).UnixMilli(), UsedPercent: 15, ResetAtMS: &reset},
+		{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 22, ResetAtMS: &reset},
+	}
+
+	onTrack := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(), Observations: observations})
+	if onTrack.Verdict != PredictionVerdictOnTrack {
+		t.Fatalf("verdict = %s, want on_track", onTrack.Verdict)
+	}
+	if onTrack.ExpectedUsedPercent == nil || *onTrack.ExpectedUsedPercent != 40 {
+		t.Fatalf("expected baseline = %v, want 40", onTrack.ExpectedUsedPercent)
+	}
+	if onTrack.LastsUntilReset == nil || !*onTrack.LastsUntilReset {
+		t.Fatalf("on-track lasts until reset = %v", onTrack.LastsUntilReset)
+	}
+
+	exhaustingWindow, _ := predictionWindow(start, 30)
+	exhaustingWindow.UsedPercent = floatPointer(95)
+	exhausting := PredictWindow(PredictionInput{Window: exhaustingWindow, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(), Observations: observations})
+	if exhausting.Verdict != PredictionVerdictWillExhaust || exhausting.LastsUntilReset == nil || *exhausting.LastsUntilReset {
+		t.Fatalf("exhausting verdict=%s lasts=%v", exhausting.Verdict, exhausting.LastsUntilReset)
+	}
+	if exhausting.ExpectedUsedPercent == nil || *exhausting.ExpectedUsedPercent != 40 {
+		t.Fatalf("exhausting baseline = %v", exhausting.ExpectedUsedPercent)
+	}
+
+	spentWindow, _ := predictionWindow(start, 30)
+	spentWindow.UsedPercent = floatPointer(100)
+	spent := PredictWindow(PredictionInput{Window: spentWindow, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(), Observations: observations})
+	if spent.Verdict != PredictionVerdictWillExhaust || spent.LastsUntilReset == nil || *spent.LastsUntilReset {
+		t.Fatalf("spent verdict=%s lasts=%v", spent.Verdict, spent.LastsUntilReset)
+	}
+
+	stale := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.Add(3 * time.Hour).UnixMilli(), Observations: observations})
+	if stale.ExpectedUsedPercent != nil || stale.LastsUntilReset != nil {
+		t.Fatalf("stale reading kept baseline=%v lasts=%v", stale.ExpectedUsedPercent, stale.LastsUntilReset)
+	}
+
+	unknown := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli()})
+	if unknown.Verdict != PredictionVerdictUnknown || unknown.LastsUntilReset != nil {
+		t.Fatalf("unfittable history verdict=%s lasts=%v", unknown.Verdict, unknown.LastsUntilReset)
+	}
+	if unknown.ExpectedUsedPercent == nil || *unknown.ExpectedUsedPercent != 40 {
+		t.Fatalf("unfittable history baseline = %v", unknown.ExpectedUsedPercent)
+	}
+}
+
+func TestPredictWindowFourConclusionFields(t *testing.T) {
+	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	observed := start.Add(4 * time.Hour)
+
+	t.Run("expected percent uses the reading instant", func(t *testing.T) {
+		window, reset := predictionWindow(start, 30)
+		got := PredictWindow(PredictionInput{
+			Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(),
+			Observations: []PredictionObservation{
+				{ObservedAtMS: start.Add(2 * time.Hour).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset},
+				{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 20, ResetAtMS: &reset},
+			},
+		})
+		if got.ExpectedUsedPercent == nil || *got.ExpectedUsedPercent != 40 {
+			t.Fatalf("expected percent = %+v", got.ExpectedUsedPercent)
+		}
+	})
+
+	t.Run("eta before reset does not last", func(t *testing.T) {
+		window, reset := predictionWindow(start, 50)
+		got := PredictWindow(PredictionInput{
+			Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(),
+			Observations: []PredictionObservation{
+				{ObservedAtMS: start.Add(2 * time.Hour).UnixMilli(), UsedPercent: 20, ResetAtMS: &reset},
+				{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 35, ResetAtMS: &reset},
+			},
+		})
+		if got.LastsUntilReset == nil || *got.LastsUntilReset || got.ExhaustionETAMS == nil || *got.ExhaustionETAMS >= reset {
+			t.Fatalf("short window = %+v", got)
+		}
+	})
+
+	t.Run("eta at or after reset lasts", func(t *testing.T) {
+		window, reset := predictionWindow(start, 12)
+		got := PredictWindow(PredictionInput{
+			Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli(),
+			Observations: []PredictionObservation{
+				{ObservedAtMS: start.Add(2 * time.Hour).UnixMilli(), UsedPercent: 10, ResetAtMS: &reset},
+				{ObservedAtMS: start.Add(3 * time.Hour).UnixMilli(), UsedPercent: 11, ResetAtMS: &reset},
+			},
+		})
+		if got.LastsUntilReset == nil || !*got.LastsUntilReset || got.UnknownReason != "" {
+			t.Fatalf("long window = %+v", got)
+		}
+	})
+
+	t.Run("full reading is a fact with eta at the reading", func(t *testing.T) {
+		window, _ := predictionWindow(start, 100)
+		got := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli()})
+		if got.LastsUntilReset == nil || *got.LastsUntilReset || got.ExhaustionETAMS == nil || *got.ExhaustionETAMS != observed.UnixMilli() || got.Evidence != PredictionEvidenceFact {
+			t.Fatalf("full reading = %+v", got)
+		}
+	})
+
+	t.Run("stale reading withholds the baseline", func(t *testing.T) {
+		period := 168.0
+		reset := start.Add(168 * time.Hour).UnixMilli()
+		used := 40.0
+		window := QuotaWindow{ID: "weekly", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+		got := PredictWindow(PredictionInput{Window: window, ObservedAtMS: observed.UnixMilli(), NowMS: observed.Add(25 * time.Hour).UnixMilli()})
+		if got.LastsUntilReset != nil || got.UnknownReason != PredictionUnknownReadingFailed || got.ExhaustionETAMS != nil {
+			t.Fatalf("stale = %+v", got)
+		}
+		if got.ExpectedUsedPercent != nil {
+			t.Fatalf("stale expectation = %+v, want nil", got.ExpectedUsedPercent)
+		}
+	})
+
+	t.Run("unknown reasons carry one of the four categories", func(t *testing.T) {
+		for _, test := range []struct {
+			name   string
+			window func() QuotaWindow
+			want   string
+		}{
+			{"no cycle", func() QuotaWindow {
+				used := 40.0
+				return QuotaWindow{ID: "usd", UsedPercent: &used}
+			}, PredictionUnknownNoCycle},
+			{"boundary unknown", func() QuotaWindow {
+				used, period := 40.0, 10.0
+				return QuotaWindow{ID: "reset-less", UsedPercent: &used, PeriodHours: &period}
+			}, PredictionUnknownBoundaryUnknown},
+			{"fewer than three buckets", func() QuotaWindow {
+				window, _ := predictionWindow(start, 40)
+				return window
+			}, PredictionUnknownHistoryInsufficient},
+			{"mid-cycle reset", func() QuotaWindow {
+				window, _ := predictionWindow(start, 40)
+				window.HasMidCycleReset = true
+				return window
+			}, PredictionUnknownHistoryInsufficient},
+			{"out of range reading", func() QuotaWindow {
+				window, _ := predictionWindow(start, 140)
+				return window
+			}, PredictionUnknownUsageAbnormal},
+		} {
+			got := PredictWindow(PredictionInput{Window: test.window(), ObservedAtMS: observed.UnixMilli(), NowMS: observed.UnixMilli()})
+			if got.LastsUntilReset != nil || got.UnknownReason != test.want {
+				t.Fatalf("%s = %+v", test.name, got)
+			}
+		}
+	})
 }

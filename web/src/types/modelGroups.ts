@@ -7,6 +7,8 @@
  * here rather than inside the pages lets the logic suite decide them without a browser.
  */
 
+import { formatUsd } from './pricingDisplay';
+
 export interface ModelGroupMember {
   model: string;
   /** 1-based slot inside this group; the same model has an independent slot in every group. */
@@ -46,8 +48,88 @@ export interface ModelGroupRestoreResult {
 /** A name is held to this many runes, matching `repository.ModelGroupNameLimit`. */
 export const MODEL_GROUP_NAME_LIMIT = 40;
 
+/**
+ * One model's reading from `GET /management/model-groups/readings`.
+ *
+ * The band and the balance are the same figures `model_groups_models` reports, projected by the
+ * same server code for the same model; the console and a caller therefore cannot disagree. A
+ * reading exists for every group member and every advertised model - candidates included - so a
+ * page joins by name instead of asking per row.
+ */
+export type ModelGroupAvailability = 'available' | 'tight' | 'unknown' | 'unavailable';
+
+export interface ModelGroupBalance {
+  /** Decimal string, kept as text so no precision is lost between server and page. */
+  amount: string;
+  currency: string;
+}
+
+export interface ModelGroupReading {
+  model: string;
+  availability: ModelGroupAvailability;
+  balance: ModelGroupBalance | null;
+}
+
+export interface ModelGroupReadings {
+  models: ModelGroupReading[];
+}
+
+/** The bands a group card counts, in the availability order the PRD fixed. */
+export const MODEL_GROUP_AVAILABILITY_BANDS: readonly ModelGroupAvailability[] = [
+  'available',
+  'tight',
+  'unknown',
+  'unavailable',
+];
+
+export function emptyModelGroupAvailabilityCounts(): Record<ModelGroupAvailability, number> {
+  return { available: 0, tight: 0, unknown: 0, unavailable: 0 };
+}
+
 /** One cache entry for the whole list: every page resolves a group from it, including by id. */
 export const MODEL_GROUPS_QUERY_KEY = ['model-groups'] as const;
+
+/** The readings the group pages join against; kept beside the list they annotate. */
+export const MODEL_GROUP_READINGS_QUERY_KEY = ['model-group-readings'] as const;
+
+/** A name's reading, or the unknown reading a name without one is drawn as. */
+export function modelGroupReading(
+  readings: ModelGroupReadings | undefined,
+  model: string,
+): ModelGroupReading {
+  const found = readings?.models.find((reading) => reading.model === model);
+  return found ?? { model, availability: 'unknown', balance: null };
+}
+
+/**
+ * How many members of one group fall into each band.
+ *
+ * A member without a reading counts as unknown, the same answer the per-group query gives for a
+ * name it cannot measure; leaving it out would make the counts add up to less than the group.
+ */
+export function countModelGroupAvailability(
+  models: readonly string[],
+  readings: ModelGroupReadings | undefined,
+): Record<ModelGroupAvailability, number> {
+  const counts = emptyModelGroupAvailabilityCounts();
+  for (const model of models) counts[modelGroupReading(readings, model).availability] += 1;
+  return counts;
+}
+
+/** The balance a row shows: the exact amount with its currency, or the empty-cell dash. */
+export function formatModelGroupBalance(balance: ModelGroupBalance | null | undefined): string {
+  if (!balance || balance.amount === '') return '';
+  const amount = Number(balance.amount);
+  if (!Number.isFinite(amount)) return `${balance.amount} ${balance.currency}`;
+  if (!balance.currency || balance.currency === 'USD') {
+    return formatUsd(amount);
+  }
+  try {
+    return new Intl.NumberFormat('en-US', { style: 'currency', currency: balance.currency }).format(amount);
+  } catch {
+    return `${balance.amount} ${balance.currency}`;
+  }
+}
 
 export type ModelGroupNameError = 'empty' | 'too_long' | 'conflict';
 
