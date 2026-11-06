@@ -63,22 +63,44 @@ test('an unfinished attempt is a warning and an unknown result carries no verdic
 });
 
 test('filters become the query the server reads, and defaults send nothing', () => {
-  assert.equal(auditSearchParams({ categories: [], outcome: 'all', search: '  ', range: 'all' }).toString(), '');
   assert.equal(
-    auditSearchParams({ categories: ['api_key', 'client_key'], outcome: 'failed', search: ' gem ', range: 'all' }).toString(),
-    'category=api_key%2Cclient_key&outcome=failed&q=gem',
+    auditSearchParams({ categories: [], outcome: 'all', search: '  ', repo: '', agent: '', range: 'all' }).toString(),
+    '',
+  );
+  assert.equal(
+    auditSearchParams({
+      categories: ['api_key', 'client_key'],
+      outcome: 'failed',
+      search: ' gem ',
+      repo: 'LambdaTheory/oh-my-cpa',
+      agent: 'Ayachi',
+      range: 'all',
+    }).toString(),
+    'category=api_key%2Cclient_key&outcome=failed&q=gem&repo=LambdaTheory%2Foh-my-cpa&agent=Ayachi',
   );
   // A relative range is resolved against the moment of the request.
   assert.equal(
-    auditSearchParams({ categories: [], outcome: 'unfinished', search: '', range: '24h' }, 90_000_000).toString(),
+    auditSearchParams({ categories: [], outcome: 'unfinished', search: '', repo: '', agent: '', range: '24h' }, 90_000_000).toString(),
     `outcome=unfinished&since_ms=${90_000_000 - 86_400_000}`,
   );
 });
 
 test('the page URL round-trips its filters and refuses values it does not know', () => {
-  const filters = readAuditFilters(new URLSearchParams('category=keys&outcome=failed&q=%20gem%20&range=7d'));
-  assert.deepEqual(filters, { categories: ['api_key', 'client_key'], outcome: 'failed', search: 'gem', range: '7d' });
-  assert.equal(writeAuditFilters(filters).toString(), 'category=keys&outcome=failed&q=gem&range=7d');
+  const filters = readAuditFilters(
+    new URLSearchParams('category=keys&outcome=failed&q=%20gem%20&repo=LambdaTheory%2Fomc&agent=Ayachi&range=7d'),
+  );
+  assert.deepEqual(filters, {
+    categories: ['api_key', 'client_key'],
+    outcome: 'failed',
+    search: 'gem',
+    repo: 'LambdaTheory/omc',
+    agent: 'Ayachi',
+    range: '7d',
+  });
+  assert.equal(
+    writeAuditFilters(filters).toString(),
+    'category=keys&outcome=failed&q=gem&repo=LambdaTheory%2Fomc&agent=Ayachi&range=7d',
+  );
   assert.equal(selectedCategory(filters), 'keys');
   assert.deepEqual(readAuditFilters(new URLSearchParams('category=api_key&outcome=sideways&range=1y')), DEFAULT_AUDIT_FILTERS);
   assert.equal(writeAuditFilters(DEFAULT_AUDIT_FILTERS).toString(), '');

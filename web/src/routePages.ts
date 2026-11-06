@@ -27,6 +27,9 @@ export const AgentPage = React.lazy(loadAgentPage);
 export const loadAuthorizePage = createPageLoader(() => import('./pages/agent/AuthorizePage'), 'AuthorizePage');
 export const AuthorizePage = React.lazy(loadAuthorizePage);
 
+export const loadRepoKeyApplyPage = createPageLoader(() => import('./pages/repo-key/RepoKeyApplyPage'), 'RepoKeyApplyPage');
+export const RepoKeyApplyPage = React.lazy(loadRepoKeyApplyPage);
+
 export const loadModelSquarePage = createPageLoader(() => import('./pages/ModelSquarePage'), 'ModelSquarePage');
 export const ModelSquarePage = React.lazy(loadModelSquarePage);
 

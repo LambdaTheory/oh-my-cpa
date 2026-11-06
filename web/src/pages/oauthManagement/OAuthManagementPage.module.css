@@ -223,6 +223,14 @@
   margin-right: auto;
 }
 
+/* The one line that says which credentials never reach the prediction panel or Feishu. */
+.quota-scope-note {
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
 .toolbar > :global(.ant-dropdown-button) {
   width: auto;
   flex: 0 0 auto;

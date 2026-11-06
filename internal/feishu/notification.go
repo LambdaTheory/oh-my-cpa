@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -26,8 +27,11 @@ type Notification struct {
 	Alerts  []Alert
 	// Pending and Tight carry a scheduled or quiet-end digest, which has no single
 	// alert. They are empty for an immediate alert notification.
-	Pending   []PendingItem
-	Tight     []TightChannel
+	Pending []PendingItem
+	Tight   []TightChannel
+	// Omitted counts findings the payload limit kept out of Alerts. The card
+	// discloses the count instead of silently dropping rows.
+	Omitted   int
 	State     string
 	Attempts  int
 	LastError string
@@ -44,13 +48,20 @@ type Notification struct {
 type Dispatcher struct {
 	channelUnavailableAfter time.Duration
 	source                  ReportSource
-	store                   Store
-	sender                  Sender
-	renderer                ReportRenderer
-	logger                  *slog.Logger
-	now                     func() time.Time
-	backoffBase             time.Duration
-	backoffMax              time.Duration
+	// predictionSource re-reads the prediction findings for a queued card. Quiet
+	// hours and the bounded retry can hold a notification for hours, so the
+	// roster and the reading freshness are checked again right before sending
+	// rather than trusting the state the card was queued with. Nil means the
+	// dispatcher was built without a prediction job and prediction cards are
+	// delivered as queued.
+	predictionSource PredictionSource
+	store            Store
+	sender           Sender
+	renderer         ReportRenderer
+	logger           *slog.Logger
+	now              func() time.Time
+	backoffBase      time.Duration
+	backoffMax       time.Duration
 }
 
 // NewDispatcher builds a dispatcher. A nil logger and nil clock fall back to the
@@ -99,6 +110,19 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			out[i] = notification
 			continue
 		}
+		if d.predictionSource != nil && strings.HasPrefix(notification.Kind, predictionKindPrefix) {
+			alerts, err := d.currentPredictionAlerts(ctx, notification.Alerts)
+			if err != nil {
+				notification.LastError = err.Error()
+				notification.Attempts++
+				notification.NextAttemptAt = now.Add(backoffDelay(notification.Attempts, d.backoffBase, d.backoffMax))
+				d.logger.WarnContext(ctx, "feishu prediction digest re-read failed",
+					"action", "notify", "kind", notification.Kind, "attempts", notification.Attempts, "error", err)
+				out[i] = notification
+				continue
+			}
+			notification.Alerts = alerts
+		}
 		msg := Message{
 			ChannelUnavailableAfter: d.channelUnavailableAfter,
 			EvaluatedAt:             now,
@@ -106,6 +130,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			Alerts:                  notification.Alerts,
 			Pending:                 notification.Pending,
 			Tight:                   notification.Tight,
+			Omitted:                 notification.Omitted,
 			GeneratedAt:             notification.OccurredAt,
 		}
 		if d.source != nil && usesCompactCard(msg.Kind) {
@@ -123,6 +148,39 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 				}
 			}
 		}
+		if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+			// Freshness is judged again here, not just when the finding was queued:
+			// quiet hours and retry backoff can hold a card for hours, and a reading
+			// that has aged out is no longer evidence.
+			fresh := make([]Alert, 0, len(msg.Alerts))
+			hasPrediction := false
+			for _, alert := range msg.Alerts {
+				if !alertStale(alert, now) {
+					fresh = append(fresh, alert)
+					hasPrediction = hasPrediction || alert.Kind == predictionKindPrefix
+				}
+			}
+			msg.Alerts = fresh
+			notification.Alerts = fresh
+			if !hasPrediction {
+				// The dedicated card stores its omitted count outside the alert list.
+				// A surviving morning alert cannot keep a discarded forecast's count.
+				msg.Omitted = 0
+				notification.Omitted = 0
+			}
+			if len(msg.Alerts) == 0 && len(msg.Pending) == 0 && len(msg.Tight) == 0 {
+				// Nothing evidence-based survived. Sending a stale conclusion (or an
+				// "expired" notice with no action) only adds noise, so the card is
+				// dropped and acknowledged rather than retried forever.
+				notification.State = NotifySent
+				notification.LastError = ""
+				notification.SentAt = now
+				d.logger.InfoContext(ctx, "feishu prediction card dropped",
+					"action", "notify", "result", "stale_reading", "kind", notification.Kind)
+				out[i] = notification
+				continue
+			}
+		}
 		if err := d.sendWithFallback(ctx, chatID, msg); err != nil {
 			notification.LastError = err.Error()
 			notification.Attempts++
@@ -138,6 +196,48 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 		out[i] = notification
 	}
 	return out
+}
+
+// currentPredictionAlerts keeps only the alerts a fresh digest still supports.
+// The digest is read by the operations layer, so a credential that has since
+// been disabled, deleted, left without a window or gone stale is already absent
+// from it; this is the "check the roster immediately before sending" step, run
+// on every delivery attempt rather than only when the card is queued. Alerts
+// that are not prediction rows (a morning digest can carry report alerts in the
+// same notification) are kept as they are. The "omitted" footer is dropped when
+// no finding survives, because it counts rows the card would no longer show.
+func (d *Dispatcher) currentPredictionAlerts(ctx context.Context, alerts []Alert) ([]Alert, error) {
+	digest, err := d.predictionSource(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]bool, len(digest.Items))
+	for _, item := range predictionFindings(digest.Items, d.now()) {
+		live[predictionItemID(item)] = true
+	}
+	kept := make([]Alert, 0, len(alerts))
+	findings := 0
+	for _, alert := range alerts {
+		if alert.Kind != predictionKindPrefix {
+			kept = append(kept, alert)
+			continue
+		}
+		if live[alertItemID(alert)] {
+			kept = append(kept, alert)
+			findings++
+		}
+	}
+	if findings == 0 {
+		// The footer counts findings the card no longer shows.
+		withoutFooter := kept[:0]
+		for _, alert := range kept {
+			if alert.Kind != "omitted" {
+				withoutFooter = append(withoutFooter, alert)
+			}
+		}
+		kept = withoutFooter
+	}
+	return kept, nil
 }
 
 // sendWithFallback posts the full card and, on failure, the simplified card. It

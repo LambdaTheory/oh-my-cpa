@@ -58,6 +58,10 @@ type Config struct {
 	IsDemoMode bool
 
 	ResetAdviceExpiryWindow time.Duration
+
+	// AuditPush forwards the audit trail to the team audit platform. The zero value
+	// (empty URL) means the feature is off.
+	AuditPush AuditPushConfig
 }
 
 // DefaultUpdaterURL is the updater sidecar's address: the name both an installed
@@ -108,6 +112,28 @@ type ReleaseConfig struct {
 	// Interval is the background sweep period.
 	Interval time.Duration
 }
+
+// AuditPushConfig is the team audit platform's forwarding side (PRD 4.8). It is off
+// unless OMCPA_AUDIT_INGEST_URL is set: a deployment without a platform still writes
+// the local audit trail, and exactly zero outbound requests happen.
+type AuditPushConfig struct {
+	// URL is the platform's ingest endpoint.
+	URL string
+	// Timeout bounds one send. The guide recommends 1500 ms; a longer value delays the
+	// pusher without making the platform any more reachable.
+	Timeout time.Duration
+	// RetryEnabled replays events the platform has not confirmed.
+	RetryEnabled bool
+	// MaxBatch is the largest number of events in one request, bounded by the
+	// platform's request-size limit and by this value.
+	MaxBatch int
+}
+
+// Defaults for the audit platform link, taken from the platform's integration guide.
+const (
+	DefaultAuditIngestTimeoutMS = 1500
+	DefaultAuditRetryMaxBatch   = 50
+)
 
 // Default release sources. The gateway default is the upstream the project is built
 // against; the console default is this project's own repository. A deployment that
@@ -499,6 +525,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	auditPushConfig, err := loadAuditPushConfig()
+	if err != nil {
+		return Config{}, err
+	}
 	updaterConfig, err := loadUpdaterConfig()
 	if err != nil {
 		return Config{}, err
@@ -516,6 +546,9 @@ func Load() (Config, error) {
 		// connection and sends messages: neither may happen in a demonstration.
 		ollamaConfig.CollectorEnabled = false
 		feishuConfig.ForceDisabled = true
+		// A demonstration performs no outbound request, so the audit platform link is
+		// cleared even if the deployment inherits a URL for a real instance.
+		auditPushConfig.URL = ""
 	}
 
 	cpa := CPAConfig{
@@ -564,6 +597,7 @@ func Load() (Config, error) {
 		IsDemoMode:        demoMode,
 
 		ResetAdviceExpiryWindow: resetAdviceExpiryWindow,
+		AuditPush:               auditPushConfig,
 	}, nil
 }
 
@@ -587,6 +621,40 @@ func loadReleaseConfig() (ReleaseConfig, error) {
 		OMCRepository: envOr("OMCPA_OMC_REPO", DefaultOMCRepository),
 		CPARepository: envOr("OMCPA_CPA_REPO", DefaultCPARepository),
 		Interval:      DefaultReleaseInterval,
+	}, nil
+}
+
+// loadAuditPushConfig reads the team audit platform's ingest settings. An unset URL
+// disables the link; a set but unusable value is reported rather than ignored, because
+// a deployment that configured forwarding and silently got none would believe its
+// events reached the platform.
+func loadAuditPushConfig() (AuditPushConfig, error) {
+	ingestURL := strings.TrimSpace(os.Getenv("OMCPA_AUDIT_INGEST_URL"))
+	timeoutMS := DefaultAuditIngestTimeoutMS
+	if raw := strings.TrimSpace(os.Getenv("OMCPA_AUDIT_INGEST_TIMEOUT_MS")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > 60000 {
+			return AuditPushConfig{}, fmt.Errorf("OMCPA_AUDIT_INGEST_TIMEOUT_MS must be an integer between 1 and 60000: %q", raw)
+		}
+		timeoutMS = parsed
+	}
+	retryEnabled, err := parseBoolEnv("OMCPA_AUDIT_RETRY_ENABLED", true)
+	if err != nil {
+		return AuditPushConfig{}, err
+	}
+	maxBatch := DefaultAuditRetryMaxBatch
+	if raw := strings.TrimSpace(os.Getenv("OMCPA_AUDIT_RETRY_MAX_BATCH")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 || parsed > 500 {
+			return AuditPushConfig{}, fmt.Errorf("OMCPA_AUDIT_RETRY_MAX_BATCH must be an integer between 1 and 500: %q", raw)
+		}
+		maxBatch = parsed
+	}
+	return AuditPushConfig{
+		URL:          ingestURL,
+		Timeout:      time.Duration(timeoutMS) * time.Millisecond,
+		RetryEnabled: retryEnabled,
+		MaxBatch:     maxBatch,
 	}, nil
 }
 

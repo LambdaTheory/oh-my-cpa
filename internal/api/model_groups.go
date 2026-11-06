@@ -44,6 +44,25 @@ type modelGroupListDTO struct {
 	Groups []modelGroupDTO `json:"groups"`
 }
 
+// Model availability readings for the group pages. The wire shape repeats the figure
+// names the console renders rather than the repository's, and the balance is an
+// explicit null for a model no account publishes a monetary balance for: absence and
+// zero are different facts.
+type modelGroupBalanceDTO struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
+type modelGroupReadingDTO struct {
+	Model        string                `json:"model"`
+	Availability string                `json:"availability"`
+	Balance      *modelGroupBalanceDTO `json:"balance"`
+}
+
+type modelGroupReadingsDTO struct {
+	Models []modelGroupReadingDTO `json:"models"`
+}
+
 // modelGroupAddDTO answers an add request with what actually changed. `skipped` is not
 // an error: the caller asked for the group to contain those models and it does, so
 // saying which were already there is more useful than a bare success.
@@ -175,6 +194,33 @@ func (h *Handler) listModelGroups(writer http.ResponseWriter, request *http.Requ
 	response := modelGroupListDTO{Groups: make([]modelGroupDTO, 0, len(groups))}
 	for _, group := range groups {
 		response.Groups = append(response.Groups, projectModelGroup(group))
+	}
+	writeJSON(writer, http.StatusOK, response)
+}
+
+// listModelGroupReadings answers the console's one read of per-model availability and
+// balance. It carries the same projection model_groups_models uses, for every group
+// member and every advertised model, so the group pages can draw a verdict beside a
+// name without a second, differently derived number. It never reads CPA for a write and
+// never triggers collection: it is the stored readings, projected.
+func (h *Handler) listModelGroupReadings(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("Cache-Control", "no-store")
+	if h.repo == nil {
+		writeError(writer, http.StatusServiceUnavailable, "model group storage is unavailable")
+		return
+	}
+	result, err := h.operationsService().ModelGroupReadings(request.Context())
+	if err != nil {
+		writeInternalError(writer, err)
+		return
+	}
+	response := modelGroupReadingsDTO{Models: make([]modelGroupReadingDTO, 0, len(result.Models))}
+	for _, reading := range result.Models {
+		item := modelGroupReadingDTO{Model: reading.Model, Availability: reading.Availability}
+		if reading.Balance != nil {
+			item.Balance = &modelGroupBalanceDTO{Amount: reading.Balance.Amount, Currency: reading.Balance.Currency}
+		}
+		response.Models = append(response.Models, item)
 	}
 	writeJSON(writer, http.StatusOK, response)
 }

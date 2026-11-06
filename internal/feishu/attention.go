@@ -265,7 +265,7 @@ func decisionConclusion(msg Message, alerts []Alert) string {
 		return "今天暂不需要调整额度，未发现异常"
 	}
 	for _, alert := range alerts {
-		if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || strings.HasPrefix(alert.Kind, predictionKindPrefix) && alert.Title != "预计额度有余量" || alert.Kind == AlertChannelUnavailable {
+		if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || strings.HasPrefix(alert.Kind, predictionKindPrefix) || alert.Kind == AlertChannelUnavailable {
 			return "今天需要调整额度安排，请处理以下风险"
 		}
 	}

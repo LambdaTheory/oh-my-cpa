@@ -195,7 +195,7 @@ func TestStartupEpisodesAreNotRepeatedInMorning(t *testing.T) {
 				}
 				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 					if forecast {
-						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "weekly", Verdict: "will_exhaust"}}}, nil
+						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "weekly"}}}, nil
 					}
 					return PredictionDigest{}, nil
 				})

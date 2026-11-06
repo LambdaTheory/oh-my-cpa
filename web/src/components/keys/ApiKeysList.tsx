@@ -33,6 +33,7 @@ import { phoneRowFields } from '../common/phoneRowFields';
 import styles from './ApiKeysList.module.css';
 import { useToast } from '../feedback';
 import { EmptyState } from '../common/EmptyState';
+import { Tag } from '../common/Tag';
 import { ConfirmAction } from '../common/ConfirmAction';
 import './keys.css';
 
@@ -57,6 +58,11 @@ export interface ApiKeysListProps {
   metadata?: ClientAPIKeyItem[];
   /** Keyed by usage fingerprint. */
   usage?: Record<string, ClientKeyUsageItem>;
+  /**
+   * The repository each key belongs to, keyed by usage fingerprint. A key missing from this
+   * map is one the console did not issue for a repository, and the row says so (AC-14).
+   */
+  repoByKey?: Record<string, string>;
   formatTime: (ms: number) => string;
   /** The list's search box, applied to the name and the key text. */
   searchQuery: string;
@@ -75,6 +81,7 @@ export const ApiKeysList: React.FC<ApiKeysListProps> = ({
   apiKeys,
   metadata,
   usage,
+  repoByKey,
   formatTime,
   searchQuery,
   isBusy = false,
@@ -205,6 +212,17 @@ export const ApiKeysList: React.FC<ApiKeysListProps> = ({
         <span className={styles['name-text']}>{record.alias}</span>
       ) : (
         <span className={styles['name-unnamed']}>{t('keys.unnamed')}</span>
+      )}
+      {/* Which repository holds this key; a key the console did not issue for one says so,
+          so the two lists can be read against each other (AC-14). */}
+      {record.usageFingerprint && repoByKey?.[record.usageFingerprint] ? (
+        <Tag size="small" tone="accent" className={styles['repo-tag']}>
+          {repoByKey[record.usageFingerprint]}
+        </Tag>
+      ) : (
+        <Tag size="small" className={styles['repo-tag']}>
+          {t('keys.unbound_repo')}
+        </Tag>
       )}
       <EditOutlined className={styles['name-edit-icon']} />
     </button>

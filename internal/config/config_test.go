@@ -531,3 +531,42 @@ func TestFeishuOAuthEnvironment(t *testing.T) {
 		t.Fatal("invalid CIDR accepted")
 	}
 }
+
+func TestLoadAuditPushConfig(t *testing.T) {
+	for _, name := range []string{
+		"OMCPA_AUDIT_INGEST_URL", "OMCPA_AUDIT_INGEST_TIMEOUT_MS",
+		"OMCPA_AUDIT_RETRY_ENABLED", "OMCPA_AUDIT_RETRY_MAX_BATCH",
+	} {
+		t.Setenv(name, "")
+	}
+	cfg, err := loadAuditPushConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.URL != "" || !cfg.RetryEnabled || cfg.MaxBatch != DefaultAuditRetryMaxBatch ||
+		cfg.Timeout != DefaultAuditIngestTimeoutMS*time.Millisecond {
+		t.Fatalf("defaults = %+v", cfg)
+	}
+
+	t.Setenv("OMCPA_AUDIT_INGEST_URL", "http://127.0.0.1:9320/v1/ingest")
+	t.Setenv("OMCPA_AUDIT_INGEST_TIMEOUT_MS", "2500")
+	t.Setenv("OMCPA_AUDIT_RETRY_ENABLED", "false")
+	t.Setenv("OMCPA_AUDIT_RETRY_MAX_BATCH", "20")
+	cfg, err = loadAuditPushConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.URL != "http://127.0.0.1:9320/v1/ingest" || cfg.RetryEnabled || cfg.MaxBatch != 20 ||
+		cfg.Timeout != 2500*time.Millisecond {
+		t.Fatalf("configured values = %+v", cfg)
+	}
+
+	for _, bad := range []string{"OMCPA_AUDIT_INGEST_TIMEOUT_MS", "OMCPA_AUDIT_RETRY_MAX_BATCH"} {
+		t.Setenv("OMCPA_AUDIT_INGEST_TIMEOUT_MS", "2500")
+		t.Setenv("OMCPA_AUDIT_RETRY_MAX_BATCH", "20")
+		t.Setenv(bad, "0")
+		if _, err := loadAuditPushConfig(); err == nil {
+			t.Fatalf("%s=0 was accepted", bad)
+		}
+	}
+}

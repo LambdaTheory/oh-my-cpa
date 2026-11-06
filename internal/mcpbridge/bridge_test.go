@@ -22,7 +22,7 @@ func TestMCPStdioHelper(t *testing.T) {
 	if os.Getenv("OMCPA_MCP_TEST_CHILD") != "1" {
 		return
 	}
-	if err := Run(context.Background(), os.Getenv("OMCPA_SERVER_URL"), os.Getenv("OMCPA_CPA_MANAGEMENT_KEY"), "v-test"); err != nil {
+	if err := Run(context.Background(), os.Getenv("OMCPA_SERVER_URL"), os.Getenv("OMCPA_CPA_MANAGEMENT_KEY"), "v-test", "claude-test", "test-device"); err != nil {
 		os.Exit(2)
 	}
 	os.Exit(0)
