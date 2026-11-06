@@ -221,6 +221,16 @@ func GenerateKeyValue() (string, error) {
 // own examples use. Keeping the host would make the same repository produce two
 // identities depending on whether an agent pasted a clone URL or the short form.
 func NormalizeRepo(value string) (repoID string, hasRemote bool, err error) {
+	return normalizeRepo(value, true)
+}
+
+// RepoDisplay preserves the submitted spelling without exposing URL credentials.
+func RepoDisplay(value string) (string, error) {
+	display, _, err := normalizeRepo(value, false)
+	return display, err
+}
+
+func normalizeRepo(value string, foldGitHub bool) (repoID string, hasRemote bool, err error) {
 	original := strings.TrimSpace(value)
 	if original == "" {
 		return "", false, errors.New("repo_required")
@@ -236,7 +246,7 @@ func NormalizeRepo(value string) (repoID string, hasRemote bool, err error) {
 			host := trimmed[at+1 : at+1+colon]
 			path := trimmed[at+1+colon+1:]
 			if host != "" && path != "" && !strings.ContainsAny(host, " \\") {
-				return repoIdentity(host, path)
+				return repoIdentity(host, path, foldGitHub)
 			}
 		}
 	}
@@ -251,7 +261,7 @@ func NormalizeRepo(value string) (repoID string, hasRemote bool, err error) {
 			}
 			path := withoutScheme[hostEnd+1:]
 			if host != "" && path != "" {
-				return repoIdentity(host, path)
+				return repoIdentity(host, path, foldGitHub)
 			}
 		}
 		return "", false, errors.New("repo_invalid")
@@ -271,7 +281,7 @@ func NormalizeRepo(value string) (repoID string, hasRemote bool, err error) {
 			}
 		}
 		if len(nonEmpty) >= 2 {
-			return repoIdentity("", strings.Join(nonEmpty, "/"))
+			return repoIdentity("", strings.Join(nonEmpty, "/"), foldGitHub)
 		}
 	}
 	// A local directory: the last path segment, either separator.
@@ -286,7 +296,7 @@ func NormalizeRepo(value string) (repoID string, hasRemote bool, err error) {
 	return directory, false, nil
 }
 
-func repoIdentity(host, path string) (string, bool, error) {
+func repoIdentity(host, path string, foldGitHub bool) (string, bool, error) {
 	path = strings.Trim(path, "/")
 	path = strings.TrimSuffix(path, ".git")
 	path = strings.Trim(path, "/")
@@ -295,6 +305,11 @@ func repoIdentity(host, path string) (string, bool, error) {
 	}
 	host = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(host)), "www.")
 	if host == "" || host == "github.com" {
+		owner := strings.SplitN(path, "/", 2)[0]
+		isGitHubShorthand := strings.Count(path, "/") == 1 && !strings.ContainsAny(owner, ".:") && !strings.EqualFold(owner, "localhost")
+		if foldGitHub && (host == "github.com" || isGitHubShorthand) {
+			path = strings.ToLower(path)
+		}
 		return path, true, nil
 	}
 	return host + "/" + path, true, nil

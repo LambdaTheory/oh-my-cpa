@@ -380,13 +380,15 @@ test('every page the router loads has a scenario rule', () => {
 });
 
 test('Insights and repository approvals select the scenarios that open their routes', () => {
-  for (const [files, id] of [
-    [['web/src/pages/insights/InsightsPage.tsx', 'web/src/pages/insights/components/KeyDetailDrawer.tsx', 'web/src/pages/insights/insights.module.css'], 'insights'],
-    [['web/src/pages/repo-key/RepoKeyApplyPage.tsx', 'web/src/pages/repo-key/RepoKeyApplyPage.module.css'], 'repo-key-apply'],
+  for (const [files, ids] of [
+    [['web/src/pages/insights/InsightsPage.tsx', 'web/src/pages/insights/components/KeyDetailDrawer.tsx', 'web/src/pages/insights/insights.module.css'], ['insights']],
+    [['web/src/pages/repo-key/RepoKeyApplyPage.tsx', 'web/src/pages/repo-key/RepoKeyApplyPage.module.css'], ['repo-key-apply', 'repo-key-approval']],
   ]) {
-    assert.ok(ALL.includes(id), `${id} must be a registered browser scenario`);
+    for (const id of ids) {
+      assert.ok(ALL.includes(id), `${id} must be a registered browser scenario`);
+    }
     for (const file of files) {
-      assert.deepEqual(planScenarios([file], ALL, { ...realGraph, isAdditionOnly: () => false }).ids, [id], file);
+      assert.deepEqual(planScenarios([file], ALL, { ...realGraph, isAdditionOnly: () => false }).ids, ids, file);
     }
   }
 });

@@ -131,7 +131,7 @@ func TestRepoKeyApplicationLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if query.State != "none" || query.NextKind != "issue" || query.Repo != "LambdaTheory/oh-my-cpa" || !query.RepoHasRemote {
+	if query.State != "none" || query.NextKind != "issue" || query.Repo != "lambdatheory/oh-my-cpa" || !query.RepoHasRemote {
 		t.Fatalf("query on a fresh repo = %+v", query)
 	}
 
@@ -325,7 +325,7 @@ func TestRepoKeyActionsQueuePlatformAuditEvents(t *testing.T) {
 	if full.AgentID != "oh-my-cpa" || full.Status != "OK" {
 		t.Fatalf("payload identity = %+v", full)
 	}
-	if full.Entity.Type != "repo" || full.Entity.ID != "LambdaTheory/oh-my-cpa" {
+	if full.Entity.Type != "repo" || full.Entity.ID != "lambdatheory/oh-my-cpa" {
 		t.Fatalf("payload entity = %+v", full.Entity)
 	}
 	if !containsString(full.Tags, "agent:claude-hl") || !containsString(full.Tags, "device:laptop-a") {

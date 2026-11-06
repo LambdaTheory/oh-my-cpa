@@ -76,7 +76,7 @@ const AGENT_SCENARIOS = ['agent', 'agent-external', 'agent-question', 'agent-liv
  */
 const SCENARIO_PATHS = [
   { prefix: 'web/src/pages/insights/', scenarios: ['insights'] },
-  { prefix: 'web/src/pages/repo-key/RepoKeyApplyPage', scenarios: ['repo-key-apply'] },
+  { prefix: 'web/src/pages/repo-key/RepoKeyApplyPage', scenarios: ['repo-key-apply', 'repo-key-approval'] },
   { prefix: 'web/src/pages/agent/', scenarios: AGENT_SCENARIOS },
   { prefix: 'web/src/pages/playground/', scenarios: ['playground', 'playground-narrow', 'mobile-console'] },
   // The run protocol, stream reader and exports: the Agent runs on all of it, and the Playground
@@ -234,6 +234,7 @@ const SCENARIO_PATHS = [
   { prefix: 'web/src/types/modelSquare', scenarios: ['model-square', 'mobile-console'] },
   { prefix: 'web/src/pages/modelGroups/', scenarios: ['model-groups'] },
   { prefix: 'web/src/types/modelGroups', scenarios: ['model-groups'] },
+  { prefix: 'web/src/pages/repo-key/', scenarios: ['repo-key-approval'] },
   // The key list page: the phone rendering, the touch rules and the modal Back dismissal
   // each load `/api-keys`.
   { prefix: 'web/src/pages/ApiKeysPage', scenarios: ['phone-lists', 'touch-ergonomics', 'overlay-back', 'mobile-console'] },
