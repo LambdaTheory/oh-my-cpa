@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -12,11 +14,13 @@ import (
 
 // lockedPrice is what the insert transaction stores beside a usage event.
 type lockedPrice struct {
-	cost           *int64
-	version        *int64
-	channelVersion *int64
-	tier           *int64
-	status         string
+	cost              *int64
+	version           *int64
+	channelVersion    *int64
+	tier              *int64
+	status            string
+	serviceTier       string
+	serviceTierSource string
 }
 
 // queryer is satisfied by both *sql.Tx and *sql.DB, so the lock and the read-time
@@ -89,6 +93,18 @@ const channelVersionSelect = `SELECT id, channel, available, effective_from_ms, 
 // delayed queue delivery cannot reprice an older request. A tombstone stops a
 // removed price from leaking forward; a missing or tombstoned channel is 1x.
 func lockUsagePrice(ctx context.Context, tx *sql.Tx, event usage.Event) (lockedPrice, error) {
+	serviceTier, source := pricing.ResolveServiceTier(event.Provider, event.ExecutorType, event.ResponseServiceTier, event.ServiceTier, event.EffectiveServiceTier)
+	locked, err := lockUsageCost(ctx, tx, event, serviceTier)
+	locked.serviceTier, locked.serviceTierSource = serviceTier, source
+	return locked, err
+}
+
+func lockUsageCost(ctx context.Context, tx *sql.Tx, event usage.Event, serviceTier string) (lockedPrice, error) {
+	// A supplied but unresolved partition cannot be turned into a billable one by
+	// guessing its dialect. Legacy records retain the established raw-count policy.
+	if event.Accounting != nil && event.Accounting.Status != "complete" {
+		return lockedPrice{status: "unpriced"}, nil
+	}
 	version, err := scanPriceVersion(tx.QueryRowContext(ctx, priceVersionSelect+`
  WHERE channel = ? AND model = ? AND effective_from_ms <= ? ORDER BY effective_from_ms DESC, id DESC LIMIT 1`, event.Provider, event.Model, event.TimestampMS))
 	// A channel tombstone restores the shared price effective at the request time.
@@ -123,7 +139,6 @@ func lockUsagePrice(ctx context.Context, tx *sql.Tx, event usage.Event) (lockedP
 			locked.channelVersion = &channel.ID
 		}
 	}
-	serviceTier, _ := pricing.BilledServiceTier(event.ResponseServiceTier, event.ServiceTier)
 	breakdown, err := pricing.Quote(version.Price.ModelPrice, multiplier, eventTokens(event.InputTokens, event.OutputTokens, event.CacheReadTokens, event.CacheCreationTokens), event.TimestampMS, serviceTier)
 	// Invalid or overflowing prices must not lose usage telemetry or look free.
 	if err != nil {
@@ -150,16 +165,18 @@ func eventTokens(input, output, cacheRead, cacheWrite int64) pricing.Tokens {
 // A disagreement would mean the pricing rules changed after the request was
 // stored, which the stored amount survives unchanged.
 type RequestCostBreakdown struct {
-	Status            string             `json:"status"`
-	StoredNanos       *int64             `json:"stored_nanos,omitempty"`
-	StoredTier        *int64             `json:"stored_tier,omitempty"`
-	ServiceTier       string             `json:"service_tier,omitempty"`
-	ServiceTierSource string             `json:"service_tier_source,omitempty"`
-	Version           *PriceVersion      `json:"price_version,omitempty"`
-	Channel           *ChannelVersion    `json:"channel,omitempty"`
-	Quote             *pricing.Breakdown `json:"quote,omitempty"`
-	RecomputedMatches bool               `json:"recomputed_matches"`
-	InvalidReason     string             `json:"invalid_reason,omitempty"`
+	AccountingStatus  string                 `json:"accounting_status"`
+	Accounting        *usage.TokenAccounting `json:"token_accounting,omitempty"`
+	Status            string                 `json:"status"`
+	StoredNanos       *int64                 `json:"stored_nanos,omitempty"`
+	StoredTier        *int64                 `json:"stored_tier,omitempty"`
+	ServiceTier       string                 `json:"service_tier,omitempty"`
+	ServiceTierSource string                 `json:"service_tier_source,omitempty"`
+	Version           *PriceVersion          `json:"price_version,omitempty"`
+	Channel           *ChannelVersion        `json:"channel,omitempty"`
+	Quote             *pricing.Breakdown     `json:"quote,omitempty"`
+	RecomputedMatches bool                   `json:"recomputed_matches"`
+	InvalidReason     string                 `json:"invalid_reason,omitempty"`
 }
 
 // GetUsageEventCostBreakdown loads the versions a stored request locked. An
@@ -173,16 +190,25 @@ func (r *Repository) GetUsageEventCostBreakdown(ctx context.Context, id int64) (
 	var timestampMS int64
 	var input, output, cacheRead, cacheWrite int64
 	var requestedTier, responseTier string
+	var billedTier, billedTierSource, accounting sql.NullString
 	err := r.SQL().QueryRowContext(ctx, `SELECT pricing_status, cost_nanos, price_version_id, channel_version_id, price_tier,
- timestamp_ms, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, service_tier, response_service_tier
+ timestamp_ms, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, service_tier, response_service_tier, billed_service_tier, billed_service_tier_source, token_accounting
  FROM usage_events WHERE id = ?`, id).Scan(
 		&result.Status, &storedNanos, &versionID, &channelID, &storedTier, &timestampMS, &input, &output, &cacheRead, &cacheWrite,
-		&requestedTier, &responseTier)
+		&requestedTier, &responseTier, &billedTier, &billedTierSource, &accounting)
 	if errors.Is(err, sql.ErrNoRows) {
 		return result, ErrNotFound
 	}
 	if err != nil {
 		return result, fmt.Errorf("read request cost: %w", err)
+	}
+	result.Accounting, err = decodeStoredTokenAccounting(accounting)
+	result.AccountingStatus = "legacy"
+	if result.Accounting != nil {
+		result.AccountingStatus = result.Accounting.Status
+	}
+	if err != nil {
+		return result, err
 	}
 	if storedNanos.Valid {
 		result.StoredNanos = &storedNanos.Int64
@@ -190,9 +216,14 @@ func (r *Repository) GetUsageEventCostBreakdown(ctx context.Context, id int64) (
 	if storedTier.Valid {
 		result.StoredTier = &storedTier.Int64
 	}
-	// Both tier columns are stored with the event and never change, so the tier
-	// the lock matched is re-derived rather than stored a second time.
-	result.ServiceTier, result.ServiceTierSource = pricing.BilledServiceTier(responseTier, requestedTier)
+	// NULL marks records predating the selection snapshot. Their explanation
+	// retains the original policy, even when current observability resolves a
+	// Codex request differently. Empty non-NULL is a recorded selection of none.
+	if billedTier.Valid {
+		result.ServiceTier, result.ServiceTierSource = billedTier.String, billedTierSource.String
+	} else {
+		result.ServiceTier, result.ServiceTierSource = pricing.BilledServiceTier(responseTier, requestedTier)
+	}
 	if !versionID.Valid {
 		return result, nil
 	}
@@ -258,4 +289,32 @@ func (r *Repository) ListModelPriceVersions(ctx context.Context, model string, l
 		versions = append(versions, version)
 	}
 	return versions, rows.Err()
+}
+
+type tokenAccountingValue struct{ accounting *usage.TokenAccounting }
+
+func encodeTokenAccounting(accounting *usage.TokenAccounting) tokenAccountingValue {
+	return tokenAccountingValue{accounting: accounting}
+}
+
+func (value tokenAccountingValue) Value() (driver.Value, error) {
+	if value.accounting == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(value.accounting)
+	if err != nil {
+		return nil, err
+	}
+	return string(encoded), nil
+}
+
+func decodeStoredTokenAccounting(stored sql.NullString) (*usage.TokenAccounting, error) {
+	if !stored.Valid {
+		return nil, nil
+	}
+	var accounting usage.TokenAccounting
+	if err := json.Unmarshal([]byte(stored.String), &accounting); err != nil {
+		return nil, fmt.Errorf("read stored token accounting: %w", err)
+	}
+	return &accounting, nil
 }

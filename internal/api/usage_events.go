@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/pricing"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/security"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/usage"
@@ -27,17 +28,19 @@ import (
 // short redacted product label (security.MinimizeUserAgent on the persistence
 // path), so it names the calling client without carrying the raw header.
 type usageEventResponse struct {
-	ID            int64  `json:"id"`
-	EventKey      string `json:"event_key"`
-	RequestID     string `json:"request_id,omitempty"`
-	TimestampMS   int64  `json:"timestamp_ms"`
-	Provider      string `json:"provider"`
-	Endpoint      string `json:"endpoint,omitempty"`
-	ExecutorType  string `json:"executor_type,omitempty"`
-	AuthType      string `json:"auth_type,omitempty"`
-	AuthIndex     string `json:"auth_index,omitempty"`
-	APIGroupKey   string `json:"api_group_key,omitempty"`
-	APIGroupLabel string `json:"api_group_label,omitempty"`
+	AccountingStatus string                 `json:"accounting_status"`
+	Accounting       *usage.TokenAccounting `json:"token_accounting,omitempty"`
+	ID               int64                  `json:"id"`
+	EventKey         string                 `json:"event_key"`
+	RequestID        string                 `json:"request_id,omitempty"`
+	TimestampMS      int64                  `json:"timestamp_ms"`
+	Provider         string                 `json:"provider"`
+	Endpoint         string                 `json:"endpoint,omitempty"`
+	ExecutorType     string                 `json:"executor_type,omitempty"`
+	AuthType         string                 `json:"auth_type,omitempty"`
+	AuthIndex        string                 `json:"auth_index,omitempty"`
+	APIGroupKey      string                 `json:"api_group_key,omitempty"`
+	APIGroupLabel    string                 `json:"api_group_label,omitempty"`
 	// APIKeyAlias is the operator-assigned name for the caller key, resolved
 	// server-side from the fingerprint in APIGroupKey. It is a display label
 	// only: APIGroupKey stays the filter identity, so renaming a key never
@@ -56,14 +59,17 @@ type usageEventResponse struct {
 	// that could not be read - in which case the console prints nothing rather
 	// than a guess. A provider that is merely switched off is not one of those
 	// cases: its current state does not change which key answered.
-	ProviderKeyMask     string `json:"provider_key_mask,omitempty"`
-	Source              string `json:"source,omitempty"`
-	UserAgent           string `json:"user_agent,omitempty"`
-	Model               string `json:"model"`
-	ModelAlias          string `json:"model_alias,omitempty"`
-	ReasoningEffort     string `json:"reasoning_effort,omitempty"`
-	ServiceTier         string `json:"service_tier,omitempty"`
-	ResponseServiceTier string `json:"response_service_tier,omitempty"`
+	ProviderKeyMask           string `json:"provider_key_mask,omitempty"`
+	Source                    string `json:"source,omitempty"`
+	UserAgent                 string `json:"user_agent,omitempty"`
+	Model                     string `json:"model"`
+	ModelAlias                string `json:"model_alias,omitempty"`
+	ReasoningEffort           string `json:"reasoning_effort,omitempty"`
+	ServiceTier               string `json:"service_tier,omitempty"`
+	EffectiveServiceTier      string `json:"effective_service_tier,omitempty"`
+	ResponseServiceTier       string `json:"response_service_tier,omitempty"`
+	ResolvedServiceTier       string `json:"resolved_service_tier,omitempty"`
+	ResolvedServiceTierSource string `json:"resolved_service_tier_source,omitempty"`
 	// ResponseModel is the model the upstream reported having served. Absent
 	// when it reported none, which is not a claim that the request's model ran.
 	ResponseModel    string `json:"response_model,omitempty"`
@@ -95,6 +101,11 @@ type usageEventResponse struct {
 
 func projectUsageEvent(row repository.UsageEventRow) usageEventResponse {
 	var item usageEventResponse
+	item.Accounting = row.Accounting
+	item.AccountingStatus = "legacy"
+	if row.Accounting != nil {
+		item.AccountingStatus = row.Accounting.Status
+	}
 	item.ID = row.ID
 	item.EventKey = row.EventKey
 	item.RequestID = row.RequestID
@@ -115,7 +126,9 @@ func projectUsageEvent(row repository.UsageEventRow) usageEventResponse {
 	item.Model = row.Model
 	item.ReasoningEffort = row.ReasoningEffort
 	item.ServiceTier = row.ServiceTier
+	item.EffectiveServiceTier = row.EffectiveServiceTier
 	item.ResponseServiceTier = row.ResponseServiceTier
+	item.ResolvedServiceTier, item.ResolvedServiceTierSource = pricing.ResolveServiceTier(row.Provider, row.ExecutorType, row.ResponseServiceTier, row.ServiceTier, row.EffectiveServiceTier)
 	item.ResponseModel = row.ResponseModel
 	item.ModelSubstituted = row.ModelSubstituted
 	item.Failed = row.Failed
@@ -336,6 +349,7 @@ func usageEventFilterFromRequest(request *http.Request, window dashboardWindow) 
 		{"executor", &filter.ExecutorTypes},
 		{"reasoning", &filter.ReasoningEfforts},
 		{"service_tier", &filter.ServiceTiers},
+		{"resolved_service_tier", &filter.ResolvedServiceTiers},
 	}
 	for _, dimension := range multi {
 		values, err := usageEventMultiParams(query, dimension.key)
@@ -613,46 +627,51 @@ func (h *Handler) getUsageEvent(writer http.ResponseWriter, request *http.Reques
 func projectUsageEventDetail(row repository.UsageEventRow, providerKeyMask string) map[string]any {
 	item := projectUsageEvent(row)
 	detail := map[string]any{
-		"id":                    item.ID,
-		"event_key":             item.EventKey,
-		"request_id":            item.RequestID,
-		"timestamp_ms":          item.TimestampMS,
-		"provider":              item.Provider,
-		"endpoint":              row.Endpoint,
-		"executor_type":         item.ExecutorType,
-		"auth_type":             item.AuthType,
-		"auth_index":            item.AuthIndex,
-		"api_group_key":         item.APIGroupKey,
-		"api_group_label":       item.APIGroupLabel,
-		"api_key_mask":          item.APIKeyMask,
-		"source":                item.Source,
-		"model":                 item.Model,
-		"model_alias":           item.ModelAlias,
-		"reasoning_effort":      item.ReasoningEffort,
-		"service_tier":          item.ServiceTier,
-		"response_service_tier": item.ResponseServiceTier,
-		"response_model":        item.ResponseModel,
-		"model_substituted":     item.ModelSubstituted,
-		"failed":                item.Failed,
-		"fail_status_code":      item.FailStatusCode,
-		"fail_body":             row.FailBody,
-		"response_headers":      responseHeadersOrEmpty(row.ResponseHeaders),
-		"access_provider":       row.AccessProvider,
-		"is_native_key":         row.IsNativeKey,
-		"generate":              item.Generate,
-		"stream":                item.Stream,
-		"latency_ms":            item.LatencyMS,
-		"ttft_ms":               item.TTFTMS,
-		"tokens":                item.Tokens,
-		"resource_id":           item.ResourceID,
-		"resource_name":         item.ResourceName,
-		"has_request_log":       item.HasRequestLog,
-		"cost_usd":              row.CostUSD,
-		"pricing_status":        row.PricingStatus,
-		"price_version_id":      row.PriceVersionID,
-		"client_ip":             row.ClientIP,
-		"x_forwarded_for":       row.XForwardedFor,
-		"user_agent":            row.UserAgent,
+		"id":                           item.ID,
+		"event_key":                    item.EventKey,
+		"request_id":                   item.RequestID,
+		"timestamp_ms":                 item.TimestampMS,
+		"provider":                     item.Provider,
+		"endpoint":                     row.Endpoint,
+		"executor_type":                item.ExecutorType,
+		"auth_type":                    item.AuthType,
+		"auth_index":                   item.AuthIndex,
+		"api_group_key":                item.APIGroupKey,
+		"api_group_label":              item.APIGroupLabel,
+		"api_key_mask":                 item.APIKeyMask,
+		"source":                       item.Source,
+		"model":                        item.Model,
+		"model_alias":                  item.ModelAlias,
+		"reasoning_effort":             item.ReasoningEffort,
+		"service_tier":                 item.ServiceTier,
+		"effective_service_tier":       item.EffectiveServiceTier,
+		"response_service_tier":        item.ResponseServiceTier,
+		"resolved_service_tier":        item.ResolvedServiceTier,
+		"resolved_service_tier_source": item.ResolvedServiceTierSource,
+		"response_model":               item.ResponseModel,
+		"model_substituted":            item.ModelSubstituted,
+		"failed":                       item.Failed,
+		"fail_status_code":             item.FailStatusCode,
+		"fail_body":                    row.FailBody,
+		"response_headers":             responseHeadersOrEmpty(row.ResponseHeaders),
+		"access_provider":              row.AccessProvider,
+		"is_native_key":                row.IsNativeKey,
+		"generate":                     item.Generate,
+		"stream":                       item.Stream,
+		"latency_ms":                   item.LatencyMS,
+		"ttft_ms":                      item.TTFTMS,
+		"tokens":                       item.Tokens,
+		"accounting_status":            item.AccountingStatus,
+		"token_accounting":             item.Accounting,
+		"resource_id":                  item.ResourceID,
+		"resource_name":                item.ResourceName,
+		"has_request_log":              item.HasRequestLog,
+		"cost_usd":                     row.CostUSD,
+		"pricing_status":               row.PricingStatus,
+		"price_version_id":             row.PriceVersionID,
+		"client_ip":                    row.ClientIP,
+		"x_forwarded_for":              row.XForwardedFor,
+		"user_agent":                   row.UserAgent,
 	}
 	// Present only when a credential was actually identified: an absent key and an
 	// empty one read differently to a consumer, and the console prints no key line

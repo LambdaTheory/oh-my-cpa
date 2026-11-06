@@ -1,6 +1,7 @@
 /** Initial reads and rendered content, not polling silence, define a ready demo route. */
 export const DEMO_ROUTES = [
   { path: '/dashboard', heading: '仪表盘', reads: ['/management/dashboard', '/management/dashboard/models', '/management/dashboard/token-heatmap', '/management/overview', '/management/dashboard/providers', '/management/dashboard/predictions', '/management/auth-files', '/management/quota', '/usage/routing'], content: '.heatmap-panel .heatmap-grid' },
+  { path: '/insights', heading: '洞察', reads: ['/management/insights/cube', '/management/insights/rhythm', '/management/auth-files', '/management/providers'], content: '[data-testid="insights-rhythm"] [data-testid="insights-hour-chart"]' },
   { path: '/model-square', heading: '模型广场', reads: ['/management/model-square', '/pricing', '/usage/facets'], content: '.model-square-page [data-model-identity]' },
   { path: '/model-groups', heading: '模型组', reads: ['/management/model-groups', '/management/model-groups/readings'], content: '[data-model-group-card]' },
   // The demonstration is read-only, so a literal placeholder id is the honest address: the page states that the group is gone, which is all a visitor could ever do here.
@@ -9,6 +10,7 @@ export const DEMO_ROUTES = [
   { path: '/agent', heading: 'Oh My CPA', headingSelector: '[data-testid="agent-empty"] [aria-label="Oh My CPA"]', reads: ['/agent/session', '/capabilities'], content: '[data-testid="agent-empty"]' },
   // Nothing can be prepared in the demonstration, so the page states that instead of reading an operation.
   { path: '/authorize/:id', heading: '授权外部 Agent', reads: [], content: '[data-testid="agent-authorize-demo"]' },
+  { path: '/repo-key-apply/:token', heading: '审批仓库密钥申请', headingSelector: 'h1#repo-key-apply-title', reads: ['/preferences'], content: '[data-testid="repo-key-apply-page"] .auth-card > p', detail: '每个仓库一把密钥' },
   { path: '/ai-providers', heading: 'AI 提供商', reads: ['/management/providers'], content: '.providers-page .ant-table-row' },
   { path: '/api-keys', heading: '密钥管理', reads: ['/management/api-keys'], content: '.keys-page .ant-table-row' },
   { path: '/oauth-management', heading: 'OAuth 管理', reads: ['/management/auth-files', '/ollama/accounts', '/ollama/quota'], content: '[data-testid="oauth-credential-record"]' },

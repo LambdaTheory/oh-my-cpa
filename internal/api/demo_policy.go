@@ -198,6 +198,8 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/management/dashboard/models", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/dashboard/providers", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/dashboard/predictions", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/insights/cube", demoAllow, ""},
+	{http.MethodGet, "/api/v1/management/insights/rhythm", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/logs", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/logs/status", demoAllow, ""},
 	{http.MethodGet, "/api/v1/management/service-logs", demoAllow, ""},
@@ -240,6 +242,8 @@ var demoPolicy = []demoPolicyRule{
 	{http.MethodGet, "/api/v1/management/system/maintenance", demoAllow, ""},
 	{http.MethodPost, "/api/v1/management/system/maintenance/checkpoint", demoRefuse, "database maintenance is disabled in the demo"},
 	{http.MethodPost, "/api/v1/management/system/maintenance/vacuum", demoRefuse, "database maintenance is disabled in the demo"},
+	{http.MethodGet, "/api/v1/management/system/data-retention", demoAllow, ""},
+	{http.MethodPut, "/api/v1/management/system/data-retention", demoRefuse, "changing data retention is disabled in the demo"},
 
 	// Configuration and capability reads. The console renders them; nothing here
 	// writes to the gateway.

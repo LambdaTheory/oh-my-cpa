@@ -1414,6 +1414,8 @@ CPA queue / subscription
   → ingest.Maintenance   fold into usage_facts_15m + usage_facts_daily
                          (permanent), then the data-lifecycle pass that
                          rolls request records and decoded payloads out
+                         and returns freed pages to the filesystem; run
+                         by the app, so it continues with capture off
   → /management/dashboard, /management/dashboard/tail,
     /management/dashboard/token-heatmap, /management/dashboard/models,
     /management/dashboard/providers, /usage/events, /usage/routing
@@ -1443,6 +1445,34 @@ RESP `LPOP`, and an unreachable RESP endpoint degrades to the HTTP usage queue
 4s → 8s → 10s, then capped) while a full batch drains with no delay. A wrong
 management key triggers a long cooldown instead of retrying, because CPA bans a
 client IP after repeated failures.
+
+### Canonical token accounting
+
+`internal/usage/accounting.go` consumes the queue's existing `accounting_version`
+and `token_breakdown` fields. Only a complete v2 partition with present,
+non-negative, overflow-safe buckets, matching totals and compatible raw counts
+replaces the stored input/output/cache buckets. Canonical output already includes
+reasoning exactly once: an Interactions record with raw input 100, output 30,
+reasoning 10 and total 140 therefore stores input 100 and output 40. A dialect
+whose raw output is already 40 stores the same output, not 50.
+
+Migration `066_usage_token_accounting.sql` adds nullable, immutable
+`usage_events.token_accounting` evidence: the version, validation status, typed
+breakdown and original vendor token counts. Existing rows remain NULL and retain
+their original counts and locked prices. Missing evidence is explicitly legacy;
+new legacy-format records retain the established raw-count pricing policy.
+Supplied unsupported, malformed, inconsistent or unclassified accounting keeps
+its usage telemetry but is unpriced, even when the model has a configured price.
+It never manufactures a complete billable partition or changes an old snapshot.
+
+The request list/detail, Agent/MCP request reads and cost explanation expose the
+same allowlisted evidence and accounting status. The completion bucket uses the
+stored canonical output total, while the raw output remains inspectable. All
+three permanent fact grains preserve canonical and unresolved request counts
+plus raw input/output/total sums for those observed records; requests outside
+those counts have no canonical evidence. These measures fold with the normalized
+usage and locked costs, so detail retention and local-day rebuilding do not
+change their meaning.
 
 ### The live change signal
 
@@ -1586,8 +1616,11 @@ never pruned. They grow with *distinct dimension combinations per bucket*, not w
 
 `Repository.QueryUsageFacts` is the single read every panel goes through; the older
 `QueryUsageAnalytics`, `QueryUsageModelBuckets`, `QueryUsageProviderTotals`,
-`QueryUsageCostWindow` and `QueryDailyTokenTotals` are thin projections of it. A new panel
-adds a grouping or a measure there instead of writing another scan of `usage_events`.
+`QueryUsageCostWindow` and `QueryDailyTokenTotals` are thin projections of it. A query names
+the dimensions it groups by (`UsageDimension`: key, model, call point, provider, credential,
+auth type, serving key) and the values it keeps (`Filters`, one `IN` per dimension, rendered
+in a fixed order so a query always compiles to one statement). A new panel adds a dimension
+or a measure there instead of writing another scan of `usage_events`.
 
 Three rules keep the read exact:
 
@@ -1608,6 +1641,35 @@ Three rules keep the read exact:
 The fine grain is fifteen minutes because every civil UTC offset in use is a multiple of
 it: a local calendar day is a whole number of buckets in any deployment time zone, which
 an hourly grain cannot offer (`+05:30`, `+05:45`).
+
+**Calendar buckets.** A query with a `Calendar` (hour, day or Monday week in a time zone)
+buckets on the wall clock rather than on epoch multiples. Go splits the window at each
+offset change (`time.Time.ZoneBounds`). The SQL adds the matching offset to every timestamp
+with one `CASE`, aligns the wall-clock value, and Go turns each key back into an instant.
+That is exact across a DST change: every row of one local day carries the same key, and
+the 25-hour day is one bucket. Because every offset is a multiple of fifteen minutes, the
+fine grain divides any local hour or day. The UTC daily table is read only where the
+offset is zero throughout the window.
+
+**Local-day facts.** A non-UTC deployment reading ninety days by local day would otherwise
+group every fifteen-minute row of the window, which measured about three seconds. Migration
+065 adds `usage_facts_local_daily`, the same measures per local day of one zone, behind the
+checkpoint marker `facts_local:<zone>`. `EnsureLocalUsageFacts` rebuilds it from the
+fifteen-minute facts in one transaction when the OMC Time Zone changes. The same fold that
+advances `facts` keeps it current. A read takes local days only while the marker names its
+zone (an `EXISTS` guard in the same statement), and otherwise reads the interior from the
+fine table, so a zone change can never serve the previous zone's days.
+`BenchmarkUsageFactsCube` pins the Insights shape at about 140 ms over ninety days.
+
+**The Insights cube.** `GET /management/insights/cube` returns one window's facts per bucket
+and per full tuple of key, call point, model, provider and credential, dictionary-encoded
+with positional measure columns, plus the Comparison Window's totals per tuple. The response supports browser-side
+projections from a single snapshot without issuing a new request for each grouping. Rows grow with active tuples per bucket, never with requests. Past 60,000 rows an
+automatic granularity is coarsened and reported in `window.bucket`; an explicit one is a
+400. Windows and Calendar Presets are resolved by the server in the OMC Time Zone
+(`internal/api/insights_window.go`). The rhythm grid needs local hours under day buckets,
+so `GET /management/insights/rhythm` is its own read. It takes the request list's filter
+parameters, and fingerprints a raw key value server-side.
 
 **The detail horizon.** Once the lifecycle pass has removed request records before an
 instant, the ragged edges and the fine grids behind it can no longer be read. The instant is
@@ -1944,47 +2006,50 @@ Four properties are load-bearing:
 
 ### Streaming status and throughput (TPS) derivation
 
-CPA usage payloads include a boolean `stream` field indicating whether the request
-was executed in streaming mode. Oh My CPA records this in `usage_events.stream`
-(migration 023) as a nullable integer: `1` for streaming, `0` for non-streaming,
-and `NULL` for historical rows where the flag was not captured.
+A usage record carries CPA's total `latency_ms`, optional `ttft_ms`, the raw token counts
+and, when available, canonical token accounting. OMC does not infer hidden reasoning timing
+or progressive delivery from the recorded `stream` flag, a model name, a duration threshold
+or the resulting speed. A first-token timestamp can mark the first observable token even in
+a request the client sent with `stream: false`, and it can be a first-packet fallback.
 
-The flag is operational metadata, not a sufficient classifier for TTFT validity.
-An upstream executor can capture a real first-token event even when the client
-requested `stream: false`, while an apparently streaming request can still receive
-its whole payload in one chunk. `eventTokensPerSecond` in
-`web/src/types/usageEventMetrics.ts` derives output-token rates using the deployment's
-`omc_tps_calculation_mode` preference:
+`calculateTokensPerSecond` in `web/src/types/tpsCalculation.ts` is the shared leaf
+calculation used by `eventTokensPerSecond` and the Playground:
 
-- `exclude_ttft` (default): subtract a finite positive `ttft_ms` only when it is below
-  total latency and `latency_ms - ttft_ms >= MIN_STREAMING_GENERATION_WINDOW_MS` (50 ms).
-  TPS is then `output_tokens * 1000 / (latency_ms - ttft_ms)`. Otherwise use
-  `output_tokens * 1000 / latency_ms` and identify the result as a fallback.
-- `include_ttft`: always use `output_tokens * 1000 / latency_ms`, even when TTFT is
-  measurable. This does not hide or invalidate the independent TTFT readout.
-- Non-generation records, non-positive or non-finite output tokens, and invalid total
-  latency have no TPS. Remaining elapsed time can include server-side tool calls;
-  the subtraction is not a measurement of pure generation time.
+- `include_ttft` is `output_tokens * 1000 / latency_ms`, using the canonical output total
+  when complete accounting exists. Legacy counts use their grand total to establish
+  whether reported reasoning is already inside output or is a separate bucket; an
+  equation that identifies neither scope makes the rate unavailable.
+- `exclude_ttft` requires a finite first-token timestamp strictly between zero and
+  `latency_ms`; a usage record's zero means absent. It divides output tokens by
+  `latency_ms - ttft_ms` when no reasoning is reported. When the observer knows the
+  timestamp marks non-reasoning content (the Playground's first-content delta after a
+  separate thought channel), it removes the known reasoning count from the numerator and
+  returns the `exclude_ttft_visible` basis; a content clock may itself be zero because it was
+  measured locally. Inline `<think>` reasoning shares the content stream, so its first delta
+  is not an answer boundary. A usage record with reported reasoning has no such content
+  boundary and returns `unavailable_reasoning`.
+- Invalid or inconsistent accounting returns `unavailable_accounting`; missing timing
+  returns `unavailable_timing`. Non-generation records, non-positive output, and values
+  outside the safe-integer range have no TPS and no basis. Unavailable rates are not
+  fallbacks: the selected formula either has the evidence it needs or produces no number.
 
-`TokenDisplayProvider` owns the setting through the existing optimistic, per-key
-serialized preference hook. OMC Settings, request rows and Playground footers share
-one value; changing it recalculates historical readouts without touching stored observations.
-The calculation result exposes `basis` (`exclude_ttft`, `include_ttft`, `fallback_total`,
-or `null`) so both surfaces select the same accurate formula tooltip. The closed preference
-API allowlist accepts the new key using its existing JSON-document contract. Missing or
-unsupported values resolve to `exclude_ttft`; no migration is needed.
+The Playground's content clock is a separate observation from CPA's `ttft_ms`. When a
+provider omits reasoning details, the Playground treats its reported output as having no
+reported reasoning; this is a claim about the usage evidence, not about hidden model work.
+Gateway usage events now preserve `completion_tokens_details.reasoning_tokens`,
+`output_tokens_details.reasoning_tokens`, and Claude Messages thinking counts from
+`output_tokens_details.thinking_tokens` (plus the legacy top-level `thinking_tokens`),
+so a turn footer can distinguish non-reasoning output from hidden reasoning. The tooltip states that even the content-tail rate can include
+tools and transport time; it is not a claim about internal model speed.
 
-`internal/operations/tps_calculation.go` registers `tps_calculation_get` and
-`tps_calculation_set` for both Agent and MCP administrators. The low-risk write validates
-its two mode values, returns `invalid_parameters` otherwise, persists through the same
-repository and invalidates `preferences`. Reads return the effective mode using
-`internal/repository/tps_calculation.go`.
+The calculation result's basis (`exclude_ttft`, `exclude_ttft_visible`, `include_ttft`,
+`unavailable_timing`, `unavailable_reasoning`, `unavailable_accounting`, or `null`) drives
+the same formula tooltip and JSON export on every surface. The closed preference API
+accepts `omc_tps_calculation_mode`; missing or unsupported values resolve to
+`include_ttft`.
 
-The request list and detail drawer show a non-stream badge when an explicit
-`stream: false` record has no measurable TTFT or when the observed residual window
-collapsed. Historical records (`stream IS NULL`) use the same residual-window
-heuristic, preserving genuine legacy first-token observations without inferring a
-first-token boundary from a completion-only measurement.
+The request list and detail drawer show the non-stream badge only for an explicit
+`stream: false` observation; they do not infer it from collapsed timing or a fast rate.
 
 ### 6.1 The request-record filter vocabulary
 
@@ -2003,6 +2068,7 @@ drill-down links written before multi-select existed working unchanged.
 | Dimension | Wire parameter | Match |
 | --- | --- | --- |
 | Model / alias / provider / caller key / auth index / source / auth type / executor / reasoning effort / service tier | same name, repeatable | exact, OR within the dimension |
+| Resolved service tier | `resolved_service_tier`, repeatable | provider-aware mode evidence; original request tier remains `service_tier` |
 | Identity search | `q` | literal substring across the columns in `usageEventSearchColumns` |
 | Endpoint, user agent | `endpoint`, `ua` | literal substring |
 | Request id | `request_id` | exact |
@@ -2157,9 +2223,30 @@ operator ──▶ channel_model_prices ──triggers──▶ model_price_vers
 `usage_events` stores, in the event's own insert transaction and by the request
 timestamp, the price version id, the channel version id (absent means 1×), the
 index of the tier the request qualified for, and integer USD nanos computed by
-`pricing.Quote`. The tier is selected on the request's billed service tier (the
-reported response tier, else the requested one), which is re-derived from the
-event's own immutable tier columns when the breakdown is explained. Historical totals never join the mutable tables, so a later edit
+`pricing.Quote`. `pricing.ResolveServiceTier` interprets the recorded evidence:
+Codex first uses a nonempty final outbound `effective_service_tier`, captured by
+CPA v8.0.39 after translation and payload rules. Outbound `auto` selects no lane
+and does not fall back to the client choice. Without this evidence, Codex keeps
+its requested-tier policy even when its response says `default`/`auto`: a missing
+client tier may use the response, while explicit client `auto` selects no lane.
+Other providers remain response-first with request fallback. Provider identity or a concrete Codex executor identifies this policy,
+never a model name or provider display label.
+
+Migration 063 locks the selected `billed_service_tier` and its
+`billed_service_tier_source` beside the amount, including an empty selection.
+Both are immutable. NULL identifies historical snapshots, whose breakdown keeps
+the original response-first policy. The API exposes the current interpretation
+as `resolved_service_tier`/`resolved_service_tier_source` for mode indicators and
+exports; a deterministic SQLite function calls the same resolver for filters and
+facets, including historical rows. The cost breakdown instead explains the
+selection originally locked. Migration 064 preserves all request fields, indexes,
+immutability triggers and the request-id high-water mark while adding
+`effective_service_tier` and allowing the `outbound` snapshot source. Missing
+telemetry keeps the existing per-record policy, including for older CPA, mixed
+queues and CPA downgrades. CPA omits empty outbound tiers, so a missing field
+cannot distinguish an older publisher from a payload rule that removed the tier;
+OMC does not infer that fact from gateway version, configuration or latency.
+Historical totals never join the mutable tables, so a later edit
 cannot rewrite an invoice. A request with no effective price version is stored
 with pricing status `unpriced` (`legacy_unpriced` for rows that predate migration
 019), cost absent, and is never backfilled. The request detail recomputes a
@@ -2685,7 +2772,7 @@ transient codes and pending notifications, and preserves every job and historica
 | Table group | Tables | Notes |
 | --- | --- | --- |
 | Instances & identity | `cpa_instances`, `discovered_resources`, `resource_overrides`, `connections`, `cpa_bindings` | Encrypted management key; bindings survive upstream removal. `connections` is provisioned by migration 006 for the Connection entity but no code reads or writes it yet — treat it as reserved, not as a live table |
-| Usage | `usage_inboxes`, `usage_events`, `error_events`, `ingest_gaps`, `usage_facts_15m`, `usage_facts_daily`, `usage_aggregation_checkpoints`, `data_lifecycle_state` | Milliseconds; raw payloads encrypted, and stored once: with a cipher configured `raw_message` is empty and only the ciphertext is kept. Migration 035 replaces the hourly and daily overview rollups with the permanent usage facts and adds `data_lifecycle_state` (what each rolling policy has removed, and up to which instant). Every table declares its lifecycle in `TABLE_LIFECYCLES` (`internal/repository/lifecycle.go`). Migration 034 adds `usage_events.response_model` (the model the upstream reported serving, empty when unknown) and `model_substituted`, decided at ingestion by `usage.IsModelSubstituted`, with a partial index for the substituted rows; earlier rows stay unknown. Migration 037 adds `usage_events.fail_status_code` and `fail_body` (the status a failed request ended with and the upstream's redacted, bounded error body, from the `fail` block of CPA's usage record); `0` and empty mean unknown, and the list projection carries the status only. Migration 038 adds `usage_events.response_headers`, the filtered upstream header snapshot as a JSON object (`usage.FilterResponseHeaders` drops transport and credential-bearing headers and bounds the rest); only `GetUsageEvent` reads it. Migration 039 adds `usage_events.access_provider` and `is_native_key` (which access provider authenticated the caller and whether the caller's key is CPA's native configured key, from CPA's usage record); an empty `access_provider` means a gateway that predates them, while `is_native_key` is meaningful whenever a path is present, and only `GetUsageEvent` reads them |
+| Usage | `usage_inboxes`, `usage_events`, `error_events`, `ingest_gaps`, `usage_facts_15m`, `usage_facts_daily`, `usage_aggregation_checkpoints`, `data_lifecycle_state` | Milliseconds; raw payloads encrypted, and stored once: with a cipher configured `raw_message` is empty and only the ciphertext is kept. Migration 035 replaces the hourly and daily overview rollups with the permanent usage facts and adds `data_lifecycle_state` (what each rolling policy has removed, and up to which instant). Every table declares its lifecycle in `TABLE_LIFECYCLES` (`internal/repository/lifecycle.go`). Migration 034 adds `usage_events.response_model` (the model the upstream reported serving, empty when unknown) and `model_substituted`, decided at ingestion by `usage.IsModelSubstituted`, with a partial index for the substituted rows; earlier rows stay unknown. Migration 037 adds `usage_events.fail_status_code` and `fail_body` (the status a failed request ended with and the upstream's redacted, bounded error body, from the `fail` block of CPA's usage record); `0` and empty mean unknown, and the list projection carries the status only. Migration 038 adds `usage_events.response_headers`, the filtered upstream header snapshot as a JSON object (`usage.FilterResponseHeaders` drops transport and credential-bearing headers and bounds the rest); only `GetUsageEvent` reads it. Migration 039 adds `usage_events.access_provider` and `is_native_key` (which access provider authenticated the caller and whether the caller's key is CPA's native configured key, from CPA's usage record); an empty `access_provider` means a gateway that predates them, while `is_native_key` is meaningful whenever a path is present, and only `GetUsageEvent` reads them. Migration 067 adds `usage_retention_settings`, the single row holding the request-record horizon the operator chose in OMC Settings and, when the API set one, a payload horizon (NULL follows the environment); no row means the environment's horizons apply |
 | Custom icons | `custom_icons` | Migration 032 adds durable sanitized image BLOBs, stable IDs and content revisions; confirmed deletion atomically clears matching provider overrides and deletes the asset |
 | Font library | `fonts`, `font_faces` | Migration 047: one row per installed family (`source` `google` or `upload`) and one per `@font-face` (weight range, style, `unicode-range`, container format, file BLOB, position). Faces cascade with their family; deletion clears the `omc_fonts` roles that used it in the same transaction. Both tables are hidden from `database_query` |
 | Pricing | `model_prices`, `model_price_versions`, `pricing_sync_state`, `pricing_model_catalog`, `pricing_catalog_state`, `pricing_model_links`, `pricing_upstream_catalog`, `pricing_channels`, `pricing_channel_versions`, `pricing_match_reviews` | Price and channel versions are append-only via triggers; migration 028 added tiers, links, the stored OpenRouter snapshot and channels, and `usage_events.channel_version_id`/`price_tier`. Migration 029 added `pricing_catalog_state.providers_json`; the pricing repository refuses to run before migration 29. Migration 031 added `pricing_match_reviews` (the OpenRouter model last answered for a custom or linked price); match-review reads and writes refuse to run before migration 31 |
@@ -2713,7 +2800,7 @@ once for both the gateway's version header and its credential count), the plugin
 provider counts, and the database, collector, record-count and admission reads - so the page
 waits for its slowest read rather than for the sum of them.
 
-The management system surface is nine routes: `GET /management/system` (the page),
+The management system surface is eleven routes: `GET /management/system` (the page),
 `GET /management/system/releases` (one product's merged change log), `GET
 /management/system/repository` (the project's star count for the header link), `GET
 /management/system/updates` (both products' stored version answers for the shell's update
@@ -2721,8 +2808,13 @@ indicator), `GET /management/system/updater` (whether this deployment can apply 
 per product, and the running or last update), `POST /management/system/updater/apply`
 (start one; see [Console updates](#console-updates-adr-0099)), `POST
 /management/system/check-updates` (a check, subject to the floor), `GET
-/management/system/maintenance` (the running or last job) and `POST
-/management/system/maintenance/{checkpoint,vacuum}`. The check answers `200` with the two
+/management/system/maintenance` (the running or last job), `POST
+/management/system/maintenance/{checkpoint,vacuum}`, and `GET`/`PUT
+/management/system/data-retention` (the request-record and payload horizons, where they come
+from, what each rolling policy has removed, the pass schedule, and whether the file is in
+incremental auto-vacuum mode; a `PUT` takes `request_record_days`, the `expected_request_record_days` it was confirmed
+against, and an optional `payload_days` (0–3650 days), is audited before it is stored, answers
+`409` when another console has replaced the expected horizon, and wakes the maintenance loop). The check answers `200` with the two
 products' states and `served_from_cache`; a maintenance POST answers `202` on admission,
 `409` when a job is already running, `507` when a rebuild cannot be admitted for space, and
 `503` once the service is shutting down. Every one of them answers `503` when the handler was
@@ -2782,7 +2874,7 @@ versions. Versions 010–014 were never part of this repository's migration hist
 | Feishu notifications | `app.Run` → `feishu.Service` | Best effort; the long connection and the classification loop are started with the process and stopped before the database closes. A disabled, forced-off or degraded configuration is inert and never fails startup; it is never started in demo mode |
 | Feishu quota prediction | `app.Run` → `feishu.PredictionJob` | Best effort; the job remains loaded but inert while Feishu is disabled or degraded, becomes active after a ready settings reload, and falls back to the ordinary summary when prediction has no finding or cannot be read. It is never built in demo mode |
 | Release sweep | `app.Run` → `release.Service` | Best effort; the stored index and its timestamps go stale, and the page says so. Every six hours, first run delayed by one interval so a restart loop cannot become a request loop |
-| Usage-fact fold + data lifecycle | `ingest.Maintenance` inside the pipeline | Retried on its own interval; errors surface in ingest status |
+| Usage-fact fold + data lifecycle | `app.Run` → `ingest.Maintenance`, independent of capture (runs with ingestion off or no CPA configured; not in a demo) | Retried on its own interval; errors surface in ingest status. Each pass reads the retention from `usage_retention_settings` (falling back to the environment), and `PUT /management/system/data-retention` wakes it |
 | Database maintenance | `repository.MaintenanceService`, started by an operator request | Never started automatically; a job's outcome is retained in process memory and recorded on the audit trail. The retained record is served by both reads, and the console shows only a job it observed rather than that record — see §11 |
 
 A demo deployment starts only the HTTP server: its history is the fixture, so there
@@ -3727,8 +3819,11 @@ override from replacing `messages` with content the image checks never approved;
 console does not model pass through untouched. `user_agent` is a transport header rather than a
 body field, so it is resolved here (the operator's value, else `Oh-My-CPA/<build version>`) and
 refused when it is not a header value; a non-streaming body is refused by name, because this
-route projects allowlisted SSE events. TPS in the turn footer comes from the same
-`eventTokensPerSecond` helper and global TPS calculation preference the request records use, so the two cannot disagree.
+route projects allowlisted SSE events. TPS in the turn footer uses the same calculation and
+global preference as request records, while supplying a non-reasoning content boundary when
+reasoning arrives on a separate thought channel. Inline reasoning shares the reply clock, so
+the footer reports exclusion as unavailable. The bases remain explicit so a content-tail
+rate is never mistaken for a usage record's narrower evidence.
 
 Request inspection substitutes image summaries at any depth (a valid custom body may replace
 `messages` with the string-content form) and omits `user_agent` from the body preview, since it

@@ -74,11 +74,11 @@ export async function sidebarNavCustomization({ base, page, check }) {
   const rowToggle = (route) => page.locator('[data-nav-toggle=' + JSON.stringify(route) + '] button');
   const rowOf = (route) => panel().locator('.settings-toggle-row').filter({ has: rowToggle(route) });
   const showAll = () => page.getByRole('button', { name: 'Show all' });
-  const observeRoutes = ['/usage/events', '/pricing', '/logs', '/audit'];
+  const observeRoutes = ['/insights', '/usage/events', '/pricing', '/logs', '/audit'];
   const hideObserve = async () => {
     for (const route of observeRoutes) await rowToggle(route).click();
     await until(() => hiddenWrites().some((write) => observeRoutes.every((route) => JSON.parse(write.body).includes(route))), {
-      label: 'the four Observe entries to be hidden',
+      label: 'every Observe entry to be hidden',
     });
   };
 
@@ -107,7 +107,7 @@ export async function sidebarNavCustomization({ base, page, check }) {
 
   // A heading with nothing under it reads as a section that failed to load, so it goes as well.
   await hideObserve();
-  // The four clicks reach the cache before they reach the wire, so waiting for the last write
+  // The clicks reach the cache before they reach the wire, so waiting for the last write
   // still leaves the drawn menu a frame behind it: the heading has to be gone from the rail
   // itself before its absence is asserted. A sheet opened after the fact renders the new state
   // on its own, which is why the phone half of this scenario does not need the same wait.
@@ -134,7 +134,7 @@ export async function sidebarNavCustomization({ base, page, check }) {
     (await railGroups()).join(' | '));
   // The setting reads without the panel being opened: the row states what the panel holds.
   check('the settings row states how many entries are out of the rail',
-    (await rowSummary().innerText()).includes('5 hidden'), await rowSummary().innerText());
+    (await rowSummary().innerText()).includes('6 hidden'), await rowSummary().innerText());
 
   // The page that owns the setting and the page that owns the fork's account-operation entrances
   // are not hideable: either preference would remove the only console path back to that capability.

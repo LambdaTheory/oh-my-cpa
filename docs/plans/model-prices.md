@@ -64,10 +64,14 @@ write), a model multiplier, and an optional list of **tiers**:
   Time Zone, which only decides how the console displays time (ADR 0063);
 - a **service-tier tier** (`service_tiers`, such as `["priority","fast"]`)
   applies when the request was billed on one of the named upstream service
-  tiers. The billed tier is the `response_service_tier` CPA reported, or the
-  requested `service_tier` when the response names none (an older gateway or a
-  silent upstream); `auto` and empty name no tier and never match. Names are
-  compared lowercased and trimmed. Which provider spellings share a rate is
+  tiers. For Codex, the final outbound `effective_service_tier` governs when
+  nonempty; otherwise the client `service_tier` remains the evidence. Its response
+  can report `default` or `auto` even for Fast. Explicit outbound `auto` selects
+  no lane. Other providers prefer a non-`auto`
+  `response_service_tier`, falling back to the request. A missing Codex request
+  field can fall back to the response; an explicit `auto` names no lane and
+  does not fall through. `auto` and empty never match. Names are compared
+  lowercased and trimmed. Which provider spellings share a rate is
   listed in the price itself: no mapping between `fast` and `priority` is built
   in;
 - a tier carrying several conditions applies only when all of them hold.
@@ -93,6 +97,24 @@ tiered base cost × model multiplier × channel multiplier
 Both multipliers are applied as exact fractions before a single half-up
 rounding to nanos, so a request with no tiers and a 1× channel costs exactly
 what the pre-tier formula charged (`FuzzQuoteLegacyParity`).
+
+The resolved service tier and its outbound/request/response source are saved with new
+request costs (migration 063). Historical records without that selection retain
+the original response-first policy when their locked cost is explained. Neither
+amounts nor price versions are rewritten. Mode indicators and the
+`resolved_service_tier` filter use the current provider-aware interpretation;
+`service_tier` continues to filter the original client request.
+
+CPA v8.0.39 adds optional `effective_service_tier` telemetry from the final outbound
+request after translation and payload rules. Codex prefers this evidence, including
+explicit `default` downgrades; outbound `auto` selects no service-tier price and
+never revives the original client priority. Missing or empty outbound evidence
+retains the existing request-aware resolver, without a gateway-version gate.
+Other providers retain response-first pricing. Migration 064 adds the raw field
+and extends the immutable snapshot source with `outbound`, preserving old rows,
+amounts and explanations. CPA omits an empty outbound tier, so an old publisher
+and a payload rule that removed the tier are indistinguishable. OMC does not
+infer missing evidence from current configuration or request latency.
 
 ## Decoding OpenRouter
 
@@ -369,3 +391,17 @@ Price history rejects corrupt tier snapshots rather than presenting them as base
   matcher. The fixture writes the price and channel versions its fabricated
   history is priced against (`Repository.SeedModelPriceHistoryBackfill`,
   `Repository.SeedChannelHistoryBackfill`). See `docs/architecture.md` §13.
+
+## Canonical token accounting at ingestion
+
+A complete validated CPA v2 breakdown supplies the normalized input, cache-read,
+cache-write and output totals used by the request-time quote. The completion
+bucket includes canonical reasoning exactly once; no universal reasoning
+addition is applied to vendor output. Request records retain the original counts,
+version, typed partition and validation status in immutable accounting evidence,
+which the cost explanation and Agent/MCP request reads also return. Missing
+evidence retains legacy accounting. Supplied unresolved accounting is unpriced
+rather than guessed, and editing prices never backfills it. Existing recorded
+counts, amounts and append-only price versions are unchanged by migration
+`066_usage_token_accounting.sql`; the permanent facts preserve corrected usage
+and raw-evidence measures after request-detail retention.

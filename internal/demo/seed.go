@@ -539,7 +539,8 @@ func seedRollups(ctx context.Context, repo *repository.Repository) error {
 			return fmt.Errorf("fold demo usage facts: %w", err)
 		}
 		if folded < 20000 {
-			return nil
+			_, err := repo.EnsureLocalUsageFacts(ctx)
+			return err
 		}
 	}
 }
@@ -855,6 +856,13 @@ func buildEventAt(random *deterministic, profile modelProfile, credentials map[s
 	// the latency already drawn, so every other generated value stays where it was.
 	if !failed && latency%6 == 0 {
 		event.ServiceTier, event.ResponseServiceTier = "priority", "priority"
+		if event.Provider == "codex" {
+			event.ResponseServiceTier = "default"
+			if latency%12 == 0 {
+				event.EffectiveServiceTier = "priority"
+				event.ServiceTier = "auto"
+			}
+		}
 	} else if !failed {
 		event.ResponseServiceTier = "default"
 	}
