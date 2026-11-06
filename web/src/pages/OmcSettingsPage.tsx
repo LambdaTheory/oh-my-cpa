@@ -33,8 +33,10 @@ import { SectionHeading } from '../components/common/SectionHeading';
 import { FeishuSettingsPanel } from '../components/feishu/FeishuSettingsPanel';
 import { SettingRow } from '../components/common/SettingRow';
 import { FontSettings } from '../components/settings/FontSettings';
+import { DataRetentionSettings } from '../components/settings/DataRetentionSettings';
 import { SidebarNavSettings } from '../components/settings/SidebarNavSettings';
 import { usePreference } from '../hooks/usePreference';
+import { Notice } from '../components/feedback';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   DEFAULT_QUOTA_AUTO_REFRESH,
@@ -182,8 +184,8 @@ export const OmcSettingsPage: React.FC = () => {
             <Segmented
               value={tpsMode}
               options={[
-                { value: 'exclude_ttft', label: t('omc.tps_exclude_ttft') },
                 { value: 'include_ttft', label: t('omc.tps_include_ttft') },
+                { value: 'exclude_ttft', label: t('omc.tps_exclude_ttft') },
               ]}
               onChange={(next) => setTpsMode(next as TpsCalculationMode)}
               aria-label={t('omc.tps_calculation_mode')}
@@ -192,6 +194,11 @@ export const OmcSettingsPage: React.FC = () => {
             />
           }
         />
+        {tpsMode === 'exclude_ttft' && (
+          <div className="settings-inline-notice">
+            <Notice tone="warning" description={t('omc.tps_exclude_warning')} />
+          </div>
+        )}
         <SettingRow
           label={t('omc.request_model_icons')}
           description={t('omc.request_model_icons_desc')}
@@ -206,6 +213,8 @@ export const OmcSettingsPage: React.FC = () => {
       </div>
 
       <QuotaAutoRefreshGroup />
+
+      <DataRetentionSettings />
 
       <PluginSourceGroup />
 
@@ -336,7 +345,7 @@ const PluginSourceGroup: React.FC = () => {
 /**
  * QuotaAutoRefreshGroup is the background quota refresh policy the server's loop reads.
  *
- * Unlike every other row on this page it changes what the deployment does on its own, not how the
+ * Unlike the display rows it changes what the deployment does on its own, not how the
  * console reads: each automatic read is a request to a provider made with the credential. The two
  * rows are the two independent triggers, so either can be used without the other.
  */

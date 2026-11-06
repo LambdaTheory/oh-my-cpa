@@ -146,11 +146,24 @@ assert.deepEqual(
   'a request with nothing to mark draws a dash, not an empty cell',
 );
 const fastSheet = buildRequestSheet({
-  rows: [{ ...events[1], response_service_tier: 'priority' }] as UsageEvent[],
+  rows: [{ ...events[1], provider: 'codex', service_tier: 'priority', response_service_tier: 'default', resolved_service_tier: 'priority', resolved_service_tier_source: 'request' }] as UsageEvent[],
   masks: effectiveMasks([], []), colWidths: {}, caption: '', t: (key) => key, tokenStyle: 'en-compact', tpsMode: 'exclude_ttft', credentials,
 });
 assert.deepEqual(fastSheet.rows[0].cells.mode.lines, [[{ kind: 'glyph', glyph: 'fast', tone: 'accent', isBoxed: true, isFilled: true }]],
-  'a request served on the fast lane draws the lightning mark');
+  'a Codex request resolved as priority draws the lightning mark despite its default response');
+const tierExport = buildRequestExport({
+  rows: [{ ...events[1], provider: 'codex', service_tier: 'priority', response_service_tier: 'default', resolved_service_tier: 'priority', resolved_service_tier_source: 'request' }],
+  masks: effectiveMasks([], []), exportedAt: new Date(0), tpsMode: 'exclude_ttft', credentials,
+}).requests[0];
+assert.equal(tierExport.service_tier, 'priority');
+assert.equal(tierExport.response_service_tier, 'default');
+assert.equal(tierExport.resolved_service_tier, 'priority');
+assert.equal(tierExport.resolved_service_tier_source, 'request');
+const hiddenTierExport = buildRequestExport({
+  rows: [{ ...events[1], resolved_service_tier: 'priority', resolved_service_tier_source: 'request' }],
+  masks: effectiveMasks([], ['mode']), exportedAt: new Date(0), tpsMode: 'exclude_ttft', credentials,
+}).requests[0];
+assert.ok(!('resolved_service_tier' in hiddenTierExport) && !('resolved_service_tier_source' in hiddenTierExport));
 const modeHidden = sheetStrings(modeSheet(effectiveMasks([], ['mode'])));
 assert.ok(!modeHidden.includes('xHigh') && modeHidden.includes('gpt-5'), 'hiding the mode column keeps the model');
 const modeJson = (columns: Parameters<typeof effectiveMasks>[1]) =>
@@ -190,6 +203,8 @@ assert.deepEqual(openDocument.requests[0], {
   latency_ms: 1250,
   ttft_ms: 300,
   tokens_per_second: (50 * 1000) / 950,
+  tps_basis: 'exclude_ttft',
+  tps_mode: 'exclude_ttft',
   tokens: { total: 200, input: 150, output: 50, reasoning: 0, cached: 0, cache_read: 0, cache_creation: 0 },
   cost_usd: 0.0123,
   api_key_alias: 'laptop key',
@@ -206,5 +221,15 @@ assert.deepEqual(redactedDocument.redacted, ['cache', 'key', 'provider_account',
 assert.equal(redactedDocument.requests[0].auth_index, 'oauth-a', 'requests still group by the account that answered');
 assert.equal(redactedDocument.requests[1].source, 'relay', 'a key provider keeps its source');
 assert.deepEqual(redactedDocument.requests[0].tokens, { total: 200, input: 150, output: 50, reasoning: 0 });
+
+
+const outboundEvent: UsageEvent = { ...events[1], service_tier: 'auto', effective_service_tier: 'priority', response_service_tier: 'default', resolved_service_tier: 'priority', resolved_service_tier_source: 'outbound' };
+const outboundExport = buildRequestExport({ rows: [outboundEvent], masks: effectiveMasks([], []), exportedAt: new Date(0), tpsMode: 'exclude_ttft', credentials }).requests[0];
+assert.equal(outboundExport.effective_service_tier, 'priority');
+assert.equal(outboundExport.service_tier, 'auto');
+assert.equal(outboundExport.response_service_tier, 'default');
+assert.equal(outboundExport.resolved_service_tier_source, 'outbound');
+const hiddenOutboundExport = buildRequestExport({ rows: [outboundEvent], masks: effectiveMasks([], ['mode']), exportedAt: new Date(0), tpsMode: 'exclude_ttft', credentials }).requests[0];
+assert.ok(!('effective_service_tier' in hiddenOutboundExport));
 
 console.log('PASS request export: selection ranges, page-scoped select-all, row cap, canvas ceiling, redaction leaves values out of the sheet and the JSON document');

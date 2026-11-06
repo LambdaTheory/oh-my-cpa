@@ -1,3 +1,4 @@
+import type { InsightsCubeResponse, InsightsRhythmResponse } from '../types/insights';
 import type { WarmupCredential, WarmupPolicy, WarmupResult, WarmupSettings } from '../types/warmup';
 import type { ResetAnnouncement, ResetAnnouncementInput, ResetAnnouncementPage } from '../types/resetAnnouncements';
 import type { ModelSquareDirectory } from '../types/modelSquare';
@@ -66,6 +67,7 @@ import {
   SystemMaintenanceResponse,
   SystemUpdaterResponse,
   ReleaseProduct,
+  DataRetentionResponse,
 } from '../types/system';
 import type {
   PluginConfigResponse,
@@ -714,6 +716,20 @@ export const api = {
       '/management/client-key-aliases',
       { method: 'PUT', body: JSON.stringify({ key_fingerprint: keyFingerprint, alias, version }) },
     );
+  },
+
+  /**
+   * getInsightsCube reads one window of the Insights page whole: every dimension tuple's usage per
+   * bucket, plus the comparison period's totals. The page pivots it in the browser, so its filters and
+   * groupings never read again (`pages/insights/insightsCube.ts`).
+   */
+  async getInsightsCube(query: string): Promise<InsightsCubeResponse> {
+    return request<InsightsCubeResponse>(`/management/insights/cube?${query}`, { method: 'GET' });
+  },
+
+  /** getInsightsRhythm reads a window's usage by local weekday and hour, narrowed by the page's filters. */
+  async getInsightsRhythm(query: string): Promise<InsightsRhythmResponse> {
+    return request<InsightsRhythmResponse>(`/management/insights/rhythm?${query}`, { method: 'GET' });
   },
 
   async getClientKeyUsage(
@@ -1383,6 +1399,18 @@ export const api = {
   async runSystemMaintenance(action: 'checkpoint' | 'vacuum'): Promise<SystemMaintenanceResponse> {
     return request<SystemMaintenanceResponse>(`/management/system/maintenance/${encodeURIComponent(action)}`, {
       method: 'POST',
+    });
+  },
+
+  async getDataRetention(): Promise<DataRetentionResponse> {
+    return request<DataRetentionResponse>('/management/system/data-retention', { method: 'GET' });
+  },
+
+  /** `expectedRequestRecordDays` is the horizon the operator confirmed against; a different stored value is refused with 409. */
+  async setDataRetention(requestRecordDays: number, expectedRequestRecordDays: number): Promise<DataRetentionResponse> {
+    return request<DataRetentionResponse>('/management/system/data-retention', {
+      method: 'PUT',
+      body: JSON.stringify({ request_record_days: requestRecordDays, expected_request_record_days: expectedRequestRecordDays }),
     });
   },
 

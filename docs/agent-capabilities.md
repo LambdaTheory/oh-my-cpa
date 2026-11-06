@@ -477,8 +477,12 @@ a page, and none returns a secret.
   the `breakdown` with the governing `tier_index`, and `cost_usd`. Nothing is written.
 - `requests_cost_breakdown` (`id`): a recorded request's pricing status, stored nanos,
   locked price and channel versions, tier, the billed `service_tier` with its
-  `service_tier_source` (`response` or `request`) and per-bucket rates; `resource_missing` for
-  an unknown id.
+  `service_tier_source` (`outbound`, `response` or `request`) and per-bucket rates; `resource_missing` for
+  an unknown id. New Codex costs prefer nonempty final outbound
+  `effective_service_tier` evidence; without it, the existing client-request
+  resolver applies. Explicit outbound `auto` selects no service-tier price.
+  Other providers keep response precedence. The selected tier/source are locked
+  with the amount, and historical explanations retain their original policy.
 
 A time-of-day tier's `utc_start`/`utc_end` are HHMM on the clock named by `time_zone`,
 UTC when omitted (ADR 0063). An agent given a vendor's price page enters the published
@@ -518,19 +522,18 @@ each refusal (`internal/operations/validation_test.go`), the matching itself
 
 ### TPS calculation capabilities
 
-`tps_calculation_get` is a low-risk read returning `{ "mode": "exclude_ttft" }` or
-`{ "mode": "include_ttft" }`. Missing or unsupported stored preferences resolve to
-`exclude_ttft`. `tps_calculation_set` is a low-risk write accepting the same mode
+`tps_calculation_get` is a low-risk read returning `{ "mode": "include_ttft" }` or
+`{ "mode": "exclude_ttft" }`. Missing or unsupported stored preferences resolve to
+`include_ttft`. `tps_calculation_set` is a low-risk write accepting the same mode
 shape, rejects unsupported or absent mode values with `invalid_parameters`, and
 returns the saved mode. Both are available to Agent and MCP administrators under
 the existing policy. The write shares the console's `omc_tps_calculation_mode`
 preference and invalidates `preferences`; no secret or OAuth handoff is involved.
 It changes request-record and Playground TPS readouts, not original timings or usage.
-Exclusion subtracts measurable first-token latency and otherwise uses total latency,
-as it also does for records that report reasoning tokens (hidden reasoning precedes
-the first token, so the residual window never contained it);
-inclusion always uses total latency. Tests cover both adapters, shared preference
-reads/writes, defaults, invalid values and administrator refusal.
+Inclusion divides total output tokens, including known reasoning, by total latency.
+Exclusion subtracts first-token latency only when the output-token scope and the
+timing boundary match; otherwise the rate is unavailable. Tests cover both adapters,
+shared preference reads/writes, defaults, invalid values and administrator refusal.
 
 ### Automatic quota refresh capabilities
 

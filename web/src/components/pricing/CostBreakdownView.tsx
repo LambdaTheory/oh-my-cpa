@@ -1,3 +1,4 @@
+import { TokenAccountingNote } from '../usage/TokenAccountingNote';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
 import { Button } from 'antd';
@@ -54,11 +55,15 @@ export const CostBreakdownView: React.FC<CostBreakdownViewProps> = ({ breakdown,
       </div>
     );
   }
+  const hasUnresolvedAccounting = breakdown.token_accounting != null && breakdown.token_accounting.status !== 'complete';
   if (breakdown.status === 'unpriced' || breakdown.status === 'legacy_unpriced') {
     return (
       <div className={styles.breakdown} data-testid="cost-breakdown">
-        <p className={styles['mode-hint']}>{t(breakdown.status === 'unpriced' ? 'cost.unpriced' : 'cost.legacy_unpriced')}</p>
-        {setPrice}
+        <TokenAccountingNote accounting={breakdown.token_accounting} className={styles['mode-hint']} />
+        {!hasUnresolvedAccounting && <>
+          <p className={styles['mode-hint']}>{t(breakdown.status === 'unpriced' ? 'cost.unpriced' : 'cost.legacy_unpriced')}</p>
+          {setPrice}
+        </>}
       </div>
     );
   }
@@ -66,6 +71,7 @@ export const CostBreakdownView: React.FC<CostBreakdownViewProps> = ({ breakdown,
   const stored = nanosToUsd(breakdown.stored_nanos);
   return (
     <div className={styles.breakdown} data-testid="cost-breakdown">
+      <TokenAccountingNote accounting={breakdown.token_accounting} className={styles['mode-hint']} />
       {(breakdown.status === 'invalid_price' || breakdown.invalid_reason) && (
         <Notice tone="warning" title={t('cost.invalid', { reason: breakdown.invalid_reason ?? '' })} />
       )}
@@ -73,7 +79,7 @@ export const CostBreakdownView: React.FC<CostBreakdownViewProps> = ({ breakdown,
       {/* The billed tier only explains a price that has service-tier lanes; elsewhere it decides nothing. */}
       {breakdown.service_tier && version?.price.tiers?.some((tier) => tier.service_tiers?.length) && (
         <p className={styles['breakdown-tier']} data-testid="cost-service-tier">
-          {t(breakdown.service_tier_source === 'request' ? 'cost.service_tier_requested' : 'cost.service_tier', { tier: breakdown.service_tier })}
+          {t(breakdown.service_tier_source === 'outbound' ? 'cost.service_tier_outbound' : breakdown.service_tier_source === 'request' ? 'cost.service_tier_requested' : 'cost.service_tier', { tier: breakdown.service_tier })}
         </p>
       )}
       {quote && (

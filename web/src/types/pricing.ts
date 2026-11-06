@@ -1,3 +1,4 @@
+import type { TokenAccounting, TokenAccountingStatus } from './tokenAccounting';
 /**
  * Pricing types: the price book the server keeps per CPA model, priced from
  * OpenRouter by default, plus the per-channel multipliers. Rates are USD per 1M
@@ -229,12 +230,14 @@ export interface ChannelVersion {
  * says whether re-running the lock from its versions agrees with it.
  */
 export interface RequestCostBreakdown {
+  accounting_status?: TokenAccountingStatus;
+  token_accounting?: TokenAccounting | null;
   status: 'priced' | 'unpriced' | 'legacy_unpriced' | 'invalid_price';
   stored_nanos?: number;
   stored_tier?: number;
-  /** The service tier the request was billed on, and whether the response or the request named it. */
+  /** The service tier the request was billed on, and whether the outbound request, client request or response named it. */
   service_tier?: string;
-  service_tier_source?: 'response' | 'request';
+  service_tier_source?: 'request' | 'response' | 'outbound';
   price_version?: PriceVersion;
   channel?: ChannelVersion;
   quote?: CostQuote;
