@@ -202,7 +202,9 @@ open persistent
 `quota_low`, `quota_exhausted` and `reading_missing` episodes. Scope is explicit;
 model/group exhaustion never claims whole-account unavailability. Untimed and
 long-stale missing data retains the monitoring grace above. Positive fresh numeric
-evidence resolves an episode without a recovery push. See the card contract below.
+evidence resolves an episode without a recovery push. A fresh non-auth collection
+attempt may appear as a collection-health diagnostic, but does not create a second
+missing-data pending incident alongside the monitoring policy. See the card contract below.
 
 Delivery is outbox-based: a notification is persisted before sending and marked
 sent only after a successful send, so a failed send is retried with a bounded

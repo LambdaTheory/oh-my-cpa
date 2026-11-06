@@ -26,6 +26,20 @@ func TestFeishuLegacyNonAuthSignalRetainsItsOwnMonitoringClock(t *testing.T) {
 	}
 }
 
+func TestFeishuOllamaAttemptCannotSupplyAnUnknownQuotaObservation(t *testing.T) {
+	now := time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC)
+	attemptMS := now.UnixMilli()
+	account := ollamaAccountReport(repository.OllamaAccount{ID: "synthetic", Enabled: true, Status: "auth_invalid", LastObservedAtMS: &attemptMS})
+	if !account.AttemptedAt.Equal(now) || !account.AuthSignalObservedAt.Equal(now) || !account.ObservedAt.IsZero() || !account.LastSuccessAt.IsZero() {
+		t.Fatalf("attempt/authentication time became an invented quota observation: %+v", account)
+	}
+	quotaMS := now.Add(-17 * 24 * time.Hour).UnixMilli()
+	account = ollamaAccountReport(repository.OllamaAccount{ID: "synthetic", Enabled: true, Status: "auth_invalid", LastObservedAtMS: &attemptMS, QuotaObservedAtMS: &quotaMS})
+	if !account.ObservedAt.Equal(time.UnixMilli(quotaMS)) || !account.AuthSignalObservedAt.Equal(now) {
+		t.Fatalf("independent stored quota/authentication clocks were conflated: %+v", account)
+	}
+}
+
 func TestFeishuDeliveryEvidenceAndSuppressionSurviveSQLiteReload(t *testing.T) {
 	_, repo, _, _ := newFeishuAPITest(t)
 	store := feishuStore{repo: repo}

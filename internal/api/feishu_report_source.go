@@ -327,8 +327,6 @@ func ollamaAccountReport(account repository.OllamaAccount) feishu.AccountReport 
 	}
 	if account.QuotaObservedAtMS != nil && *account.QuotaObservedAtMS > 0 {
 		report.ObservedAt = time.UnixMilli(*account.QuotaObservedAtMS).UTC()
-	} else if account.LastObservedAtMS != nil && *account.LastObservedAtMS > 0 {
-		report.ObservedAt = time.UnixMilli(*account.LastObservedAtMS).UTC()
 	}
 	return report
 }
