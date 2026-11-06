@@ -571,10 +571,10 @@ the result and sees `credential_label` through `accountLabelForCaller`. Agent an
 callers retain both fields. The result is also bounded to 32 KiB and reports every removed
 tail row through `omitted`. The internal Feishu findings projection keeps only
 `lasts_until_reset: false` rows, sorted by exhaustion ETA, before these public
-result bounds, and retains at most 178 findings to
-fit the card envelope while also applying the 32 KiB result bound. Its `omitted` count is
-disclosed in the prediction card footer, so a finding cannot disappear silently behind
-either a non-finding row, the byte bound or renderer truncation.
+result bounds, and retains at most 178 findings while also applying the 32 KiB
+result bound. The dedicated prediction card displays at most five rows. Its footer
+discloses both the input's `omitted` count and renderer truncation, so a finding
+cannot disappear silently behind either a non-finding row or a payload bound.
 
 Each item includes the source window identity (`window_id`, `window_scope` and optional
 `window_model`), stable within its credential and independent of forecast values. These
@@ -590,7 +590,9 @@ is null and is rendered as "cannot be calculated", never as zero.
 
 `lasts_until_reset` is decided in a fixed order: a stale reading gets no ETA and
 is always null, checked first so an old 100% reading never becomes an up-to-date
-conclusion; a current reading at 100% cannot last; a trend ETA earlier than the
+conclusion. Stale readings also have no `expected_used_percent` baseline; the
+console may retain only their last actual usage, marked stale. A current reading
+at 100% cannot last; a trend ETA earlier than the
 reset cannot last; a non-increasing trend, or an ETA at or after the reset,
 lasts; insufficient evidence is null with one of four reason classes - reading
 failed, insufficient history, unknown window boundary (which includes windows

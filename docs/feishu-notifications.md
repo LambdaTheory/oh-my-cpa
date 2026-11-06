@@ -306,8 +306,12 @@ windows that last, stale readings and undecided rows are never pushed. Each row
 names the provider, the credential and the window type, so two windows of one
 credential stay distinguishable, then opens with the two numbers ("实际 X% ·
 期望 Y%") and the sentence after them states only the exhaustion instant and
-that the window will not last to the reset. The card title counts the windows
-("N 个窗口撑不到重置") and its subtitle says only those windows are included.
+that the window will not last to the reset. The dedicated prediction layout
+shows at most five windows, with the total in its opening line ("N 个窗口撑不到重置").
+Its footer uses the newest observation time and discloses both payload-bound and
+row-limit omissions as "另有 N 项，见控制台". Non-prediction morning alerts remain
+visible after those rows; if all prediction rows are removed, their omitted
+count is cleared without suppressing the other alerts.
 Immediately before sending - on a quiet-hour hold or a failed-send retry as well
 as on the first attempt - the digest re-reads the stored credential roster, and
 drops any item whose credential was disabled, removed, no longer has a window or

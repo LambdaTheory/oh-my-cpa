@@ -29,7 +29,7 @@ all three surfaces:
 - `used_percent` - what the reading says.
 - `expected_used_percent` - the linear share of the window that had elapsed at
   the reading's own instant, one decimal place. Null when the boundary is
-  unknown, never zero.
+  unknown, the cycle has ended or the reading is stale; missing is never zero.
 - `exhaustion_eta_ms` - the instant the trend reaches 100%. Equal to the reading
   instant when the window already is at 100%.
 - `lasts_until_reset` - true, false, or null when the evidence cannot decide.

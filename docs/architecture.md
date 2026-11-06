@@ -3827,8 +3827,10 @@ and credentials no longer in the roster are excluded from capabilities, the dige
 dashboard panel, so they never count as "cannot last". The internal Feishu projection keeps
 only rows whose `lasts_until_reset` is false and whose reading is not stale, orders them by
 exhaustion ETA, and caps the card input at 178 rows while carrying an omitted count to
-the renderer. The digest re-reads the stored roster immediately before sending, so an item
-whose credential was disabled, deleted or lost its window after the snapshot is dropped.
+the dedicated renderer. It displays at most five prediction rows and discloses the
+remaining count. Every delivery attempt, including retries, re-reads the stored roster
+and applies the reading's original freshness bound, so disabled, deleted, windowless
+or stale rows are dropped without suppressing the morning card's other alerts.
 
 `internal/api/management_dashboard_predictions.go` exposes the same stored computation to
 the authenticated dashboard as `GET /api/v1/management/dashboard/predictions`. The handler

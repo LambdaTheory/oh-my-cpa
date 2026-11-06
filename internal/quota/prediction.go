@@ -102,8 +102,8 @@ type WindowPrediction struct {
 	Accounting  PredictionAccounting
 	UsedPercent *float64
 	// ExpectedUsedPercent is the linear share of the window that had elapsed at
-	// the reading's own instant. It is nil when the window boundary is unknown,
-	// never zero: a missing figure and "spent 0%" are different claims.
+	// the reading's own instant. Unknown boundaries, expired cycles and stale
+	// readings have no baseline: missing and "spent 0%" are different claims.
 	ExpectedUsedPercent *float64
 	ResetAtMS           *int64
 	ObservedAtMS        int64

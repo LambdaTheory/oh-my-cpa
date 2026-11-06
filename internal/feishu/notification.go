@@ -121,20 +121,6 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 				out[i] = notification
 				continue
 			}
-			if len(alerts) == 0 && len(notification.Pending) == 0 && len(notification.Tight) == 0 {
-				// Nothing the queued card claimed is still true: the reading went
-				// stale, the credential was disabled or removed, or the window now
-				// lasts to its reset. Sending nothing is the whole outcome; the
-				// row is marked sent so the outbox stops retrying it.
-				d.logger.InfoContext(ctx, "feishu prediction card has no current finding",
-					"action", "notify", "kind", notification.Kind, "result", "dropped")
-				notification.Alerts = alerts
-				notification.State = NotifySent
-				notification.LastError = ""
-				notification.SentAt = now
-				out[i] = notification
-				continue
-			}
 			notification.Alerts = alerts
 		}
 		msg := Message{
@@ -167,12 +153,21 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			// quiet hours and retry backoff can hold a card for hours, and a reading
 			// that has aged out is no longer evidence.
 			fresh := make([]Alert, 0, len(msg.Alerts))
+			hasPrediction := false
 			for _, alert := range msg.Alerts {
 				if !alertStale(alert, now) {
 					fresh = append(fresh, alert)
+					hasPrediction = hasPrediction || alert.Kind == predictionKindPrefix
 				}
 			}
 			msg.Alerts = fresh
+			notification.Alerts = fresh
+			if !hasPrediction {
+				// The dedicated card stores its omitted count outside the alert list.
+				// A surviving morning alert cannot keep a discarded forecast's count.
+				msg.Omitted = 0
+				notification.Omitted = 0
+			}
 			if len(msg.Alerts) == 0 && len(msg.Pending) == 0 && len(msg.Tight) == 0 {
 				// Nothing evidence-based survived. Sending a stale conclusion (or an
 				// "expired" notice with no action) only adds noise, so the card is
