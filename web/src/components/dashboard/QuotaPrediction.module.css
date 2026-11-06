@@ -109,8 +109,17 @@
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
+  border-left: 3px solid var(--muted);
   border-radius: var(--radius-sm);
   background: var(--surface);
+}
+
+.row[data-lasts='no'] {
+  border-left-color: var(--danger);
+}
+
+.row[data-lasts='yes'] {
+  border-left-color: var(--success);
 }
 
 .identity {
@@ -137,7 +146,7 @@
 .combined-reading {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
@@ -159,6 +168,31 @@
   color: var(--fg);
   font-size: var(--text-lg);
   font-variant-numeric: tabular-nums;
+}
+
+.deviation b {
+  font-size: var(--text-base);
+}
+
+.diagnostics {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.diagnostics summary {
+  min-height: 32px;
+  cursor: pointer;
+}
+
+.diagnostics summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.diagnostics p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .context,

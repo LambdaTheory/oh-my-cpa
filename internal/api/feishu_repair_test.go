@@ -76,7 +76,7 @@ func TestFeishuPredictionSourceIncludesRecoveryAndResetProvenance(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(digest.Items) != 1 || (digest.Items[0].Verdict != "under_used" && digest.Items[0].Verdict != "on_track") || digest.Items[0].ResetAccuracy != "exact" || digest.Items[0].WindowID != "7d" {
+	if len(digest.Items) != 1 || digest.Items[0].LastsUntilReset == nil || !*digest.Items[0].LastsUntilReset || digest.Items[0].ResetAccuracy != "exact" || digest.Items[0].WindowID != "7d" {
 		t.Fatalf("production recovery projection=%+v", digest)
 	}
 }

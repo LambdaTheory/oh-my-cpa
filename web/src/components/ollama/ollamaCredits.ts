@@ -18,7 +18,9 @@ export function readOllamaCredits(quota?: NormalizedQuota | null, status?: strin
   const used = readCents(credits.used_cents);
   const total = remaining !== null && used !== null && Number.isSafeInteger(remaining + used)
     ? remaining + used : null;
-  const usedPercent = total !== null && total > 0 && used !== null && used > 0
+  // A published zero share is 0%, not a missing reading: only an unknown total withholds the
+  // share, and the view says so instead of drawing 0.
+  const usedPercent = total !== null && total > 0 && used !== null
     ? used / total * 100 : null;
   return {
     remaining, used, total, usedPercent,

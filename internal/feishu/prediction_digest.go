@@ -22,18 +22,15 @@ type PredictionDigestItem struct {
 	Provider        string
 	WindowKind      string
 	UsedPercent     *float64
-	// ExpectedUsedPercent is the time-linear baseline at the reading instant.
+	// ExpectedUsedPercent is the linear share the window should have used at
+	// the reading instant; nil means it cannot be calculated.
 	ExpectedUsedPercent *float64
-	// LastsUntilReset is the tri-state risk threshold; nil means unknown.
+	ObservedAtMS        int64
+	// LastsUntilReset is the only conclusion this digest carries. Feishu pushes
+	// exactly the false rows and never renders the deprecated verdict vocabulary.
 	LastsUntilReset *bool
-	// FreshWindowMS is the reading's own freshness bound, so a card render or a
-	// retry can drop an observation that has since aged out.
-	FreshWindowMS             int64
-	ProjectedPercentAtReset   *float64
-	ProjectedTokensAtReset    *int64
-	ProjectedCostNanosAtReset *int64
-	ObservedAtMS              int64
-	Verdict                   string
+	// FreshWindowMS carries the same bound through queueing, rendering and retry.
+	FreshWindowMS int64
 }
 
 type PredictionDigest struct {
@@ -53,6 +50,9 @@ func NewPredictionJob(service *Service, source PredictionSource) *PredictionJob 
 	if service == nil || source == nil {
 		return nil
 	}
+	// Handing the source to the service lets every delivery, including one a
+	// quiet hour or a retry delayed, re-check the roster and freshness first.
+	service.setPredictionSource(source)
 	return &PredictionJob{service: service, source: source, interval: defaultPredictionInterval}
 }
 
@@ -234,7 +234,7 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 func predictionFindings(items []PredictionDigestItem, now time.Time) []PredictionDigestItem {
 	findings := make([]PredictionDigestItem, 0, len(items))
 	for _, item := range items {
-		if item.Verdict != "will_exhaust" || predictionItemStale(item, now) {
+		if item.LastsUntilReset == nil || *item.LastsUntilReset || predictionItemStale(item, now) {
 			continue
 		}
 		findings = append(findings, item)
@@ -275,7 +275,7 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 		if item.ResetAccuracy == "exact" && item.ResetAtMS != nil {
 			reset = time.UnixMilli(*item.ResetAtMS).UTC()
 		}
-		if exists && previous.Kind == predictionKindPrefix && (item.Verdict == "on_track" || item.Verdict == "under_used") {
+		if exists && previous.Kind == predictionKindPrefix && item.LastsUntilReset != nil && *item.LastsUntilReset {
 			for index := range state.PendingItems {
 				marker := &state.PendingItems[index]
 				if marker.ID == identity && marker.ResolvedAt.IsZero() {
@@ -283,7 +283,7 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 				}
 			}
 		}
-		if item.Verdict != "will_exhaust" || predictionItemStale(item, now) {
+		if item.LastsUntilReset == nil || *item.LastsUntilReset || predictionItemStale(item, now) {
 			continue
 		}
 		isNewCycle := exists && hasNewQuotaCycle(previous, reset, time.UnixMilli(item.ObservedAtMS))
@@ -350,7 +350,7 @@ func predictionNotification(items []PredictionDigestItem, omitted int, resolved 
 	}
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		ids = append(ids, strings.Join([]string{item.Provider, item.CredentialLabel, item.WindowKind, item.Verdict}, ":"))
+		ids = append(ids, strings.Join([]string{item.Provider, item.CredentialLabel, item.WindowKind, "cannot_last"}, ":"))
 	}
 	return Notification{
 		ID: episodeID(predictionKindPrefix, ids, now), Kind: predictionKindPrefix + localMinute,
@@ -399,7 +399,7 @@ func pendingStillKnown(item PendingItem, report Report, hasReport bool) bool {
 
 func predictionPercent(value *float64) string {
 	if !validPercent(value) {
-		return "数据缺失"
+		return "无法计算"
 	}
 	return fmt.Sprintf("%.1f%%", *value)
 }
@@ -410,7 +410,7 @@ func predictionPercent(value *float64) string {
 // render still says when rather than "in 1 hour" from a stale queue time.
 func predictionExhaustionLine(item PredictionDigestItem, resolved Resolved, now time.Time) string {
 	if item.ExhaustionETAMS == nil {
-		return "耗尽时间数据缺失 · 撑不到重置"
+		return "无法估算耗尽时间 · 撑不到重置"
 	}
 	eta := time.UnixMilli(*item.ExhaustionETAMS).In(resolved.Location)
 	if !eta.After(now) {
