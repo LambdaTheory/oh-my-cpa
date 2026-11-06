@@ -42,6 +42,11 @@ type Alert struct {
 	Facts      []string
 	Advice     string
 	OccurredAt time.Time
+	// FreshWindowMS is the freshness bound the reading was judged by when the
+	// alert was queued. A retry or a quiet-hours release may render hours later,
+	// so delivery re-checks the age against this bound instead of trusting the
+	// queue-time decision. Zero means the alert carries no bound.
+	FreshWindowMS int64
 }
 
 // PendingItem is one structured "something needs a human" record. ID is stable

@@ -11,6 +11,9 @@ func (r *PlainReportRenderer) Card(msg Message) map[string]any       { return r.
 func (r *PlainReportRenderer) CardSimple(msg Message) map[string]any { return r.card(msg, false) }
 
 func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
+	if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+		return r.predictionCard(msg)
+	}
 	if usesCompactCard(msg.Kind) {
 		return r.compactCard(msg)
 	}

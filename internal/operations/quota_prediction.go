@@ -59,12 +59,18 @@ type QuotaPredictionItem struct {
 	ProjectedTokensAtReset    *int64                     `json:"projected_tokens_at_reset"`
 	ProjectedCostNanosAtReset *int64                     `json:"projected_cost_nanos_at_reset"`
 	ExhaustionETAMS           *int64                     `json:"exhaustion_eta_ms"`
-	Verdict                   string                     `json:"verdict"`
-	Evidence                  string                     `json:"evidence"`
-	Reasons                   []string                   `json:"reasons"`
-	SampleCount               int                        `json:"sample_count"`
-	CoverageSeconds           *int64                     `json:"coverage_seconds"`
-	MaxGapSeconds             *int64                     `json:"max_gap_seconds"`
+	ExpectedUsedPercent       *float64                   `json:"expected_used_percent"`
+	LastsUntilReset           *bool                      `json:"lasts_until_reset"`
+	// FreshWindowMS is the reading's own freshness bound. It is internal: a
+	// digest uses it to drop a finding whose observation has aged out by the
+	// time the card is rendered or retried.
+	FreshWindowMS   int64    `json:"-" jsonschema:"-"`
+	Verdict         string   `json:"verdict"`
+	Evidence        string   `json:"evidence"`
+	Reasons         []string `json:"reasons"`
+	SampleCount     int      `json:"sample_count"`
+	CoverageSeconds *int64   `json:"coverage_seconds"`
+	MaxGapSeconds   *int64   `json:"max_gap_seconds"`
 }
 
 type QuotaPredictionResult struct {
@@ -212,6 +218,12 @@ func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissi
 	}
 	result := make([]Quota, 0, len(metadata))
 	for _, entry := range metadata {
+		// A credential the operator disabled is not expected to answer. Keeping it
+		// in the roster would report its silence as a reading failure and can push
+		// a shortage warning for an account that is deliberately off.
+		if entry.Disabled {
+			continue
+		}
 		snapshot, ok := snapshots[entry.AuthIndex]
 		provider := strings.TrimSpace(snapshot.Provider)
 		if provider == "" {
@@ -291,6 +303,11 @@ func (s *Service) storedPredictionQuotas(ctx context.Context, shouldIncludeMissi
 		return nil, err
 	}
 	for _, account := range ollamaAccounts {
+		// ListOllamaAccounts includes disabled rows for the settings screen. Only
+		// an enabled account participates in the prediction roster.
+		if !account.Enabled {
+			continue
+		}
 		reading := Quota{AuthIndex: "ollama:" + account.ID, Name: safeLabel(account.Label), Provider: "ollama"}
 		var snapshot quota.NormalizedQuota
 		if strings.TrimSpace(account.QuotaSnapshotJSON) != "" {
@@ -456,7 +473,9 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 		DataAgeSeconds: predicted.DataAgeSeconds, BurnRatePerHour: predicted.BurnRatePerHour,
 		ProjectedPercentAtReset: predicted.ProjectedPercentAtReset, ProjectedTokensAtReset: predicted.ProjectedTokensAtReset,
 		ProjectedCostNanosAtReset: predicted.ProjectedCostNanosAtReset, ExhaustionETAMS: predicted.ExhaustionETAMS,
-		Verdict: predicted.Verdict, Evidence: predicted.Evidence, Reasons: predicted.Reasons,
+		ExpectedUsedPercent: predicted.ExpectedUsedPercent, LastsUntilReset: predicted.LastsUntilReset,
+		FreshWindowMS: quota.PredictionFreshWindow(window).Milliseconds(),
+		Verdict:       predicted.Verdict, Evidence: predicted.Evidence, Reasons: predicted.Reasons,
 		SampleCount: predicted.SampleCount, CoverageSeconds: predicted.CoverageSeconds, MaxGapSeconds: predicted.MaxGapSeconds,
 	}
 }

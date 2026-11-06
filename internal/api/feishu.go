@@ -119,6 +119,8 @@ func (f *FeishuAPI) readPrediction(ctx context.Context) (feishu.PredictionDigest
 		items = append(items, feishu.PredictionDigestItem{
 			CredentialLabel: item.CredentialLabel, Provider: item.Provider, WindowKind: item.WindowKind,
 			UsedPercent: item.UsedPercent, ProjectedPercentAtReset: item.ProjectedPercentAtReset,
+			ExpectedUsedPercent: item.ExpectedUsedPercent, LastsUntilReset: item.LastsUntilReset,
+			FreshWindowMS:          item.FreshWindowMS,
 			ProjectedTokensAtReset: item.ProjectedTokensAtReset, ProjectedCostNanosAtReset: item.ProjectedCostNanosAtReset,
 			ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
 			ExhaustionETAMS: item.ExhaustionETAMS, WindowScope: item.WindowScope,

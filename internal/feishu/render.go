@@ -59,6 +59,8 @@ type Message struct {
 	// channels. They are display-only.
 	Pending []PendingItem
 	Tight   []TightChannel
+	// Omitted counts findings the payload limit kept out of Alerts.
+	Omitted int
 	// GeneratedAt is the report's observation time.
 	GeneratedAt time.Time
 	EvaluatedAt time.Time

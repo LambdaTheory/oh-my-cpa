@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -26,8 +27,11 @@ type Notification struct {
 	Alerts  []Alert
 	// Pending and Tight carry a scheduled or quiet-end digest, which has no single
 	// alert. They are empty for an immediate alert notification.
-	Pending   []PendingItem
-	Tight     []TightChannel
+	Pending []PendingItem
+	Tight   []TightChannel
+	// Omitted counts findings the payload limit kept out of Alerts. The card
+	// discloses the count instead of silently dropping rows.
+	Omitted   int
 	State     string
 	Attempts  int
 	LastError string
@@ -106,6 +110,7 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			Alerts:                  notification.Alerts,
 			Pending:                 notification.Pending,
 			Tight:                   notification.Tight,
+			Omitted:                 notification.Omitted,
 			GeneratedAt:             notification.OccurredAt,
 		}
 		if d.source != nil && usesCompactCard(msg.Kind) {
@@ -121,6 +126,30 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 						msg.Pending = append(msg.Pending, item)
 					}
 				}
+			}
+		}
+		if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+			// Freshness is judged again here, not just when the finding was queued:
+			// quiet hours and retry backoff can hold a card for hours, and a reading
+			// that has aged out is no longer evidence.
+			fresh := make([]Alert, 0, len(msg.Alerts))
+			for _, alert := range msg.Alerts {
+				if !alertStale(alert, now) {
+					fresh = append(fresh, alert)
+				}
+			}
+			msg.Alerts = fresh
+			if len(msg.Alerts) == 0 && len(msg.Pending) == 0 && len(msg.Tight) == 0 {
+				// Nothing evidence-based survived. Sending a stale conclusion (or an
+				// "expired" notice with no action) only adds noise, so the card is
+				// dropped and acknowledged rather than retried forever.
+				notification.State = NotifySent
+				notification.LastError = ""
+				notification.SentAt = now
+				d.logger.InfoContext(ctx, "feishu prediction card dropped",
+					"action", "notify", "result", "stale_reading", "kind", notification.Kind)
+				out[i] = notification
+				continue
 			}
 		}
 		if err := d.sendWithFallback(ctx, chatID, msg); err != nil {
