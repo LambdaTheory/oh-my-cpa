@@ -38,10 +38,20 @@ export interface AuditFilters {
   categories: string[];
   outcome: AuditOutcome;
   search: string;
+  /** Structured narrowings of the details the trail records (AC-23). */
+  repo: string;
+  agent: string;
   range: AuditRange;
 }
 
-export const DEFAULT_AUDIT_FILTERS: AuditFilters = { categories: [], outcome: 'all', search: '', range: 'all' };
+export const DEFAULT_AUDIT_FILTERS: AuditFilters = {
+  categories: [],
+  outcome: 'all',
+  search: '',
+  repo: '',
+  agent: '',
+  range: 'all',
+};
 
 /** One page of the timeline. The server caps it at 200; fifty fills a screen twice. */
 export const AUDIT_PAGE_SIZE = 50;
@@ -56,6 +66,10 @@ export function auditSearchParams(filters: AuditFilters, now = Date.now()): URLS
   if (filters.outcome !== 'all') search.set('outcome', filters.outcome);
   const needle = filters.search.trim();
   if (needle) search.set('q', needle);
+  const repo = filters.repo.trim();
+  if (repo) search.set('repo', repo);
+  const agent = filters.agent.trim();
+  if (agent) search.set('agent', agent);
   const span = AUDIT_RANGES[filters.range];
   if (span !== undefined) search.set('since_ms', String(Math.max(0, now - span)));
   return search;
@@ -185,6 +199,8 @@ export function readAuditFilters(params: URLSearchParams): AuditFilters {
     categories: Object.prototype.hasOwnProperty.call(AUDIT_CATEGORIES, category) ? [...AUDIT_CATEGORIES[category]] : [],
     outcome: outcome && AUDIT_OUTCOMES.includes(outcome) ? outcome : DEFAULT_AUDIT_FILTERS.outcome,
     search: (params.get('q') ?? '').trim(),
+    repo: (params.get('repo') ?? '').trim(),
+    agent: (params.get('agent') ?? '').trim(),
     range: range && Object.prototype.hasOwnProperty.call(AUDIT_RANGES, range) ? range : DEFAULT_AUDIT_FILTERS.range,
   };
 }
@@ -197,6 +213,10 @@ export function writeAuditFilters(filters: AuditFilters): URLSearchParams {
   if (filters.outcome !== DEFAULT_AUDIT_FILTERS.outcome) params.set('outcome', filters.outcome);
   const needle = filters.search.trim();
   if (needle) params.set('q', needle);
+  const repo = filters.repo.trim();
+  if (repo) params.set('repo', repo);
+  const agent = filters.agent.trim();
+  if (agent) params.set('agent', agent);
   if (filters.range !== DEFAULT_AUDIT_FILTERS.range) params.set('range', filters.range);
   return params;
 }

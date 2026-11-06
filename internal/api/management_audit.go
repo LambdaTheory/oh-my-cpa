@@ -61,7 +61,11 @@ func auditBucketDTOs(buckets []repository.AuditBucket) []auditBucketDTO {
 func auditEventDTOs(events []repository.AuditEvent) []auditEventDTO {
 	out := make([]auditEventDTO, 0, len(events))
 	for _, event := range events {
-		out = append(out, auditEventDTO(event))
+		out = append(out, auditEventDTO{
+			ID: event.ID, OccurredAtMS: event.OccurredAtMS, Action: event.Action,
+			TargetType: event.TargetType, TargetID: event.TargetID, Result: event.Result,
+			RequestID: event.RequestID, SourceSummary: event.SourceSummary, Details: event.Details,
+		})
 	}
 	return out
 }
@@ -120,6 +124,18 @@ func parseAuditQuery(request *http.Request, maxLimit int, defaultFold bool) (rep
 		return query, errors.New("search is too long")
 	}
 	query.Search = search
+	// The repository-key trail writes the repository and the agent into its details, and
+	// AC-23 asks for both as filters rather than one free-text match.
+	for _, parameter := range []struct {
+		name   string
+		target *string
+	}{{"repo", &query.Repo}, {"agent", &query.Agent}} {
+		value := strings.TrimSpace(values.Get(parameter.name))
+		if len([]rune(value)) > auditSearchMaxRunes {
+			return query, fmt.Errorf("%s is too long", parameter.name)
+		}
+		*parameter.target = value
+	}
 	switch values.Get("fold") {
 	case "":
 	case "1", "true":

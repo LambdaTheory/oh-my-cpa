@@ -1,0 +1,102 @@
+/* The one-time approval link's screen. The shell, column and title are the sign-in page's
+   (`auth-*` in index.css); these are the parts only this screen has. */
+
+.card {
+  max-width: 520px;
+}
+
+/* The shared title leaves room for a form under it; here one sentence follows directly. */
+.card :global(.auth-title) {
+  margin-bottom: 12px;
+}
+
+.intro {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.request {
+  margin-bottom: 14px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.facts dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.fingerprint {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  word-break: break-all;
+}
+
+/* What approving would do, stated plainly rather than left to be inferred. */
+.impact {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+
+.hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.console {
+  display: inline-block;
+  margin-top: 18px;
+  color: var(--accent);
+  font-size: var(--text-sm);
+}

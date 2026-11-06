@@ -73,6 +73,15 @@ async function generateInto(directory) {
       // is still a Go binary that reads its environment: pointing it at /dev/null and
       // a temporary directory is what keeps a run from picking up a real deployment's
       // configuration.
+      //
+      // TZ is pinned for the same reason, and it is not cosmetic. Anything the export
+      // renders in the server's zone - the quota windows' `reset_label` above all, which
+      // `formatResetInstant` formats through `time.Local` - would otherwise carry the
+      // generating machine's offset. Two runs of the same code would then differ, and a
+      // difference is indistinguishable from drift, which is the one thing this dataset
+      // exists to surface. UTC is the fixed choice; regenerating on a branch whose data
+      // was last written in another zone shows up as a `reset_label` shift in the diff,
+      // and that shift is the pin working, so it is not a reason to hand-edit the data.
       TZ: 'UTC',
       OMCPA_ENV_FILE: '/dev/null',
       OMCPA_DATA_DIR: directory,

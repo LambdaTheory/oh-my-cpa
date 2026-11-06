@@ -59,6 +59,28 @@ type Options struct {
 	// ConsoleURL returns the console address, base path included, that the operator opens to
 	// decide an operation. An empty value leaves the link out of a pending result.
 	ConsoleURL func(*mcp.CallToolRequest) string
+	// Caller returns the agent and device behind one tool call, when the transport can tell.
+	// A nil Caller leaves the context without one, and a capability that needs it refuses.
+	Caller func(*mcp.CallToolRequest) capability.Caller
+}
+
+// CALLER_AGENT_HEADER and CALLER_DEVICE_HEADER carry the self-reported caller identity on an
+// MCP request. They are read by the HTTP endpoint and sent by the stdio bridge so both
+// transports reach the same capability with the same information.
+const (
+	CALLER_AGENT_HEADER  = "X-Omc-Agent"
+	CALLER_DEVICE_HEADER = "X-Omc-Device"
+)
+
+// HeaderCaller reads the caller identity from the request headers, if the transport has them.
+func HeaderCaller(request *mcp.CallToolRequest) capability.Caller {
+	if request == nil || request.Extra == nil {
+		return capability.Caller{}
+	}
+	return capability.Caller{
+		Agent:  request.Extra.Header.Get(CALLER_AGENT_HEADER),
+		Device: request.Extra.Header.Get(CALLER_DEVICE_HEADER),
+	}
 }
 
 type operationStatusInput struct {
@@ -94,6 +116,14 @@ func NewServer(ctx context.Context, backend Backend, options Options) (*mcp.Serv
 		isDestructive := definition.Permission == "destructive"
 		annotations := &mcp.ToolAnnotations{ReadOnlyHint: definition.Permission == "read", DestructiveHint: &isDestructive, OpenWorldHint: &isOpenWorld}
 		server.AddTool(&mcp.Tool{Name: definition.Name, Description: definition.Description, InputSchema: definition.InputSchema, OutputSchema: definition.ResultSchema(), Annotations: annotations}, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if options.Caller != nil {
+				ctx = capability.WithCaller(ctx, options.Caller(request))
+			}
+			// A capability that answers with a link for a person (a repository key's one-time
+			// approval link) gets the console address from the transport, never from a guess.
+			if options.ConsoleURL != nil {
+				ctx = capability.WithConsoleURL(ctx, options.ConsoleURL(request))
+			}
 			arguments := request.Params.Arguments
 			// A client may omit the arguments of a tool that takes none.
 			if len(arguments) == 0 {
@@ -176,6 +206,15 @@ type Bridge struct {
 	base          string
 	managementKey string
 	client        *http.Client
+	// caller is forwarded on every request so the server-side capability sees the same agent
+	// and device the MCP client reports.
+	caller capability.Caller
+}
+
+// WithCaller sets the identity the bridge reports on every capability request.
+func (bridge *Bridge) WithCaller(caller capability.Caller) *Bridge {
+	bridge.caller = caller
+	return bridge
 }
 
 func New(serverURL, managementKey string) (*Bridge, error) {
@@ -204,6 +243,12 @@ func (bridge *Bridge) request(ctx context.Context, method, path string, input, o
 	}
 	request.Header.Set("Authorization", "Bearer "+bridge.managementKey)
 	request.Header.Set("Content-Type", "application/json")
+	if bridge.caller.Agent != "" {
+		request.Header.Set(CALLER_AGENT_HEADER, bridge.caller.Agent)
+	}
+	if bridge.caller.Device != "" {
+		request.Header.Set(CALLER_DEVICE_HEADER, bridge.caller.Device)
+	}
 	response, err := bridge.client.Do(request)
 	if err != nil {
 		return errors.New("omc_unavailable")
@@ -252,14 +297,21 @@ func (bridge *Bridge) Operation(ctx context.Context, id string) (capability.Oper
 
 // Server builds the MCP server the stdio process serves.
 func (bridge *Bridge) Server(ctx context.Context, version string) (*mcp.Server, error) {
-	return NewServer(ctx, bridge, Options{Version: version, ConsoleURL: func(*mcp.CallToolRequest) string { return bridge.base }})
+	return NewServer(ctx, bridge, Options{
+		Version:    version,
+		ConsoleURL: func(*mcp.CallToolRequest) string { return bridge.base },
+		Caller:     func(*mcp.CallToolRequest) capability.Caller { return bridge.caller },
+	})
 }
 
-func Run(ctx context.Context, serverURL, managementKey, version string) error {
+// Run serves the stdio transport. agentName and deviceName are what this client reports about
+// itself: the agent name a person configured for this connection, and the machine it runs on.
+func Run(ctx context.Context, serverURL, managementKey, version, agentName, deviceName string) error {
 	bridge, err := New(serverURL, managementKey)
 	if err != nil {
 		return err
 	}
+	bridge.WithCaller(capability.Caller{Agent: agentName, Device: deviceName})
 	server, err := bridge.Server(ctx, version)
 	if err != nil {
 		return err

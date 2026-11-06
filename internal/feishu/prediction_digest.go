@@ -12,22 +12,22 @@ const predictionKindPrefix = "prediction:"
 const defaultPredictionInterval = time.Minute
 
 type PredictionDigestItem struct {
-	Key                       string
-	WindowID                  string
-	ResetAccuracy             string
-	ResetAtMS                 *int64
-	ExhaustionETAMS           *int64
-	WindowScope               string
-	CredentialLabel           string
-	Provider                  string
-	WindowKind                string
-	UsedPercent               *float64
-	ProjectedPercentAtReset   *float64
-	ProjectedTokensAtReset    *int64
-	ProjectedCostNanosAtReset *int64
-	ObservedAtMS              int64
-	FreshWindowMS             int64
-	Verdict                   string
+	Key             string
+	WindowID        string
+	ResetAccuracy   string
+	ResetAtMS       *int64
+	ExhaustionETAMS *int64
+	WindowScope     string
+	CredentialLabel string
+	Provider        string
+	WindowKind      string
+	UsedPercent     *float64
+	// ExpectedUsedPercent is the linear share at the original reading instant.
+	ExpectedUsedPercent *float64
+	ObservedAtMS        int64
+	// Only an explicitly false conclusion qualifies for a prediction push.
+	LastsUntilReset *bool
+	FreshWindowMS   int64
 }
 
 type PredictionDigest struct {
@@ -47,6 +47,9 @@ func NewPredictionJob(service *Service, source PredictionSource) *PredictionJob 
 	if service == nil || source == nil {
 		return nil
 	}
+	// Handing the source to the service lets every delivery, including one a
+	// quiet hour or a retry delayed, re-check the roster and freshness first.
+	service.setPredictionSource(source)
 	return &PredictionJob{service: service, source: source, interval: defaultPredictionInterval}
 }
 
@@ -103,10 +106,7 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 			continue
 		}
 		if candidate.State == NotifySent {
-			return true, nil
-		}
-		if candidate.State == NotifySuppressed {
-			return false, nil
+			return !candidate.SentAt.IsZero(), nil
 		}
 		return false, fmt.Errorf("feishu prediction delivery is pending")
 	}
@@ -181,7 +181,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 			notification := &state.Outbox[index]
 			if notification.CreatedAt.Equal(now) && strings.HasPrefix(notification.Kind, predictionKindPrefix) {
 				for _, item := range openItems(state.PendingItems) {
-					if !announcedInMinute(state, item.ID, notification.ID, now) {
+					if !announcedInMinute(state, item.ID, notification.ID, now) && pendingStillKnown(item, report, hasReport) {
 						notification.Pending = append(notification.Pending, item)
 					}
 				}
@@ -226,17 +226,32 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 }
 
 func predictionEvidenceFresh(item PredictionDigestItem, now time.Time) bool {
-	return alertEvidenceFresh(Alert{Kind: predictionKindPrefix, ObservedAt: time.UnixMilli(item.ObservedAtMS), FreshWindowMS: item.FreshWindowMS, EvidenceSource: EvidenceQuota}, now)
+	return !predictionItemStale(item, now)
 }
 
+// Only a window that cannot last to reset and has current evidence may be pushed.
 func predictionFindings(items []PredictionDigestItem, now time.Time) []PredictionDigestItem {
 	findings := make([]PredictionDigestItem, 0, len(items))
 	for _, item := range items {
-		if predictionEvidenceFresh(item, now) && (item.Verdict == "will_exhaust" || item.Verdict == "under_used") {
-			findings = append(findings, item)
+		if item.LastsUntilReset == nil || *item.LastsUntilReset || predictionItemStale(item, now) {
+			continue
 		}
+		findings = append(findings, item)
 	}
 	return findings
+}
+
+// predictionItemStale and alertStale share one clock/bound rule. Unknown
+// evidence is ineligible; notification creation never supplies a missing clock.
+func predictionItemStale(item PredictionDigestItem, now time.Time) bool {
+	return alertStale(Alert{ObservedAt: time.UnixMilli(item.ObservedAtMS), FreshWindowMS: item.FreshWindowMS}, now)
+}
+
+func alertStale(alert Alert, now time.Time) bool {
+	if alert.FreshWindowMS <= 0 || alert.FreshWindowMS > int64((1<<63-1)/int64(time.Millisecond)) {
+		return true
+	}
+	return !evidenceFresh(alert.ObservedAt, now, time.Duration(alert.FreshWindowMS)*time.Millisecond)
 }
 
 func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
@@ -254,7 +269,7 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 		if item.ResetAccuracy == "exact" && item.ResetAtMS != nil {
 			reset = time.UnixMilli(*item.ResetAtMS).UTC()
 		}
-		if exists && previous.Kind == predictionKindPrefix && (item.Verdict == "on_track" || item.Verdict == "under_used") {
+		if exists && previous.Kind == predictionKindPrefix && item.LastsUntilReset != nil && *item.LastsUntilReset {
 			for index := range state.PendingItems {
 				marker := &state.PendingItems[index]
 				if marker.ID == identity && marker.ResolvedAt.IsZero() {
@@ -262,7 +277,7 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 				}
 			}
 		}
-		if item.Verdict != "will_exhaust" {
+		if item.LastsUntilReset == nil || *item.LastsUntilReset || predictionItemStale(item, now) {
 			continue
 		}
 		isNewCycle := exists && hasNewQuotaCycle(previous, reset, time.UnixMilli(item.ObservedAtMS))
@@ -312,33 +327,19 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 }
 
 func predictionNotification(items []PredictionDigestItem, omitted int, resolved Resolved, now time.Time) Notification {
-	alerts := make([]Alert, 0, len(items)+1)
+	alerts := make([]Alert, 0, len(items))
 	for _, item := range items {
 		if !predictionEvidenceFresh(item, now) {
 			continue
 		}
-		title, advice := "预计重置前耗尽", "提前准备备用凭证，按需分流"
-		if item.Verdict == "under_used" {
-			title, advice = "预计额度有余量", "按需使用现有额度"
-		}
-		detail := item.WindowKind + " · 当前已用 " + predictionPercent(item.UsedPercent)
-		if item.ExhaustionETAMS != nil && *item.ExhaustionETAMS > now.UnixMilli() {
-			detail += "；预计还可用 " + remainingDuration(time.UnixMilli(*item.ExhaustionETAMS).Sub(now))
-		} else {
-			detail += "；耗尽时间数据缺失"
-		}
-		if item.WindowScope != "" {
-			detail = scopeLabel(item.WindowScope) + " · " + detail
-		}
+		facts := []string{"实际 " + predictionPercent(item.UsedPercent), "期望 " + predictionPercent(item.ExpectedUsedPercent)}
 		observed := time.Time{}
 		if item.ObservedAtMS > 0 {
 			observed = time.UnixMilli(item.ObservedAtMS).UTC()
 		}
-		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed, FreshWindowMS: item.FreshWindowMS, EvidenceSource: EvidenceQuota,
-			Alias: item.CredentialLabel, Title: title, Detail: detail + "（预测）", Advice: advice, OccurredAt: now})
-	}
-	if omitted > 0 {
-		alerts = append(alerts, Alert{Kind: "omitted", Title: fmt.Sprintf("另有 %d 项预测发现未展示", omitted), Advice: "打开控制台查看完整预测"})
+		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed, EvidenceSource: EvidenceQuota,
+			Alias: item.CredentialLabel, Title: predictionWindowLabel(item), Detail: predictionExhaustionLine(item, resolved, now), Facts: facts,
+			Advice: "提前准备备用凭证，按需分流", OccurredAt: now, FreshWindowMS: item.FreshWindowMS})
 	}
 	localMinute := now.In(resolved.Location).Format("15:04")
 	if morningMinute(resolved, now) {
@@ -346,19 +347,73 @@ func predictionNotification(items []PredictionDigestItem, omitted int, resolved 
 	}
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		ids = append(ids, strings.Join([]string{item.Provider, item.CredentialLabel, item.WindowKind, item.Verdict}, ":"))
+		ids = append(ids, strings.Join([]string{item.Provider, item.CredentialLabel, item.WindowKind, "cannot_last"}, ":"))
 	}
 	return Notification{
 		ID: episodeID(predictionKindPrefix, ids, now), Kind: predictionKindPrefix + localMinute,
-		Alerts: alerts, State: NotifyPending, OccurredAt: now, CreatedAt: now,
+		Alerts: alerts, Omitted: omitted, State: NotifyPending, OccurredAt: now, CreatedAt: now,
 	}
+}
+
+// predictionWindowLabel names the cycle in the card's identity line. An unknown
+// kind keeps its stored token rather than inventing a cycle length.
+func predictionWindowLabel(item PredictionDigestItem) string {
+	switch item.WindowKind {
+	case "five_hour":
+		return "5 小时窗口"
+	case "weekly":
+		return "每周窗口"
+	case "monthly":
+		return "每月窗口"
+	case "daily":
+		return "每日窗口"
+	case "model_scoped":
+		return "模型窗口"
+	case "":
+		return "窗口"
+	default:
+		return compactText(item.WindowKind, 20)
+	}
+}
+
+// pendingStillKnown checks a stored open quota item against the current report.
+// An account deleted from CPA has no account row, so re-announcing its incident
+// would describe a credential that no longer exists. Non-quota items and a
+// report that failed to read are left untouched rather than silently dropped.
+func pendingStillKnown(item PendingItem, report Report, hasReport bool) bool {
+	if item.Kind != AlertQuotaLow && item.Kind != AlertQuotaExhausted || item.Key == "" || !hasReport {
+		return true
+	}
+	for _, provider := range report.Providers {
+		for _, account := range provider.Accounts {
+			if account.Key == item.Key && (item.Provider == "" || provider.Provider == item.Provider) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func predictionPercent(value *float64) string {
 	if !validPercent(value) {
-		return "数据缺失"
+		return "无法计算"
 	}
 	return fmt.Sprintf("%.1f%%", *value)
+}
+
+// predictionExhaustionLine states the concrete time the window runs out and the
+// one conclusion a pushed row carries: it cannot last until its reset. An
+// absolute time replaces the old relative duration, so a delayed or retried
+// render still says when rather than "in 1 hour" from a stale queue time.
+func predictionExhaustionLine(item PredictionDigestItem, resolved Resolved, now time.Time) string {
+	if item.ExhaustionETAMS == nil {
+		return "无法估算耗尽时间 · 撑不到重置"
+	}
+	eta := time.UnixMilli(*item.ExhaustionETAMS).In(resolved.Location)
+	if !eta.After(now) {
+		return "已到达耗尽时间 · 撑不到重置"
+	}
+	return "预计 " + eta.Format("01-02 15:04") + " 耗尽 · 撑不到重置"
 }
 
 func scheduledMinute(resolved Resolved, now time.Time) bool {
@@ -409,7 +464,7 @@ func predictionItemID(item PredictionDigestItem) string {
 
 func announcedInMinute(state *State, identity, exceptID string, now time.Time) bool {
 	for _, notification := range state.Outbox {
-		if notification.State == NotifySuppressed || notification.ID == exceptID || notification.CreatedAt.UTC().Truncate(time.Minute) != now.UTC().Truncate(time.Minute) {
+		if isDiscardedNotification(notification) || notification.ID == exceptID || notification.CreatedAt.UTC().Truncate(time.Minute) != now.UTC().Truncate(time.Minute) {
 			continue
 		}
 		for _, alert := range notification.Alerts {

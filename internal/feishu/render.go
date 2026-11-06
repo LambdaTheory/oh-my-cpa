@@ -61,6 +61,8 @@ type Message struct {
 	// channels. They are display-only.
 	Pending []PendingItem
 	Tight   []TightChannel
+	// Omitted counts findings the payload limit kept out of Alerts.
+	Omitted int
 	// GeneratedAt is caller context (report aggregation or notification creation),
 	// never a substitute for any individual evidence clock.
 	GeneratedAt time.Time
@@ -116,7 +118,16 @@ func (r *PlainReportRenderer) Title(msg Message) string {
 		return strings.TrimSpace(msg.Title)
 	}
 	if strings.HasPrefix(msg.Kind, predictionKindPrefix) {
-		return "OMC 额度预测 · " + strings.TrimPrefix(msg.Kind, predictionKindPrefix)
+		windows := 0
+		for _, alert := range msg.Alerts {
+			if alert.Kind == predictionKindPrefix {
+				windows++
+			}
+		}
+		if windows > 0 {
+			return fmt.Sprintf("%d 个窗口撑不到重置", windows)
+		}
+		return "OMC 额度预测"
 	}
 	if title, ok := defaultTitles[msg.Kind]; ok {
 		return title

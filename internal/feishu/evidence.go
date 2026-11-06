@@ -46,7 +46,7 @@ func alertEvidenceFresh(alert Alert, now time.Time) bool {
 	default:
 		return false
 	}
-	return evidenceFresh(alert.ObservedAt, now, time.Duration(alert.FreshWindowMS)*time.Millisecond)
+	return !alertStale(alert, now)
 }
 
 func currentEvidenceAlerts(report *Report, tracks map[string]ChannelTrack, cfg PolicyConfig, now time.Time) map[string]Alert {
@@ -173,7 +173,7 @@ func (s *Service) revalidateNewNotifications(state *State, resolved Resolved, re
 		if notification.CreatedAt.Equal(now) && (notification.State == NotifyPending || notification.State == NotifyQueued) {
 			notification.Alerts = eligibleNotificationAlerts(*notification, stored, state.ChannelTracks, cfg, now)
 			if !notificationHasContent(*notification) {
-				suppressNotification(notification)
+				discardNotification(notification)
 			}
 		}
 	}

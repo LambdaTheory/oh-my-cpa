@@ -21,8 +21,8 @@ func TestPredictionDeliveryBoundMatchesWindowCadenceWithoutChangingPublicJSON(t 
 		// No exact cycle is supplied, so this projection has no repository reads.
 		item := (&Service{}).predictQuotaWindow(context.Background(), Quota{ObservedAtMS: now}, window, "weekly", "weekly", now)
 		want := test.bound.Milliseconds()
-		if item.Accounting.FreshWindowMS != want || want < (2*time.Hour).Milliseconds() || want > (24*time.Hour).Milliseconds() {
-			t.Fatalf("period=%v internal bound=%d want=%d", hours, item.Accounting.FreshWindowMS, want)
+		if item.FreshWindowMS != want || want < (2*time.Hour).Milliseconds() || want > (24*time.Hour).Milliseconds() {
+			t.Fatalf("period=%v internal bound=%d want=%d", hours, item.FreshWindowMS, want)
 		}
 		encoded, err := json.Marshal(item)
 		if err != nil || strings.Contains(string(encoded), "FreshWindow") || strings.Contains(string(encoded), "fresh_window") {

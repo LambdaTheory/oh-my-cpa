@@ -584,7 +584,14 @@ export async function ollamaAccounts({ base, page, check }) {
   check('a stored cookie is reported as encrypted and never as its value',
     await drawer.getByText('Encrypted', { exact: true }).count() === 2 && !(await drawer.innerText()).includes(OLLAMA_COOKIE));
   check('a collected account shows exact USD amounts and labelled derived usage', (await drawer.innerText()).includes('$299.98') && (await drawer.innerText()).includes('$0.02') && (await drawer.innerText()).includes('Calculated from used / total'));
-  check('a paused account with no snapshot reads as an unknown quota', await drawer.getByText('Data missing', { exact: true }).count() >= 1);
+  const pausedCredits = drawer.locator('div').filter({
+    has: page.getByRole('switch', { name: 'Paused Ollama', exact: true }),
+  }).locator(':scope > div > div > [data-testid="ollama-credits"]');
+  check('a paused account with no snapshot reads as an unknown quota',
+    await pausedCredits.count() === 1
+      && await pausedCredits.getByText('No quota reading available — refresh to retry', { exact: true }).isVisible()
+      && !/\$|\d|%|No credits remaining|No usage this month/.test(await pausedCredits.innerText())
+      && await pausedCredits.locator('strong, [role="progressbar"]').count() === 0);
 
   // Edit: the cookie field starts blank, and saving without touching it omits it entirely.
   await drawer.getByRole('button', { name: 'Edit', exact: true }).first().click();

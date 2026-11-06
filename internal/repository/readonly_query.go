@@ -44,13 +44,16 @@ import (
 
 // QUERY_READABLE_TABLES maps every table an operator query may read to the columns it must not.
 var QUERY_READABLE_TABLES = map[string][]string{
-	"account_automation_accounts":   {"account_label"},
-	"account_automation_batches":    nil,
-	"account_automation_settings":   nil,
-	"credential_warmup_policies":    nil,
-	"credential_warmup_state":       nil,
-	"credential_warmup_runs":        nil,
-	"audit_events":                  nil,
+	"account_automation_accounts": {"account_label"},
+	"account_automation_batches":  nil,
+	"account_automation_settings": nil,
+	"credential_warmup_policies":  nil,
+	"credential_warmup_state":     nil,
+	"credential_warmup_runs":      nil,
+	"audit_events":                nil,
+	// The outbox payload is the same platform event as the audit record beside it,
+	// which carries masks, ciphertext and reasons but never a key's plaintext.
+	"audit_push_events":             nil,
 	"client_key_aliases":            nil,
 	"connections":                   nil,
 	"cpa_bindings":                  nil,
@@ -90,6 +93,14 @@ var QUERY_READABLE_TABLES = map[string][]string{
 	"usage_events":                  nil,
 	"usage_facts_15m":               nil,
 	"usage_facts_daily":             nil,
+	"repo_key_bindings":             nil,
+	"repo_key_callers":              nil,
+	"repo_key_recipients":           nil,
+	// `authorization_token_hash` is a one-way fingerprint, so the table carries no
+	// credential an operator query could lift out.
+	"repo_key_applications": nil,
+	"repo_key_stops":        nil,
+	"repo_key_deliveries":   nil,
 }
 
 // QUERY_HIDDEN_TABLES are never readable, with the reason recorded for the next reviewer.

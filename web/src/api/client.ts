@@ -1,6 +1,16 @@
 import type { WarmupCredential, WarmupPolicy, WarmupResult, WarmupSettings } from '../types/warmup';
 import type { ResetAnnouncement, ResetAnnouncementInput, ResetAnnouncementPage } from '../types/resetAnnouncements';
 import type { ModelSquareDirectory } from '../types/modelSquare';
+import type {
+  RepoKeyApplication,
+  RepoKeyApplicationStatus,
+  RepoKeyAuditPushStatus,
+  RepoKeyBinding,
+  RepoKeyBindingDetail,
+  RepoKeyListResponse,
+  RepoKeyRepoView,
+  RepoKeyReview,
+} from '../types/repoKeys';
 import type { CustomIcon } from '../types/customIcons';
 import type { InstalledFont } from '../types/fonts';
 import { getAppConfig } from '../types/config';
@@ -713,6 +723,192 @@ export const api = {
       `/management/client-key-usage${query ? `?${query}` : ''}`,
       { method: 'GET' },
     );
+  },
+
+  /**
+   * Repository-owned keys: the keys in service, the applications agents filed, and the
+   * lifecycle actions on one key.
+   *
+   * Every response is mask-only. The single call that returns a key's value is
+   * `revealRepoKeyPlaintext`, which requires a reason and is audited server-side.
+   */
+  async getRepoKeys(query = ''): Promise<RepoKeyListResponse> {
+    return request<RepoKeyListResponse>(`/management/repo-keys${query ? `?${query}` : ''}`, { method: 'GET' });
+  },
+
+  async getRepoKeyApplications(params: {
+    status?: RepoKeyApplicationStatus;
+    awaiting?: boolean;
+    limit?: number;
+  } = {}): Promise<{ applications: RepoKeyApplication[] }> {
+    const search = new URLSearchParams();
+    if (params.status) search.set('status', params.status);
+    if (params.awaiting) search.set('awaiting', 'true');
+    if (params.limit) search.set('limit', String(params.limit));
+    const query = search.toString();
+    return request<{ applications: RepoKeyApplication[] }>(
+      `/management/repo-keys/applications${query ? `?${query}` : ''}`,
+      { method: 'GET' },
+    );
+  },
+
+  async getRepoKeyApplication(id: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/applications/${encodeURIComponent(id)}`,
+      { method: 'GET' },
+    );
+  },
+
+  /** Files an application on an agent's behalf. It is queued like any other; the console cannot approve it here. */
+  async applyRepoKeyOnBehalf(payload: {
+    repo: string;
+    purpose: string;
+    public_key?: string;
+    public_key_fingerprint?: string;
+    agent: string;
+  }): Promise<{
+    application_id: string;
+    status: string;
+    kind: string;
+    approval_token?: string;
+    approval_url?: string;
+    approval_expires_at_ms?: number;
+  }> {
+    return request<{
+      application_id: string;
+      status: string;
+      kind: string;
+      approval_token?: string;
+      approval_url?: string;
+      approval_expires_at_ms?: number;
+    }>('/management/repo-keys/applications', { method: 'POST', body: JSON.stringify(payload) });
+  },
+
+  /**
+   * Issues a fresh one-time link for a still-pending application (AC-8). Only the token's
+   * fingerprint is stored, so the original link cannot be shown again; the server rotates
+   * the token and the previous link stops working.
+   */
+  async createRepoKeyApprovalLink(id: string): Promise<{
+    application: RepoKeyApplication;
+    approval_token: string;
+    approval_url: string;
+    approval_expires_at_ms: number;
+  }> {
+    return request<{
+      application: RepoKeyApplication;
+      approval_token: string;
+      approval_url: string;
+      approval_expires_at_ms: number;
+    }>(`/management/repo-keys/applications/${encodeURIComponent(id)}/approval-link`, { method: 'POST' });
+  },
+
+  async approveRepoKeyApplication(id: string, reason = ''): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/applications/${encodeURIComponent(id)}/approve`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  /** The approval snapshot the queue and the one-time link both show (AC-4, AC-8). */
+  async getRepoKeyReview(id: string): Promise<RepoKeyReview> {
+    return request<RepoKeyReview>(`/management/repo-keys/applications/${encodeURIComponent(id)}/review`, {
+      method: 'GET',
+    });
+  },
+
+  /** A repository's state as an approver needs it, for the proxy application form (AC-29). */
+  async getRepoKeyRepoStatus(repo: string): Promise<RepoKeyRepoView> {
+    // The handler answers under a `repo` key, like its sibling single-object reads; the
+    // form reads the view itself, so the envelope is unwrapped here (AC-29).
+    const response = await request<{ repo: RepoKeyRepoView }>(
+      `/management/repo-keys/repo-status?repo=${encodeURIComponent(repo)}`,
+      { method: 'GET' },
+    );
+    return response.repo;
+  },
+
+  /** The audit platform link's health (AC-32). */
+  async getRepoKeyAuditPush(): Promise<RepoKeyAuditPushStatus> {
+    return request<RepoKeyAuditPushStatus>('/management/repo-keys/audit-push', { method: 'GET' });
+  },
+
+  /** The one-time approval link's snapshot; the address names the request, the session decides it. */
+  async getRepoKeyApprovalLink(token: string): Promise<RepoKeyReview> {
+    return request<RepoKeyReview>(`/management/repo-keys/apply-link/${encodeURIComponent(token)}`, {
+      method: 'GET',
+    });
+  },
+
+  async approveRepoKeyByLink(token: string, reason = ''): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/apply-link/${encodeURIComponent(token)}/approve`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  async rejectRepoKeyByLink(token: string, reason: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/apply-link/${encodeURIComponent(token)}/reject`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  /** An awaiting envelope, handed to the operator; the hand-out is recorded server-side (AC-33). */
+  async fetchRepoKeyCiphertext(
+    id: string,
+  ): Promise<{ application_id: string; kind: string; key_mask: string; algorithm: string; ciphertext: string; instructions: string }> {
+    return request<{
+      application_id: string;
+      kind: string;
+      key_mask: string;
+      algorithm: string;
+      ciphertext: string;
+      instructions: string;
+    }>(`/management/repo-keys/applications/${encodeURIComponent(id)}/ciphertext`, { method: 'POST' });
+  },
+
+  async rejectRepoKeyApplication(id: string, reason: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/applications/${encodeURIComponent(id)}/reject`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  async getRepoKeyBinding(id: string, window = '7d'): Promise<RepoKeyBindingDetail> {
+    return request<RepoKeyBindingDetail>(
+      `/management/repo-keys/${encodeURIComponent(id)}?window=${encodeURIComponent(window)}`,
+      { method: 'GET' },
+    );
+  },
+
+  async stopRepoKeyBinding(id: string, category: string, reason: string): Promise<{ key: RepoKeyBinding }> {
+    return request<{ key: RepoKeyBinding }>(`/management/repo-keys/${encodeURIComponent(id)}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ category, reason }),
+    });
+  },
+
+  /**
+   * Asks to put a stopped key back into service.
+   *
+   * This files a request, it does not restore anything: a person approves it in the same queue,
+   * and the server brings the original key back from its sealed copy (AC-31). OMC never asks for
+   * the plaintext.
+   */
+  async requestRepoKeyReenable(id: string, reason: string): Promise<{ application: RepoKeyApplication }> {
+    return request<{ application: RepoKeyApplication }>(
+      `/management/repo-keys/${encodeURIComponent(id)}/reenable-request`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+    );
+  },
+
+  /** The one place a key's value is read back: explicit, with a reason, and audited. */
+  async revealRepoKeyPlaintext(id: string, reason: string): Promise<{ key: string }> {
+    return request<{ key: string }>(`/management/repo-keys/${encodeURIComponent(id)}/reveal`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
   },
 
   async getManagementProviders(includeKeys = false): Promise<{ providers: ProviderItem[]; total: number }> {

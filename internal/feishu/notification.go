@@ -4,75 +4,60 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
-// Notification delivery states.
+// Notification delivery states. A closed row is actually delivered only when
+// SentAt is nonzero; an evidence-based discard keeps the existing sent state.
 const (
-	NotifyPending    = "pending"    // due to send
-	NotifyQueued     = "queued"     // held back by quiet hours
-	NotifySent       = "sent"       // delivered; kept briefly as an acknowledgement
-	NotifySuppressed = "suppressed" // no eligible evidence; never acknowledged as sent
+	NotifyPending = "pending"
+	NotifyQueued  = "queued"
+	NotifySent    = "sent"
 )
 
-// Notification is one unit of outbound delivery: a single immediate alert or a
-// merged quiet-end/scheduled digest. It is secret-free and is what the outbox
-// persists until Feishu confirms delivery. Persisting it before sending, and
-// marking it sent only after a successful send, is what makes a failed send
-// retried rather than lost.
+// Notification is persisted before delivery and contains no credential material.
 type Notification struct {
 	ID      string
 	Kind    string
 	ItemIDs []string
 	Alerts  []Alert
-	// Pending and Tight carry a scheduled or quiet-end digest, which has no single
-	// alert. They are empty for an immediate alert notification.
-	Pending   []PendingItem
-	Tight     []TightChannel
-	State     string
-	Attempts  int
-	LastError string
-	// NextAttemptAt is when a failed send may be retried.
+	Pending []PendingItem
+	Tight   []TightChannel
+	// Omitted counts findings kept out of Alerts by the payload limit.
+	Omitted       int
+	State         string
+	Attempts      int
+	LastError     string
 	NextAttemptAt time.Time
 	SentAt        time.Time
 	OccurredAt    time.Time
 	CreatedAt     time.Time
 }
 
-// Dispatcher renders and sends queued notifications, honouring a bounded
-// exponential retry. It marks a notification sent only after the sender returns
-// nil; a failure leaves it pending with a later NextAttemptAt.
 type Dispatcher struct {
 	channelUnavailableAfter time.Duration
 	monitorDownAfter        time.Duration
 	source                  ReportSource
-	store                   Store
-	sender                  Sender
-	renderer                ReportRenderer
-	logger                  *slog.Logger
-	now                     func() time.Time
-	backoffBase             time.Duration
-	backoffMax              time.Duration
+	// Prediction delivery re-reads the stored roster, including on every retry.
+	predictionSource PredictionSource
+	store            Store
+	sender           Sender
+	renderer         ReportRenderer
+	logger           *slog.Logger
+	now              func() time.Time
+	backoffBase      time.Duration
+	backoffMax       time.Duration
 }
 
-// NewDispatcher builds a dispatcher. A nil logger and nil clock fall back to the
-// defaults so a test can construct one with only the seams it cares about.
 func NewDispatcher(sender Sender, renderer ReportRenderer, logger *slog.Logger) *Dispatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Dispatcher{
-		sender:      sender,
-		renderer:    renderer,
-		logger:      logger,
-		now:         time.Now,
-		backoffBase: 30 * time.Second,
-		backoffMax:  30 * time.Minute,
-	}
+	return &Dispatcher{sender: sender, renderer: renderer, logger: logger, now: time.Now,
+		backoffBase: 30 * time.Second, backoffMax: 30 * time.Minute}
 }
 
-// withClock overrides the dispatcher clock. Tests use it to drive the retry
-// schedule without waiting.
 func (d *Dispatcher) withClock(now func() time.Time) *Dispatcher {
 	if now != nil {
 		d.now = now
@@ -80,20 +65,16 @@ func (d *Dispatcher) withClock(now func() time.Time) *Dispatcher {
 	return d
 }
 
-// deliverDue attempts every pending notification whose retry time has passed and
-// returns the outbox with the outcomes applied. The chatID is the configured
-// target group. The returned slice contains sent rows as well, so the caller can
-// persist acknowledgements or terminal suppression and prune them later. Failed
-// sends remain in the returned slice as pending rows with a retry deadline.
+// deliverDue returns delivery progress for persistence. Failed sends remain
+// pending; closing an ineligible row does not manufacture a delivery timestamp.
 func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Notification) []Notification {
 	out := append([]Notification(nil), outbox...)
 	for index := range out {
 		notification := &out[index]
-		if notification.State == NotifySent || notification.State == NotifyQueued || notification.State == NotifySuppressed {
+		if notification.State == NotifySent || notification.State == NotifyQueued {
 			continue
 		}
-		now := d.now()
-		if notification.NextAttemptAt.After(now) {
+		if notification.NextAttemptAt.After(d.now()) {
 			continue
 		}
 		notification.State = NotifyPending
@@ -109,24 +90,35 @@ func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Not
 			notification.NextAttemptAt = time.Time{}
 			notification.SentAt = d.now()
 		} else {
-			suppressNotification(notification)
+			discardNotification(notification)
 		}
 	}
 	return out
 }
 
-func suppressNotification(notification *Notification) {
-	notification.State = NotifySuppressed
-	notification.LastError = ""
-	notification.NextAttemptAt = time.Time{}
+func isDiscardedNotification(notification Notification) bool {
+	return notification.State == NotifySent && notification.SentAt.IsZero()
 }
 
-func (d *Dispatcher) deliveryMessage(ctx context.Context, notification *Notification) (Message, bool) {
+func discardNotification(notification *Notification) {
+	notification.State = NotifySent
+	notification.LastError = ""
+	notification.NextAttemptAt = time.Time{}
+	notification.SentAt = time.Time{}
+}
+
+func (d *Dispatcher) deliveryMessage(ctx context.Context, notification *Notification) (Message, bool, error) {
+	if d.predictionSource != nil && strings.HasPrefix(notification.Kind, predictionKindPrefix) {
+		alerts, err := d.currentPredictionAlerts(ctx, notification.Alerts)
+		if err != nil {
+			return Message{}, false, err
+		}
+		notification.Alerts = alerts
+	}
 	now := d.now()
 	msg := Message{EvidenceChecked: true, ChannelUnavailableAfter: d.channelUnavailableAfter,
-		EvaluatedAt: now, Kind: notification.Kind, Pending: notification.Pending, GeneratedAt: notification.OccurredAt}
-	// Every path reads only stored projections. Aggregate report time cannot renew
-	// a forecast or a retained authentication event.
+		EvaluatedAt: now, Kind: notification.Kind, Pending: notification.Pending,
+		Omitted: notification.Omitted, GeneratedAt: notification.OccurredAt}
 	if d.source != nil {
 		if report, has := d.source.ReadReport(ctx); has {
 			msg.Report = &report
@@ -139,29 +131,90 @@ func (d *Dispatcher) deliveryMessage(ctx context.Context, notification *Notifica
 			d.logger.WarnContext(ctx, "feishu delivery evidence state unavailable", "error", err)
 		} else {
 			tracks = state.ChannelTracks
+			if usesCompactCard(msg.Kind) {
+				// These items are diagnostic/omission context only. Qualification
+				// below uses the notification's selected identities, not this backlog.
+				msg.Pending = openItems(state.PendingItems)
+				for _, item := range state.PendingItems {
+					if item.Kind == predictionKindPrefix && item.ResolvedAt.IsZero() {
+						msg.Pending = append(msg.Pending, item)
+					}
+				}
+			}
 		}
 	}
 	cfg := PolicyConfig{ChannelUnavailableAfter: d.channelUnavailableAfter, MonitorDownAfter: d.monitorDownAfter}
 	msg.Alerts = eligibleNotificationAlerts(*notification, msg.Report, tracks, cfg, now)
 	notification.Alerts = msg.Alerts
-	return msg, notificationHasContent(*notification)
+	hasPrediction := false
+	for _, alert := range msg.Alerts {
+		hasPrediction = hasPrediction || alert.Kind == predictionKindPrefix
+	}
+	if !hasPrediction && strings.HasPrefix(msg.Kind, predictionKindPrefix) {
+		msg.Omitted, notification.Omitted = 0, 0
+	}
+	return msg, notificationHasContent(*notification), nil
 }
 
-// A full-card request may itself cross the evidence bound, so the degraded send
-// must rebuild its evidence independently rather than reuse the first view model.
+// The original queued evidence must remain age-bounded even when the current
+// roster still contains its identity. A legacy missing source can be recovered
+// only when the stored digest proves the same observation, never from queue time.
+func (d *Dispatcher) currentPredictionAlerts(ctx context.Context, alerts []Alert) ([]Alert, error) {
+	digest, err := d.predictionSource(ctx)
+	if err != nil {
+		return nil, err
+	}
+	live := make(map[string]PredictionDigestItem, len(digest.Items))
+	for _, item := range predictionFindings(digest.Items, d.now()) {
+		live[predictionItemID(item)] = item
+	}
+	kept := make([]Alert, 0, len(alerts))
+	findings := 0
+	for _, alert := range alerts {
+		if alert.Kind != predictionKindPrefix {
+			kept = append(kept, alert)
+			continue
+		}
+		item, exists := live[alertItemID(alert)]
+		if !exists {
+			continue
+		}
+		if alert.EvidenceSource == "" && alert.ObservedAt.UnixMilli() == item.ObservedAtMS && alert.FreshWindowMS > 0 {
+			alert.EvidenceSource = EvidenceQuota
+			if item.FreshWindowMS < alert.FreshWindowMS {
+				alert.FreshWindowMS = item.FreshWindowMS
+			}
+		}
+		kept = append(kept, alert)
+		findings++
+	}
+	if findings == 0 {
+		withoutFooter := kept[:0]
+		for _, alert := range kept {
+			if alert.Kind != "omitted" {
+				withoutFooter = append(withoutFooter, alert)
+			}
+		}
+		kept = withoutFooter
+	}
+	return kept, nil
+}
+
+// A rejected full-card request may cross a bound or a roster change; the
+// simplified fallback must independently re-read and requalify every item.
 func (d *Dispatcher) sendWithFallback(ctx context.Context, chatID string, notification *Notification) (bool, error) {
-	msg, eligible := d.deliveryMessage(ctx, notification)
-	if !eligible {
-		return false, nil
+	msg, eligible, err := d.deliveryMessage(ctx, notification)
+	if err != nil || !eligible {
+		return false, err
 	}
 	if err := d.sender.SendCard(ctx, chatID, d.renderer.Card(msg)); err == nil {
 		return true, nil
 	} else {
 		d.logger.WarnContext(ctx, "feishu full card rejected, retrying simplified", "action", "notify", "result", "fallback", "error", err)
 	}
-	msg, eligible = d.deliveryMessage(ctx, notification)
-	if !eligible {
-		return false, nil
+	msg, eligible, err = d.deliveryMessage(ctx, notification)
+	if err != nil || !eligible {
+		return false, err
 	}
 	if err := d.sender.SendCard(ctx, chatID, d.renderer.CardSimple(msg)); err != nil {
 		return false, fmt.Errorf("full and simplified card both failed: %w", err)
@@ -170,7 +223,6 @@ func (d *Dispatcher) sendWithFallback(ctx context.Context, chatID string, notifi
 	return true, nil
 }
 
-// backoffDelay is the bounded exponential retry for a failed send.
 func backoffDelay(attempt int, base, max time.Duration) time.Duration {
 	if attempt < 1 {
 		attempt = 1

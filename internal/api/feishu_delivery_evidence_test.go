@@ -68,7 +68,7 @@ func TestFeishuPredictionDeliveryReceivesTheAccountingCadenceBound(t *testing.T)
 		t.Fatalf("prediction digest=%+v err=%v", digest, err)
 	}
 	item := digest.Items[0]
-	if item.Verdict != "will_exhaust" || item.FreshWindowMS != (6*time.Hour).Milliseconds() || item.ObservedAtMS != now.UnixMilli() {
+	if item.LastsUntilReset == nil || *item.LastsUntilReset || item.FreshWindowMS != (6*time.Hour).Milliseconds() || item.ObservedAtMS != now.UnixMilli() {
 		t.Fatalf("prediction lost its original evidence cadence in transit: %+v", item)
 	}
 }
@@ -78,7 +78,7 @@ func TestFeishuDeliveryEvidenceAndSuppressionSurviveSQLiteReload(t *testing.T) {
 	store := feishuStore{repo: repo}
 	state := feishu.EmptyState()
 	now := time.Date(2026, 11, 6, 2, 0, 0, 0, time.UTC)
-	state.Outbox = []feishu.Notification{{ID: "synthetic", Kind: feishu.AlertReadingMissing, State: feishu.NotifySuppressed, CreatedAt: now,
+	state.Outbox = []feishu.Notification{{ID: "synthetic", Kind: feishu.AlertReadingMissing, State: feishu.NotifySent, CreatedAt: now,
 		Alerts: []feishu.Alert{{Kind: feishu.AlertReadingMissing, Provider: "codex", Key: "synthetic", ObservedAt: now.Add(-time.Minute), EvidenceSource: feishu.EvidenceAttempt, FreshWindowMS: time.Minute.Milliseconds()}}}}
 	if err := store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
@@ -87,7 +87,7 @@ func TestFeishuDeliveryEvidenceAndSuppressionSurviveSQLiteReload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded.Outbox) != 1 || loaded.Outbox[0].State != feishu.NotifySuppressed || !loaded.Outbox[0].SentAt.IsZero() || len(loaded.Outbox[0].Alerts) != 1 {
+	if len(loaded.Outbox) != 1 || loaded.Outbox[0].State != feishu.NotifySent || !loaded.Outbox[0].SentAt.IsZero() || len(loaded.Outbox[0].Alerts) != 1 {
 		t.Fatalf("terminal suppression lost or acknowledged: %+v", loaded)
 	}
 	alert := loaded.Outbox[0].Alerts[0]

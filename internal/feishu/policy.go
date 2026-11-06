@@ -173,6 +173,8 @@ func evaluatePolicy(cfg PolicyConfig, in PolicyInput) PolicyResult {
 		prev, ok := prevAll[id]
 		cycleReset, cycleObserved := quotaCycleEvidence(sig, in.Report)
 		isNewCycle := ok && hasNewQuotaCycle(prev, cycleReset, cycleObserved)
+		// TODO(T12/N1106-23): keep dev's existing-open policy unchanged until the
+		// coordinator decides how an unsent closure may qualify for one later send.
 		if ok && prev.Status == PendingOpen && !isNewCycle {
 			item := prev
 			item.Kind = sig.Kind

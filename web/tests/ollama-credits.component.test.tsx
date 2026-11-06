@@ -47,20 +47,34 @@ describe('Ollama USD credits', () => {
     expect(text).not.toMatch(/\$|%|Data missing/);
   });
 
-  it('reports missing data after a failed fetch even if a previous snapshot exists', () => {
+  it('reports the missing reading after a failed fetch even if a previous snapshot exists', () => {
     const text = show(reading(), 'transport_error');
-    expect(text).toContain('Data missing');
-    expect(text).not.toMatch(/\$|%|15 requests|in 2 weeks/);
+    expect(text).toContain('No quota reading available');
+    expect(text).not.toMatch(/\$|%|15 requests|in 2 weeks|Data missing/);
   });
 
   it('refuses path-contaminated amounts without fabricating a share', () => {
     const text = show(reading({ used_cents: '/usr/bin/bash.02' }));
-    expect(text).toContain('Data missing');
+    expect(text).toContain('$299.98');
+    expect(text).toContain('—');
+    expect(text).toContain('Not reported upstream');
+    expect(text).toContain('Cannot be calculated');
     expect(text).not.toMatch(/bash|\$0|%|\$300/);
   });
 
+  it('writes an unpublished total as not reported upstream instead of 0%', () => {
+    // AC-15: upstream answered with a used amount but no total. A 0% share or a $0.00 total
+    // would claim the credits are untouched; the page must say it does not know instead.
+    const text = show(reading({ remaining_cents: undefined, used_cents: 2 }));
+    expect(text).toContain('Used this month (USD): $0.02');
+    expect(text).toContain('Monthly total (USD): Not reported upstream');
+    expect(text).toContain('Share: Cannot be calculated');
+    expect(text).not.toContain('0%');
+    expect(text).not.toContain('Data missing');
+  });
+
   it('shows a missing reading explicitly', () => {
-    expect(show()).toContain('Data missing');
+    expect(show()).toContain('No quota reading available');
   });
 
   it('does not round a small positive share to zero percent', () => {

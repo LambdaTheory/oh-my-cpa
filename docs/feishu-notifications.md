@@ -206,9 +206,10 @@ evidence resolves an episode without a recovery push. A fresh non-auth collectio
 attempt may appear as a collection-health diagnostic, but does not create a second
 missing-data pending incident alongside the monitoring policy. See the card contract below.
 
-Delivery is outbox-based: a notification is persisted before sending and marked
-sent only after a successful send, so a failed send is retried with a bounded
-backoff rather than lost. Before enqueueing and before every actual send, including
+A delivered notification has state `sent` and a nonzero `SentAt`; a failed send
+is retried with bounded backoff. A row discarded at delivery also closes as `sent`,
+but retains zero `SentAt` and is not evidence of an actual notification. Before
+enqueueing and before every actual send, including
 quiet-end, retry and the simplified fallback, the same per-item eligibility rule
 rechecks stored evidence. Quota/authentication/reading-missing claims require a
 positive observation time, the appropriate source and a positive, representable
@@ -217,18 +218,17 @@ may select current stored-report evidence, but pending ownership, notification
 creation and report aggregation times cannot supply or renew evidence. Re-reading
 the same sample cannot extend an existing narrower freshness bound. Prediction
 items retain the quota prediction window's cadence-based bound (2–24 hours), not a
-new bound starting at digest creation. The bound travels through the existing
-accounting projection as `PredictionAccounting.FreshWindowMS`, excluded from both
-JSON and JSON Schema, including dashboard and MCP responses.
+new bound starting at digest creation. The operations prediction item's existing
+internal `FreshWindowMS` comes from `quota.PredictionFreshWindow` and stays excluded
+from JSON and JSON Schema; the Feishu adapter preserves it unchanged.
 
 Ongoing `monitor_down` uses a separate policy re-evaluation with persisted failure
 counts and last-valid/first-seen baseline, not the sample's 15-minute cutoff. Age
 expiry alone never resolves a credential or channel incident. A notification with
-no eligible risk is terminally `suppressed` (no `SentAt`, no delivery acknowledgement),
-while explicit status queries and daily summaries may still explain unknown data.
-Scheduled terminal identities cannot be revived by requeueing; an explicit status
-request may repeat. Suppressed rows use the same bounded outbox retention as sent
-rows, dated from creation rather than an invented send time.
+no eligible risk closes without an actual send or delivery timestamp; explicit
+status queries and daily summaries may still explain unknown data. Discarded rows
+are not announcement or cooldown evidence and use creation time for bounded
+retention, rather than an invented send time.
 
 ## Integration
 
@@ -333,13 +333,26 @@ recipients permit only that person's private queries. Query cards retain scoped 
 answers and stale-observation notices; an empty abnormal filter means no anomalies.
 
 The earliest summary slot always supplies the morning fallback. Prediction
-evaluation runs once per minute from stored data and only
-`will_exhaust` findings retain a tracked episode; forecast-only events stay silent
-outside the morning digest. Morning prediction cards also select currently evidenced anomalies from stored
-reports. Historical open items are shown only in a bounded data-quality diagnostic
-section, never reconstructed as current credential/quota risk. Explicit
-manual prediction sends retain both finding kinds, deliver only their new outbox
-row and never claim a scheduled minute. No finding returns `no_findings`.
+evaluation runs once per minute from stored data and only windows whose
+`lasts_until_reset` is false retain a tracked episode and reach the card;
+windows that last, stale readings and undecided rows are never pushed. Each row
+names the provider, the credential and the window type, so two windows of one
+credential stay distinguishable, then opens with the two numbers ("实际 X% ·
+期望 Y%") and the sentence after them states only the exhaustion instant and
+that the window will not last to the reset. The dedicated prediction layout
+shows at most five windows, with the total in its opening line ("N 个窗口撑不到重置").
+Its read-time note names the newest displayed prediction observation only;
+individual evidence clocks and historical diagnostics remain separate. It
+discloses both payload-bound and row-limit omissions as "另有 N 项，见控制台".
+Non-prediction morning alerts remain visible after those rows; if all prediction
+rows are removed, their omitted count is cleared without suppressing other alerts.
+Immediately before every attempt, including quiet-end and retry, the digest
+re-reads the stored roster and drops findings for credentials that are disabled,
+removed, lack a window or have stale evidence. Forecast-only events stay silent
+outside the morning digest. Historical open items are bounded diagnostic context,
+never a source of current risk. Explicit manual prediction sends apply the same
+findings filter, deliver only their new outbox row and never claim a scheduled
+minute. No finding returns `no_findings`.
 
 ### Evidence clocks and diagnostics
 

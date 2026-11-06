@@ -144,7 +144,7 @@ func TestDashboardPredictionAccountingPreservesCapabilityWireContract(t *testing
 		}
 		delete(fields, key)
 	}
-	for _, key := range []string{"remaining_tokens", "capacity_error_percent", "capacity_unavailable"} {
+	for _, key := range []string{"remaining_tokens", "capacity_error_percent", "capacity_unavailable", "unavailable_reason", "reading_stale"} {
 		if _, exists := capabilityFields[key]; exists {
 			t.Fatalf("console accounting leaked into capability: %s", key)
 		}

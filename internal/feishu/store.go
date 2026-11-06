@@ -81,7 +81,7 @@ func (s *State) queueNotification(notification Notification) {
 		// Scheduled episodes are idempotent; an explicit status request may repeat
 		// within the same clock tick (for example after changing the recipient).
 		existing := s.Outbox[i]
-		if existing.State == NotifySent || existing.State == NotifySuppressed {
+		if existing.State == NotifySent {
 			if notification.Kind == KindQuery {
 				s.Outbox[i] = notification
 			}
@@ -104,7 +104,7 @@ func (s *State) trimOutbox() {
 	kept := make([]Notification, 0, len(s.Outbox))
 	overflow := len(s.Outbox) - maxOutboxPerChannel
 	for _, notification := range s.Outbox {
-		if overflow > 0 && (notification.State == NotifySent || notification.State == NotifySuppressed) {
+		if overflow > 0 && notification.State == NotifySent {
 			overflow--
 			continue
 		}
@@ -185,11 +185,14 @@ func (s *State) prune(now time.Time) {
 
 	outbox := s.Outbox[:0]
 	for _, notification := range s.Outbox {
-		if notification.State == NotifySuppressed && !notification.CreatedAt.IsZero() && now.Sub(notification.CreatedAt) > sentRetention {
-			continue
-		}
-		if notification.State == NotifySent && !notification.SentAt.IsZero() && now.Sub(notification.SentAt) > sentRetention {
-			continue
+		if notification.State == NotifySent {
+			closedAt := notification.SentAt
+			if closedAt.IsZero() {
+				closedAt = notification.CreatedAt
+			}
+			if !closedAt.IsZero() && now.Sub(closedAt) > sentRetention {
+				continue
+			}
 		}
 		outbox = append(outbox, notification)
 	}

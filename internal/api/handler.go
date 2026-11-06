@@ -270,6 +270,7 @@ func (h *Handler) routes() chi.Router {
 				// and nowhere else. Grouped under the management tree because the write
 				// side is a management action, sibling to the model square's read.
 				v1.Get("/management/model-groups", h.listModelGroups)
+				v1.Get("/management/model-groups/readings", h.listModelGroupReadings)
 				v1.Post("/management/model-groups", h.createModelGroup)
 				v1.Post("/management/model-groups/restore-defaults", h.restoreDefaultModelGroups)
 				v1.Patch("/management/model-groups/{id}", h.renameModelGroup)
@@ -363,6 +364,28 @@ func (h *Handler) routes() chi.Router {
 				v1.Put("/management/client-key-aliases", h.putClientKeyAlias)
 				v1.Delete("/management/client-key-aliases/{fingerprint}", h.deleteClientKeyAlias)
 				v1.Get("/management/client-key-usage", h.clientKeyUsage)
+				// Repository-owned keys: the console's view of the applications agents
+				// file over MCP, the decisions on them, and the lifecycle of each key.
+				v1.Get("/management/repo-keys", h.listRepoKeyBindings)
+				// Static names come before the {id} routes so a path segment such as
+				// repo-status is never read as a binding id.
+				v1.Get("/management/repo-keys/repo-status", h.getRepoKeyRepoStatus)
+				v1.Get("/management/repo-keys/audit-push", h.getRepoKeyAuditPush)
+				v1.Get("/management/repo-keys/apply-link/{token}", h.getRepoKeyApprovalLink)
+				v1.Post("/management/repo-keys/apply-link/{token}/approve", h.approveRepoKeyByLink)
+				v1.Post("/management/repo-keys/apply-link/{token}/reject", h.rejectRepoKeyByLink)
+				v1.Get("/management/repo-keys/applications", h.listRepoKeyApplications)
+				v1.Post("/management/repo-keys/applications", h.applyRepoKeyOnBehalf)
+				v1.Get("/management/repo-keys/applications/{id}", h.getRepoKeyApplication)
+				v1.Get("/management/repo-keys/applications/{id}/review", h.getRepoKeyBindingReview)
+				v1.Post("/management/repo-keys/applications/{id}/approve", h.approveRepoKeyApplication)
+				v1.Post("/management/repo-keys/applications/{id}/reject", h.rejectRepoKeyApplication)
+				v1.Post("/management/repo-keys/applications/{id}/ciphertext", h.fetchRepoKeyCiphertext)
+				v1.Post("/management/repo-keys/applications/{id}/approval-link", h.createRepoKeyApprovalLink)
+				v1.Get("/management/repo-keys/{id}", h.getRepoKeyBinding)
+				v1.Post("/management/repo-keys/{id}/stop", h.stopRepoKeyBinding)
+				v1.Post("/management/repo-keys/{id}/reenable-request", h.requestRepoKeyReenable)
+				v1.Post("/management/repo-keys/{id}/reveal", h.revealRepoKeyPlaintext)
 				v1.Get("/management/providers", h.listManagementProviders)
 				v1.Post("/management/providers", h.createManagementProvider)
 				v1.Post("/management/providers/pull-models", h.pullProviderModels)

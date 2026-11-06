@@ -245,7 +245,7 @@ func decisionConclusion(msg Message, alerts []Alert) string {
 		return "数据缺失或已过期，当前额度与认证状态未知"
 	}
 	for _, alert := range alerts {
-		if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || strings.HasPrefix(alert.Kind, predictionKindPrefix) && alert.Title != "预计额度有余量" || alert.Kind == AlertChannelUnavailable {
+		if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || strings.HasPrefix(alert.Kind, predictionKindPrefix) || alert.Kind == AlertChannelUnavailable {
 			return "今天需要调整额度安排，请处理以下风险"
 		}
 	}
@@ -280,7 +280,7 @@ func omitStartupEpisodes(notification *Notification, state *State, resolved Reso
 			return false
 		}
 		for _, earlier := range state.Outbox {
-			if earlier.State == NotifySuppressed || earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
+			if isDiscardedNotification(earlier) || earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
 				continue
 			}
 			for _, item := range earlier.Pending {

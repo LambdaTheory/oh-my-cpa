@@ -74,7 +74,7 @@ func TestDeliveryQuietEndRequiresCurrentEvidenceAndKeepsHistoricalOwnership(t *t
 				t.Fatalf("quiet end sends=%d want=%d, ownership=%+v", sends, want, state.PendingItems)
 			}
 			for _, row := range state.Outbox {
-				if !renewed && (row.State != NotifySuppressed || !row.SentAt.IsZero()) {
+				if !renewed && (row.State != NotifySent || !row.SentAt.IsZero()) {
 					t.Fatalf("expired episode was acknowledged: %+v", row)
 				}
 			}
@@ -104,7 +104,7 @@ func TestDeliveryMorningPathsShareIndependentEvidenceAcrossDays(t *testing.T) {
 				if !forecast {
 					return PredictionDigest{}, nil
 				}
-				return PredictionDigest{Items: []PredictionDigestItem{{Key: "fresh-forecast", Provider: "claude", Verdict: "will_exhaust", ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
+				return PredictionDigest{Items: []PredictionDigestItem{{Key: "fresh-forecast", Provider: "claude", LastsUntilReset: &cannotLast, ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
 			})
 			job.Activate()
 			for day := 0; day < 2; day++ {
@@ -139,7 +139,7 @@ func TestDeliverySuppressionPersistsWithoutRevivalOrAcknowledgement(t *testing.T
 	now := mustTime("2026-11-06T02:00:00Z")
 	store := NewMemoryStore()
 	state := EmptyState()
-	row := Notification{ID: "suppressed", Kind: AlertCredential, State: NotifySuppressed, CreatedAt: now}
+	row := Notification{ID: "suppressed", Kind: AlertCredential, State: NotifySent, CreatedAt: now}
 	state.Outbox = []Notification{row}
 	if err := store.Save(context.Background(), state); err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestDeliverySuppressionPersistsWithoutRevivalOrAcknowledgement(t *testing.T
 	reloaded, _ := store.Load(context.Background())
 	row.State = NotifyPending
 	reloaded.queueNotification(row)
-	if len(reloaded.Outbox) != 1 || reloaded.Outbox[0].State != NotifySuppressed || !reloaded.Outbox[0].SentAt.IsZero() {
+	if len(reloaded.Outbox) != 1 || reloaded.Outbox[0].State != NotifySent || !reloaded.Outbox[0].SentAt.IsZero() {
 		t.Fatalf("suppressed row revived or acknowledged: %+v", reloaded)
 	}
 	reloaded.prune(now.Add(sentRetention + time.Millisecond))
@@ -197,7 +197,7 @@ func TestDeliveryEvidenceRejectsMissingAndExpiredBoundsForEveryRisk(t *testing.T
 				sender := newFakeSender()
 				dispatcher := NewDispatcher(sender, NewPlainReportRenderer(time.UTC), nil).withClock(func() time.Time { return now })
 				rows := dispatcher.deliverDue(context.Background(), "ou_synthetic", []Notification{{ID: "synthetic", Kind: predictionKindPrefix + KindMorning, Alerts: []Alert{alert}, State: NotifyPending, CreatedAt: now}})
-				if sends, _ := sender.counts(); sends != 0 || rows[0].State != NotifySuppressed || !rows[0].SentAt.IsZero() {
+				if sends, _ := sender.counts(); sends != 0 || rows[0].State != NotifySent || !rows[0].SentAt.IsZero() {
 					t.Fatalf("unknown/expired evidence delivered or falsely acknowledged: %+v", rows)
 				}
 			})
@@ -236,7 +236,7 @@ func TestDeliveryRetryDoesNotRefreshEvidenceFromNotificationTime(t *testing.T) {
 	}
 	now = now.Add(2 * time.Minute)
 	rows = dispatcher.deliverDue(context.Background(), "ou_synthetic", rows)
-	if sends, _ := sender.counts(); sends != 0 || rows[0].State != NotifySuppressed || rows[0].Attempts != 1 {
+	if sends, _ := sender.counts(); sends != 0 || rows[0].State != NotifySent || rows[0].Attempts != 1 {
 		t.Fatalf("retry renewed expired evidence: %+v", rows)
 	}
 }
@@ -259,7 +259,7 @@ func TestDeliveryRechecksBeforeSimplifiedFallback(t *testing.T) {
 	dispatcher := NewDispatcher(sender, NewPlainReportRenderer(time.UTC), nil).withClock(func() time.Time { return now })
 	alert := Alert{Kind: predictionKindPrefix, EvidenceSource: EvidenceQuota, ObservedAt: now, FreshWindowMS: time.Minute.Milliseconds()}
 	rows := dispatcher.deliverDue(context.Background(), "ou_synthetic", []Notification{{ID: "fallback", Kind: predictionKindPrefix + KindMorning, Alerts: []Alert{alert}, State: NotifyPending}})
-	if sender.calls != 1 || rows[0].State != NotifySuppressed || !rows[0].SentAt.IsZero() {
+	if sender.calls != 1 || rows[0].State != NotifySent || !rows[0].SentAt.IsZero() {
 		t.Fatalf("simplified send used expired evidence: calls=%d rows=%+v", sender.calls, rows)
 	}
 }
@@ -287,7 +287,7 @@ func TestDeliveryRetainsOngoingMonitorPolicyWithoutRefreshingItsLastSuccess(t *t
 	account.ObservedAt = now
 	rows[0].ID, rows[0].State = "recovered", NotifyPending
 	rows = dispatcher.deliverDue(context.Background(), "ou_synthetic", rows)
-	if sends, _ := sender.counts(); sends != 1 || rows[0].State != NotifySuppressed {
+	if sends, _ := sender.counts(); sends != 1 || rows[0].State != NotifySent {
 		t.Fatalf("recovered monitor incident still delivered: %+v", rows)
 	}
 }

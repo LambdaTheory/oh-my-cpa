@@ -65,9 +65,13 @@ type Service struct {
 	resolved           Resolved
 	store              Store
 	source             ReportSource
-	renderer           ReportRenderer
-	logger             *slog.Logger
-	now                func() time.Time
+	// predictionSource is registered by the prediction job and handed to every
+	// dispatcher the service builds, so queued cards are re-checked at delivery.
+	// It is read and written under mu.
+	predictionSource PredictionSource
+	renderer         ReportRenderer
+	logger           *slog.Logger
+	now              func() time.Time
 
 	sender      Sender
 	dispatcher  *Dispatcher
@@ -167,6 +171,7 @@ func NewService(opts Options) *Service {
 	service.eventSource = sourceFactory(resolved)
 	service.dispatcher = NewDispatcher(service.sender, renderer, logger).withClock(now)
 	service.dispatcher.source = service.source
+	service.dispatcher.predictionSource = service.predictionSource
 	service.dispatcher.store = service.store
 	service.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
 	service.dispatcher.monitorDownAfter = resolved.MonitorDownAfter
@@ -317,6 +322,7 @@ func (s *Service) ensureSenderLocked(resolved Resolved) {
 	s.sender = sender
 	s.dispatcher = NewDispatcher(sender, s.renderer, s.logger).withClock(s.now)
 	s.dispatcher.source = s.source
+	s.dispatcher.predictionSource = s.predictionSource
 	s.dispatcher.store = s.store
 	s.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
 	s.dispatcher.monitorDownAfter = resolved.MonitorDownAfter
@@ -571,6 +577,18 @@ func (s *Service) currentDispatcher() *Dispatcher {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.dispatcher
+}
+
+// setPredictionSource registers the digest a dispatcher re-reads before it sends
+// a queued prediction card. The prediction job calls it at construction, so both
+// the scheduled loop and an operator-requested send see the same check.
+func (s *Service) setPredictionSource(source PredictionSource) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.predictionSource = source
+	if s.dispatcher != nil {
+		s.dispatcher.predictionSource = source
+	}
 }
 
 func (s *Service) acquireQuery() bool {
