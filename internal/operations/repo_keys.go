@@ -226,13 +226,15 @@ func (s *Service) QueryRepoKey(ctx context.Context, input RepoKeyQueryInput) (Re
 		if result.CallerAgent != "" && result.CallerDevice != "" {
 			callerRow, callerErr := s.Repo.GetRepoKeyCaller(ctx, repoKeyInstanceID, result.CallerAgent, result.CallerDevice)
 			result.PublicKeyRegistered = callerErr == nil
-			if recipient, recipientErr := s.Repo.IsRepoKeyRecipient(ctx, repoKeyInstanceID, repoID, result.CallerAgent, result.CallerDevice); recipientErr == nil {
-				result.CallerRegistered = recipient && result.PublicKeyRegistered
+			if callerErr == nil {
+				result.CallerRegistered, err = s.wasRepoKeyCallerApproved(ctx, repoID, result.CallerAgent, result.CallerDevice, callerRow.PublicKeyFingerprint)
+				if err != nil {
+					return RepoKeyQueryResult{}, err
+				}
 			}
 			if callerErr != nil && !errors.Is(callerErr, repository.ErrRepoKeyNotFound) {
 				return RepoKeyQueryResult{}, callerErr
 			}
-			_ = callerRow
 		}
 	}
 	result.AutoApprove = result.State == "active" && result.CallerRegistered
@@ -279,6 +281,18 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 		return RepoKeyApplyResult{}, invalidParameters{detail: "The purpose is required and must be at most 500 characters."}
 	}
 
+	release, err := s.lock(ctx)
+	if err != nil {
+		return RepoKeyApplyResult{}, err
+	}
+	defer release()
+	pending, pendingErr := s.Repo.PendingRepoKeyApplication(ctx, repoKeyInstanceID, repoID, agent)
+	if pendingErr != nil && !errors.Is(pendingErr, repository.ErrRepoKeyApplicationNotFound) {
+		return RepoKeyApplyResult{}, pendingErr
+	}
+	if pendingErr == nil && pending.DeviceName == device && strings.TrimSpace(params.PublicKey) == "" && strings.TrimSpace(params.PublicKeyFingerprint) == "" {
+		params.PublicKey = pending.PublicKey
+	}
 	publicKey, fingerprint, err := s.resolveRepoKeyPublicKey(ctx, agent, device, params.PublicKey, params.PublicKeyFingerprint)
 	if err != nil {
 		return RepoKeyApplyResult{}, err
@@ -289,14 +303,8 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 	}
 	// A changed public key is exactly the case the operator must look at again, even for a
 	// caller this repository already accepted (AC-34).
-	publicKeyChanged := previousErr == nil && previous.PublicKeyFingerprint != fingerprint
+	publicKeyChanged := previousErr != nil || previous.PublicKeyFingerprint != fingerprint
 	nowMS := time.Now().UnixMilli()
-	if _, err = s.Repo.UpsertRepoKeyCaller(ctx, repository.RepoKeyCaller{
-		InstanceID: repoKeyInstanceID, AgentName: agent, DeviceName: device,
-		PublicKey: publicKey, PublicKeyFingerprint: fingerprint, KeyAlgorithm: "x25519",
-	}, nowMS); err != nil {
-		return RepoKeyApplyResult{}, err
-	}
 
 	status, err := s.Repo.GetRepoKeyRepoStatus(ctx, repoKeyInstanceID, repoID)
 	if err != nil {
@@ -327,8 +335,8 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 
 	// 免审: a caller this repository already accepted, asking for the key it already uses, with
 	// the public key it registered. Everything else waits for a person (PRD 4.2 q01).
-	if params.AutoApproveAllowed && kind == "reuse" && !publicKeyChanged {
-		if recipient, recipientErr := s.Repo.IsRepoKeyRecipient(ctx, repoKeyInstanceID, repoID, agent, device); recipientErr == nil && recipient {
+	if params.AutoApproveAllowed && kind == "reuse" && !publicKeyChanged && errors.Is(pendingErr, repository.ErrRepoKeyApplicationNotFound) {
+		if recipient, recipientErr := s.wasRepoKeyCallerApproved(ctx, repoID, agent, device, fingerprint); recipientErr == nil && recipient {
 			approved, approveErr := s.autoApproveRepoKeyApplication(ctx, status.Binding, application, publicKey, nowMS)
 			if approveErr == nil {
 				return s.repoKeyApplyResult(ctx, approved, token), nil
@@ -355,6 +363,18 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 	// A waiting application keeps the token this attempt handed out: the repository rotated
 	// the stored fingerprint, so the link opens the row that is actually queued (AC-28, AC-8).
 	return s.repoKeyApplyResult(ctx, stored, token), nil
+}
+
+func (s *Service) wasRepoKeyCallerApproved(ctx context.Context, repoID, agent, device, fingerprint string) (bool, error) {
+	recipient, err := s.Repo.IsRepoKeyRecipient(ctx, repoKeyInstanceID, repoID, agent, device)
+	if err != nil || !recipient {
+		return false, err
+	}
+	approved, err := s.Repo.LatestApprovedRepoKeyApplicationForCaller(ctx, repoKeyInstanceID, repoID, agent, device, "")
+	if errors.Is(err, repository.ErrRepoKeyApplicationNotFound) {
+		return false, nil
+	}
+	return err == nil && approved.PublicKeyFingerprint == fingerprint, err
 }
 
 func (s *Service) autoApproveRepoKeyApplication(ctx context.Context, binding *repository.RepoKeyBinding, application repository.RepoKeyApplication, publicKey string, nowMS int64) (repository.RepoKeyApplication, error) {
@@ -435,10 +455,19 @@ func (s *Service) resolveRepoKeyPublicKey(ctx context.Context, agent, device, pu
 		return caller.PublicKey, caller.PublicKeyFingerprint, nil
 	}
 	caller, err := s.Repo.GetRepoKeyCaller(ctx, repoKeyInstanceID, agent, device)
-	if err != nil {
-		return "", "", invalidParameters{detail: "A public key is required on the first application; generate a key pair locally and send the public half."}
+	if err == nil {
+		return caller.PublicKey, caller.PublicKeyFingerprint, nil
 	}
-	return caller.PublicKey, caller.PublicKeyFingerprint, nil
+	if !errors.Is(err, repository.ErrRepoKeyNotFound) {
+		return "", "", err
+	}
+	// A previously supplied key can seed another manual application without becoming
+	// an approved registration. In particular, rejection must never grant auto-approval.
+	previous, err := s.Repo.LatestRepoKeyApplicationForCaller(ctx, repoKeyInstanceID, agent, device)
+	if err == nil && previous.PublicKey != "" {
+		return previous.PublicKey, previous.PublicKeyFingerprint, nil
+	}
+	return "", "", invalidParameters{detail: "A public key is required on the first application; generate a key pair locally and send the public half."}
 }
 
 // RepoKeyApplicationByToken resolves a one-time approval link. Only the fingerprint of the
@@ -601,6 +630,11 @@ func (s *Service) repoKeyIndex(keys []string, fingerprint string) int {
 // A re-enable request is decided by this same call (AC-31): it puts the stopped key back,
 // never issues a new one, and records the approver and their reason.
 func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, operator, reason string) (repository.RepoKeyApplication, error) {
+	release, err := s.lock(ctx)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	defer release()
 	application, err := s.Repo.GetRepoKeyApplication(ctx, applicationID)
 	if err != nil {
 		return repository.RepoKeyApplication{}, err
@@ -612,11 +646,6 @@ func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, 
 	if application.RequestKind == "reenable" {
 		return s.approveRepoKeyReenable(ctx, application, operator, reason)
 	}
-	release, err := s.lock(ctx)
-	if err != nil {
-		return repository.RepoKeyApplication{}, err
-	}
-	defer release()
 	client, err := s.Client(ctx)
 	if err != nil {
 		return repository.RepoKeyApplication{}, err
@@ -630,12 +659,22 @@ func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, 
 	if err != nil {
 		return repository.RepoKeyApplication{}, err
 	}
+	var newBinding *repository.RepoKeyBinding
+	if kind != "reuse" {
+		newBinding = &binding
+	}
 	raw, err := repokey.ParsePublicKey(application.PublicKey)
 	if err != nil {
-		return repository.RepoKeyApplication{}, errors.New("invalid_public_key")
+		if newBinding != nil {
+			err = restoreRepoKeyGateway(ctx, client, keys, err)
+		}
+		return repository.RepoKeyApplication{}, err
 	}
 	envelope, err := repokey.Encrypt(raw, secret)
 	if err != nil {
+		if newBinding != nil {
+			err = restoreRepoKeyGateway(ctx, client, keys, err)
+		}
 		return repository.RepoKeyApplication{}, err
 	}
 	decided, err := s.Repo.DecideRepoKeyApplication(ctx, repository.ApplicationDecision{
@@ -643,6 +682,14 @@ func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, 
 		DecisionReason: strings.TrimSpace(reason),
 		Kind:           kind, BindingID: binding.ID, KeyFingerprint: binding.KeyFingerprint,
 		KeyMask: binding.KeyMask, Ciphertext: envelope,
+		NewBinding: newBinding,
+		BindingAudit: repository.AuditEvent{
+			Action: AuditRepoKeyReissue, SourceSummary: "console",
+			Details: map[string]any{"repo": binding.RepoID, "key_mask": binding.KeyMask, "new_key": true},
+			Push: repoKeyPush(AuditRepoKeyReissue, binding.ID, binding.RepoID,
+				fmt.Sprintf("issued a new key %s for %s while approving an application", binding.KeyMask, binding.RepoID),
+				auditpush.ChannelConsole, nil),
+		},
 	}, nowMS, repository.AuditEvent{
 		Action: AuditRepoKeyApprove, SourceSummary: "console",
 		Details: map[string]any{
@@ -655,11 +702,10 @@ func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, 
 				application.AgentName, application.DeviceName, binding.KeyMask),
 			auditpush.ChannelConsole, repoKeyTags(application.AgentName, application.DeviceName)),
 	})
-	if err != nil {
-		return repository.RepoKeyApplication{}, err
+	if newBinding != nil && (err != nil || decided.Status != "approved") {
+		err = restoreRepoKeyGateway(ctx, client, keys, err)
 	}
-	if err = s.Repo.AddRepoKeyRecipient(ctx, repoKeyInstanceID, application.RepoID,
-		application.AgentName, application.DeviceName, operator, nowMS); err != nil {
+	if err != nil {
 		return repository.RepoKeyApplication{}, err
 	}
 	return decided, nil
@@ -671,56 +717,59 @@ func (s *Service) ApproveRepoKeyApplication(ctx context.Context, applicationID, 
 func (s *Service) repoKeyForApproval(ctx context.Context, client interface {
 	UpdateClientAPIKeys(context.Context, []string) error
 }, keys []string, repoID string, repoHasRemote bool, createdBy string, nowMS int64) (repository.RepoKeyBinding, string, string, error) {
-	active, err := s.Repo.GetActiveRepoKeyBinding(ctx, repoKeyInstanceID, repoID)
-	if err == nil {
-		secret, secretErr := s.repoKeySecret(ctx, active.KeyFingerprint)
+	status, err := s.Repo.GetRepoKeyRepoStatus(ctx, repoKeyInstanceID, repoID)
+	if err != nil {
+		return repository.RepoKeyBinding{}, "", "", err
+	}
+	if status.State == "active" {
+		secret, secretErr := s.repoKeySecret(ctx, status.Binding.KeyFingerprint)
 		if secretErr != nil {
 			return repository.RepoKeyBinding{}, "", "", secretErr
 		}
-		return active, secret, "reuse", nil
+		return *status.Binding, secret, "reuse", nil
 	}
-	if !errors.Is(err, repository.ErrRepoKeyNotFound) {
-		return repository.RepoKeyBinding{}, "", "", err
+	kind := "issue"
+	if status.State == "stopped" {
+		kind = "reissue"
 	}
-
 	secret, err := repokey.GenerateKeyValue()
 	if err != nil {
 		return repository.RepoKeyBinding{}, "", "", err
 	}
+	fingerprint, err := s.Repo.UsageClientKeyFingerprint(secret)
+	if err != nil {
+		return repository.RepoKeyBinding{}, "", "", err
+	}
+	sealed, err := s.sealRepoKey(secret)
+	if err != nil {
+		return repository.RepoKeyBinding{}, "", "", err
+	}
+	binding := repository.RepoKeyBinding{
+		ID: uuid.NewString(), InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: repoHasRemote,
+		KeyFingerprint: fingerprint, KeyMask: security.MaskSecret(secret), CreatedBy: createdBy,
+		KeySealed: sealed, Status: "active", CreatedAtMS: nowMS,
+	}
+	// CPA has no prepare/commit operation. Keep ownership provisional until the same
+	// SQLite transaction accepts the approval, caller registration and audit record.
 	if err = client.UpdateClientAPIKeys(ctx, append(append([]string{}, keys...), secret)); err != nil {
 		return repository.RepoKeyBinding{}, "", "", configWriteOutcome(err)
 	}
-	fingerprint, err := s.Repo.UsageClientKeyFingerprint(secret)
-	if err != nil {
-		_, _ = s.removeRepoKeyFromGateway(ctx, client, keys, "")
-		return repository.RepoKeyBinding{}, "", "", err
+	return binding, secret, kind, nil
+}
+
+// ErrRepoKeyGatewayRestoreFailed means the local decision was refused but CPA could not
+// be restored. Callers must not report that nothing changed in this state.
+var ErrRepoKeyGatewayRestoreFailed = errors.New("repo_key_gateway_restore_failed")
+
+func restoreRepoKeyGateway(ctx context.Context, client interface {
+	UpdateClientAPIKeys(context.Context, []string) error
+}, keys []string, cause error) error {
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := client.UpdateClientAPIKeys(restoreCtx, keys); err != nil {
+		return errors.Join(cause, ErrRepoKeyGatewayRestoreFailed)
 	}
-	bindingID := uuid.NewString()
-	sealed, err := s.sealRepoKey(secret)
-	if err != nil {
-		_, _ = s.removeRepoKeyFromGateway(ctx, client, keys, "")
-		return repository.RepoKeyBinding{}, "", "", err
-	}
-	binding, bindErr := s.Repo.CreateRepoKeyBinding(ctx, repository.RepoKeyBinding{
-		ID:         bindingID,
-		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: repoHasRemote,
-		KeyFingerprint: fingerprint, KeyMask: security.MaskSecret(secret), CreatedBy: createdBy,
-		KeySealed: sealed,
-	}, nowMS, repository.AuditEvent{
-		Action: AuditRepoKeyReissue, SourceSummary: "console",
-		Details: map[string]any{"repo": repoID, "key_mask": security.MaskSecret(secret), "new_key": true},
-		Push: repoKeyPush(AuditRepoKeyReissue, bindingID, repoID,
-			fmt.Sprintf("issued a new key %s for %s while approving an application",
-				security.MaskSecret(secret), repoID),
-			auditpush.ChannelConsole, nil),
-	})
-	if bindErr != nil {
-		// The key is in the gateway but has no owner; leaving it there would be an
-		// unaccounted caller key, so it is removed again.
-		_ = client.UpdateClientAPIKeys(ctx, keys)
-		return repository.RepoKeyBinding{}, "", "", bindErr
-	}
-	return binding, secret, "issue", nil
+	return cause
 }
 
 func (s *Service) removeRepoKeyFromGateway(ctx context.Context, client interface {
@@ -766,6 +815,15 @@ func (s *Service) RejectRepoKeyApplication(ctx context.Context, applicationID, o
 // StopRepoKeyBinding removes the key from the gateway and keeps every record about it. CPA has
 // no disabled state, so removal is what stops it (AC-10, AC-11).
 func (s *Service) StopRepoKeyBinding(ctx context.Context, bindingID, operator, category, reason string) (repository.RepoKeyBinding, error) {
+	reason = strings.TrimSpace(reason)
+	switch category {
+	case "leaked", "rotate", "misuse", "other":
+	default:
+		return repository.RepoKeyBinding{}, repository.ErrRepoKeyInvalid
+	}
+	if reason == "" {
+		return repository.RepoKeyBinding{}, repository.ErrRepoKeyInvalid
+	}
 	release, err := s.lock(ctx)
 	if err != nil {
 		return repository.RepoKeyBinding{}, err
@@ -775,6 +833,9 @@ func (s *Service) StopRepoKeyBinding(ctx context.Context, bindingID, operator, c
 	if err != nil {
 		return repository.RepoKeyBinding{}, err
 	}
+	if binding.Status != "active" {
+		return repository.RepoKeyBinding{}, repository.ErrRepoKeyConflict
+	}
 	client, err := s.Client(ctx)
 	if err != nil {
 		return repository.RepoKeyBinding{}, err
@@ -783,11 +844,12 @@ func (s *Service) StopRepoKeyBinding(ctx context.Context, bindingID, operator, c
 	if err != nil {
 		return repository.RepoKeyBinding{}, err
 	}
-	if _, err = s.removeRepoKeyFromGateway(ctx, client, keys, binding.KeyFingerprint); err != nil {
+	removed, err := s.removeRepoKeyFromGateway(ctx, client, keys, binding.KeyFingerprint)
+	if err != nil {
 		return repository.RepoKeyBinding{}, configWriteOutcome(err)
 	}
 	nowMS := time.Now().UnixMilli()
-	return s.Repo.StopRepoKeyBinding(ctx, binding.ID, operator, category, reason, nowMS, repository.AuditEvent{
+	stopped, err := s.Repo.StopRepoKeyBinding(ctx, binding.ID, operator, category, reason, nowMS, repository.AuditEvent{
 		Action: AuditRepoKeyStop, SourceSummary: "console",
 		Details: map[string]any{
 			"repo": binding.RepoID, "key_mask": binding.KeyMask,
@@ -797,6 +859,10 @@ func (s *Service) StopRepoKeyBinding(ctx context.Context, bindingID, operator, c
 			fmt.Sprintf("stopped key %s for %s (%s): %s", binding.KeyMask, binding.RepoID, category, reason),
 			auditpush.ChannelConsole, nil),
 	})
+	if err != nil && removed {
+		err = restoreRepoKeyGateway(ctx, client, keys, err)
+	}
+	return stopped, err
 }
 
 // RequestRepoKeyReenable files a request to put a stopped key back in service (AC-31).
@@ -858,11 +924,6 @@ func (s *Service) RequestRepoKeyReenable(ctx context.Context, bindingID, operato
 // sealed copy kept when it was issued - the same key, not a new one (AC-31) - and is written
 // back into the gateway before the records say it is in service.
 func (s *Service) approveRepoKeyReenable(ctx context.Context, application repository.RepoKeyApplication, operator, reason string) (repository.RepoKeyApplication, error) {
-	release, err := s.lock(ctx)
-	if err != nil {
-		return repository.RepoKeyApplication{}, err
-	}
-	defer release()
 	binding, err := s.Repo.GetRepoKeyBindingByID(ctx, application.TargetBindingID)
 	if err != nil {
 		return repository.RepoKeyApplication{}, err
@@ -872,6 +933,11 @@ func (s *Service) approveRepoKeyReenable(ctx context.Context, application reposi
 	}
 	if binding.StopCategory == "leaked" {
 		return repository.RepoKeyApplication{}, errors.New("repo_key_leaked_never_reenabled")
+	}
+	if _, activeErr := s.Repo.GetActiveRepoKeyBinding(ctx, binding.InstanceID, binding.RepoID); activeErr == nil {
+		return repository.RepoKeyApplication{}, repository.ErrRepoKeyConflict
+	} else if !errors.Is(activeErr, repository.ErrRepoKeyNotFound) {
+		return repository.RepoKeyApplication{}, activeErr
 	}
 	secret, err := s.unsealRepoKey(binding.KeySealed)
 	if err != nil {
@@ -912,8 +978,10 @@ func (s *Service) approveRepoKeyReenable(ctx context.Context, application reposi
 			fmt.Sprintf("re-enabled key %s for %s: %s", binding.KeyMask, binding.RepoID, reason),
 			auditpush.ChannelConsole, nil),
 	})
+	if err != nil || approved.Status != "approved" {
+		err = restoreRepoKeyGateway(ctx, client, keys, err)
+	}
 	if err != nil {
-		_ = client.UpdateClientAPIKeys(ctx, keys)
 		return repository.RepoKeyApplication{}, err
 	}
 	return approved, nil

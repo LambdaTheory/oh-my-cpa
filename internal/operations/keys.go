@@ -70,6 +70,15 @@ func (s *Service) CreateKey(ctx context.Context, secret, revision string) (int, 
 	if err = s.checkRevision(keys, revision); err != nil {
 		return 0, err
 	}
+	fingerprint, err := s.Repo.UsageClientKeyFingerprint(secret)
+	if err != nil {
+		return 0, err
+	}
+	if _, bindingErr := s.Repo.GetRepoKeyBindingByFingerprint(ctx, repoKeyInstanceID, fingerprint); bindingErr == nil {
+		return 0, errors.New("resource_conflict")
+	} else if !errors.Is(bindingErr, repository.ErrRepoKeyNotFound) {
+		return 0, bindingErr
+	}
 	for _, key := range keys {
 		if key == secret {
 			return 0, errors.New("resource_conflict")

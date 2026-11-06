@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/capability"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/operations"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repokey"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
@@ -37,12 +38,12 @@ type RepoKeyBindingDTO struct {
 	KeyMask        string `json:"key_mask"`
 	// Alias is the operator's name for the key, if one was given. The gateway's own alias
 	// list is keyed by fingerprint, so both lists show the same name (AC-15).
-	Alias       string `json:"alias,omitempty"`
-	Status      string `json:"status"`
-	CreatedAtMS int64  `json:"created_at_ms"`
-	CreatedBy   string `json:"created_by"`
-	StoppedAtMS int64  `json:"stopped_at_ms,omitempty"`
-	StoppedBy   string `json:"stopped_by"`
+	Alias        string `json:"alias,omitempty"`
+	Status       string `json:"status"`
+	CreatedAtMS  int64  `json:"created_at_ms"`
+	CreatedBy    string `json:"created_by"`
+	StoppedAtMS  int64  `json:"stopped_at_ms,omitempty"`
+	StoppedBy    string `json:"stopped_by"`
 	StopCategory string `json:"stop_category"`
 	StopReason   string `json:"stop_reason"`
 	// LastRecipient and LastDeliveredAtMS are the newest hand-out, shown as 最近领取人 (AC-15).
@@ -64,21 +65,21 @@ type RepoKeyModelUsageDTO struct {
 // RepoKeyStoppedUsageDTO is the 停用后 block: only rejected requests are counted, and the
 // cost is zero by definition (AC-13).
 type RepoKeyStoppedUsageDTO struct {
-	SinceMS         int64 `json:"since_ms"`
-	Rejected        int64 `json:"rejected"`
-	CostNanos       int64 `json:"cost_nanos"`
+	SinceMS   int64 `json:"since_ms"`
+	Rejected  int64 `json:"rejected"`
+	CostNanos int64 `json:"cost_nanos"`
 }
 
 // RepoKeyUsageDTO is a key's usage in one window. Window is 24h, 7d or 30d (AC-19).
 type RepoKeyUsageDTO struct {
-	Window     string                `json:"window"`
-	FromMS     int64                 `json:"from_ms"`
-	ToMS       int64                 `json:"to_ms"`
-	Requests   int64                 `json:"requests"`
-	Failed     int64                 `json:"failed"`
-	Tokens     int64                 `json:"total_tokens"`
-	CostNanos  int64                 `json:"cost_nanos"`
-	LastUsedMS int64                 `json:"last_used_ms"`
+	Window     string                 `json:"window"`
+	FromMS     int64                  `json:"from_ms"`
+	ToMS       int64                  `json:"to_ms"`
+	Requests   int64                  `json:"requests"`
+	Failed     int64                  `json:"failed"`
+	Tokens     int64                  `json:"total_tokens"`
+	CostNanos  int64                  `json:"cost_nanos"`
+	LastUsedMS int64                  `json:"last_used_ms"`
 	Models     []RepoKeyModelUsageDTO `json:"models"`
 	// StoppedAfter is present only for a stopped key: what it cost after it left service.
 	StoppedAfter *RepoKeyStoppedUsageDTO `json:"stopped_after,omitempty"`
@@ -206,6 +207,9 @@ func repoKeyStopDTO(stop repository.RepoKeyStop) RepoKeyStopDTO {
 // one description of a gateway problem whichever page hit it.
 func writeRepoKeyError(writer http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, operations.ErrRepoKeyGatewayRestoreFailed):
+		writeError(writer, http.StatusInternalServerError, "gateway key state could not be restored; reconcile the gateway configuration before continuing")
+		return
 	case errors.Is(err, repository.ErrRepoKeyApplicationNotFound), errors.Is(err, repository.ErrRepoKeyNotFound):
 		writeError(writer, http.StatusNotFound, "the repository key record was not found")
 		return
@@ -299,7 +303,8 @@ func (h *Handler) listRepoKeyBindings(writer http.ResponseWriter, request *http.
 		return
 	}
 	// The list's 近 7 天用量 is one read for every key, not one read per key (AC-15).
-	_, fromMS, toMS := repoKeyUsageWindow(request, time.Now().UTC())
+	toMS := time.Now().UTC().UnixMilli()
+	fromMS := toMS - (7 * 24 * time.Hour).Milliseconds()
 	sevenDay := map[string]repository.ClientKeyUsage{}
 	if usage, usageErr := h.repo.ClientKeyUsage(ctx, instanceID, fromMS, toMS); usageErr == nil {
 		for _, row := range usage {
@@ -323,7 +328,7 @@ func (h *Handler) listRepoKeyBindings(writer http.ResponseWriter, request *http.
 			item.Usage7D = RepoKeyUsageDTO{
 				Window: "7d", FromMS: fromMS, ToMS: toMS,
 				Requests: usage.Requests, Failed: usage.Failed, Tokens: usage.TotalTokens,
-				LastUsedMS: usage.LastUsedMS, Models: []RepoKeyModelUsageDTO{},
+				CostNanos: usage.CostNanos, LastUsedMS: usage.LastUsedMS, Models: []RepoKeyModelUsageDTO{},
 			}
 		} else {
 			item.Usage7D = RepoKeyUsageDTO{Window: "7d", FromMS: fromMS, ToMS: toMS, Models: []RepoKeyModelUsageDTO{}}
@@ -750,16 +755,16 @@ func (h *Handler) requestRepoKeyReenable(writer http.ResponseWriter, request *ht
 // key is in service, who created it, who last received it, how it was used lately, and how it
 // was stopped before. It carries masks and counts, never a key.
 type RepoKeyRepoViewDTO struct {
-	Repo                 string           `json:"repo"`
-	RepoHasRemote        bool             `json:"repo_has_remote"`
-	State                string           `json:"state"`
-	KeyMask              string           `json:"key_mask,omitempty"`
-	CreatedBy            string           `json:"created_by,omitempty"`
-	CreatedAtMS          int64            `json:"created_at_ms,omitempty"`
-	LastRecipient        string           `json:"last_recipient,omitempty"`
-	LastDeliveredAtMS    int64            `json:"last_delivered_at_ms,omitempty"`
-	Usage                RepoKeyUsageDTO `json:"usage"`
-	Stops                []RepoKeyStopDTO `json:"stops"`
+	Repo              string           `json:"repo"`
+	RepoHasRemote     bool             `json:"repo_has_remote"`
+	State             string           `json:"state"`
+	KeyMask           string           `json:"key_mask,omitempty"`
+	CreatedBy         string           `json:"created_by,omitempty"`
+	CreatedAtMS       int64            `json:"created_at_ms,omitempty"`
+	LastRecipient     string           `json:"last_recipient,omitempty"`
+	LastDeliveredAtMS int64            `json:"last_delivered_at_ms,omitempty"`
+	Usage             RepoKeyUsageDTO  `json:"usage"`
+	Stops             []RepoKeyStopDTO `json:"stops"`
 }
 
 // RepoKeyReviewDTO is everything the approval page shows: what is being asked for, who is
@@ -813,8 +818,8 @@ func (h *Handler) repoKeyReview(ctx context.Context, request *http.Request, appl
 	// AC-34: the fingerprint this caller used before is shown next to the one it asks with, so
 	// a changed machine or identity cannot pass as the same caller.
 	if application.RequestKind != "reenable" && strings.TrimSpace(application.AgentName) != "" {
-		if previous, err := h.repo.LatestRepoKeyApplicationForCaller(ctx, defaultInstanceID(), application.AgentName, application.DeviceName); err == nil {
-			if previous.ID != application.ID && previous.PublicKeyFingerprint != "" && previous.PublicKeyFingerprint != application.PublicKeyFingerprint {
+		if previous, err := h.repo.LatestApprovedRepoKeyApplicationForCaller(ctx, defaultInstanceID(), "", application.AgentName, application.DeviceName, application.ID); err == nil {
+			if previous.PublicKeyFingerprint != application.PublicKeyFingerprint {
 				review.PreviousPublicKeyFingerprint = previous.PublicKeyFingerprint
 			}
 		}
