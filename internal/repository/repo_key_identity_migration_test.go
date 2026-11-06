@@ -15,9 +15,16 @@ func seedRepoKeyIdentityBeforeUpgrade(t *testing.T, db *DB, id, repoID string) {
 	}
 }
 
-func TestRepoKeyIdentityMigrationPreservesOldRegistration(t *testing.T) {
+func TestRepoKeyIdentityMigration068From067PreservesOldRegistration(t *testing.T) {
 	ctx := context.Background()
-	db := openDatabaseAtMigration(t, 62)
+	db := openDatabaseAtMigration(t, 67)
+	var ledgerCount, maxVersion int
+	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), MAX(version) FROM schema_migrations`).Scan(&ledgerCount, &maxVersion); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerCount != 62 || maxVersion != 67 {
+		t.Fatalf("pre-upgrade ledger count/max = %d/%d, want 62/67", ledgerCount, maxVersion)
+	}
 	seedRepoKeyIdentityBeforeUpgrade(t, db, "existing", "Legacy-Org/Existing-Repo")
 	seedRepoKeyIdentityBeforeUpgrade(t, db, "other-host", "gitlab.com/Team/Project")
 	if _, err := db.SQL.Exec(`INSERT INTO repo_key_applications
@@ -36,6 +43,12 @@ func TestRepoKeyIdentityMigrationPreservesOldRegistration(t *testing.T) {
 	}
 	if err := db.Migrate(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := db.SQL.QueryRowContext(ctx, `SELECT COUNT(*), MAX(version) FROM schema_migrations`).Scan(&ledgerCount, &maxVersion); err != nil {
+		t.Fatal(err)
+	}
+	if ledgerCount != 63 || maxVersion != 68 {
+		t.Fatalf("post-upgrade ledger count/max = %d/%d, want 63/68", ledgerCount, maxVersion)
 	}
 	repo := New(db)
 	binding, err := repo.GetActiveRepoKeyBinding(ctx, "default", "legacy-org/existing-repo")
@@ -63,9 +76,9 @@ func TestRepoKeyIdentityMigrationPreservesOldRegistration(t *testing.T) {
 	}
 }
 
-func TestRepoKeyIdentityMigrationPreservesSinglePathOtherHost(t *testing.T) {
+func TestRepoKeyIdentityMigration068From067PreservesSinglePathOtherHost(t *testing.T) {
 	ctx := context.Background()
-	db := openDatabaseAtMigration(t, 62)
+	db := openDatabaseAtMigration(t, 67)
 	for index, identity := range []string{"git.example.com/Repo", "git.example.com/repo", "localhost/Repo", "localhost/repo"} {
 		id := []string{"host-upper", "host-lower", "local-upper", "local-lower"}[index]
 		seedRepoKeyIdentityBeforeUpgrade(t, db, id, identity)
@@ -104,8 +117,8 @@ func TestRepoKeyIdentityMigrationPreservesSinglePathOtherHost(t *testing.T) {
 	}
 }
 
-func TestRepoKeyIdentityMigrationRefusesAmbiguousActiveKeysWithoutDataLoss(t *testing.T) {
-	db := openDatabaseAtMigration(t, 62)
+func TestRepoKeyIdentityMigration068From067RefusesAmbiguousActiveKeysWithoutDataLoss(t *testing.T) {
+	db := openDatabaseAtMigration(t, 67)
 	seedRepoKeyIdentityBeforeUpgrade(t, db, "one", "Legacy-Org/Existing-Repo")
 	seedRepoKeyIdentityBeforeUpgrade(t, db, "two", "legacy-org/existing-repo")
 	if err := db.Migrate(context.Background()); err == nil {
@@ -122,7 +135,7 @@ func TestRepoKeyIdentityMigrationRefusesAmbiguousActiveKeysWithoutDataLoss(t *te
 	if err := db.SQL.QueryRow(`SELECT repo_id FROM repo_key_bindings WHERE id = 'one'`).Scan(&spelling); err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 || version != 62 || spelling != "Legacy-Org/Existing-Repo" {
+	if count != 2 || version != 67 || spelling != "Legacy-Org/Existing-Repo" {
 		t.Fatal("a refused upgrade changed or discarded existing registrations")
 	}
 }

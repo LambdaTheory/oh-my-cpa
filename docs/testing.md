@@ -26,7 +26,7 @@ lifecycle refusal, reissue history and a conflicting re-enable's absence of CPA 
 `internal/api/management_repo_keys_regression_test.go` owns changed-fingerprint disclosure
 and nonzero, request-time-priced seven-day list/detail costs, including misleading window
 parameters. Identity tests cover GitHub case variants without folding other hosts or local
-directories, submitted display spelling, shared-key reuse and the 062-to-063 upgrade's
+directories, submitted display spelling, shared-key reuse and the 067-to-068 upgrade's
 preservation or fail-closed collision outcome. Component tests for repository-key costs and
 display spelling own rendered amount and identity wiring. The `repo-key-approval` probe owns
 pending/settled approval geometry, scrolling and hit-testing at desktop and phone widths;

@@ -1,5 +1,5 @@
--- GitHub owner/repo identities are case-insensitive; submitted spelling remains
--- available to the reviewer instead of becoming a second ownership identity.
+-- GitHub owner/repo identities are case-insensitive. The 067-to-068 upgrade
+-- keeps the reported spelling separately so a reviewer can inspect what was supplied.
 ALTER TABLE repo_key_applications ADD COLUMN repo_display TEXT NOT NULL DEFAULT '';
 UPDATE repo_key_applications SET repo_display = repo_id;
 
