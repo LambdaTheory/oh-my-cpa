@@ -345,7 +345,7 @@ func channelAlert(p providerInfo, now time.Time) Alert {
 		facts = append(facts, "无自动恢复时间")
 	}
 	return Alert{
-		Kind:       AlertChannelUnavailable,
+		Kind: AlertChannelUnavailable, EvidenceSource: EvidenceAvailability, FreshWindowMS: defaultFreshWindow.Milliseconds(), ObservedAt: p.evidenceObserved,
 		Severity:   SeverityUrgent,
 		Provider:   p.provider,
 		Title:      providerName(p.provider) + " 渠道不可用",
@@ -359,7 +359,7 @@ func channelAlert(p providerInfo, now time.Time) Alert {
 func monitorAlert(p providerInfo, now time.Time) Alert {
 	facts := []string{"最后有效数据: " + displayTime(p.latestSuccess)}
 	return Alert{
-		Kind:       AlertMonitorDown,
+		Kind: AlertMonitorDown, EvidenceSource: EvidenceMonitoring,
 		ObservedAt: p.latestSuccess,
 		Severity:   SeverityWarn,
 		Provider:   p.provider,
@@ -399,6 +399,7 @@ type providerInfo struct {
 	monitorDown      bool
 	hasValid         bool
 	latestSuccess    time.Time
+	evidenceObserved time.Time
 }
 
 // reportInfo is the per-round projection used for reconciliation.
@@ -408,6 +409,7 @@ type reportInfo struct {
 	unavailable map[string]bool
 	hasValid    map[string]bool
 	hasKey      map[string]bool
+	available   map[string]bool
 	unmonitored map[string]bool
 	// recoveredKeys are the credentials with positive recovery evidence: a valid
 	// reading this round. Absent evidence is not recovery, so an item only resolves
@@ -421,6 +423,7 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		unavailable:   map[string]bool{},
 		hasValid:      map[string]bool{},
 		hasKey:        map[string]bool{},
+		available:     map[string]bool{},
 		unmonitored:   map[string]bool{},
 		recoveredKeys: map[string]bool{},
 	}
@@ -462,13 +465,22 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 			// An exhausted account reports OK true with a maxed window, so the
 			// availability check runs for every enabled account.
 			if u, recovery := accountUnavailable(account, now); u {
+				observed := account.ObservedAt
+				if account.HasFreshAuthFailure(now) {
+					observed = account.AuthSignalObservedAt
+				}
+				if pi.evidenceObserved.IsZero() || observed.Before(pi.evidenceObserved) {
+					pi.evidenceObserved = observed
+				}
 				unavail++
-				if account.State != StateInvalid {
+				if !account.HasFreshAuthFailure(now) {
 					nonAuthUnavail++
 				}
 				if recovery != nil {
 					earliest = earlierTime(earliest, recovery)
 				}
+			} else if hasFreshQuotaReading(account, now) {
+				info.available[p.Provider] = true
 			}
 		}
 
@@ -485,6 +497,9 @@ func analyzeReport(cfg PolicyConfig, rep Report, now time.Time, tracks map[strin
 		if enabled > 0 && unavail == enabled && nonAuthUnavail > 0 {
 			pi.channelUnavailable = earliest == nil || earliest.After(now.Add(cfg.ChannelUnavailableAfter))
 			pi.earliestRecovery = earliest
+			if !pi.channelUnavailable {
+				info.available[p.Provider] = true
+			}
 		}
 
 		// Distinct collection failures and elapsed time must both reach their
@@ -528,7 +543,7 @@ func (info reportInfo) resolvedByEvidence(item PendingItem) bool {
 		if !info.present[item.Provider] {
 			return false
 		}
-		return !info.unavailable[item.Provider]
+		return info.available[item.Provider] || info.unmonitored[item.Provider]
 	case AlertMonitorDown:
 		if !info.present[item.Provider] {
 			return false
@@ -543,8 +558,11 @@ func (info reportInfo) resolvedByEvidence(item PendingItem) bool {
 // back. A model- or group-scoped window running out does NOT make the account
 // unusable. nil recovery means no automatic recovery is known.
 func accountUnavailable(account AccountReport, now time.Time) (bool, *time.Time) {
-	if account.State == StateInvalid {
+	if account.HasFreshAuthFailure(now) {
 		return true, nil
+	}
+	if !observationFresh(account, now, defaultFreshWindow) {
+		return false, nil
 	}
 	if account.CooldownUntil != nil && account.CooldownUntil.After(now) {
 		return true, account.CooldownUntil

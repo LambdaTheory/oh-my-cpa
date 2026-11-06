@@ -127,7 +127,7 @@ func TestChannelUnavailableWhenEarliestRecoveryBeyondThreshold(t *testing.T) {
 	rep := Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "claude",
 		Accounts: []AccountReport{{
-			Key: "a1", State: StateExhausted, OK: true,
+			Key: "a1", State: StateExhausted, OK: true, ObservedAt: now,
 			Windows: []Window{accountWindow(100, &reset)},
 		}},
 	}}}
@@ -145,7 +145,7 @@ func TestChannelUnavailableNearRecoveryIsNotImmediate(t *testing.T) {
 	reset := now.Add(5 * time.Minute)
 	rep := Report{GeneratedAt: now, Providers: []ProviderReport{{
 		Provider: "claude",
-		Accounts: []AccountReport{{Key: "a1", State: StateExhausted, OK: true, Windows: []Window{accountWindow(100, &reset)}}},
+		Accounts: []AccountReport{{Key: "a1", State: StateExhausted, OK: true, ObservedAt: now, Windows: []Window{accountWindow(100, &reset)}}},
 	}}}
 	res := evaluatePolicy(policyCfg(), PolicyInput{Report: rep, Now: now})
 	if hasItem(res.Items, AlertChannelUnavailable) {

@@ -39,6 +39,8 @@ var defaultTitles = map[string]string{
 // rendered from. Keeping one projection is what stops the two surfaces from
 // drifting apart.
 type Message struct {
+	// EvidenceChecked prevents a renderer from reintroducing report risks after delivery filtering.
+	EvidenceChecked         bool
 	ChannelUnavailableAfter time.Duration
 	Kind                    string
 	// Title, when set, overrides the kind's default title.

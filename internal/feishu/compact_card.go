@@ -70,7 +70,7 @@ func compactBlocks(msg Message) ([]compactBlock, int) {
 					hasExhaustion = true
 				}
 			}
-			if provider.channelUnavailable && !hasExhaustion {
+			if !msg.EvidenceChecked && provider.channelUnavailable && !hasExhaustion {
 				alerts = append(alerts, channelAlert(provider, now))
 			}
 		}

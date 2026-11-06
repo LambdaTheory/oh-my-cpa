@@ -120,7 +120,8 @@ func (f *FeishuAPI) readPrediction(ctx context.Context) (feishu.PredictionDigest
 			CredentialLabel: item.CredentialLabel, Provider: item.Provider, WindowKind: item.WindowKind,
 			UsedPercent: item.UsedPercent, ProjectedPercentAtReset: item.ProjectedPercentAtReset,
 			ProjectedTokensAtReset: item.ProjectedTokensAtReset, ProjectedCostNanosAtReset: item.ProjectedCostNanosAtReset,
-			ObservedAtMS: item.ObservedAtMS, Verdict: item.Verdict,
+			FreshWindowMS: item.FreshWindowMS,
+			ObservedAtMS:  item.ObservedAtMS, Verdict: item.Verdict,
 			ExhaustionETAMS: item.ExhaustionETAMS, WindowScope: item.WindowScope,
 			Key: item.AuthIndex, WindowID: item.WindowID, ResetAtMS: item.ResetAtMS, ResetAccuracy: item.ResetAccuracy,
 		})

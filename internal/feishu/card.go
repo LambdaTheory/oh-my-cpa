@@ -89,14 +89,22 @@ func cardColor(msg Message) string {
 
 // This marker distinguishes a healthy morning digest from absent report data.
 const statusHealthy = "status_healthy"
+const statusUnknown = "status_data_unknown"
+
+func unknownDataAlert(now time.Time) Alert {
+	return Alert{Kind: statusUnknown, Title: "数据缺失或已过期，当前状态未知", Advice: "查看数据质量诊断与最近采集结果", OccurredAt: now}
+}
 
 func reportDecisionAlerts(rep Report, has bool, now time.Time) []Alert {
 	if !has || len(rep.Providers) == 0 {
-		return []Alert{{Kind: AlertReadingMissing, Title: "数据缺失", Advice: "检查采集链路后再决定额度安排", Severity: SeverityWarn, OccurredAt: now}}
+		return []Alert{unknownDataAlert(now)}
 	}
 	alerts := decisionAlerts(Message{Report: &rep, EvaluatedAt: now})
 	if len(alerts) == 0 {
-		return []Alert{{Kind: statusHealthy, Title: "当前读数未发现异常", Advice: "保持现有额度安排", OccurredAt: now, ObservedAt: rep.GeneratedAt}}
+		if !reportEvidenceHealthy(rep, now) {
+			return []Alert{unknownDataAlert(now)}
+		}
+		return []Alert{{Kind: statusHealthy, Title: "当前读数未发现异常", Advice: "保持现有额度安排", OccurredAt: now}}
 	}
 	return alerts
 }

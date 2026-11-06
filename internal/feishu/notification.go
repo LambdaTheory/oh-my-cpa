@@ -9,9 +9,10 @@ import (
 
 // Notification delivery states.
 const (
-	NotifyPending = "pending" // due to send
-	NotifyQueued  = "queued"  // held back by quiet hours
-	NotifySent    = "sent"    // delivered; kept briefly as an acknowledgement
+	NotifyPending    = "pending"    // due to send
+	NotifyQueued     = "queued"     // held back by quiet hours
+	NotifySent       = "sent"       // delivered; kept briefly as an acknowledgement
+	NotifySuppressed = "suppressed" // no eligible evidence; never acknowledged as sent
 )
 
 // Notification is one unit of outbound delivery: a single immediate alert or a
@@ -43,6 +44,7 @@ type Notification struct {
 // nil; a failure leaves it pending with a later NextAttemptAt.
 type Dispatcher struct {
 	channelUnavailableAfter time.Duration
+	monitorDownAfter        time.Duration
 	source                  ReportSource
 	store                   Store
 	sender                  Sender
@@ -81,79 +83,91 @@ func (d *Dispatcher) withClock(now func() time.Time) *Dispatcher {
 // deliverDue attempts every pending notification whose retry time has passed and
 // returns the outbox with the outcomes applied. The chatID is the configured
 // target group. The returned slice contains sent rows as well, so the caller can
-// persist the acknowledgement and prune it later; it never contains an alert
-// whose send failed, which stays pending.
+// persist acknowledgements or terminal suppression and prune them later. Failed
+// sends remain in the returned slice as pending rows with a retry deadline.
 func (d *Dispatcher) deliverDue(ctx context.Context, chatID string, outbox []Notification) []Notification {
-	now := d.now()
-	out := make([]Notification, len(outbox))
-	copy(out, outbox)
-	for i := range out {
-		notification := out[i]
-		if notification.State == NotifySent || notification.State == NotifyQueued {
+	out := append([]Notification(nil), outbox...)
+	for index := range out {
+		notification := &out[index]
+		if notification.State == NotifySent || notification.State == NotifyQueued || notification.State == NotifySuppressed {
 			continue
 		}
-		if notification.State != NotifyPending {
-			notification.State = NotifyPending
-		}
+		now := d.now()
 		if notification.NextAttemptAt.After(now) {
-			out[i] = notification
 			continue
 		}
-		msg := Message{
-			ChannelUnavailableAfter: d.channelUnavailableAfter,
-			EvaluatedAt:             now,
-			Kind:                    notification.Kind,
-			Alerts:                  notification.Alerts,
-			Pending:                 notification.Pending,
-			Tight:                   notification.Tight,
-			GeneratedAt:             notification.OccurredAt,
-		}
-		if d.source != nil && usesCompactCard(msg.Kind) {
-			if report, has := d.source.ReadReport(ctx); has {
-				msg.Report = &report
-			}
-		}
-		if d.store != nil && usesCompactCard(msg.Kind) {
-			if state, err := d.store.Load(ctx); err == nil {
-				msg.Pending = openItems(state.PendingItems)
-				for _, item := range state.PendingItems {
-					if item.Kind == predictionKindPrefix && item.ResolvedAt.IsZero() {
-						msg.Pending = append(msg.Pending, item)
-					}
-				}
-			}
-		}
-		if err := d.sendWithFallback(ctx, chatID, msg); err != nil {
+		notification.State = NotifyPending
+		sent, err := d.sendWithFallback(ctx, chatID, notification)
+		if err != nil {
 			notification.LastError = err.Error()
 			notification.Attempts++
-			notification.NextAttemptAt = now.Add(backoffDelay(notification.Attempts, d.backoffBase, d.backoffMax))
-			d.logger.WarnContext(ctx, "feishu notification send failed",
-				"action", "notify", "kind", notification.Kind, "attempts", notification.Attempts, "error", err)
-			out[i] = notification
-			continue
+			notification.NextAttemptAt = d.now().Add(backoffDelay(notification.Attempts, d.backoffBase, d.backoffMax))
+			d.logger.WarnContext(ctx, "feishu notification send failed", "action", "notify", "kind", notification.Kind, "attempts", notification.Attempts, "error", err)
+		} else if sent {
+			notification.State = NotifySent
+			notification.LastError = ""
+			notification.NextAttemptAt = time.Time{}
+			notification.SentAt = d.now()
+		} else {
+			suppressNotification(notification)
 		}
-		notification.State = NotifySent
-		notification.LastError = ""
-		notification.SentAt = now
-		out[i] = notification
 	}
 	return out
 }
 
-// sendWithFallback posts the full card and, on failure, the simplified card. It
-// returns the variant that succeeded ("full" or "simple") in the audit log.
-func (d *Dispatcher) sendWithFallback(ctx context.Context, chatID string, msg Message) error {
+func suppressNotification(notification *Notification) {
+	notification.State = NotifySuppressed
+	notification.LastError = ""
+	notification.NextAttemptAt = time.Time{}
+}
+
+func (d *Dispatcher) deliveryMessage(ctx context.Context, notification *Notification) (Message, bool) {
+	now := d.now()
+	msg := Message{EvidenceChecked: true, ChannelUnavailableAfter: d.channelUnavailableAfter,
+		EvaluatedAt: now, Kind: notification.Kind, Pending: notification.Pending, GeneratedAt: notification.OccurredAt}
+	// Every path reads only stored projections. Aggregate report time cannot renew
+	// a forecast or a retained authentication event.
+	if d.source != nil {
+		if report, has := d.source.ReadReport(ctx); has {
+			msg.Report = &report
+		}
+	}
+	var tracks map[string]ChannelTrack
+	if d.store != nil {
+		state, err := d.store.Load(ctx)
+		if err != nil {
+			d.logger.WarnContext(ctx, "feishu delivery evidence state unavailable", "error", err)
+		} else {
+			tracks = state.ChannelTracks
+		}
+	}
+	cfg := PolicyConfig{ChannelUnavailableAfter: d.channelUnavailableAfter, MonitorDownAfter: d.monitorDownAfter}
+	msg.Alerts = eligibleNotificationAlerts(*notification, msg.Report, tracks, cfg, now)
+	notification.Alerts = msg.Alerts
+	return msg, notificationHasContent(*notification)
+}
+
+// A full-card request may itself cross the evidence bound, so the degraded send
+// must rebuild its evidence independently rather than reuse the first view model.
+func (d *Dispatcher) sendWithFallback(ctx context.Context, chatID string, notification *Notification) (bool, error) {
+	msg, eligible := d.deliveryMessage(ctx, notification)
+	if !eligible {
+		return false, nil
+	}
 	if err := d.sender.SendCard(ctx, chatID, d.renderer.Card(msg)); err == nil {
-		return nil
+		return true, nil
 	} else {
-		d.logger.WarnContext(ctx, "feishu full card rejected, retrying simplified",
-			"action", "notify", "result", "fallback", "error", err)
+		d.logger.WarnContext(ctx, "feishu full card rejected, retrying simplified", "action", "notify", "result", "fallback", "error", err)
+	}
+	msg, eligible = d.deliveryMessage(ctx, notification)
+	if !eligible {
+		return false, nil
 	}
 	if err := d.sender.SendCard(ctx, chatID, d.renderer.CardSimple(msg)); err != nil {
-		return fmt.Errorf("full and simplified card both failed: %w", err)
+		return false, fmt.Errorf("full and simplified card both failed: %w", err)
 	}
 	d.logger.InfoContext(ctx, "feishu simplified card sent", "action", "notify", "result", "degraded")
-	return nil
+	return true, nil
 }
 
 // backoffDelay is the bounded exponential retry for a failed send.

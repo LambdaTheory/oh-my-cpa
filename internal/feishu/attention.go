@@ -192,7 +192,7 @@ func decisionAlerts(msg Message) []Alert {
 	if msg.EvaluatedAt.IsZero() {
 		msg.EvaluatedAt = msg.GeneratedAt
 	}
-	if msg.Report != nil {
+	if msg.Report != nil && !msg.EvidenceChecked {
 		alerts = append(alerts, attentionSignals(*msg.Report, DefaultTightRemainingPercent, msg.EvaluatedAt)...)
 		for _, provider := range msg.Report.Providers {
 			for _, account := range provider.Accounts {
@@ -277,7 +277,7 @@ func omitStartupEpisodes(notification *Notification, state *State, resolved Reso
 			return false
 		}
 		for _, earlier := range state.Outbox {
-			if earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
+			if earlier.State == NotifySuppressed || earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
 				continue
 			}
 			for _, item := range earlier.Pending {
@@ -366,7 +366,7 @@ func compactText(value string, limit int) string {
 // remain open forever without a provider identity to supply recovery evidence.
 func rememberReportedAlerts(state *State, alerts []Alert, report Report, now time.Time) {
 	for _, alert := range alerts {
-		if alert.Kind == statusHealthy || alert.Provider == "" {
+		if alert.Kind == statusHealthy || alert.Kind == statusUnknown || alert.Kind == statusReported || alert.Kind == "omitted" || alert.Provider == "" {
 			continue
 		}
 		identity := alertItemID(alert)

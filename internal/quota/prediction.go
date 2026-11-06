@@ -513,6 +513,12 @@ func roundPrediction(value float64, places int) (float64, bool) {
 
 func floatPointer(value float64) *float64 { return &value }
 
+// PredictionFreshWindowMS lets delivery preserve the same evidence bound that
+// qualified the projection, instead of extending it from the digest's creation time.
+func PredictionFreshWindowMS(window QuotaWindow) int64 {
+	return predictionFreshWindow(window).Milliseconds()
+}
+
 func predictionFreshWindow(window QuotaWindow) time.Duration {
 	bound := predictionMinimumFreshWindow
 	if window.PeriodHours != nil && *window.PeriodHours > 0 && isFinite(*window.PeriodHours) {

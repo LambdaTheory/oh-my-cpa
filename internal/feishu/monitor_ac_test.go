@@ -65,7 +65,7 @@ func TestAC14ForecastTrackingDoesNotSuppressFirstExhaustion(t *testing.T) {
 	resetMS := reset.UnixMilli()
 	state := EmptyState()
 	job := &PredictionJob{service: NewService(Options{})}
-	item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", Verdict: "will_exhaust", ObservedAtMS: now.UnixMilli(), ResetAtMS: &resetMS, ResetAccuracy: "exact"}
+	item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", Verdict: "will_exhaust", ObservedAtMS: now.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds(), ResetAtMS: &resetMS, ResetAccuracy: "exact"}
 	if job.queueFindings(state, readyPredictionConfig(), now, PredictionDigest{Items: []PredictionDigestItem{item}}) {
 		t.Fatal("forecast pushed")
 	}

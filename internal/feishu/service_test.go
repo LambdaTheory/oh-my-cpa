@@ -373,6 +373,7 @@ func TestQuietQueueMergesAndSendsAtQuietEnd(t *testing.T) {
 	}
 
 	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
+	env.source.report = invalidReport(*env.clock)
 	service.tick(context.Background())
 	if sends, _ := env.sender.counts(); sends != 1 {
 		t.Fatalf("quiet end should send the merged notification, got %d", sends)
@@ -920,6 +921,7 @@ func TestFailedMergedQuietSendRetriesWithoutLosingOrDuplicating(t *testing.T) {
 
 	env.sender.failSends = 2 // fail the full card and its simplified fallback
 	*env.clock = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
+	env.source.report = invalidReportWith(*env.clock, "a1", "a2")
 	service.tick(context.Background())
 	if sends, _ := env.sender.counts(); sends != 0 {
 		t.Fatalf("a failed batch send must not count as sent, got %d", sends)

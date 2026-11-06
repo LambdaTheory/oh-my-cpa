@@ -26,6 +26,7 @@ type PredictionDigestItem struct {
 	ProjectedTokensAtReset    *int64
 	ProjectedCostNanosAtReset *int64
 	ObservedAtMS              int64
+	FreshWindowMS             int64
 	Verdict                   string
 }
 
@@ -70,12 +71,11 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	findings := predictionFindings(digest.Items)
+	now := service.now()
+	findings := predictionFindings(digest.Items, now)
 	if len(findings) == 0 {
 		return false, nil
 	}
-
-	now := service.now()
 	notification := predictionNotification(findings, digest.Omitted, resolved, now)
 	service.lockStateTransition()
 	state, err := service.store.Load(ctx)
@@ -104,6 +104,9 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 		}
 		if candidate.State == NotifySent {
 			return true, nil
+		}
+		if candidate.State == NotifySuppressed {
+			return false, nil
 		}
 		return false, fmt.Errorf("feishu prediction delivery is pending")
 	}
@@ -198,6 +201,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 	if !queued {
 		service.maybeScheduledSummary(state, resolved, report, hasReport, now)
 	}
+	service.revalidateNewNotifications(state, resolved, report, hasReport, now)
 	state.UpdatedAt = now
 	if err := service.store.Save(ctx, state); err != nil {
 		service.unlockStateTransition()
@@ -221,10 +225,14 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 	return job.queueFindings(state, resolved, now, digest)
 }
 
-func predictionFindings(items []PredictionDigestItem) []PredictionDigestItem {
+func predictionEvidenceFresh(item PredictionDigestItem, now time.Time) bool {
+	return alertEvidenceFresh(Alert{Kind: predictionKindPrefix, ObservedAt: time.UnixMilli(item.ObservedAtMS), FreshWindowMS: item.FreshWindowMS, EvidenceSource: EvidenceQuota}, now)
+}
+
+func predictionFindings(items []PredictionDigestItem, now time.Time) []PredictionDigestItem {
 	findings := make([]PredictionDigestItem, 0, len(items))
 	for _, item := range items {
-		if item.Verdict == "will_exhaust" || item.Verdict == "under_used" {
+		if predictionEvidenceFresh(item, now) && (item.Verdict == "will_exhaust" || item.Verdict == "under_used") {
 			findings = append(findings, item)
 		}
 	}
@@ -237,6 +245,9 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 	}
 	var findings []PredictionDigestItem
 	for _, item := range digest.Items {
+		if !predictionEvidenceFresh(item, now) {
+			continue
+		}
 		identity := predictionItemID(item)
 		previous, exists := state.pendingByID(identity)
 		reset := time.Time{}
@@ -303,6 +314,9 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 func predictionNotification(items []PredictionDigestItem, omitted int, resolved Resolved, now time.Time) Notification {
 	alerts := make([]Alert, 0, len(items)+1)
 	for _, item := range items {
+		if !predictionEvidenceFresh(item, now) {
+			continue
+		}
 		title, advice := "预计重置前耗尽", "提前准备备用凭证，按需分流"
 		if item.Verdict == "under_used" {
 			title, advice = "预计额度有余量", "按需使用现有额度"
@@ -320,7 +334,7 @@ func predictionNotification(items []PredictionDigestItem, omitted int, resolved 
 		if item.ObservedAtMS > 0 {
 			observed = time.UnixMilli(item.ObservedAtMS).UTC()
 		}
-		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed,
+		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed, FreshWindowMS: item.FreshWindowMS, EvidenceSource: EvidenceQuota,
 			Alias: item.CredentialLabel, Title: title, Detail: detail + "（预测）", Advice: advice, OccurredAt: now})
 	}
 	if omitted > 0 {
@@ -395,7 +409,7 @@ func predictionItemID(item PredictionDigestItem) string {
 
 func announcedInMinute(state *State, identity, exceptID string, now time.Time) bool {
 	for _, notification := range state.Outbox {
-		if notification.ID == exceptID || notification.CreatedAt.UTC().Truncate(time.Minute) != now.UTC().Truncate(time.Minute) {
+		if notification.State == NotifySuppressed || notification.ID == exceptID || notification.CreatedAt.UTC().Truncate(time.Minute) != now.UTC().Truncate(time.Minute) {
 			continue
 		}
 		for _, alert := range notification.Alerts {

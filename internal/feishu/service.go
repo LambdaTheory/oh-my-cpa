@@ -169,6 +169,7 @@ func NewService(opts Options) *Service {
 	service.dispatcher.source = service.source
 	service.dispatcher.store = service.store
 	service.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
+	service.dispatcher.monitorDownAfter = resolved.MonitorDownAfter
 	return service
 }
 
@@ -318,6 +319,7 @@ func (s *Service) ensureSenderLocked(resolved Resolved) {
 	s.dispatcher.source = s.source
 	s.dispatcher.store = s.store
 	s.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
+	s.dispatcher.monitorDownAfter = resolved.MonitorDownAfter
 	s.mu.Unlock()
 }
 
@@ -722,6 +724,7 @@ func (s *Service) tick(ctx context.Context) {
 		state.Bootstrapped = true
 	}
 
+	s.revalidateNewNotifications(state, resolved, rep, has, now)
 	state.UpdatedAt = now
 	if err := s.store.Save(ctx, state); err != nil {
 		s.unlockStateTransition()
@@ -1058,6 +1061,7 @@ func (s *Service) SendTest(ctx context.Context) (TestDelivery, error) {
 	state, err := s.store.Load(ctx)
 	if err == nil {
 		state.queueNotification(notification)
+		s.revalidateNewNotifications(state, resolved, rep, has, now)
 		err = s.store.Save(ctx, state)
 	}
 	s.unlockStateTransition()
