@@ -9,7 +9,7 @@ import (
 // The prediction card is deliberately its own layout. The generic decision card
 // concatenates identity, title, detail and advice into one long sentence per
 // point; a quota forecast is a short list of windows, so the row carries the
-// identity, two numbers and one sentence, and nothing else.
+// identity, two numbers, one sentence and its evidence clock.
 const (
 	predictionCardRowLimit = 5
 	predictionSentenceMax  = 120
@@ -20,7 +20,7 @@ const (
 func (r *PlainReportRenderer) predictionCard(msg Message) map[string]any {
 	rows := make([]Alert, 0, len(msg.Alerts))
 	others := make([]Alert, 0, len(msg.Alerts))
-	for _, alert := range msg.Alerts {
+	for _, alert := range decisionRiskAlerts(msg.Alerts) {
 		if strings.HasPrefix(alert.Kind, predictionKindPrefix) {
 			rows = append(rows, alert)
 		} else {
@@ -29,6 +29,7 @@ func (r *PlainReportRenderer) predictionCard(msg Message) map[string]any {
 	}
 	total := len(rows) + msg.Omitted
 	count := min(len(rows), predictionCardRowLimit)
+	visible := make([]Alert, 0, count+min(len(others), maxDecisionPoints))
 	config := map[string]any{"update_multi": true, "width_mode": "compact"}
 	elements := make([]map[string]any, 0, len(msg.Alerts)+4)
 	switch {
@@ -36,9 +37,12 @@ func (r *PlainReportRenderer) predictionCard(msg Message) map[string]any {
 		elements = append(elements, markdown(fmt.Sprintf("**%d 个窗口撑不到重置**", total)))
 	case len(others) > 0:
 		elements = append(elements, markdown("**其他需要处理**"))
+	default:
+		elements = append(elements, markdown("**"+decisionConclusion(msg, msg.Alerts)+"**"))
 	}
 	for _, alert := range rows[:count] {
-		elements = append(elements, markdown(predictionRow(alert)))
+		elements = append(elements, markdown(predictionRow(alert)+"\n"+r.alertClock(alert)))
+		visible = append(visible, alert)
 	}
 	// The morning card appends actionable non-prediction alerts (channel
 	// unavailable, credential invalid) to the same notification. They are what a
@@ -50,24 +54,31 @@ func (r *PlainReportRenderer) predictionCard(msg Message) map[string]any {
 		}
 		otherCount := min(len(others), maxDecisionPoints)
 		for _, alert := range others[:otherCount] {
-			elements = append(elements, markdown("• "+decisionPoint(alert)))
+			elements = append(elements, markdown("• "+decisionPoint(alert)+"\n"+r.alertClock(alert)))
+			visible = append(visible, alert)
 		}
 		if omitted := len(others) - otherCount; omitted > 0 {
 			elements = append(elements, markdown(fmt.Sprintf("另有 %d 项需要处理，见控制台", omitted)))
 		}
 	}
-	if pending := predictionPendingLine(msg.Pending); pending != "" {
+	if pending := predictionPendingLine(msg.Pending, visible); pending != "" {
 		elements = append(elements, markdown(pending))
 	}
 	meta := ""
-	if len(rows) > 0 {
-		meta = "读数 " + r.predictionReadTime(rows)
+	if count > 0 {
+		meta = "已展示预测最新读数 " + r.predictionReadTime(rows[:count]) + " · 各项时间仅对应标注的证据来源"
 	}
 	if omitted := total - count; omitted > 0 {
 		if meta != "" {
 			meta += " · "
 		}
 		meta += fmt.Sprintf("另有 %d 项，见控制台", omitted)
+	}
+	if diagnostic := r.diagnosticText(msg, visible); diagnostic != "" {
+		if meta != "" {
+			meta += "\n"
+		}
+		meta += diagnostic
 	}
 	if meta != "" {
 		elements = append(elements, markdown(meta))
@@ -96,37 +107,50 @@ func predictionRow(alert Alert) string {
 	return strings.Join(lines, "\n")
 }
 
-// predictionPendingLine keeps the open items that ride along with the card in
-// one compact line, so the identity a person needs is still visible without
-// spending an element per item.
-func predictionPendingLine(items []PendingItem) string {
-	if len(items) == 0 {
-		return ""
+// Pending ownership earns a current-action label only when a displayed alert
+// supplies its evidence. Other open items stay in the bounded history diagnostic.
+func predictionPendingLine(items []PendingItem, visible []Alert) string {
+	current := make(map[string]bool, len(visible))
+	for _, alert := range visible {
+		current[alertItemID(alert)] = true
 	}
 	labels := make([]string, 0, min(len(items), predictionPendingMax))
-	for _, item := range items[:min(len(items), predictionPendingMax)] {
+	count := 0
+	for _, item := range items {
+		if item.Status != PendingOpen || !current[item.ID] {
+			continue
+		}
+		count++
+		if len(labels) >= predictionPendingMax {
+			continue
+		}
 		label := providerName(item.Provider)
 		if item.Alias != "" {
 			label += " · " + item.Alias
 		}
 		labels = append(labels, compactText(label, predictionIdentityMax))
 	}
+	if count == 0 {
+		return ""
+	}
 	line := "<font color='grey'>待处理：" + strings.Join(labels, "、")
-	if omitted := len(items) - len(labels); omitted > 0 {
-		line += fmt.Sprintf(" 等 %d 项", len(items))
+	if count > len(labels) {
+		line += fmt.Sprintf(" 等 %d 项", count)
 	}
 	return line + "</font>"
 }
 
-// predictionReadTime reports the newest observation among the rows. An older
-// row must never make a fresh card look stale, so the maximum, not the earliest,
-// is the honest read age.
+// The latest-read hint summarizes only displayed forecast rows. Each row's
+// source-specific clock, including diagnostics, remains independent of it.
 func (r *PlainReportRenderer) predictionReadTime(rows []Alert) string {
 	latest := time.Time{}
 	for _, alert := range rows {
-		if alert.ObservedAt.After(latest) {
+		if isMonitoringTimeValid(alert.ObservedAt) && alert.ObservedAt.After(latest) {
 			latest = alert.ObservedAt
 		}
+	}
+	if latest.IsZero() {
+		return "时间未知"
 	}
 	return r.formatShort(latest)
 }

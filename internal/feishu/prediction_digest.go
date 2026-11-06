@@ -22,15 +22,12 @@ type PredictionDigestItem struct {
 	Provider        string
 	WindowKind      string
 	UsedPercent     *float64
-	// ExpectedUsedPercent is the linear share the window should have used at
-	// the reading instant; nil means it cannot be calculated.
+	// ExpectedUsedPercent is the linear share at the original reading instant.
 	ExpectedUsedPercent *float64
 	ObservedAtMS        int64
-	// LastsUntilReset is the only conclusion this digest carries. Feishu pushes
-	// exactly the false rows and never renders the deprecated verdict vocabulary.
+	// Only an explicitly false conclusion qualifies for a prediction push.
 	LastsUntilReset *bool
-	// FreshWindowMS carries the same bound through queueing, rendering and retry.
-	FreshWindowMS int64
+	FreshWindowMS   int64
 }
 
 type PredictionDigest struct {
@@ -77,12 +74,11 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	findings := predictionFindings(digest.Items, service.now())
+	now := service.now()
+	findings := predictionFindings(digest.Items, now)
 	if len(findings) == 0 {
 		return false, nil
 	}
-
-	now := service.now()
 	notification := predictionNotification(findings, digest.Omitted, resolved, now)
 	service.lockStateTransition()
 	state, err := service.store.Load(ctx)
@@ -110,7 +106,7 @@ func (job *PredictionJob) SendNow(ctx context.Context) (bool, error) {
 			continue
 		}
 		if candidate.State == NotifySent {
-			return true, nil
+			return !candidate.SentAt.IsZero(), nil
 		}
 		return false, fmt.Errorf("feishu prediction delivery is pending")
 	}
@@ -205,6 +201,7 @@ func (job *PredictionJob) tick(ctx context.Context) {
 	if !queued {
 		service.maybeScheduledSummary(state, resolved, report, hasReport, now)
 	}
+	service.revalidateNewNotifications(state, resolved, report, hasReport, now)
 	state.UpdatedAt = now
 	if err := service.store.Save(ctx, state); err != nil {
 		service.unlockStateTransition()
@@ -228,9 +225,11 @@ func (job *PredictionJob) maybeQueue(ctx context.Context, state *State, resolved
 	return job.queueFindings(state, resolved, now, digest)
 }
 
-// predictionFindings keeps only the one thing a push may announce: a window
-// that cannot last until its reset. A surplus forecast is console context, and
-// an observation that has aged past its freshness bound is not evidence.
+func predictionEvidenceFresh(item PredictionDigestItem, now time.Time) bool {
+	return !predictionItemStale(item, now)
+}
+
+// Only a window that cannot last to reset and has current evidence may be pushed.
 func predictionFindings(items []PredictionDigestItem, now time.Time) []PredictionDigestItem {
 	findings := make([]PredictionDigestItem, 0, len(items))
 	for _, item := range items {
@@ -242,25 +241,17 @@ func predictionFindings(items []PredictionDigestItem, now time.Time) []Predictio
 	return findings
 }
 
-// predictionItemStale reports whether the observation behind a finding is older
-// than the freshness bound the prediction used. An item that carries no bound or
-// no observation time cannot be judged, so it is left to the reader.
+// predictionItemStale and alertStale share one clock/bound rule. Unknown
+// evidence is ineligible; notification creation never supplies a missing clock.
 func predictionItemStale(item PredictionDigestItem, now time.Time) bool {
-	if item.FreshWindowMS <= 0 || item.ObservedAtMS <= 0 {
-		return false
-	}
-	ageMS := now.UnixMilli() - item.ObservedAtMS
-	return ageMS > item.FreshWindowMS
+	return alertStale(Alert{ObservedAt: time.UnixMilli(item.ObservedAtMS), FreshWindowMS: item.FreshWindowMS}, now)
 }
 
-// alertStale is the delivery-time twin of predictionItemStale: it re-checks a
-// queued row against the freshness bound it was created with, so a retry cannot
-// render an observation that has since aged out.
 func alertStale(alert Alert, now time.Time) bool {
-	if alert.FreshWindowMS <= 0 || alert.ObservedAt.IsZero() {
-		return false
+	if alert.FreshWindowMS <= 0 || alert.FreshWindowMS > int64((1<<63-1)/int64(time.Millisecond)) {
+		return true
 	}
-	return now.UnixMilli()-alert.ObservedAt.UnixMilli() > alert.FreshWindowMS
+	return !evidenceFresh(alert.ObservedAt, now, time.Duration(alert.FreshWindowMS)*time.Millisecond)
 }
 
 func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now time.Time, digest PredictionDigest) bool {
@@ -269,6 +260,9 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 	}
 	var findings []PredictionDigestItem
 	for _, item := range digest.Items {
+		if !predictionEvidenceFresh(item, now) {
+			continue
+		}
 		identity := predictionItemID(item)
 		previous, exists := state.pendingByID(identity)
 		reset := time.Time{}
@@ -335,12 +329,15 @@ func (job *PredictionJob) queueFindings(state *State, resolved Resolved, now tim
 func predictionNotification(items []PredictionDigestItem, omitted int, resolved Resolved, now time.Time) Notification {
 	alerts := make([]Alert, 0, len(items))
 	for _, item := range items {
+		if !predictionEvidenceFresh(item, now) {
+			continue
+		}
 		facts := []string{"实际 " + predictionPercent(item.UsedPercent), "期望 " + predictionPercent(item.ExpectedUsedPercent)}
 		observed := time.Time{}
 		if item.ObservedAtMS > 0 {
 			observed = time.UnixMilli(item.ObservedAtMS).UTC()
 		}
-		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed,
+		alerts = append(alerts, Alert{Kind: predictionKindPrefix, Severity: SeverityWarn, Provider: item.Provider, Key: predictionKey(item), Scope: predictionScope(item), ObservedAt: observed, EvidenceSource: EvidenceQuota,
 			Alias: item.CredentialLabel, Title: predictionWindowLabel(item), Detail: predictionExhaustionLine(item, resolved, now), Facts: facts,
 			Advice: "提前准备备用凭证，按需分流", OccurredAt: now, FreshWindowMS: item.FreshWindowMS})
 	}
@@ -467,7 +464,7 @@ func predictionItemID(item PredictionDigestItem) string {
 
 func announcedInMinute(state *State, identity, exceptID string, now time.Time) bool {
 	for _, notification := range state.Outbox {
-		if notification.ID == exceptID || notification.CreatedAt.UTC().Truncate(time.Minute) != now.UTC().Truncate(time.Minute) {
+		if isDiscardedNotification(notification) || notification.ID == exceptID || notification.CreatedAt.UTC().Truncate(time.Minute) != now.UTC().Truncate(time.Minute) {
 			continue
 		}
 		for _, alert := range notification.Alerts {

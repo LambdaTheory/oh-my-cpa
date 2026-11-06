@@ -232,6 +232,7 @@ func TestMonitorUnsupportedQuotaStillAnnouncesCredentialFailure(t *testing.T) {
 	env := newTestEnv(t, monitorReport("unsupported"), true)
 	account := &env.source.report.Providers[0].Accounts[0]
 	account.IsUnmonitored, account.AuthFailed, account.State = true, true, StateInvalid
+	account.AuthSignalObservedAt = *env.clock
 	state := assertMonitorSends(t, env, 1)
 	if !hasItem(state.PendingItems, AlertCredential) || hasItem(state.PendingItems, AlertMonitorDown) {
 		t.Fatalf("quota eligibility must not hide independent auth evidence: %+v", state.PendingItems)

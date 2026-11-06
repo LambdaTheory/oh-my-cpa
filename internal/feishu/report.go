@@ -27,8 +27,8 @@ const (
 // domain model, so this package depends on neither the API layer nor the quota
 // package and therefore cannot trigger an upstream refresh.
 //
-// GeneratedAt is the observation time of the newest evaluation. A query shows
-// it and grades its age; it is never replaced by "now".
+// GeneratedAt summarizes the newest stored quota sample in the report. It is not
+// independent evidence for any account, authentication signal or collection attempt.
 type Report struct {
 	GeneratedAt time.Time
 	Providers   []ProviderReport
@@ -48,8 +48,16 @@ type ProviderReport struct {
 
 // AccountReport is one credential's reading within a channel.
 type AccountReport struct {
+	// AttemptedAt and its bounded result come from the independent latest refresh
+	// attempt, never from the unresolved authentication incident's timestamp.
 	AttemptedAt      time.Time
+	AttemptOutcome   string
+	AttemptReason    string
 	CollectionFailed bool
+	// CollectionSignalObservedAt dates a stored non-auth collection failure when
+	// no independent attempt record exists. It is not the latest-attempt clock and
+	// must never be populated from a retained authentication incident.
+	CollectionSignalObservedAt time.Time
 	// Key is the opaque credential identity (the auth index). It is a
 	// persistence key, not text for a person.
 	Key string
@@ -85,12 +93,23 @@ type AccountReport struct {
 	// a reading: the Disabled flag is only as current as this instant, so a
 	// reader must not present it as live. The zero value means unknown.
 	MetadataObservedAt time.Time
-	// AuthFailed reports that the newest unrefuted collection evidence is an
-	// authentication failure. It is set from the stored, enum-only collection
-	// signal, never from a cached availability flag: an unknown or stale state
-	// must not close an open credential item, and only a successful reading
-	// observed after the auth failure clears it.
+	// AuthFailed retains an unresolved authentication failure, including historical
+	// evidence. Age expiry never resolves it; only positive recovery does. Current
+	// decisions must use HasFreshAuthFailure rather than this historical latch.
 	AuthFailed bool
+	// AuthSignalObservedAt dates the explicit authentication rejection, separately
+	// from the quota reading and the latest collection attempt. Zero means unknown.
+	AuthSignalObservedAt time.Time
+}
+
+// HasFreshAuthFailure reports a currently evidenced authentication rejection.
+// Retained incidents with expired or unknown evidence remain unresolved, not fresh.
+func (a AccountReport) HasFreshAuthFailure(now time.Time) bool {
+	return (a.AuthFailed || a.State == StateInvalid) && evidenceFresh(a.AuthSignalObservedAt, now, defaultFreshWindow)
+}
+
+func evidenceFresh(observedAt, now time.Time, window time.Duration) bool {
+	return isMonitoringTimeValid(observedAt) && window > 0 && now.Sub(observedAt) <= window
 }
 
 // Window is one quota window as a person reads it. A window exists only when the

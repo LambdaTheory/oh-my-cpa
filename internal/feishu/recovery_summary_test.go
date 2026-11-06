@@ -191,11 +191,11 @@ func TestStartupEpisodesAreNotRepeatedInMorning(t *testing.T) {
 						t.Fatal(err)
 					}
 					env.source.has = true
-					env.source.report = Report{GeneratedAt: *env.clock, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "old", Label: "already-reported", State: StateInvalid, ObservedAt: *env.clock}, {Key: "new", Label: "new-risk", State: StateInvalid, ObservedAt: *env.clock}}}}}
+					env.source.report = Report{GeneratedAt: *env.clock, Providers: []ProviderReport{{Provider: "codex", Accounts: []AccountReport{{Key: "old", Label: "already-reported", State: StateInvalid, AuthSignalObservedAt: *env.clock, ObservedAt: *env.clock}, {Key: "new", Label: "new-risk", State: StateInvalid, AuthSignalObservedAt: *env.clock, ObservedAt: *env.clock}}}}}
 				}
 				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 					if forecast {
-						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "weekly"}}}, nil
+						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "weekly", ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
 					}
 					return PredictionDigest{}, nil
 				})

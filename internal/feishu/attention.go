@@ -23,22 +23,27 @@ func attentionSignals(rep Report, threshold float64, now time.Time) []Alert {
 	var alerts []Alert
 	for _, provider := range rep.Providers {
 		if provider.Error != "" || len(provider.Accounts) == 0 {
-			alerts = append(alerts, Alert{Kind: AlertReadingMissing, Provider: provider.Provider, Title: "数据缺失", Advice: "检查采集链路后再决定额度安排", Severity: SeverityWarn, OccurredAt: now})
 			continue
 		}
 		for _, account := range provider.Accounts {
-			if account.Disabled || account.IsUnmonitored || account.State == StateInvalid {
+			if account.Disabled || account.IsUnmonitored || account.HasFreshAuthFailure(now) {
 				continue
 			}
-			alert := Alert{Provider: provider.Provider, Key: account.Key, Alias: account.Label, Severity: SeverityWarn, OccurredAt: now}
-			alert.ObservedAt = account.ObservedAt
-			if account.AuthFailed {
-				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（认证状态待确认）", "检查凭证认证与最新采集结果"
+			alert := Alert{Provider: provider.Provider, Key: account.Key, Alias: account.Label, Severity: SeverityWarn, OccurredAt: now,
+				ObservedAt: account.ObservedAt, FreshWindowMS: defaultFreshWindow.Milliseconds(), EvidenceSource: EvidenceQuota}
+			if account.CollectionFailed && evidenceFresh(account.AttemptedAt, now, defaultFreshWindow) {
+				alert.ObservedAt, alert.EvidenceSource = account.AttemptedAt, EvidenceAttempt
+				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（最新采集失败，认证状态未知）", "检查最新采集结果与采集链路"
 				alerts = append(alerts, alert)
 				continue
 			}
-			if !account.OK || !observationFresh(account, now, defaultFreshWindow) || !usableState(account.State) && account.State != StateExhausted {
-				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（读数异常或已过期）", "检查采集链路后再决定额度安排"
+			// An unresolved incident is ownership, not renewed authentication evidence.
+			// Long-stale or untimed readings belong to diagnostics and monitor_down.
+			if !observationFresh(account, now, defaultFreshWindow) {
+				continue
+			}
+			if account.AuthFailed || !account.OK || !usableState(account.State) && account.State != StateExhausted {
+				alert.Kind, alert.Title, alert.Advice = AlertReadingMissing, "数据缺失（读数异常，当前状态待确认）", "检查采集链路后再决定额度安排"
 				alerts = append(alerts, alert)
 				continue
 			}
@@ -187,11 +192,11 @@ func decisionAlerts(msg Message) []Alert {
 	if msg.EvaluatedAt.IsZero() {
 		msg.EvaluatedAt = msg.GeneratedAt
 	}
-	if msg.Report != nil {
+	if msg.Report != nil && !msg.EvidenceChecked {
 		alerts = append(alerts, attentionSignals(*msg.Report, DefaultTightRemainingPercent, msg.EvaluatedAt)...)
 		for _, provider := range msg.Report.Providers {
 			for _, account := range provider.Accounts {
-				if !account.Disabled && account.State == StateInvalid {
+				if !account.Disabled && account.HasFreshAuthFailure(msg.EvaluatedAt) {
 					alerts = append(alerts, credentialAlert(provider.Provider, account, msg.EvaluatedAt))
 				}
 			}
@@ -211,36 +216,8 @@ func decisionAlerts(msg Message) []Alert {
 		merged = append(merged, alert)
 	}
 	alerts = merged
-	for _, item := range msg.Pending {
-		found := false
-		for _, alert := range alerts {
-			if alertItemID(alert) == item.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			title := defaultTitles[item.Kind]
-			if item.Kind == AlertQuotaLow {
-				title = "额度偏紧，最新读数待确认"
-			}
-			if item.Kind == AlertQuotaExhausted {
-				title = "额度耗尽，恢复待确认"
-			}
-			if item.Kind == AlertReadingMissing {
-				title = "数据缺失"
-			}
-			if title == "" {
-				title = "异常仍待确认"
-			}
-			alerts = append(alerts, Alert{Kind: item.Kind, Provider: item.Provider, Key: item.Key, Alias: item.Alias, Title: title, Advice: item.Action, Severity: SeverityWarn})
-		}
-	}
-	for _, tight := range msg.Tight {
-		if len(alerts) == 0 {
-			alerts = append(alerts, Alert{Kind: AlertQuotaLow, Provider: tight.Provider, Title: "额度偏紧", Detail: "凭证明细数据缺失", Advice: "准备备用凭证并检查最新读数", Severity: SeverityWarn})
-		}
-	}
+	// Pending ownership and channel summaries carry no current per-item evidence.
+	// They remain available as diagnostic context, never as synthetic risk rows.
 	if len(alerts) > 1 {
 		filtered := alerts[:0]
 		for _, alert := range alerts {
@@ -263,6 +240,9 @@ func decisionConclusion(msg Message, alerts []Alert) string {
 	}
 	if len(alerts) == 1 && alerts[0].Kind == statusHealthy {
 		return "今天暂不需要调整额度，未发现异常"
+	}
+	if len(decisionRiskAlerts(alerts)) == 0 && (msg.Report == nil || !reportEvidenceHealthy(*msg.Report, messageTime(msg))) {
+		return "数据缺失或已过期，当前额度与认证状态未知"
 	}
 	for _, alert := range alerts {
 		if alert.Kind == AlertQuotaLow || alert.Kind == AlertQuotaExhausted || strings.HasPrefix(alert.Kind, predictionKindPrefix) || alert.Kind == AlertChannelUnavailable {
@@ -300,7 +280,7 @@ func omitStartupEpisodes(notification *Notification, state *State, resolved Reso
 			return false
 		}
 		for _, earlier := range state.Outbox {
-			if earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
+			if isDiscardedNotification(earlier) || earlier.Kind != KindSummary || earlier.ID == notification.ID || earlier.CreatedAt.In(resolved.Location).Format("2006-01-02") != now.In(resolved.Location).Format("2006-01-02") || earlier.CreatedAt.Before(current.Since) {
 				continue
 			}
 			for _, item := range earlier.Pending {
@@ -363,14 +343,19 @@ func decisionPoint(alert Alert) string {
 	if alert.Kind == statusHealthy {
 		identity = "额度"
 	}
-	if alert.Alias != "" {
+	if alert.Alias != "" && alert.Alias != identity {
 		identity += " · " + alert.Alias
+	}
+	title := strings.TrimPrefix(alert.Title, providerName(alert.Provider)+" ")
+	text := identity + "：" + title
+	if alert.Detail != "" {
+		text += "。" + alert.Detail
 	}
 	advice := alert.Advice
 	if advice == "" {
 		advice = "检查控制台中的最新读数"
 	}
-	return compactText(identity+"："+alert.Title+"。"+alert.Detail, 180) + "；建议：" + compactText(advice, 70)
+	return compactText(text, 180) + "；建议：" + compactText(advice, 70)
 }
 
 func compactText(value string, limit int) string {
@@ -389,7 +374,7 @@ func compactText(value string, limit int) string {
 // remain open forever without a provider identity to supply recovery evidence.
 func rememberReportedAlerts(state *State, alerts []Alert, report Report, now time.Time) {
 	for _, alert := range alerts {
-		if alert.Kind == statusHealthy || alert.Provider == "" {
+		if alert.Kind == statusHealthy || alert.Kind == statusUnknown || alert.Kind == statusReported || alert.Kind == "omitted" || alert.Provider == "" {
 			continue
 		}
 		identity := alertItemID(alert)

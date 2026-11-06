@@ -174,6 +174,7 @@ func NewService(opts Options) *Service {
 	service.dispatcher.predictionSource = service.predictionSource
 	service.dispatcher.store = service.store
 	service.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
+	service.dispatcher.monitorDownAfter = resolved.MonitorDownAfter
 	return service
 }
 
@@ -324,6 +325,7 @@ func (s *Service) ensureSenderLocked(resolved Resolved) {
 	s.dispatcher.predictionSource = s.predictionSource
 	s.dispatcher.store = s.store
 	s.dispatcher.channelUnavailableAfter = resolved.ChannelUnavailableAfter
+	s.dispatcher.monitorDownAfter = resolved.MonitorDownAfter
 	s.mu.Unlock()
 }
 
@@ -695,6 +697,7 @@ func (s *Service) tick(ctx context.Context) {
 		Tracks:   state.ChannelTracks,
 		Now:      now,
 		Quiet:    quiet,
+		InFlight: pendingDeliveryClaims(state.Outbox),
 		recovery: s.attentionRecovery,
 	})
 	state.PendingItems = result.Items
@@ -740,6 +743,7 @@ func (s *Service) tick(ctx context.Context) {
 		state.Bootstrapped = true
 	}
 
+	s.revalidateNewNotifications(state, resolved, rep, has, now)
 	state.UpdatedAt = now
 	if err := s.store.Save(ctx, state); err != nil {
 		s.unlockStateTransition()
@@ -954,6 +958,10 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 			}
 		}
 	}
+	beforeByID := make(map[string]Notification, len(due))
+	for _, notification := range due {
+		beforeByID[notification.ID] = notification
+	}
 	delivered := dispatcher.deliverDue(ctx, resolved.ChatID, due)
 	s.lockStateTransition()
 	defer s.unlockStateTransition()
@@ -969,6 +977,15 @@ func (s *Service) deliverOutboxMatching(ctx context.Context, resolved Resolved, 
 	for index, notification := range latest.Outbox {
 		if updated, ok := byID[notification.ID]; ok {
 			latest.Outbox[index] = updated
+		}
+	}
+	// Apply all acknowledgements first, so a delivered row protects an overlapping
+	// episode even when another row was discarded in the same delivery cycle.
+	for _, outcome := range delivered {
+		if before, exists := beforeByID[outcome.ID]; exists && before.State != NotifySent {
+			acknowledgeDeliveredClaims(latest, outcome)
+			releaseDiscardedClaims(latest, before, outcome)
+			releaseUndeliveredClaims(latest, before, outcome)
 		}
 	}
 	now := s.now()
@@ -1076,6 +1093,7 @@ func (s *Service) SendTest(ctx context.Context) (TestDelivery, error) {
 	state, err := s.store.Load(ctx)
 	if err == nil {
 		state.queueNotification(notification)
+		s.revalidateNewNotifications(state, resolved, rep, has, now)
 		err = s.store.Save(ctx, state)
 	}
 	s.unlockStateTransition()
@@ -1153,13 +1171,18 @@ func updateTracks(tracks map[string]ChannelTrack, rep Report, has bool, now time
 			}
 			isMonitored = true
 			attempt := account.AttemptedAt
-			if attempt.IsZero() {
+			if !isMonitoringTimeValid(attempt) && account.CollectionFailed {
+				// A legacy non-auth signal is a real failure event, not a renewed
+				// authentication latch or an invented latest refresh attempt.
+				attempt = account.CollectionSignalObservedAt
+			}
+			if !isMonitoringTimeValid(attempt) {
 				attempt = account.ObservedAt
 			}
 			if attempt.After(lastAttempt) {
 				lastAttempt = attempt
 			}
-			isExplicitProblem := account.State == StateInvalid || account.AuthFailed || account.CooldownUntil != nil && account.CooldownUntil.After(now)
+			isExplicitProblem := (account.State == StateInvalid || account.AuthFailed) && !hasNonAuthCollectionFailure(account, now) || account.AttemptReason == "auth" || account.CooldownUntil != nil && account.CooldownUntil.After(now)
 			if !isExplicitProblem {
 				hasFailure = hasFailure || account.CollectionFailed || !account.OK
 				hasValid = hasValid || account.OK && !account.CollectionFailed && observationFresh(account, now, defaultFreshWindow)

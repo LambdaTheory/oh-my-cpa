@@ -55,7 +55,7 @@ func TestPredictionRecoveryRecurrenceAndPruning(t *testing.T) {
 		t.Run(accuracy, func(t *testing.T) {
 			now := mustTime("2026-10-26T12:00:00Z")
 			reset := now.Add(time.Hour).UnixMilli()
-			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast}
+			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast, FreshWindowMS: (2 * time.Hour).Milliseconds()}
 			if accuracy != "" {
 				item.ResetAtMS = &reset
 			}
@@ -163,7 +163,7 @@ func TestMorningRecurrencePredictionFirst(t *testing.T) {
 				setReading(morning, 100, boundary)
 				job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
 					if hasForecast {
-						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "7d"}}}, nil
+						return PredictionDigest{Items: []PredictionDigestItem{{Provider: "ollama", Key: "forecast", WindowID: "7d", ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
 					}
 					return PredictionDigest{}, nil
 				})
@@ -214,7 +214,7 @@ func TestForecastLearnsLaterExactCycle(t *testing.T) {
 			now := mustTime("2026-10-26T12:00:00Z")
 			boundary := now.Add(time.Hour)
 			reset := boundary.UnixMilli()
-			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ResetAtMS: &reset, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast}
+			item := PredictionDigestItem{Provider: "codex", Key: "synthetic", WindowID: "7d", WindowKind: "weekly", ResetAccuracy: accuracy, ResetAtMS: &reset, ObservedAtMS: now.UnixMilli(), LastsUntilReset: &cannotLast, FreshWindowMS: (2 * time.Hour).Milliseconds()}
 			state := EmptyState()
 			job := &PredictionJob{service: NewService(Options{})}
 			cfg := readyPredictionConfig()
@@ -344,7 +344,7 @@ func TestMorningPredictionPreservesObservedQuotaCycle(t *testing.T) {
 	env := newTestEnv(t, Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "claude", Accounts: []AccountReport{{Key: "low", State: StateHealthy, OK: true, ObservedAt: now, Windows: []Window{accountWindow(100, &reset)}}}}}}, true)
 	*env.clock = now
 	job := NewPredictionJob(env.service, func(context.Context) (PredictionDigest, error) {
-		return PredictionDigest{Items: []PredictionDigestItem{{Provider: "codex", Key: "forecast", WindowID: "7d"}}}, nil
+		return PredictionDigest{Items: []PredictionDigestItem{{Provider: "codex", Key: "forecast", WindowID: "7d", ObservedAtMS: env.clock.UnixMilli(), FreshWindowMS: (2 * time.Hour).Milliseconds()}}}, nil
 	})
 	job.Activate()
 	job.tick(context.Background())
@@ -408,6 +408,7 @@ func TestMorningBypassesQuietWhileOrdinaryAlertWaits(t *testing.T) {
 		t.Fatalf("quiet alert sent: %d", sends)
 	}
 	*env.clock = mustTime("2026-10-26T08:00:00Z")
+	env.source.report = invalidReport(*env.clock)
 	env.service.tick(context.Background())
 	if sends, _ := env.sender.counts(); sends != 2 {
 		t.Fatalf("quiet end sends=%d", sends)

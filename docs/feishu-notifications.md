@@ -118,9 +118,16 @@ credential `State`, `OK` (a valid numeric reading in the stored snapshot), the `
 `CooldownUntil` (latest non-model cooldown) and the `LastSuccessAt`/`ObservedAt`
 times. `MetadataObservedAt` is when the credential's disable/identity metadata was
 last synced from the discovery path; it is a cache timestamp, never a reading
-instant, and the zero value means unknown. `AuthFailed` reports that the newest
-unrefuted collection evidence is an authentication failure; only a valid reading
-observed after the auth failure clears it. Only a window with `Scope == "account"`
+instant, and the zero value means unknown. `AuthFailed` retains unresolved
+historical authentication ownership; only positive recovery clears it. Current
+credential risk requires `HasFreshAuthFailure(now)` against the separate
+`AuthSignalObservedAt`, never the quota observation or report aggregation clock.
+`AttemptedAt`, `AttemptOutcome` and `AttemptReason` come from the independent latest
+`quota_refresh_attempts` record, with bounded enums and no raw reason summary. A
+latched authentication signal is not the latest attempt. Legacy non-authentication
+collection signals carry `CollectionSignalObservedAt` solely as distinct monitoring
+failure events; they do not fill `AttemptedAt` or renew quota/authentication evidence.
+Only a window with `Scope == "account"`
 decides whole-account availability; a model- or group-scoped window running out does
 not. A window without a reported percentage is "not reported", never zero.
 `IsUnmonitored` excludes an account without quota-reader evidence from channel
@@ -145,12 +152,15 @@ management read or a refresh. It reads:
   fresh or old, and never manufactures a credential problem;
 - the newest stored quota snapshot per credential, which carries the last
   successful reading and its real observed instant;
-- the newest safe collection signal from `feishu_account_signals`, which is the
-  only auth-failure evidence: `auth_invalid` observed within `DefaultFreshWindow`
-  is a credential problem, a stale `auth_invalid` neither alerts nor recovers, and
-  `transport`/`parse`/`unknown` is never a credential problem. The signal records
-  the explicit `needs_reauth` outcome the quota layer already computes, so this
-  layer never re-parses a raw error for a 401;
+- the newest safe collection signal from `feishu_account_signals`: an explicit
+  `auth_invalid` within `DefaultFreshWindow` is a credential problem, while a stale
+  or untimed one neither alerts nor recovers. `transport`/`parse`/`unknown` is never
+  a credential problem. A newer numeric success refutes an older auth signal;
+  the last numeric snapshot's explicit `needs_reauth` status can also carry dated
+  authentication evidence. This layer never re-parses a raw error for a 401;
+- the independent latest refresh attempt, read in one batch for the selected
+  credentials, so later non-auth failures remain visible even when the auth signal
+  intentionally retains an older unresolved rejection;
 - correlated cooldowns, and the Ollama module's persisted readings.
 
 A credential's observation time is its stored instant, never "now". A credential
@@ -192,11 +202,47 @@ open persistent
 `quota_low`, `quota_exhausted` and `reading_missing` episodes. Scope is explicit;
 model/group exhaustion never claims whole-account unavailability. Untimed and
 long-stale missing data retains the monitoring grace above. Positive fresh numeric
-evidence resolves an episode without a recovery push. See the card contract below.
+evidence resolves an episode without a recovery push. A fresh non-auth collection
+attempt may appear as a collection-health diagnostic, but does not create a second
+missing-data pending incident alongside the monitoring policy. See the card contract below.
 
-Delivery is outbox-based: a notification is persisted before sending and marked
-sent only after a successful send, so a failed send is retried with a bounded
-backoff rather than lost.
+A delivered notification has state `sent` and a nonzero `SentAt`; a failed send
+is retried with bounded backoff. A row discarded at delivery also closes as `sent`,
+but retains zero `SentAt` and is not evidence of an actual notification. Before
+enqueueing and before every actual send, including
+quiet-end, retry and the simplified fallback, the same per-item eligibility rule
+rechecks stored evidence. Quota/authentication/reading-missing claims require a
+positive observation time, the appropriate source and a positive, representable
+`FreshWindowMS`; missing fields mean unknown, not eligible. Legacy queued identities
+may select current stored-report evidence, but pending ownership, notification
+creation and report aggregation times cannot supply or renew evidence. Re-reading
+the same sample cannot extend an existing narrower freshness bound. Prediction
+items retain the quota prediction window's cadence-based bound (2–24 hours), not a
+new bound starting at digest creation. The operations prediction item's existing
+internal `FreshWindowMS` comes from `quota.PredictionFreshWindow` and stays excluded
+from JSON and JSON Schema; the Feishu adapter preserves it unchanged.
+
+Ongoing `monitor_down` uses a separate policy re-evaluation with persisted failure
+counts and last-valid/first-seen baseline, not the sample's 15-minute cutoff. Age
+expiry alone never resolves a credential or channel incident. A notification with
+no eligible risk closes without an actual send or delivery timestamp; explicit
+status queries and daily summaries may still explain unknown data. Discarded rows
+are not announcement or cooldown evidence and use creation time for bounded
+retention, rather than an invented send time. Discarding also releases only the
+covered episodes' undelivered notification reservations. A genuinely fresh,
+qualified observation can then alert once on the still-open episode; it does not
+reset `Since`, declare recovery, or replay an episode actually delivered already.
+A still-pending or quiet-queued risk keeps its delivery reservation across restart,
+including legacy rows without `NotifiedAt`; policy does not queue a duplicate before
+quiet-end promotion. This admission check is reconstructed from the existing outbox.
+Historical summary selectors and lower-severity forecasts do not reserve a new
+exhaustion alert. Only actually delivered risk rows may acknowledge a missing legacy
+reservation; diagnostic-only selectors cannot do so.
+Delivery outcomes are reconciled before retention cleanup, and a newer reservation
+cannot be cleared by an older send's outcome. Discarded morning rows release the
+scheduled-minute reservation only when no other pending or delivered morning owns
+it. These rules use existing timestamps and identities, without a new state value
+or storage field.
 
 ## Integration
 
@@ -261,7 +307,8 @@ fallback and morning prediction digest bypass quiet hours at the configured slot
 including retries; startup and morning summaries share that minute's delivery.
 The process must be running during the scheduled minute to send that day's fallback.
 
-Immediate alerts and query cards use a 24-character conclusion and two-line blocks.
+Immediate alerts and query cards use a 24-character conclusion and two-line action
+blocks with separate labeled evidence-time metadata.
 Pushes contain only exhaustion, invalid credentials, unavailable channels and confirmed
 monitor outages, at most three blocks; queries also include low quota, up to eight
 blocks, with healthy channels folded into one line. Groups use channel plus state,
@@ -308,19 +355,37 @@ credential stay distinguishable, then opens with the two numbers ("实际 X% ·
 期望 Y%") and the sentence after them states only the exhaustion instant and
 that the window will not last to the reset. The dedicated prediction layout
 shows at most five windows, with the total in its opening line ("N 个窗口撑不到重置").
-Its footer uses the newest observation time and discloses both payload-bound and
-row-limit omissions as "另有 N 项，见控制台". Non-prediction morning alerts remain
-visible after those rows; if all prediction rows are removed, their omitted
-count is cleared without suppressing the other alerts.
-Immediately before sending - on a quiet-hour hold or a failed-send retry as well
-as on the first attempt - the digest re-reads the stored credential roster, and
-drops any item whose credential was disabled, removed, no longer has a window or
-whose reading has since gone stale; a card left with no current finding is not
-sent at all. Forecast-only events stay silent
-outside the morning digest. Morning prediction cards also carry stored anomalies
-and open items. Explicit manual prediction sends apply the same findings filter,
-deliver only their new outbox row and never claim a scheduled minute. No finding
-returns `no_findings`.
+Its read-time note names the newest displayed prediction observation only;
+individual evidence clocks and historical diagnostics remain separate. It
+discloses both payload-bound and row-limit omissions as "另有 N 项，见控制台".
+Non-prediction morning alerts remain visible after those rows; if all prediction
+rows are removed, their omitted count is cleared without suppressing other alerts.
+Immediately before every attempt, including quiet-end and retry, the digest
+re-reads the stored roster and drops findings for credentials that are disabled,
+removed, lack a window or have stale evidence. Forecast-only events stay silent
+outside the morning digest. Historical open items are bounded diagnostic context,
+never a source of current risk. Explicit manual prediction sends apply the same
+findings filter, deliver only their new outbox row and never claim a scheduled
+minute. No finding returns `no_findings`.
+
+### Evidence clocks and diagnostics
+
+Each visible risk identifies its own clock: quota observation, authentication
+signal, latest collection attempt, channel availability evidence, or last valid
+monitoring data. Grouped blocks explicitly label the earliest included evidence;
+unknown member timestamps remain unknown. Hidden rows do not choose a card-wide
+observation footer, and the newest aggregate report time cannot stand in for any
+row's evidence. A healthy folded quota summary dates only its qualifying accounts.
+
+Stale or untimed numeric data and historical authentication incidents live in a
+separate bounded diagnostic section. It shows quota observation, last success,
+latest attempt with bounded outcome/reason, and historical auth time independently.
+Old authentication evidence means current authentication is unknown, not a new
+login instruction. Pending-only history labels its time as incident registration,
+not observation or recovery. No-data/stale-only views cannot claim healthy. A fresh
+explicit rejection still renders as a credential problem even with old numeric
+quota, but cannot borrow that old quota's remaining share or reset as current facts.
+Full and simplified cards preserve the same source and age semantics.
 
 Button fields were checked against the [official JSON 2.0 button reference](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button).
 Design evidence is `pre_render_design`: structure, missing data, single-recipient
