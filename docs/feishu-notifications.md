@@ -217,7 +217,9 @@ may select current stored-report evidence, but pending ownership, notification
 creation and report aggregation times cannot supply or renew evidence. Re-reading
 the same sample cannot extend an existing narrower freshness bound. Prediction
 items retain the quota prediction window's cadence-based bound (2–24 hours), not a
-new bound starting at digest creation.
+new bound starting at digest creation. The bound travels through the existing
+accounting projection as `PredictionAccounting.FreshWindowMS`, excluded from both
+JSON and JSON Schema, including dashboard and MCP responses.
 
 Ongoing `monitor_down` uses a separate policy re-evaluation with persisted failure
 counts and last-valid/first-seen baseline, not the sample's 15-minute cutoff. Age

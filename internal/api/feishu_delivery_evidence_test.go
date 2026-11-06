@@ -2,10 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/feishu"
+	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
@@ -37,6 +40,36 @@ func TestFeishuOllamaAttemptCannotSupplyAnUnknownQuotaObservation(t *testing.T) 
 	account = ollamaAccountReport(repository.OllamaAccount{ID: "synthetic", Enabled: true, Status: "auth_invalid", LastObservedAtMS: &attemptMS, QuotaObservedAtMS: &quotaMS})
 	if !account.ObservedAt.Equal(time.UnixMilli(quotaMS)) || !account.AuthSignalObservedAt.Equal(now) {
 		t.Fatalf("independent stored quota/authentication clocks were conflated: %+v", account)
+	}
+}
+
+func TestFeishuPredictionDeliveryReceivesTheAccountingCadenceBound(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	var handler *Handler
+	_, _, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, _ *http.Request) {
+		t.Error("prediction contacted an upstream service")
+		writer.WriteHeader(500)
+	}, func(current *Handler) { handler = current; current.nowFn = func() time.Time { return now } })
+	seedAuthFile(t, repo, "synthetic-bound", "Synthetic", "codex", false, false, now)
+	period, used, reset := 24.0, 100.0, now.Add(6*time.Hour).UnixMilli()
+	windows, err := json.Marshal([]quota.QuotaWindow{{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{AuthIndex: "synthetic-bound", Provider: "codex", Status: "healthy", ObservedAtMS: now.UnixMilli(), WindowsJSON: string(windows)}); err != nil {
+		t.Fatal(err)
+	}
+	api, err := handler.BuildFeishuAPI(context.Background(), handler.BuildFeishuReportSource(), feishu.Overlay{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := api.readPrediction(context.Background())
+	if err != nil || len(digest.Items) != 1 {
+		t.Fatalf("prediction digest=%+v err=%v", digest, err)
+	}
+	item := digest.Items[0]
+	if item.Verdict != "will_exhaust" || item.FreshWindowMS != (6*time.Hour).Milliseconds() || item.ObservedAtMS != now.UnixMilli() {
+		t.Fatalf("prediction lost its original evidence cadence in transit: %+v", item)
 	}
 }
 

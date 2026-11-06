@@ -100,6 +100,9 @@ type WindowPrediction struct {
 // PredictionAccounting keeps cycle arithmetic separate from the fitted forecast.
 // It is console context, not an addition to the quota_prediction wire contract.
 type PredictionAccounting struct {
+	// Delivery preserves the prediction's original cadence bound without adding
+	// operational metadata to dashboard JSON or capability schemas.
+	FreshWindowMS                  int64    `json:"-" jsonschema:"-"`
 	WindowStartMS                  *int64   `json:"window_start_ms"`
 	RemainingPercent               *float64 `json:"remaining_percent"`
 	UniformProjectedPercentAtReset *float64 `json:"uniform_projected_percent_at_reset"`
@@ -269,7 +272,7 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 }
 
 func calculatePredictionAccounting(input PredictionInput, prediction WindowPrediction) PredictionAccounting {
-	result := PredictionAccounting{}
+	result := PredictionAccounting{FreshWindowMS: predictionFreshWindow(input.Window).Milliseconds()}
 	fromMS, _, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
 	if reason == "" && input.ObservedAtMS >= fromMS {
 		result.WindowStartMS = &fromMS
@@ -512,12 +515,6 @@ func roundPrediction(value float64, places int) (float64, bool) {
 }
 
 func floatPointer(value float64) *float64 { return &value }
-
-// PredictionFreshWindowMS lets delivery preserve the same evidence bound that
-// qualified the projection, instead of extending it from the digest's creation time.
-func PredictionFreshWindowMS(window QuotaWindow) int64 {
-	return predictionFreshWindow(window).Milliseconds()
-}
 
 func predictionFreshWindow(window QuotaWindow) time.Duration {
 	bound := predictionMinimumFreshWindow

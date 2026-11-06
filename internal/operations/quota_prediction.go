@@ -41,7 +41,6 @@ type QuotaPredictionInput struct {
 }
 
 type QuotaPredictionItem struct {
-	FreshWindowMS             int64                      `json:"-" jsonschema:"-"`
 	Accounting                quota.PredictionAccounting `json:"-" jsonschema:"-"`
 	ResetAccuracy             string                     `json:"-" jsonschema:"-"`
 	CredentialLabel           string                     `json:"credential_label"`
@@ -450,7 +449,6 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 	}
 	predicted := quota.PredictWindow(predictionInput)
 	return QuotaPredictionItem{
-		FreshWindowMS:   quota.PredictionFreshWindowMS(window),
 		Accounting:      predicted.Accounting,
 		CredentialLabel: reading.Name, Provider: reading.Provider, WindowKind: reportedKind, AuthIndex: reading.AuthIndex,
 		ResetAccuracy: window.ResetAccuracy, WindowID: window.ID, WindowScope: window.Scope, WindowModel: window.Model,
