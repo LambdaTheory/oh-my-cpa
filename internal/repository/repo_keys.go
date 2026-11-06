@@ -1226,9 +1226,8 @@ func (r *Repository) ListRepoKeyBindingAgentNames(ctx context.Context, instanceI
 	return agents, rows.Err()
 }
 
-// LatestRepoKeyApplicationForCaller returns the most recent application of one agent on one
-// device, whatever its outcome. The approval page compares its public-key fingerprint with
-// the one being applied for now, which is how a changed identity becomes visible (AC-34).
+// LatestRepoKeyApplicationForCaller retains a submitted key for another manual
+// application when the caller has no approved registration. It grants no access.
 func (r *Repository) LatestRepoKeyApplicationForCaller(ctx context.Context, instanceID, agentName, deviceName string) (RepoKeyApplication, error) {
 	application, err := scanRepoKeyApplication(r.SQL().QueryRowContext(ctx, `
 		SELECT `+repoKeyApplicationColumns+` FROM repo_key_applications

@@ -307,6 +307,23 @@ func TestRepoKeyRegressionReenableNeverWritesTwoActiveKeys(t *testing.T) {
 	}
 }
 
+func TestRepoKeyRegressionReenableRequestUsesWriteGate(t *testing.T) {
+	service, _ := newRepoKeyService(t)
+	approved := approveRegressionRepoKey(t, service, "org/reenable-snapshot", "agent", "device")
+	if _, err := service.StopRepoKeyBinding(context.Background(), approved.BindingID, "operator", "rotate", "synthetic pause"); err != nil {
+		t.Fatal(err)
+	}
+	service.Acquire = func(context.Context) error { return errors.New("synthetic write in progress") }
+	service.Release = func() { t.Error("a refused write released an unowned permit") }
+	if _, err := service.RequestRepoKeyReenable(context.Background(), approved.BindingID, "operator", "synthetic resume"); err == nil || err.Error() != "write_busy" {
+		t.Fatalf("re-enable request mutated a decision snapshot outside the write gate: %v", err)
+	}
+	count, err := service.Repo.CountRepoKeyApplications(context.Background(), "default", "pending")
+	if err != nil || count != 0 {
+		t.Fatal("refused re-enable admission still changed the approval queue")
+	}
+}
+
 func TestRepoKeyRegressionApprovalFailureIsAtomic(t *testing.T) {
 	for _, failure := range []string{"audit", "recipient"} {
 		t.Run(failure, func(t *testing.T) {

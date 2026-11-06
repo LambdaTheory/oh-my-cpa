@@ -232,6 +232,7 @@ const SCENARIO_PATHS = [
   { prefix: 'web/src/types/modelSquare', scenarios: ['model-square', 'mobile-console'] },
   { prefix: 'web/src/pages/modelGroups/', scenarios: ['model-groups'] },
   { prefix: 'web/src/types/modelGroups', scenarios: ['model-groups'] },
+  { prefix: 'web/src/pages/repo-key/', scenarios: ['repo-key-approval'] },
   // The key list page: the phone rendering, the touch rules and the modal Back dismissal
   // each load `/api-keys`.
   { prefix: 'web/src/pages/ApiKeysPage', scenarios: ['phone-lists', 'touch-ergonomics', 'overlay-back', 'mobile-console'] },

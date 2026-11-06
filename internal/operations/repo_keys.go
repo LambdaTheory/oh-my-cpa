@@ -309,7 +309,7 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 	}
 	// A changed public key is exactly the case the operator must look at again, even for a
 	// caller this repository already accepted (AC-34).
-	publicKeyChanged := previousErr != nil || previous.PublicKeyFingerprint != fingerprint
+	publicKeyChanged := previousErr == nil && previous.PublicKeyFingerprint != fingerprint
 	nowMS := time.Now().UnixMilli()
 
 	status, err := s.Repo.GetRepoKeyRepoStatus(ctx, repoKeyInstanceID, repoID)
@@ -341,7 +341,7 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 
 	// 免审: a caller this repository already accepted, asking for the key it already uses, with
 	// the public key it registered. Everything else waits for a person (PRD 4.2 q01).
-	if params.AutoApproveAllowed && kind == "reuse" && !publicKeyChanged && errors.Is(pendingErr, repository.ErrRepoKeyApplicationNotFound) {
+	if params.AutoApproveAllowed && kind == "reuse" && previousErr == nil && !publicKeyChanged && errors.Is(pendingErr, repository.ErrRepoKeyApplicationNotFound) {
 		if recipient, recipientErr := s.wasRepoKeyCallerApproved(ctx, repoID, agent, device, fingerprint); recipientErr == nil && recipient {
 			approved, approveErr := s.autoApproveRepoKeyApplication(ctx, status.Binding, application, publicKey, nowMS)
 			if approveErr == nil {
@@ -882,6 +882,11 @@ func (s *Service) RequestRepoKeyReenable(ctx context.Context, bindingID, operato
 	if reason == "" {
 		return repository.RepoKeyApplication{}, invalidParameters{detail: "Re-enabling needs a reason; it is recorded on the request and in the audit trail."}
 	}
+	release, err := s.lock(ctx)
+	if err != nil {
+		return repository.RepoKeyApplication{}, err
+	}
+	defer release()
 	binding, err := s.Repo.GetRepoKeyBindingByID(ctx, bindingID)
 	if err != nil {
 		return repository.RepoKeyApplication{}, err
