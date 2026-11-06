@@ -2,7 +2,7 @@ import React from 'react';
 import { App as AntdApp } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { I18nProvider } from '../src/i18n';
 import { RepoKeysPanel } from '../src/components/keys/RepoKeysPanel';
@@ -114,7 +114,9 @@ describe.each([
   { language: 'ms', costLabel: 'Kos (7 hari)' },
 ])('repository key seven-day cost in $language', ({ language, costLabel }) => {
   it.each([false, true])('renders money rather than the different request count (phone=%s)', async (isPhone) => {
-    mount(isPhone, language);
+    // The deferred catalogs (ms, zh-Hant) arrive in an effect, so their first paint and
+    // first read settle after render() returns; act keeps that rendezvous inside the mount.
+    await act(async () => { mount(isPhone, language); });
     const identity = await screen.findByText('example/cost-regression');
     const row = identity.closest(isPhone ? 'article' : 'tr') as HTMLElement;
     expect(within(row).getByText('$0.0123')).toBeTruthy();
