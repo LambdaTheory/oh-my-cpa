@@ -30,6 +30,9 @@ export const AgentPage = React.lazy(loadAgentPage);
 export const loadAuthorizePage = createPageLoader(() => import('./pages/agent/AuthorizePage'), 'AuthorizePage');
 export const AuthorizePage = React.lazy(loadAuthorizePage);
 
+export const loadPlaygroundPage = createPageLoader(() => import('./pages/playground/PlaygroundPage'), 'PlaygroundPage');
+export const PlaygroundPage = React.lazy(loadPlaygroundPage);
+
 export const loadRepoKeyApplyPage = createPageLoader(() => import('./pages/repo-key/RepoKeyApplyPage'), 'RepoKeyApplyPage');
 export const RepoKeyApplyPage = React.lazy(loadRepoKeyApplyPage);
 

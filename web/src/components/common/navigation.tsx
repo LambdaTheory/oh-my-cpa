@@ -3,6 +3,7 @@ import {
   ShopOutlined,
   AuditOutlined,
   CloudServerOutlined,
+  CodeSandboxOutlined,
   ControlOutlined,
   DashboardOutlined,
   DollarOutlined,
@@ -19,6 +20,7 @@ import {
 } from '../icons';
 import { PLUGIN_PAGE_ROUTE_PREFIX, type PluginPageEntry } from '../plugins/pluginPages';
 import { isRenderableLogoURL } from '../../types/pluginOAuthProviders';
+import { isDemoMode } from '../../types/demoMode';
 import type { NavEntry, NavGroup } from '../../types/sidebarNav';
 
 export { PLUGIN_PAGE_ROUTE_PREFIX };
@@ -38,6 +40,7 @@ export const STATIC_NAV_GROUPS: readonly NavGroup[] = [
     items: [
       { key: '/dashboard', labelKey: 'nav.dashboard', icon: <DashboardOutlined /> },
       { key: '/agent', labelKey: 'nav.agent', icon: <RobotOutlined /> },
+      { key: '/playground', labelKey: 'nav.playground', icon: <CodeSandboxOutlined /> },
       { key: '/model-square', labelKey: 'nav.model_square', icon: <BlockOutlined /> },
       { key: '/model-groups', labelKey: 'nav.model_groups', icon: <AppstoreOutlined /> },
     ],
@@ -102,6 +105,10 @@ export function buildNavGroups(pluginPages: readonly PluginPageEntry[]): NavGrou
       })),
     ],
   };
-  const controlIndex = STATIC_NAV_GROUPS.findIndex((group) => group.key === 'control');
-  return [...STATIC_NAV_GROUPS.slice(0, controlIndex), pluginGroup, ...STATIC_NAV_GROUPS.slice(controlIndex)];
+  // The rail and its settings share this model, so neither offers the demo's closed workspace.
+  const staticGroups = isDemoMode()
+    ? STATIC_NAV_GROUPS.map(group => ({ ...group, items: group.items.filter(entry => entry.key !== '/playground') }))
+    : STATIC_NAV_GROUPS;
+  const controlIndex = staticGroups.findIndex((group) => group.key === 'control');
+  return [...staticGroups.slice(0, controlIndex), pluginGroup, ...staticGroups.slice(controlIndex)];
 }
