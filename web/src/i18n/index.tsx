@@ -2222,7 +2222,7 @@ const DICT: Record<string, [string, string]> = {
   'repo_keys.col_created': ['创建时间', 'Created'],
   'repo_keys.col_fingerprint': ['公钥指纹', 'Public key fingerprint'],
   'repo_keys.col_last_recipient': ['最近领取人', 'Last recipient'],
-  'repo_keys.col_usage7d': ['近 7 天请求', 'Requests (7d)'],
+  'repo_keys.col_usage7d': ['近 7 天费用', 'Cost (7d)'],
   'repo_keys.approve': ['批准', 'Approve'],
   'repo_keys.reject': ['驳回', 'Reject'],
   'repo_keys.stop': ['停用', 'Stop'],

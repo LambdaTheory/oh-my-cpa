@@ -1,5 +1,6 @@
 import { modelSquare, modelSquareFixtures, modelSquareLedgerFixtures } from './probes/modelSquare.mjs';
 import { modelGroups, modelGroupsFixtures } from './probes/modelGroups.mjs';
+import { repoKeyApproval, repoKeyApprovalFixtures } from './probes/repoKeyApproval.mjs';
 import { mobileConsole } from './probes/mobileConsole.mjs';
 import { routeRenderError, routeLazyError } from './probes/routeError.mjs';
 import { agentWorkspace, agentExternal, agentFailureCopy, agentStream, agentNarrow, agentLive, agentQuestion, agentViews, agentReplace, agentAttach, agentFixtures } from './probes/agent.mjs';
@@ -207,6 +208,7 @@ export const SCENARIOS = [
   },
   { id: 'agent', name: 'Agent opens on a centred composer, names its model there, authorizes inline, remembers its target and recovers the server conversation', options: { routes: agentFixtures() }, run: agentWorkspace },
   { id: 'agent-external', name: 'an external agent\'s approval link opens a standalone consent screen, and Agent shows how to connect one over MCP', options: { routes: agentFixtures() }, run: agentExternal },
+  { id: 'repo-key-approval', name: 'repository approval facts, decisions and settled outcomes remain readable and hit-testable on desktop and phone', options: { routes: repoKeyApprovalFixtures() }, run: repoKeyApproval },
   { id: 'agent-question', name: 'Agent asks a question in the composer and continues once it is answered', options: { routes: agentFixtures() }, run: agentQuestion },
   { id: 'agent-live', name: 'Agent shows a sent message at once, queues the next one and keeps its reasoning', options: { routes: agentFixtures() }, run: agentLive },
   { id: 'agent-views', name: 'Agent draws a canvas from frozen rows, fills the viewport with it and saves it as an image', options: { routes: agentFixtures() }, run: agentViews },

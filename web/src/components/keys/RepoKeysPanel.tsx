@@ -309,7 +309,7 @@ export function RepoKeysPanel() {
     {
       title: t('repo_keys.col_repo'),
       dataIndex: 'repo',
-      render: (_: unknown, row) => <span className={styles['mono']}>{row.repo}</span>,
+      render: (_: unknown, row) => <span className={styles['mono']}>{row.repo_display || row.repo}</span>,
     },
     {
       title: t('repo_keys.col_caller'),
@@ -386,7 +386,7 @@ export function RepoKeysPanel() {
             size="small"
             danger
             disabled={isDemo}
-            onClick={() => setDialog({ kind: 'reject', id: row.id, title: row.repo })}
+            onClick={() => setDialog({ kind: 'reject', id: row.id, title: row.repo_display || row.repo })}
           >
             {t('repo_keys.reject')}
           </Button>
@@ -455,7 +455,7 @@ export function RepoKeysPanel() {
       title: t('repo_keys.col_usage7d'),
       key: 'usage_7d',
       width: 110,
-      render: (_: unknown, row) => (row.usage_7d?.requests ?? 0).toLocaleString(),
+      render: (_: unknown, row) => formatCost(nanosToUSD(row.usage_7d?.cost_nanos ?? 0)),
     },
     {
       title: t('repo_keys.col_created'),
@@ -690,7 +690,7 @@ export function RepoKeysPanel() {
           from the queue and from a link (AC-8). */}
       <Modal
         open={reviewID !== null}
-        title={reviewQuery.data ? t('repo_keys.review_title', { repo: reviewQuery.data.application.repo }) : ''}
+        title={reviewQuery.data ? t('repo_keys.review_title', { repo: reviewQuery.data.application.repo_display || reviewQuery.data.application.repo }) : ''}
         onCancel={() => setReviewID(null)}
         destroyOnHidden
         width={760}
@@ -703,7 +703,7 @@ export function RepoKeysPanel() {
                 disabled={isDemo}
                 onClick={() => {
                   const application = reviewQuery.data?.application;
-                  if (application) setDialog({ kind: 'reject', id: application.id, title: application.repo });
+                  if (application) setDialog({ kind: 'reject', id: application.id, title: application.repo_display || application.repo });
                 }}
               >
                 {t('repo_keys.reject')}
@@ -731,7 +731,7 @@ export function RepoKeysPanel() {
       {/* An awaiting envelope is taken here; the row leaves the queue after the first fetch. */}
       <Modal
         open={ciphertextApp !== null}
-        title={t('repo_keys.ciphertext_title', { repo: ciphertextApp?.repo ?? '' })}
+        title={t('repo_keys.ciphertext_title', { repo: ciphertextApp?.repo_display || ciphertextApp?.repo || '' })}
         onCancel={() => {
           setCiphertextApp(null);
           setCiphertext(null);
@@ -895,7 +895,7 @@ export function RepoKeysPanel() {
           rather than showing the applicant's (AC-8). It is in this dialog only. */}
       <Modal
         open={approvalLinkFor !== null}
-        title={t('repo_keys.approval_link_title', { repo: approvalLinkFor?.repo ?? '' })}
+        title={t('repo_keys.approval_link_title', { repo: approvalLinkFor?.repo_display || approvalLinkFor?.repo || '' })}
         onCancel={closeApprovalLink}
         footer={null}
         destroyOnHidden
@@ -958,7 +958,7 @@ function RepoKeyReviewView({
       <dl className={styles['facts']}>
         <div>
           <dt>{t('repo_keys.col_repo')}</dt>
-          <dd className={styles['mono']}>{application.repo}</dd>
+          <dd className={styles['mono']}>{application.repo_display || application.repo}</dd>
         </div>
         <div>
           <dt>{t('repo_keys.col_caller')}</dt>
@@ -1014,7 +1014,7 @@ function RepoKeyReviewView({
         </div>
         <div>
           <dt>{t('repo_keys.col_usage7d')}</dt>
-          <dd>{repo.usage.requests.toLocaleString()}</dd>
+          <dd>{formatCost(nanosToUSD(repo.usage.cost_nanos))}</dd>
         </div>
       </dl>
 
@@ -1161,6 +1161,8 @@ function RepoKeyDetail({
         <ul className={styles['detail-list']}>
           {detail.applications.map((application) => (
             <li key={application.id}>
+              <span className={styles['mono']}>{application.repo_display || application.repo}</span>
+              {' · '}
               <span className={styles['mono']}>{application.agent}</span> @ {application.device}
               {' · '}
               {t(`repo_keys.kind_${application.kind}`)}

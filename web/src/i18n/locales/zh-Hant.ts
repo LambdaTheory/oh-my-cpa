@@ -3981,7 +3981,7 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "repo_keys.col_created": "建立時間",
   "repo_keys.col_fingerprint": "公鑰指紋",
   "repo_keys.col_last_recipient": "最近領取人",
-  "repo_keys.col_usage7d": "近 7 天請求",
+  "repo_keys.col_usage7d": "近 7 天費用",
   "repo_keys.approve": "批准",
   "repo_keys.reject": "駁回",
   "repo_keys.stop": "停用",
