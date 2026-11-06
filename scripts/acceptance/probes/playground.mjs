@@ -109,7 +109,7 @@ export async function playground({ base, page, check, context }) {
   check('playground renders the streamed answer and measured timing', await page.getByText('A streamed answer').count() > 0 && (await page.locator('[data-testid="playground-page"]').innerText()).includes('42'), 'expected content and first-content timing');
   const transcript = page.locator('[data-testid="playground-transcript"]');
   check('playground turn footer renders metrics and tps', await transcript.locator('.anticon-thunderbolt').count() > 0 && await transcript.locator('.anticon-field-time').count() > 0);
-  // The fixture's 48ms residual falls below the shared formula's 50ms floor.
+  // The include-TTFT default uses end-to-end delivery; subtracting the first-token boundary would inflate this short turn's rate.
   check('the footer tps matches the shared request-record formula', (await page.locator('[data-testid="playground-page"]').innerText()).includes('88.89 t/s'), 'expected the shared formula\'s rate, not a residual-window division');
   const viewRequest = answer => answer.getByRole('button', { name: 'View in request records', exact: true });
   check('a turn CPA named links to its request record', await viewRequest(page.locator('[data-testid="playground-answer"]').first()).isEnabled());
@@ -139,7 +139,7 @@ export async function playground({ base, page, check, context }) {
   mode = 'success'; await regenerate.click();
   await until(() => calls.length === 3, { label: 'the regenerate to reach the upstream' });
   check('regenerating reuses the same request instead of appending a partial answer', JSON.stringify(calls[2]) === JSON.stringify(calls[1]), 'request snapshot equality');
-  await until(async () => (await transcript.innerText()).includes('8.00 t/s'), { label: 'the measurable TPS result' });
+  await until(async () => (await transcript.innerText()).includes('4.00 t/s'), { label: 'the measurable TPS result' });
   await page.route('**/api/**/usage/events?*', route => route.fulfill({ json: {
     items: [{ id: 1, event_key: 'tps-fixture', request_id: '0000002a', timestamp_ms: Date.now(),
       provider: 'openai', model: 'vision-alias', failed: false, generate: true, stream: true,
@@ -147,7 +147,7 @@ export async function playground({ base, page, check, context }) {
       source: 'hmac:tps-fixture', auth_index: 'credential-fixture', api_group_key: 'hmac:tps-fixture', executor_type: 'openai' }],
     has_more: false, limit: 50,
   } }));
-  for (const [label, expected] of [['Include first-token latency', '4.00 t/s'], ['Exclude first-token latency', '8.00 t/s']]) {
+  for (const [label, expected] of [['Exclude first-token latency', '8.00 t/s'], ['Include first-token latency', '4.00 t/s']]) {
     await page.goto(`${base}/omc-settings`, { waitUntil: 'domcontentloaded' });
     const tpsRow = page.locator('.settings-toggle-row').filter({ hasText: 'TPS calculation mode' });
     const write = page.waitForResponse(response => response.url().endsWith('/preferences/omc_tps_calculation_mode') && response.request().method() === 'PUT');
