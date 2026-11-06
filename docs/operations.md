@@ -97,8 +97,8 @@ a message naming the variable.
 | `OMCPA_USAGE_IDLE_INTERVAL` | `1s` | First wait after an empty poll |
 | `OMCPA_USAGE_MAX_IDLE_INTERVAL` | `10s` | Ceiling the idle backoff grows to. Keep it well below CPA's `redis-usage-queue-retention-seconds` |
 | `OMCPA_USAGE_BATCH_SIZE` | `1000` | Records read per poll (1–10000) |
-| `OMCPA_USAGE_RETENTION_DAYS` | `90` | Days of request records (the request list and its detail) kept, `0` to keep them all. Ninety matches the request list's longest preset. Dashboard statistics do not depend on it: they are kept permanently as usage facts |
-| `OMCPA_USAGE_INBOX_RETENTION_DAYS` | `7` | Days a captured payload is kept after it was decoded into a request record, `0` to keep it as long as the record. Payloads are the largest part of the database and nothing reads them once decoded except a re-decode after a decoder fix |
+| `OMCPA_USAGE_RETENTION_DAYS` | `90` | Days of request records (the request list and its detail) kept, `0` to keep them all. Ninety matches the request list's longest preset. Dashboard statistics do not depend on it: they are kept permanently as usage facts. A retention saved in OMC Settings → Data retention replaces it without a restart |
+| `OMCPA_USAGE_INBOX_RETENTION_DAYS` | `7` | Days a captured payload is kept after it was decoded into a request record, `0` to keep it as long as the record. Payloads are the largest part of the database and nothing reads them once decoded except a re-decode after a decoder fix. |
 
 ### Audit platform push
 
@@ -695,11 +695,28 @@ responses.
 ## TPS calculation mode
 
 OMC Settings → Display chooses whether request-record and Playground TPS includes
-first-token latency. The default excludes it when the remaining window is at least
-50 ms; otherwise it falls back to total latency. Including it always uses total latency.
-The server-stored `omc_tps_calculation_mode` preference (`exclude_ttft` /
-`include_ttft`) also supports Agent/MCP reads and writes; historical timing and usage
-remain unchanged.
+first-token latency. The rate describes observed output delivery, not the model's
+internal decoding clock.
+
+- **Include first-token latency (default).** TPS is total output tokens divided by total
+  latency. Known reasoning tokens remain in the output total.
+- **Exclude first-token latency.** When `exclude_ttft` is selected, TPS divides
+  output tokens by the interval from the first observable token to completion. A record
+  that reports reasoning tokens uses this denominator only when the first timestamp is
+  known to mark non-reasoning content. A Playground turn has that boundary when reasoning
+  arrives on a separate thought channel; inline reasoning shares the reply clock. A usage
+  record without reported reasoning may subtract a valid `ttft_ms`; when reasoning is
+  reported, its single timestamp does not locate the answer boundary and exclusion is
+  unavailable.
+- **Unavailable is a result.** Missing or contradictory timing and token accounting, or a
+  reasoning count that cannot be attributed to the observed interval, displays `—` with the
+  reason rather than silently switching to another denominator. There is no duration or
+  rate threshold. Choosing exclusion displays a warning that the narrower denominator can
+  make the rate unusually high.
+
+Both modes recalculate historical readouts from stored observations. The setting never
+rewrites usage or timing, and it does not change the independent TTFT readout. TPS exports
+also carry `tps_basis` and `tps_mode`.
 
 ## Plugin store
 

@@ -122,6 +122,39 @@ describe('routing', () => {
     }
   });
 
+  it('keeps Insights week windows and rhythm weekdays aligned after rebasing', async (t) => {
+    const dayMs = 86_400_000;
+    t.mock.method(Date, 'now', () => REFERENCE_MS + 10 * dayMs + 3_600_000);
+    const { default: worker } = await import('./worker.mjs');
+    const env = { ASSETS: { fetch: () => new Response('', { status: 200 }) } };
+    for (const preset of ['7d', '30d', '90d', 'all']) {
+      for (const view of ['cube', 'rhythm']) {
+        const response = await worker.fetch(request(`/api/v1/management/insights/${view}?preset=${preset}`), env);
+        const captured = JSON.parse(DATASET.responses[`insights-${view}-${preset}`].body);
+        const expected = rebase(captured, 7 * dayMs);
+        expected.window.open_end = false;
+        assert.deepEqual(await response.json(), expected, `${view}/${preset}`);
+      }
+    }
+  });
+
+  it('refuses Insights windows and granularities absent from the capture', async (t) => {
+    t.mock.method(Date, 'now', () => Date.UTC(2026, 9, 24, 12));
+    const { default: worker } = await import('./worker.mjs');
+    const env = { ASSETS: { fetch: () => new Response('', { status: 200 }) } };
+    for (const query of ['preset=today', 'preset=yesterday', 'preset=this_week', 'preset=last_week',
+      'preset=this_month', 'preset=last_month', 'from=1767139200000&to=1767225600000',
+      'preset=7d&bucket=month', 'preset=unknown']) {
+      for (const view of ['cube', 'rhythm']) {
+        const response = await worker.fetch(request(`/api/v1/management/insights/${view}?${query}`), env);
+        assert.equal(response.status, 404, `${view}?${query}`);
+        assert.deepEqual(await response.json(), {
+          error: 'this Insights window or granularity is not captured in the demonstration', code: 'demo_uncaptured',
+        });
+      }
+    }
+  });
+
   it('defaults the dashboard to the console’s own default window', () => {
     assert.equal(
       responseNameFor(request('/api/v1/management/dashboard')),
@@ -245,6 +278,30 @@ describe('routing', () => {
       const name = responseNameFor(request(path));
       assert.ok(name, `${path} has no dataset entry`);
       assert.ok(DATASET.responses[name], `${path} resolved to a missing response`);
+    }
+  });
+
+  it('serves repository key and retention captures while refusing their writes', async (t) => {
+    t.mock.method(Date, 'now', () => REFERENCE_MS);
+    const { default: worker } = await import('./worker.mjs');
+    const env = { ASSETS: { fetch: () => new Response('', { status: 200 }) } };
+    for (const [path, name, method] of [
+      ['/api/v1/management/repo-keys', 'repo-keys', 'POST'],
+      ['/api/v1/management/repo-keys/applications', 'repo-key-applications', 'POST'],
+      ['/api/v1/management/repo-keys/audit-push', 'repo-key-audit-push', 'POST'],
+      ['/api/v1/management/system/data-retention', 'system-data-retention', 'PUT'],
+    ]) {
+      await t.test(path, async () => {
+        const response = await worker.fetch(request(path), env);
+        assert.equal(response.status, 200, `${path} did not answer`);
+        assert.equal(responseNameFor(request(path)), name);
+        assert.deepEqual(await response.json(), JSON.parse(DATASET.responses[name].body));
+        const write = await worker.fetch(new Request(`https://demo.example${path}`, {
+          method, headers: { 'Content-Type': 'application/json' }, body: '{}',
+        }), env);
+        assert.equal(write.status, 403, `${method} ${path} must remain read-only`);
+        assert.equal((await write.json()).code, 'demo_operation_refused');
+      });
     }
   });
 

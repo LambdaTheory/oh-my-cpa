@@ -98,11 +98,12 @@ type UsageEventFilter struct {
 	// AuthIndexes select credentials on the CPA instance.
 	AuthIndexes []string
 	// Sources are CPA's client-facing API key labels.
-	Sources          []string
-	AuthTypes        []string
-	ExecutorTypes    []string
-	ReasoningEfforts []string
-	ServiceTiers     []string
+	Sources              []string
+	AuthTypes            []string
+	ExecutorTypes        []string
+	ReasoningEfforts     []string
+	ServiceTiers         []string
+	ResolvedServiceTiers []string
 
 	// Endpoint and UserAgent are substring matches. Both are long,
 	// high-cardinality values that a console filters by typing rather than by
@@ -155,28 +156,30 @@ type UsageEventFilter struct {
 
 // UsageEventRow is one stored request record.
 type UsageEventRow struct {
-	ID            int64  `json:"id"`
-	InstanceID    string `json:"instance_id"`
-	EventKey      string `json:"event_key"`
-	RequestID     string `json:"request_id"`
-	TimestampMS   int64  `json:"timestamp_ms"`
-	Provider      string `json:"provider"`
-	Endpoint      string `json:"endpoint"`
-	ExecutorType  string `json:"executor_type"`
-	AuthType      string `json:"auth_type"`
-	AuthIndex     string `json:"auth_index"`
-	APIGroupKey   string `json:"api_group_key"`
-	APIGroupLabel string `json:"api_group_label"`
+	Accounting    *usage.TokenAccounting `json:"token_accounting,omitempty"`
+	ID            int64                  `json:"id"`
+	InstanceID    string                 `json:"instance_id"`
+	EventKey      string                 `json:"event_key"`
+	RequestID     string                 `json:"request_id"`
+	TimestampMS   int64                  `json:"timestamp_ms"`
+	Provider      string                 `json:"provider"`
+	Endpoint      string                 `json:"endpoint"`
+	ExecutorType  string                 `json:"executor_type"`
+	AuthType      string                 `json:"auth_type"`
+	AuthIndex     string                 `json:"auth_index"`
+	APIGroupKey   string                 `json:"api_group_key"`
+	APIGroupLabel string                 `json:"api_group_label"`
 	// APIKeyMask is the display-only mask of the client key. It is empty for
 	// records ingested before the mask column existed: the request record keeps
 	// only the fingerprint, which cannot be turned back into a readable mask.
-	APIKeyMask          string  `json:"api_key_mask,omitempty"`
-	Source              string  `json:"source"`
-	Model               string  `json:"model"`
-	ModelAlias          *string `json:"model_alias,omitempty"`
-	ReasoningEffort     string  `json:"reasoning_effort,omitempty"`
-	ServiceTier         string  `json:"service_tier,omitempty"`
-	ResponseServiceTier string  `json:"response_service_tier,omitempty"`
+	APIKeyMask           string  `json:"api_key_mask,omitempty"`
+	Source               string  `json:"source"`
+	Model                string  `json:"model"`
+	ModelAlias           *string `json:"model_alias,omitempty"`
+	ReasoningEffort      string  `json:"reasoning_effort,omitempty"`
+	ServiceTier          string  `json:"service_tier,omitempty"`
+	EffectiveServiceTier string  `json:"effective_service_tier,omitempty"`
+	ResponseServiceTier  string  `json:"response_service_tier,omitempty"`
 	// ResponseModel is the model the upstream reported having served; empty when
 	// it reported none or the record predates the column.
 	ResponseModel    string `json:"response_model,omitempty"`
@@ -349,13 +352,13 @@ func usageEventListSelect(from string) string {
 		SELECT e.id, e.instance_id, e.event_key, e.request_id, e.timestamp_ms,
 		       e.provider, e.endpoint, e.executor_type, e.auth_type, e.auth_index,
 		       e.api_group_key, e.api_group_label, e.api_key_mask, e.source, e.model, e.model_alias, e.reasoning_effort,
-		       e.service_tier, e.response_service_tier, e.failed, e.generate, e.stream,
+		       e.service_tier, e.effective_service_tier, e.response_service_tier, e.failed, e.generate, e.stream,
 		       e.latency_ms, e.ttft_ms, e.client_ip, e.x_forwarded_for, e.user_agent,
 		       e.input_tokens, e.output_tokens, e.reasoning_tokens, e.cached_tokens,
 		       e.cache_read_tokens, e.cache_creation_tokens, e.total_tokens,
 		       d.id, d.cpa_resource_name AS resource_name,
 		       e.cost_nanos / 1000000000.0 AS cost_usd, e.pricing_status, e.price_version_id,
-		       e.response_model, e.model_substituted, e.fail_status_code
+		       e.response_model, e.model_substituted, e.fail_status_code, e.token_accounting
 		FROM ` + from + `
 		LEFT JOIN (
 			SELECT instance_id, cpa_auth_index,
@@ -383,17 +386,23 @@ func (r *Repository) queryUsageEventRows(ctx context.Context, query string, args
 		var streamVal sql.NullInt64
 		var resourceID, resourceName sql.NullString
 		var costUSD sql.NullFloat64
+		var accounting sql.NullString
 		if errScan := rows.Scan(
 			&row.ID, &row.InstanceID, &row.EventKey, &row.RequestID, &row.TimestampMS,
 			&row.Provider, &row.Endpoint, &row.ExecutorType, &row.AuthType, &row.AuthIndex,
 			&row.APIGroupKey, &row.APIGroupLabel, &row.APIKeyMask, &row.Source, &row.Model, &row.ModelAlias, &row.ReasoningEffort,
-			&row.ServiceTier, &row.ResponseServiceTier, &failed, &generate, &streamVal,
+			&row.ServiceTier, &row.EffectiveServiceTier, &row.ResponseServiceTier, &failed, &generate, &streamVal,
 			&row.LatencyMS, &row.TTFTMS, &row.ClientIP, &row.XForwardedFor, &row.UserAgent,
 			&row.Tokens.InputTokens, &row.Tokens.OutputTokens, &row.Tokens.ReasoningTokens,
 			&row.Tokens.CachedTokens, &row.Tokens.CacheReadTokens, &row.Tokens.CacheCreationTokens,
 			&row.Tokens.TotalTokens, &resourceID, &resourceName, &costUSD, &row.PricingStatus, &row.PriceVersionID,
-			&row.ResponseModel, &row.ModelSubstituted, &row.FailStatusCode); errScan != nil {
+			&row.ResponseModel, &row.ModelSubstituted, &row.FailStatusCode, &accounting); errScan != nil {
 			return nil, fmt.Errorf("scan usage event: %w", errScan)
+		}
+		var errAccounting error
+		row.Accounting, errAccounting = decodeStoredTokenAccounting(accounting)
+		if errAccounting != nil {
+			return nil, errAccounting
 		}
 		row.Failed = failed == 1
 		row.Generate = generate == 1
@@ -435,18 +444,19 @@ func (r *Repository) GetUsageEvent(ctx context.Context, id int64) (UsageEventRow
 	var isNativeKey sql.NullInt64
 	var resourceID, resourceName sql.NullString
 	var costUSD sql.NullFloat64
+	var accounting sql.NullString
 	err := r.SQL().QueryRowContext(ctx, `
 		SELECT e.id, e.instance_id, e.event_key, e.request_id, e.timestamp_ms,
 		       e.provider, e.endpoint, e.executor_type, e.auth_type, e.auth_index,
 		       e.api_group_key, e.api_group_label, e.api_key_mask, e.source, e.model, e.model_alias, e.reasoning_effort,
-		       e.service_tier, e.response_service_tier, e.failed, e.generate, e.stream,
+		       e.service_tier, e.effective_service_tier, e.response_service_tier, e.failed, e.generate, e.stream,
 		       e.latency_ms, e.ttft_ms, e.client_ip, e.x_forwarded_for, e.user_agent,
 		       e.input_tokens, e.output_tokens, e.reasoning_tokens, e.cached_tokens,
 		       e.cache_read_tokens, e.cache_creation_tokens, e.total_tokens,
 		       d.id, d.cpa_resource_name AS resource_name,
 		       e.cost_nanos / 1000000000.0 AS cost_usd, e.pricing_status, e.price_version_id,
 		       e.response_model, e.model_substituted, e.fail_status_code, e.fail_body, e.response_headers,
-		       e.access_provider, e.is_native_key
+		       e.access_provider, e.is_native_key, e.token_accounting
 		FROM usage_events e
 		LEFT JOIN (
 			SELECT instance_id, cpa_auth_index,
@@ -460,18 +470,22 @@ func (r *Repository) GetUsageEvent(ctx context.Context, id int64) (UsageEventRow
 		&row.ID, &row.InstanceID, &row.EventKey, &row.RequestID, &row.TimestampMS,
 		&row.Provider, &row.Endpoint, &row.ExecutorType, &row.AuthType, &row.AuthIndex,
 		&row.APIGroupKey, &row.APIGroupLabel, &row.APIKeyMask, &row.Source, &row.Model, &row.ModelAlias, &row.ReasoningEffort,
-		&row.ServiceTier, &row.ResponseServiceTier, &failed, &generate, &streamVal,
+		&row.ServiceTier, &row.EffectiveServiceTier, &row.ResponseServiceTier, &failed, &generate, &streamVal,
 		&row.LatencyMS, &row.TTFTMS, &row.ClientIP, &row.XForwardedFor, &row.UserAgent,
 		&row.Tokens.InputTokens, &row.Tokens.OutputTokens, &row.Tokens.ReasoningTokens,
 		&row.Tokens.CachedTokens, &row.Tokens.CacheReadTokens, &row.Tokens.CacheCreationTokens,
 		&row.Tokens.TotalTokens, &resourceID, &resourceName, &costUSD, &row.PricingStatus, &row.PriceVersionID,
 		&row.ResponseModel, &row.ModelSubstituted, &row.FailStatusCode, &row.FailBody, &row.ResponseHeaders,
-		&row.AccessProvider, &isNativeKey)
+		&row.AccessProvider, &isNativeKey, &accounting)
 	if errors.Is(err, sql.ErrNoRows) {
 		return row, ErrNotFound
 	}
 	if err != nil {
 		return row, fmt.Errorf("read usage event: %w", err)
+	}
+	row.Accounting, err = decodeStoredTokenAccounting(accounting)
+	if err != nil {
+		return row, err
 	}
 	row.Failed = failed == 1
 	row.Generate = generate == 1
@@ -577,10 +591,11 @@ type UsageFacets struct {
 	// deliberately absent: both are long free-form values where a typed substring
 	// beats a 200-row list, and the endpoint URL must never be handed to the
 	// browser (the list projection drops it for the same reason).
-	ModelAliases     []UsageFacetValue `json:"model_aliases"`
-	AuthTypes        []UsageFacetValue `json:"auth_types"`
-	ReasoningEfforts []UsageFacetValue `json:"reasoning_efforts"`
-	ServiceTiers     []UsageFacetValue `json:"service_tiers"`
+	ModelAliases         []UsageFacetValue `json:"model_aliases"`
+	AuthTypes            []UsageFacetValue `json:"auth_types"`
+	ReasoningEfforts     []UsageFacetValue `json:"reasoning_efforts"`
+	ServiceTiers         []UsageFacetValue `json:"service_tiers"`
+	ResolvedServiceTiers []UsageFacetValue `json:"resolved_service_tiers"`
 }
 
 // UsageFacetValue is one distinct value plus how often it occurred. Mask carries
@@ -660,21 +675,22 @@ func (r *Repository) ClientKeyUsage(ctx context.Context, instanceID string, from
 // GetUsageFacets enumerates filter options within a time window.
 func (r *Repository) GetUsageFacets(ctx context.Context, instanceID string, fromMS, toMS int64) (UsageFacets, error) {
 	facets := UsageFacets{
-		Models:           []UsageFacetValue{},
-		Providers:        []UsageFacetValue{},
-		APIGroupKey:      []UsageFacetValue{},
-		AuthIndexes:      []UsageFacetValue{},
-		Sources:          []UsageFacetValue{},
-		Executors:        []UsageFacetValue{},
-		ModelAliases:     []UsageFacetValue{},
-		AuthTypes:        []UsageFacetValue{},
-		ReasoningEfforts: []UsageFacetValue{},
-		ServiceTiers:     []UsageFacetValue{},
+		Models:               []UsageFacetValue{},
+		Providers:            []UsageFacetValue{},
+		APIGroupKey:          []UsageFacetValue{},
+		AuthIndexes:          []UsageFacetValue{},
+		Sources:              []UsageFacetValue{},
+		Executors:            []UsageFacetValue{},
+		ModelAliases:         []UsageFacetValue{},
+		AuthTypes:            []UsageFacetValue{},
+		ReasoningEfforts:     []UsageFacetValue{},
+		ServiceTiers:         []UsageFacetValue{},
+		ResolvedServiceTiers: []UsageFacetValue{},
 	}
 	if r == nil || r.SQL() == nil {
 		return facets, errors.New("repository is not initialized")
 	}
-	// Materialize only the facet columns once: ten indexed detail-table walks otherwise
+	// Materialize only the facet columns once: separate indexed detail-table walks otherwise
 	// hold the single SQLite connection much longer than grouping this narrow window.
 	columns := []struct {
 		column     string
@@ -691,12 +707,14 @@ func (r *Repository) GetUsageFacets(ctx context.Context, instanceID string, from
 		{column: "auth_type", target: &facets.AuthTypes},
 		{column: "reasoning_effort", target: &facets.ReasoningEfforts},
 		{column: "service_tier", target: &facets.ServiceTiers},
+		{column: "resolved_service_tier", target: &facets.ResolvedServiceTiers},
 	}
 	var query strings.Builder
 	query.WriteString(`WITH facet_window AS MATERIALIZED (
 		SELECT model, provider, api_group_key, api_key_mask, auth_index, source,
-		       executor_type, model_alias, auth_type, reasoning_effort, service_tier
-		FROM usage_events WHERE instance_id = ? AND timestamp_ms BETWEEN ? AND ?
+		       executor_type, model_alias, auth_type, reasoning_effort, service_tier,
+		       ` + RESOLVED_SERVICE_TIER_SQL + ` AS resolved_service_tier
+		FROM usage_events e WHERE instance_id = ? AND timestamp_ms BETWEEN ? AND ?
 	) `)
 	for i, entry := range columns {
 		if i > 0 {
@@ -846,6 +864,7 @@ func usageEventWhere(filter UsageEventFilter) ([]string, []any, error) {
 		{"e.executor_type", filter.ExecutorTypes},
 		{"e.reasoning_effort", filter.ReasoningEfforts},
 		{"e.service_tier", filter.ServiceTiers},
+		{RESOLVED_SERVICE_TIER_SQL, filter.ResolvedServiceTiers},
 	}
 	for _, dimension := range dimensions {
 		clause, clauseArgs, err := usageEventInClause(dimension.column, dimension.values)

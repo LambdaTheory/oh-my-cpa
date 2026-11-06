@@ -1,3 +1,4 @@
+import { TokenAccountingNote } from './TokenAccountingNote';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
 import { Button, Modal, Tabs, Tooltip } from 'antd';
@@ -30,8 +31,12 @@ import {
 } from '../../types/usageEventIdentity';
 import {
   formatEventDuration,
+  eventTokensPerSecond,
+  tpsCalculationHintKey,
   hasMeasurableTTFT,
   isFastTierEvent,
+  fastTierHintKey,
+  resolvedTierHintKey,
   isNonStreamingEvent,
 } from '../../types/usageEventMetrics';
 import { requestGroupName } from '../../types/usageEventLabels';
@@ -65,7 +70,7 @@ export const UsageEventDrawer: React.FC<UsageEventDrawerProps> = ({
   const isDemo = isDemoMode();
   // The drawer's token cards follow the console's unit style; the values are
   // exact counts, so the full form is what this surface prints.
-  const { style: tokenStyle, modelView } = useTokenDisplayStyle();
+  const { style: tokenStyle, modelView, tpsMode } = useTokenDisplayStyle();
   const isCallView = modelView === 'call';
   const toast = useToast();
   const [downloadModalOpen, setDownloadModalOpen] = React.useState(false);
@@ -220,6 +225,7 @@ export const UsageEventDrawer: React.FC<UsageEventDrawerProps> = ({
     </div>
   );
 
+  const rate = eventTokensPerSecond(event, tpsMode);
   const latency = event?.latency_ms ?? 0;
   const isMeasurable = hasMeasurableTTFT(event);
   const ttft = isMeasurable && event?.ttft_ms != null ? event.ttft_ms : 0;
@@ -252,11 +258,11 @@ export const UsageEventDrawer: React.FC<UsageEventDrawerProps> = ({
                 />
                 <h2>{(isCallView ? (event.model_alias || event.model) : event.model) || t('events.not_captured')}</h2>
                 {isFastTierEvent(event) && (
-                  <Tooltip title={t('events.fast_tier_hint', { tier: event.response_service_tier ?? '' })}>
+                  <Tooltip title={t(fastTierHintKey(event), { tier: event.resolved_service_tier ?? '' })}>
                     <span
                       className="req-mode-mark req-fast-icon"
                       role="img"
-                      aria-label={t('events.fast_tier_hint', { tier: event.response_service_tier ?? '' })}
+                      aria-label={t(fastTierHintKey(event), { tier: event.resolved_service_tier ?? '' })}
                     >
                       <ThunderboltFilled />
                     </span>
@@ -288,6 +294,14 @@ export const UsageEventDrawer: React.FC<UsageEventDrawerProps> = ({
               <span>{t('events.duration')}</span>
               <strong>{formatEventDuration(event.latency_ms)}</strong>
             </div>
+            {rate.basis !== null && (
+              <div>
+                <span>{t('events.col_tps')}</span>
+                <Tooltip title={t(tpsCalculationHintKey(rate.basis))}>
+                  <strong tabIndex={0} aria-label={`${t('events.col_tps')}: ${rate.formatted}. ${t(tpsCalculationHintKey(rate.basis))}`}>{rate.formatted}</strong>
+                </Tooltip>
+              </div>
+            )}
             {isMeasurable && (
               <div>
                 <span>{t('events.ttft')}</span>
@@ -413,7 +427,14 @@ export const UsageEventDrawer: React.FC<UsageEventDrawerProps> = ({
                         ],
                         [t('events.reasoning_effort'), value(displayEffortName(event.reasoning_effort))],
                         [t('events.service_tier'), value(event.service_tier)],
+                        [t('events.outbound_tier'), value(event.effective_service_tier)],
                         [t('events.response_tier'), value(event.response_service_tier)],
+                        [
+                          t('events.resolved_tier'),
+                          event.resolved_service_tier || event.resolved_service_tier_source === 'outbound'
+                            ? t(resolvedTierHintKey(event), { tier: event.resolved_service_tier || '—' })
+                            : value(undefined),
+                        ],
                         [
                           t('events.generation'),
                           t(event.generate ? 'events.generation_yes' : 'events.preflight'),
@@ -515,6 +536,7 @@ export const UsageEventDrawer: React.FC<UsageEventDrawerProps> = ({
                           : []),
                       ]),
                     )}
+                    <TokenAccountingNote accounting={event.token_accounting} className="request-detail-note" />
                     {section(
                       t('events.token_breakdown'),
                       fields([

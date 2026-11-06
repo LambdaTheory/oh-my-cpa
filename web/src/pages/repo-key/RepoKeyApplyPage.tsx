@@ -80,7 +80,7 @@ export function RepoKeyApplyPage() {
         <section className={`auth-card ${styles['card']}`} aria-labelledby="repo-key-apply-title" aria-busy={(canRead && review.isPending) || undefined}>
           <h1 id="repo-key-apply-title" className="terminal-title auth-title">{title}</h1>
 
-          {isDemo && <p className={styles['intro']} data-testid="repo-key-apply-demo">{t('repo_keys.subtitle')}</p>}
+          {isDemo && <p className={styles['intro']}>{t('repo_keys.subtitle')}</p>}
           {isMissing && <p className={styles['intro']}>{t('repo_key_apply.missing_hint')}</p>}
           {isExpired && <p className={styles['intro']}>{t('repo_key_apply.expired_hint')}</p>}
           {isUnread && <p className={styles['intro']}>{t('repo_keys.failed')}</p>}
