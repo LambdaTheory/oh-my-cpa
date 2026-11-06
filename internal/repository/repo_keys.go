@@ -74,6 +74,7 @@ type RepoKeyApplication struct {
 	ID                   string `json:"id"`
 	InstanceID           string `json:"instance_id"`
 	RepoID               string `json:"repo_id"`
+	RepoDisplay          string `json:"repo_display"`
 	RepoHasRemote        bool   `json:"repo_has_remote"`
 	AgentName            string `json:"agent_name"`
 	DeviceName           string `json:"device_name"`
@@ -147,7 +148,7 @@ const repoKeyApplicationColumns = `id, instance_id, repo_id, repo_has_remote, ag
 	purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source, binding_id,
 	key_fingerprint, key_mask, decided_by, decided_at_ms, reject_reason, authorization_token_hash,
 	ciphertext, token_expires_at_ms, first_delivered_at_ms, created_at_ms, updated_at_ms,
-	request_kind, target_binding_id, decision_reason`
+	request_kind, target_binding_id, decision_reason, repo_display`
 
 func scanRepoKeyBinding(scanner interface{ Scan(...any) error }) (RepoKeyBinding, error) {
 	var binding RepoKeyBinding
@@ -179,7 +180,7 @@ func scanRepoKeyApplication(scanner interface{ Scan(...any) error }) (RepoKeyApp
 		&application.DecidedBy, &decidedAt, &application.RejectReason,
 		&application.AuthorizationTokenHash, &application.Ciphertext, &application.TokenExpiresAtMS, &deliveredAt,
 		&application.CreatedAtMS, &application.UpdatedAtMS,
-		&application.RequestKind, &application.TargetBindingID, &application.DecisionReason,
+		&application.RequestKind, &application.TargetBindingID, &application.DecisionReason, &application.RepoDisplay,
 	)
 	application.RepoHasRemote = hasRemote == 1
 	if decidedAt.Valid {
@@ -636,7 +637,7 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		// changed key still needs the human decision it is waiting for (AC-34).
 		unchanged := existing.PublicKeyFingerprint == application.PublicKeyFingerprint &&
 			existing.DeviceName == application.DeviceName && existing.Source == application.Source &&
-			existing.Purpose == application.Purpose &&
+			existing.Purpose == application.Purpose && existing.RepoDisplay == application.RepoDisplay &&
 			existing.RequestKind == application.RequestKind &&
 			existing.TargetBindingID == application.TargetBindingID
 		if !unchanged {
@@ -656,12 +657,13 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 			}
 			if _, err = tx.ExecContext(ctx, `
 				UPDATE repo_key_applications SET purpose = ?, public_key = ?, public_key_fingerprint = ?,
-					key_algorithm = ?, device_name = ?, source = ?, kind = ?, request_kind = ?, target_binding_id = ?, updated_at_ms = ? WHERE id = ?`,
+					key_algorithm = ?, device_name = ?, source = ?, kind = ?, request_kind = ?, target_binding_id = ?, repo_display = ?, updated_at_ms = ? WHERE id = ?`,
 				application.Purpose, application.PublicKey, application.PublicKeyFingerprint,
 				application.KeyAlgorithm, application.DeviceName, application.Source, application.Kind, application.RequestKind, application.TargetBindingID,
-				nowMS, existing.ID); err != nil {
+				application.RepoDisplay, nowMS, existing.ID); err != nil {
 				return RepoKeyApplication{}, false, fmt.Errorf("refresh pending repo key application: %w", err)
 			}
+			existing.RepoDisplay = application.RepoDisplay
 			existing.Purpose = application.Purpose
 			existing.PublicKey = application.PublicKey
 			existing.PublicKeyFingerprint = application.PublicKeyFingerprint
@@ -704,13 +706,13 @@ func (r *Repository) CreateRepoKeyApplication(ctx context.Context, application R
 		INSERT INTO repo_key_applications (id, instance_id, repo_id, repo_has_remote, agent_name, device_name,
 			purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source,
 			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms,
-			request_kind, target_binding_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			request_kind, target_binding_id, repo_display)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		application.ID, application.InstanceID, application.RepoID, boolToInt(application.RepoHasRemote),
 		application.AgentName, application.DeviceName, application.Purpose, application.Kind,
 		application.PublicKey, application.PublicKeyFingerprint, application.KeyAlgorithm, application.Source,
 		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS,
-		application.RequestKind, application.TargetBindingID); err != nil {
+		application.RequestKind, application.TargetBindingID, application.RepoDisplay); err != nil {
 		if isUniqueViolation(err) {
 			return RepoKeyApplication{}, false, ErrRepoKeyApplicationPending
 		}
@@ -848,13 +850,13 @@ func (r *Repository) CreateApprovedRepoKeyApplication(ctx context.Context, appli
 		INSERT INTO repo_key_applications (id, instance_id, repo_id, repo_has_remote, agent_name, device_name,
 			purpose, kind, status, public_key, public_key_fingerprint, key_algorithm, source,
 			binding_id, key_fingerprint, key_mask, decided_at_ms, ciphertext,
-			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			authorization_token_hash, token_expires_at_ms, created_at_ms, updated_at_ms, repo_display)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		application.ID, application.InstanceID, application.RepoID, boolToInt(application.RepoHasRemote),
 		application.AgentName, application.DeviceName, application.Purpose, application.Kind,
 		application.PublicKey, application.PublicKeyFingerprint, application.KeyAlgorithm, application.Source,
 		application.BindingID, application.KeyFingerprint, application.KeyMask, nowMS, application.Ciphertext,
-		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS); err != nil {
+		application.AuthorizationTokenHash, application.TokenExpiresAtMS, nowMS, nowMS, application.RepoDisplay); err != nil {
 		return RepoKeyApplication{}, fmt.Errorf("create approved repo key application: %w", err)
 	}
 	if err = tx.Commit(); err != nil {

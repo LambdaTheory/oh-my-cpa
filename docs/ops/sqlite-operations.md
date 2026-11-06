@@ -190,6 +190,11 @@ When upgrading Oh My CPA, the application automatically inspects and applies une
    - Each migration runs in its own transaction. A failure rolls back that migration and stops startup; earlier migrations that already committed remain applied. Fix the cause and restart to continue forward;
    - Do not start an older binary against a database that reached 46–49. To return to the pre-upgrade release, stop OMC and restore the complete backup made before migration 046 together with the matching `.env` and `OMCPA_MASTER_KEY`.
 
+5. **Repository-key identity upgrade (063)**:
+   - GitHub owner/repository identities are normalized to lowercase; application spelling is preserved in `repo_display`. Key fingerprints, bindings, recipients and application IDs are retained; other hosts and local directories are not case-folded;
+   - Legacy identities retain no separate host field. A two-segment single-label host such as `gitserver/Repo` is indistinguishable from GitHub shorthand; domain/port-qualified hosts (including `git.example.com/Repo`) and `localhost` are excluded from folding. Confirm any historical single-label-host registration separately before this upgrade;
+   - If earlier versions already created conflicting case variants (two active keys, duplicate pending applications for one agent, or duplicate recipient identities), uniqueness checks refuse the migration and roll back all of 063. Startup stops with the old registrations intact rather than choosing a key or discarding a record. Arrange an explicitly approved reconciliation before retrying; do not remove history or edit migration bookkeeping to bypass the refusal.
+
 ---
 
 ## 6. Data Retention & Periodic Maintenance

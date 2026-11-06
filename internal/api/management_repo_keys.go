@@ -93,6 +93,7 @@ type RepoKeyUsageDTO struct {
 type RepoKeyApplicationDTO struct {
 	ID                   string `json:"id"`
 	Repo                 string `json:"repo"`
+	RepoDisplay          string `json:"repo_display"`
 	RepoHasRemote        bool   `json:"repo_has_remote"`
 	Agent                string `json:"agent"`
 	Device               string `json:"device"`
@@ -159,7 +160,7 @@ func repoKeyBindingDTO(binding repository.RepoKeyBinding) RepoKeyBindingDTO {
 
 func repoKeyApplicationDTO(application repository.RepoKeyApplication) RepoKeyApplicationDTO {
 	item := RepoKeyApplicationDTO{
-		ID: application.ID, Repo: application.RepoID, RepoHasRemote: application.RepoHasRemote,
+		ID: application.ID, Repo: application.RepoID, RepoHasRemote: application.RepoHasRemote, RepoDisplay: application.RepoDisplay,
 		Agent: application.AgentName, Device: application.DeviceName, Purpose: application.Purpose,
 		Kind: application.Kind, Status: application.Status, Source: application.Source,
 		PublicKeyFingerprint: application.PublicKeyFingerprint, KeyMask: application.KeyMask,
@@ -517,6 +518,8 @@ func (h *Handler) applyRepoKeyOnBehalf(writer http.ResponseWriter, request *http
 		"application_id":         result.ApplicationID,
 		"status":                 result.Status,
 		"kind":                   result.Kind,
+		"repo":                   result.Repo,
+		"repo_display":           result.RepoDisplay,
 		"approval_token":         result.ApprovalToken,
 		"approval_url":           result.ApprovalURL,
 		"approval_expires_at_ms": result.ApprovalExpires,

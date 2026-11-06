@@ -147,6 +147,7 @@ type RepoKeyApplyResult struct {
 	Status           string `json:"status"`
 	Kind             string `json:"kind"`
 	Repo             string `json:"repo"`
+	RepoDisplay      string `json:"repo_display"`
 	RepoHasRemote    bool   `json:"repo_has_remote"`
 	Agent            string `json:"agent"`
 	Device           string `json:"device"`
@@ -163,6 +164,7 @@ type RepoKeyStatusResult struct {
 	Status           string `json:"status"`
 	Kind             string `json:"kind"`
 	Repo             string `json:"repo"`
+	RepoDisplay      string `json:"repo_display"`
 	Agent            string `json:"agent"`
 	Device           string `json:"device"`
 	Purpose          string `json:"purpose"`
@@ -268,6 +270,10 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 	if err != nil {
 		return RepoKeyApplyResult{}, invalidParameters{detail: "The repo must be a remote identity such as org/repo, or a local directory name."}
 	}
+	repoDisplay, err := repokey.RepoDisplay(params.Repo)
+	if err != nil {
+		return RepoKeyApplyResult{}, err
+	}
 	agent := strings.TrimSpace(params.Agent)
 	purpose := strings.TrimSpace(params.Purpose)
 	if agent == "" || len(agent) > 128 {
@@ -326,7 +332,7 @@ func (s *Service) applyRepoKey(ctx context.Context, params repoKeyApplyParams) (
 		// The id is chosen here rather than inside the repository so the platform event
 		// can use it as the trace that ties apply, approval and delivery together.
 		ID:         uuid.NewString(),
-		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: hasRemote,
+		InstanceID: repoKeyInstanceID, RepoID: repoID, RepoHasRemote: hasRemote, RepoDisplay: repoDisplay,
 		AgentName: agent, DeviceName: device, Purpose: purpose, Kind: kind,
 		PublicKey: publicKey, PublicKeyFingerprint: fingerprint, KeyAlgorithm: "x25519",
 		Source: params.Source, AuthorizationTokenHash: repokey.TokenFingerprint(token),
@@ -419,7 +425,7 @@ func (s *Service) autoApproveRepoKeyApplication(ctx context.Context, binding *re
 func (s *Service) repoKeyApplyResult(ctx context.Context, application repository.RepoKeyApplication, token string) RepoKeyApplyResult {
 	result := RepoKeyApplyResult{
 		ApplicationID: application.ID, Status: application.Status, Kind: application.Kind,
-		Repo: application.RepoID, RepoHasRemote: application.RepoHasRemote,
+		Repo: application.RepoID, RepoHasRemote: application.RepoHasRemote, RepoDisplay: application.RepoDisplay,
 		Agent: application.AgentName, Device: application.DeviceName,
 		KeyMask: application.KeyMask,
 	}
@@ -531,7 +537,7 @@ func (s *Service) RepoKeyStatus(ctx context.Context, applicationID string) (Repo
 	}
 	result := RepoKeyStatusResult{
 		ApplicationID: application.ID, Status: application.Status, Kind: application.Kind,
-		Repo: application.RepoID, Agent: application.AgentName, Device: application.DeviceName,
+		Repo: application.RepoID, Agent: application.AgentName, Device: application.DeviceName, RepoDisplay: application.RepoDisplay,
 		Purpose: application.Purpose, KeyMask: application.KeyMask,
 		RejectReason: application.RejectReason, CreatedAtMS: application.CreatedAtMS,
 		DecidedAtMS: derefInt64(application.DecidedAtMS), FirstDeliveredMS: derefInt64(application.FirstDeliveredAtMS),

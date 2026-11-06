@@ -901,6 +901,14 @@ a browser, and the caller's identity travels on the MCP transport (`X-Omc-Agent`
 `X-Omc-Device`, or the stdio bridge's `OMCPA_AGENT_NAME` and `OMCPA_DEVICE_NAME`) as
 self-declared data, not as an authenticated principal.
 
+The `repo` identity folds only GitHub owner/repository names to lowercase, including
+GitHub shorthand and HTTPS/SSH variants. Other hosts' paths and local directory names
+retain their case. Applications separately retain `repo_display`, the submitted spelling
+with URL credentials removed, for human review and application history. A pending public
+key never replaces the approved caller registration: automatic reuse must match that
+repository's last human-approved caller fingerprint, and an existing pending application
+continues to require its own decision.
+
 - `repo_key_query` is a read. Given a repository it answers whether a usable key exists
   (`active`), none exists, or one was stopped — which tells the caller whether applying would
   reuse, issue or re-issue.
