@@ -2,7 +2,7 @@ import { FilterDisclosure } from '../common/FilterDisclosure';
 import { ActionMenu } from '../common/ActionMenu';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
-import { Button, Segmented, Select, Tooltip } from 'antd';
+import { Button, Input, Segmented, Select, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import dayjs from '../../utils/time';
@@ -164,6 +164,8 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
   const toast = useToast();
   const isPhone = useIsPhoneViewport();
   const [searchDraft, setSearchDraft] = React.useState(filters.search);
+  const [repoDraft, setRepoDraft] = React.useState(filters.repo);
+  const [agentDraft, setAgentDraft] = React.useState(filters.agent);
   const [isExporting, setIsExporting] = React.useState(false);
   const [openId, setOpenId] = React.useState<number>();
   const filtersRef = React.useRef(filters);
@@ -173,6 +175,13 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
   React.useEffect(() => {
     setSearchDraft(filters.search);
   }, [filters.search]);
+
+  // The two narrowing boxes commit on Enter or blur rather than on every keystroke: each
+  // character would otherwise ask the server for a page nobody is going to read.
+  React.useEffect(() => {
+    setRepoDraft(filters.repo);
+    setAgentDraft(filters.agent);
+  }, [filters.repo, filters.agent]);
 
   React.useEffect(() => {
     if (searchDraft.trim() === filtersRef.current.search) return undefined;
@@ -195,7 +204,7 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
   // Keyed on what the summary actually reads, so switching a facet reuses the matrix it
   // already has instead of asking the server to count the same rows again.
   const summary = useQuery({
-    queryKey: ['audit-summary', filters.range, filters.search],
+    queryKey: ['audit-summary', filters.range, filters.search, filters.repo, filters.agent],
     queryFn: () => api.getAuditSummary(filters),
     placeholderData: keepPreviousData,
     meta: { silent: true },
@@ -218,7 +227,13 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
   const openIndex = openId === undefined ? -1 : events.findIndex((event) => event.id === openId);
   const openEvent = openIndex >= 0 ? events[openIndex] : undefined;
 
-  const isFiltered = filters.categories.length > 0 || filters.outcome !== 'all' || filters.search.trim() !== '' || filters.range !== 'all';
+  const isFiltered =
+    filters.categories.length > 0 ||
+    filters.outcome !== 'all' ||
+    filters.search.trim() !== '' ||
+    filters.repo.trim() !== '' ||
+    filters.agent.trim() !== '' ||
+    filters.range !== 'all';
   const category = selectedCategory(filters);
   const hasCounts = summary.data !== undefined;
   const isBlocked = query.isError && !query.data;
@@ -227,6 +242,12 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
   const update = (patch: Partial<AuditFilters>) => {
     setOpenId(undefined);
     onFiltersChange({ ...filters, ...patch });
+  };
+  // The narrowing boxes share one commit so reading either after typing in both asks once.
+  const commitNarrow = () => {
+    const repo = repoDraft.trim();
+    const agent = agentDraft.trim();
+    if (repo !== filters.repo.trim() || agent !== filters.agent.trim()) update({ repo, agent });
   };
   const refresh = () => {
     void query.refetch();
@@ -376,8 +397,28 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
         />
         <FilterDisclosure activeLabel={[
           category ? t(`audit.cat.${category}`) : '',
+          filters.repo.trim() ? t('audit.filter_repo_value', { value: filters.repo.trim() }) : '',
+          filters.agent.trim() ? t('audit.filter_agent_value', { value: filters.agent.trim() }) : '',
           filters.range !== 'all' ? t(`audit.range_${filters.range}`) : '',
         ].filter(Boolean).join(' · ')}>
+          <Input
+            className={styles['audit-narrow']}
+            value={repoDraft}
+            onChange={(event) => setRepoDraft(event.target.value)}
+            onPressEnter={commitNarrow}
+            onBlur={commitNarrow}
+            placeholder={t('audit.filter_repo')}
+            aria-label={t('audit.filter_repo')}
+          />
+          <Input
+            className={styles['audit-narrow']}
+            value={agentDraft}
+            onChange={(event) => setAgentDraft(event.target.value)}
+            onPressEnter={commitNarrow}
+            onBlur={commitNarrow}
+            placeholder={t('audit.filter_agent')}
+            aria-label={t('audit.filter_agent')}
+          />
           <Select
             className={styles['audit-category']}
             value={category ?? 'all'}
@@ -416,7 +457,7 @@ export const AuditTrail: React.FC<AuditTrailProps> = ({ title, filters, onFilter
             />
           )}
           {isFiltered && (
-            <Button type="link" className={styles['clear-filters']} onClick={() => update({ categories: [], outcome: 'all', search: '', range: 'all' })}>
+            <Button type="link" className={styles['clear-filters']} onClick={() => update({ categories: [], outcome: 'all', search: '', repo: '', agent: '', range: 'all' })}>
               {t('audit.clear_filters')}
             </Button>
           )}

@@ -66,6 +66,16 @@
   transition: opacity var(--motion-fast) ease-out;
 }
 
+/* The repository (or its absence) rides with the name, so the row reads as one identity. */
+.repo-tag {
+  flex-shrink: 0;
+  margin-left: 8px;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .name-button:not(:disabled):hover .name-edit-icon,
 .name-button:focus-visible .name-edit-icon {
   opacity: 1;

@@ -866,6 +866,34 @@ example `vinsprite78@gmail.com` becomes `vin***@gmail.com`); `auth_index` is unc
 console and the management key keep seeing the real labels. The key must be at least sixteen
 characters and differ from the CPA management key, or start-up fails.
 
+### Repository-owned API keys
+
+Four capabilities let an agent obtain a key that belongs to the repository it is working in,
+rather than to the person driving it. All four are `mcp`-only: the console never issues one to
+a browser, and the caller's identity travels on the MCP transport (`X-Omc-Agent` and
+`X-Omc-Device`, or the stdio bridge's `OMCPA_AGENT_NAME` and `OMCPA_DEVICE_NAME`) as
+self-declared data, not as an authenticated principal.
+
+- `repo_key_query` is a read. Given a repository it answers whether a usable key exists
+  (`active`), none exists, or one was stopped — which tells the caller whether applying would
+  reuse, issue or re-issue.
+- `repo_key_apply` is a write. It takes a repository, a purpose and the caller's X25519 public
+  key, and answers with the application's status. A caller the repository has been approved
+  for before, with the same public key, is approved without a person; anything new waits for
+  an operator.
+- `repo_key_status` reads one application's outcome, including a refusal reason.
+- `repo_key_ciphertext` returns the key sealed to that application's public key — X25519,
+  HKDF-SHA256 and AES-256-GCM — and never a plaintext. Each fetch is recorded as a delivery;
+  the first one takes the application off the console's awaiting-delivery queue.
+
+Oh My CPA holds no private key and no plaintext at any point: the envelope is opened by the
+caller. One repository has at most one key in service, and every decision, delivery, stop,
+re-enable and reveal is an audit event (see `internal/operations/repo_keys.go` and
+`internal/repokey/repokey.go`). The console side of the same record is the repository-key panel
+on the API keys page (`internal/api/management_repo_keys.go`,
+`web/src/components/keys/RepoKeysPanel.tsx`); a deployment may also forward those events to a
+company audit platform (ADR 0119).
+
 ### Available model directory
 
 `models_list` is a low-risk read exposed to the Agent and MCP. It takes no parameters,

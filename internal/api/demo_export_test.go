@@ -215,6 +215,17 @@ func demoExportCases() []demoExportCase {
 		// captured response. Deriving it means reseeding cannot break it.
 		{Name: "usage-event-detail", Route: "/api/v1/usage/events/{id}", From: demoExportFirstEventPath},
 		{Name: "audit-export", Path: "/api/v1/management/audit/export"},
+		// The repository-key panel's two lists. Both reads are safe in a demonstration
+		// and answer with the fixture's empty state, so the page renders its real empty
+		// tables rather than an error.
+		{Name: "repo-keys", Path: "/api/v1/management/repo-keys"},
+		{Name: "repo-key-applications", Path: "/api/v1/management/repo-keys/applications?status=pending"},
+		{Name: "repo-key-applications-awaiting", Path: "/api/v1/management/repo-keys/applications?status=approved&awaiting=true"},
+		// The panel's audit-platform block and the repository lookup the approval views use.
+		// The lookup names a repository so the read is the one the console makes; the
+		// demonstration has no binding, so it answers the "no key yet" state.
+		{Name: "repo-key-audit-push", Path: "/api/v1/management/repo-keys/audit-push"},
+		{Name: "repo-key-repo-status", Path: "/api/v1/management/repo-keys/repo-status?repo=" + url.QueryEscape("LambdaTheory/oh-my-cpa")},
 	}
 	// The price editor reads one model at a time, and the price book opens it for any
 	// row, so every model the book lists has its own captured read.
@@ -292,6 +303,13 @@ var demoExportRouteGaps = map[string]string{
 	"/api/v1/management/auth-files/safe-fields": "the fixture refuses the download the projection reads, by design and under test",
 	"/api/v1/ollama/accounts/{id}":              "the demonstration seeds no Ollama account, so there is no detail row to open",
 	"/api/v1/fonts/{id}/faces/{faceId}":         "the demonstration's font library is empty, so no face is ever declared to the browser",
+	// The repository-key lists are exported empty, so there is no row whose detail
+	// drawer could be opened. A seeded binding would also imply a key in the
+	// demonstration's gateway list, which the fixture deliberately does not have.
+	"/api/v1/management/repo-keys/{id}":              "the demonstration seeds no repository key, so no detail row exists",
+	"/api/v1/management/repo-keys/applications/{id}": "the demonstration seeds no key application, so no application detail exists",
+	"/api/v1/management/repo-keys/applications/{id}/review": "the demonstration seeds no key application, so there is no application to review",
+	"/api/v1/management/repo-keys/apply-link/{token}":       "the demonstration issues no approval link, so no token ever opens a page",
 }
 
 // demoExportFirstEventPath builds the detail path for the first event the list carried.
