@@ -7,9 +7,11 @@
 ## Context
 
 Playground was hidden because it had been considered not useful, not because its
-implementation had been removed. Haowen (Newoahil) decided on 2026-11-06 to make the
-existing model-testing page available again: operators need to send a test request to
-a connected model directly from their own console.
+implementation had been removed. Haowen (Newoahil) decided on 2026-11-06 to reopen
+the existing model-testing page. No additional rationale was recorded with that decision.
+
+The page lets operators send a test request from their console to any call point in
+CPA's live model directory.
 
 The self-hosted console and the public demonstration have different authority.
 An authenticated self-hosted operator may intentionally spend their configured
