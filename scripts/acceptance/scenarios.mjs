@@ -1,6 +1,8 @@
 import { modelSquare, modelSquareFixtures, modelSquareLedgerFixtures } from './probes/modelSquare.mjs';
 import { modelGroups, modelGroupsFixtures } from './probes/modelGroups.mjs';
 import { mobileConsole } from './probes/mobileConsole.mjs';
+import { insights, insightsFixtures } from './probes/insights.mjs';
+import { repoKeyApply } from './probes/repoKeyApply.mjs';
 import { routeRenderError, routeLazyError } from './probes/routeError.mjs';
 import { agentWorkspace, agentExternal, agentFailureCopy, agentStream, agentNarrow, agentLive, agentQuestion, agentViews, agentReplace, agentAttach, agentFixtures } from './probes/agent.mjs';
 import { playground, playgroundFixtures, playgroundNarrow } from './probes/playground.mjs';
@@ -178,6 +180,18 @@ const PHONE_LIST_ROUTES = [
 ];
 
 export const SCENARIOS = [
+  {
+    id: 'insights',
+    name: 'Insights paints its spend, opens key details and follows native Back on desktop and phones',
+    options: { routes: insightsFixtures() },
+    run: insights,
+  },
+  {
+    id: 'repo-key-apply',
+    name: 'a repository approval link fits a phone and replaces its controls after a reasoned decision',
+    options: { viewport: { width: 375, height: 844 } },
+    run: repoKeyApply,
+  },
   {
     id: 'route-render-error',
     name: 'route render failures show branded recovery in every language and theme',
