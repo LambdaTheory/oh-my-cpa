@@ -9,10 +9,9 @@ function request(path, { isOk = true, method = 'GET', base = BASE } = {}) {
   return { url: () => base + path, method: () => method, response: async () => ({ ok: () => isOk }) };
 }
 
-test('the retired Playground address is a redirect, so readiness covers the dashboard instead', () => {
-  // The hidden page has no content of its own to become ready; navigating to it lands on the
-  // dashboard, whose readiness entry already owns the reads and rendered content a visitor sees.
-  assert.equal(DEMO_ROUTES.some((route) => route.path === '/playground'), false, 'the retired address is not a page');
+test('the public demo keeps Playground closed, so readiness covers the dashboard instead', () => {
+  // Only self-hosted consoles reopen the workspace; the demo still redirects without mounting it.
+  assert.equal(DEMO_ROUTES.some((route) => route.path === '/playground'), false, 'the demo workspace stays closed');
   assert.ok(DEMO_ROUTES.some((route) => route.path === '/dashboard'), 'the redirect target owns readiness');
 });
 
