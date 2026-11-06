@@ -281,6 +281,30 @@ describe('routing', () => {
     }
   });
 
+  it('serves repository key and retention captures while refusing their writes', async (t) => {
+    t.mock.method(Date, 'now', () => REFERENCE_MS);
+    const { default: worker } = await import('./worker.mjs');
+    const env = { ASSETS: { fetch: () => new Response('', { status: 200 }) } };
+    for (const [path, name, method] of [
+      ['/api/v1/management/repo-keys', 'repo-keys', 'POST'],
+      ['/api/v1/management/repo-keys/applications', 'repo-key-applications', 'POST'],
+      ['/api/v1/management/repo-keys/audit-push', 'repo-key-audit-push', 'POST'],
+      ['/api/v1/management/system/data-retention', 'system-data-retention', 'PUT'],
+    ]) {
+      await t.test(path, async () => {
+        const response = await worker.fetch(request(path), env);
+        assert.equal(response.status, 200, `${path} did not answer`);
+        assert.equal(responseNameFor(request(path)), name);
+        assert.deepEqual(await response.json(), JSON.parse(DATASET.responses[name].body));
+        const write = await worker.fetch(new Request(`https://demo.example${path}`, {
+          method, headers: { 'Content-Type': 'application/json' }, body: '{}',
+        }), env);
+        assert.equal(write.status, 403, `${method} ${path} must remain read-only`);
+        assert.equal((await write.json()).code, 'demo_operation_refused');
+      });
+    }
+  });
+
   it('serves the unified OAuth workspace’s Ollama inventory from the dataset and still refuses its writes', async () => {
     // The unified OAuth workspace reads both of these on every load, not only when the
     // Ollama drawer opens. They are empty inventories in the demonstration - it seeds no
