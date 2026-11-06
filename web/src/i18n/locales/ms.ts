@@ -4024,7 +4024,7 @@ export const MS: Readonly<Record<string, string>> = {
   "repo_keys.col_created": "Dicipta",
   "repo_keys.col_fingerprint": "Cap jari kunci awam",
   "repo_keys.col_last_recipient": "Penerima terakhir",
-  "repo_keys.col_usage7d": "Permintaan (7 hari)",
+  "repo_keys.col_usage7d": "Kos (7 hari)",
   "repo_keys.approve": "Luluskan",
   "repo_keys.reject": "Tolak",
   "repo_keys.stop": "Hentikan",

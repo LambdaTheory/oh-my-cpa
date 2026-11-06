@@ -622,6 +622,7 @@ type ClientKeyUsage struct {
 	Requests       int64  `json:"requests"`
 	Failed         int64  `json:"failed"`
 	TotalTokens    int64  `json:"total_tokens"`
+	CostNanos      int64  `json:"-"`
 	// LastUsedMS is the newest request time observed in the window, which is the
 	// same clock the request list prints.
 	LastUsedMS int64 `json:"last_used_ms"`
@@ -647,6 +648,7 @@ func (r *Repository) ClientKeyUsage(ctx context.Context, instanceID string, from
 		       COUNT(1),
 		       COALESCE(SUM(failed), 0),
 		       COALESCE(SUM(total_tokens), 0),
+		       COALESCE(SUM(cost_nanos), 0),
 		       COALESCE(MAX(timestamp_ms), 0)
 		FROM usage_events
 		WHERE instance_id = ? AND timestamp_ms BETWEEN ? AND ?
@@ -659,7 +661,7 @@ func (r *Repository) ClientKeyUsage(ctx context.Context, instanceID string, from
 
 	for rows.Next() {
 		var entry ClientKeyUsage
-		if errScan := rows.Scan(&entry.KeyFingerprint, &entry.Requests, &entry.Failed, &entry.TotalTokens, &entry.LastUsedMS); errScan != nil {
+		if errScan := rows.Scan(&entry.KeyFingerprint, &entry.Requests, &entry.Failed, &entry.TotalTokens, &entry.CostNanos, &entry.LastUsedMS); errScan != nil {
 			return nil, fmt.Errorf("scan client key usage: %w", errScan)
 		}
 		result = append(result, entry)

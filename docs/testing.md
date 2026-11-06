@@ -17,6 +17,21 @@ a map, not a mandate — they record which layer owns which claim today and why 
 placed there. When a better owner exists, move the claim and update the map in the same
 change; keep the claim's strength, not its address. Nothing in the map is frozen.
 
+## Repository key regressions
+
+`internal/operations/repo_keys_regression_test.go` covers pending-key approval admission,
+coherent device/key snapshots, a rejection that wins during a held CPA write, atomic
+caller/recipient/audit failure, invalid-stop zero effects, stop compensation, legacy-create
+lifecycle refusal, reissue history and a conflicting re-enable's absence of CPA writes.
+`internal/api/management_repo_keys_regression_test.go` owns changed-fingerprint disclosure
+and nonzero, request-time-priced seven-day list/detail costs, including misleading window
+parameters. Identity tests cover GitHub case variants without folding other hosts or local
+directories, submitted display spelling, shared-key reuse and the 067-to-068 upgrade's
+preservation or fail-closed collision outcome. Component tests for repository-key costs and
+display spelling own rendered amount and identity wiring. The `repo-key-approval` probe owns
+pending/settled approval geometry, scrolling and hit-testing at desktop and phone widths;
+DOM presence alone does not certify that a clipped approval can be reviewed.
+
 ## Prebuilt deployment verification
 
 `scripts/prebuilt-web.test.mjs` owns immutable-revision preparation, caller

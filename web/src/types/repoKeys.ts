@@ -68,6 +68,8 @@ export type RepoKeyKind = 'issue' | 'reuse' | 'reissue';
 export interface RepoKeyApplication {
   id: string;
   repo: string;
+  /** The applicant's spelling; repo remains the canonical identity for lookups. */
+  repo_display?: string;
   repo_has_remote: boolean;
   agent: string;
   device: string;
