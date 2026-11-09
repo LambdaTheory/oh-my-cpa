@@ -281,6 +281,47 @@ describe('routing', () => {
     }
   });
 
+  it('moves retention instants with request history while keeping policy and storage amounts', async (t) => {
+    const delta = 10 * 86_400_000;
+    t.mock.method(Date, 'now', () => REFERENCE_MS + delta);
+    const { default: worker } = await import('./worker.mjs');
+    const env = { ASSETS: { fetch: () => new Response('', { status: 200 }) } };
+    const path = '/api/v1/management/system/data-retention';
+    const entry = DATASET.responses['system-data-retention'];
+    const captured = JSON.parse(entry.body);
+    const response = await worker.fetch(request(path), env);
+    assert.equal(response.status, 200);
+    const moved = await response.json();
+    assert.equal(moved.oldest_request_record_ms, captured.oldest_request_record_ms + delta);
+    const recordsResponse = await worker.fetch(request('/api/v1/usage/events?limit=100'), env);
+    assert.equal(recordsResponse.status, 200);
+    const records = (await recordsResponse.json()).items;
+    const originalRecords = JSON.parse(DATASET.responses['usage-events'].body).items;
+    assert.ok(records.length > 0);
+    for (const record of records) {
+      const original = originalRecords.find(item => item.id === record.id);
+      assert.ok(original, `request ${record.id} has no captured counterpart`);
+      assert.equal(record.timestamp_ms - original.timestamp_ms,
+        moved.oldest_request_record_ms - captured.oldest_request_record_ms);
+    }
+    assert.deepEqual(moved.storage, captured.storage);
+    assert.equal(moved.request_record_days, captured.request_record_days);
+    assert.equal(moved.payload_days, captured.payload_days);
+
+    // The official capture has no active policy. Supply one in memory to exercise
+    // the same Worker response path without editing generated data on disk.
+    const policy = { days: 90, horizon_ms: REFERENCE_MS - 90 * 86_400_000,
+      last_run_at_ms: REFERENCE_MS - 60_000, deleted_rows: 17, free_page_bytes: 8192 };
+    DATASET.responses['system-data-retention'] = { ...entry, body: JSON.stringify({ ...captured, policies: [policy] }) };
+    t.after(() => { DATASET.responses['system-data-retention'] = entry; });
+    const policyResponse = await worker.fetch(request(path), env);
+    assert.equal(policyResponse.status, 200);
+    assert.deepEqual((await policyResponse.json()).policies, [{ ...policy,
+      horizon_ms: policy.horizon_ms + delta, last_run_at_ms: policy.last_run_at_ms + delta }]);
+    assert.deepEqual(rebase({ oldest_request_record_ms: null, policies: [{ horizon_ms: 0 }] }, delta),
+      { oldest_request_record_ms: null, policies: [{ horizon_ms: 0 }] });
+  });
+
   it('serves repository key and retention captures while refusing their writes', async (t) => {
     t.mock.method(Date, 'now', () => REFERENCE_MS);
     const { default: worker } = await import('./worker.mjs');
