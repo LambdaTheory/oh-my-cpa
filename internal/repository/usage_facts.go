@@ -58,7 +58,7 @@ const usageEventMeasures = `
 	(ttft_ms IS NOT NULL) AS ttft_count, COALESCE(cost_nanos, 0) AS cost_nanos,
 	(pricing_status = 'priced') AS priced_requests, (cost_nanos IS NOT NULL) AS costed_requests,
 	(COALESCE(json_extract(token_accounting, '$.status'), '') = 'complete') AS canonical_requests,
-	(token_accounting IS NOT NULL AND json_extract(token_accounting, '$.status') <> 'complete') AS unresolved_accounting_requests,
+	(token_accounting IS NOT NULL AND json_extract(token_accounting, '$.status') NOT IN ('complete', 'legacy')) AS unresolved_accounting_requests,
 	COALESCE(json_extract(token_accounting, '$.raw_tokens.input_tokens'), 0) AS raw_input_tokens,
 	COALESCE(json_extract(token_accounting, '$.raw_tokens.output_tokens'), 0) AS raw_output_tokens,
 	COALESCE(json_extract(token_accounting, '$.raw_tokens.total_tokens'), 0) AS raw_total_tokens`
@@ -731,7 +731,7 @@ func (r *Repository) AggregateUsageFacts(ctx context.Context, batchSize int) (in
 			       SUM(latency_ms), SUM(COALESCE(ttft_ms, 0)), SUM(ttft_ms IS NOT NULL),
 			       SUM(COALESCE(cost_nanos, 0)), SUM(pricing_status = 'priced'), SUM(cost_nanos IS NOT NULL),
 			       SUM(COALESCE(json_extract(token_accounting, '$.status'), '') = 'complete'),
-			       SUM(token_accounting IS NOT NULL AND json_extract(token_accounting, '$.status') <> 'complete'),
+			       SUM(token_accounting IS NOT NULL AND json_extract(token_accounting, '$.status') NOT IN ('complete', 'legacy')),
 			       SUM(COALESCE(json_extract(token_accounting, '$.raw_tokens.input_tokens'), 0)),
 			       SUM(COALESCE(json_extract(token_accounting, '$.raw_tokens.output_tokens'), 0)),
 			       SUM(COALESCE(json_extract(token_accounting, '$.raw_tokens.total_tokens'), 0))
@@ -838,7 +838,7 @@ func foldLocalUsageFacts(ctx context.Context, tx *sql.Tx, lastID, highID int64) 
 		       SUM(latency_ms), SUM(COALESCE(ttft_ms, 0)), SUM(ttft_ms IS NOT NULL),
 		       SUM(COALESCE(cost_nanos, 0)), SUM(pricing_status = 'priced'), SUM(cost_nanos IS NOT NULL),
 		       SUM(COALESCE(json_extract(token_accounting, '$.status'), '') = 'complete'),
-		       SUM(token_accounting IS NOT NULL AND json_extract(token_accounting, '$.status') <> 'complete'),
+		       SUM(token_accounting IS NOT NULL AND json_extract(token_accounting, '$.status') NOT IN ('complete', 'legacy')),
 		       SUM(COALESCE(json_extract(token_accounting, '$.raw_tokens.input_tokens'), 0)),
 		       SUM(COALESCE(json_extract(token_accounting, '$.raw_tokens.output_tokens'), 0)),
 		       SUM(COALESCE(json_extract(token_accounting, '$.raw_tokens.total_tokens'), 0))

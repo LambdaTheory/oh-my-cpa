@@ -100,6 +100,7 @@ type TokenStats struct {
 	CacheReadTokensPresent bool  `json:"cache_read_tokens_present"`
 	CacheCreationTokens    int64 `json:"cache_creation_tokens"`
 	TotalTokens            int64 `json:"total_tokens"`
+	TotalTokensPresent     bool  `json:"total_tokens_present"`
 }
 
 // Payload is one CPA usage record as published to the queue.
@@ -232,6 +233,17 @@ func DecodeEventWithFingerprinter(raw string, instanceID string, observedAt time
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return Event{}, fmt.Errorf("decode usage payload: %w", err)
 	}
+	// The display total may be inferred; only the original queue field can prove
+	// whether a legacy output count includes reasoning.
+	var evidence struct {
+		Tokens struct {
+			Total *int64 `json:"total_tokens"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal([]byte(raw), &evidence); err != nil {
+		return Event{}, fmt.Errorf("decode token evidence: %w", err)
+	}
+	payload.Tokens.TotalTokensPresent = evidence.Tokens.Total != nil
 	requestID := boundedSafe(payload.RequestID, 256)
 	if requestID == "" {
 		return Event{}, ErrMissingRequestID

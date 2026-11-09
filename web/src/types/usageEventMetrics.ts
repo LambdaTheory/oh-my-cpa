@@ -131,14 +131,14 @@ export function isNonStreamingEvent(event?: Partial<Pick<UsageEvent, 'stream'>>)
   return event?.stream === false;
 }
 
-/** Canonical accounting establishes whether reasoning is included; legacy counts use their totals. */
+/** Legacy reasoning scope needs original total evidence; historical display totals may be inferred. */
 export function eventTokensPerSecond(
   event?: Partial<Pick<UsageEvent, 'generate' | 'latency_ms' | 'ttft_ms' | 'tokens' | 'stream' | 'token_accounting' | 'accounting_status'>>,
   mode: TpsCalculationMode = DEFAULT_TPS_CALCULATION_MODE,
 ): EventTokensPerSecondResult {
   const accounting = event?.token_accounting;
   const breakdown = accounting?.status === 'complete' ? accounting.token_breakdown : undefined;
-  let isAccountingValid = (accounting == null || accounting.status === 'complete')
+  let isAccountingValid = (accounting == null || accounting.status === 'legacy' || accounting.status === 'complete')
     && (accounting?.status !== 'complete' || breakdown != null)
     && (event?.accounting_status == null || event.accounting_status === 'legacy' || event.accounting_status === 'complete');
   const reasoning = breakdown?.output.reasoning_tokens ?? event?.tokens?.reasoning;
@@ -148,7 +148,7 @@ export function eventTokensPerSecond(
       inputTokens: event?.tokens?.input,
       outputTokens: event?.tokens?.output,
       reasoningTokens: reasoning,
-      totalTokens: event?.tokens?.total,
+      totalTokens: accounting?.raw_tokens.total_tokens_present ? accounting.raw_tokens.total_tokens : undefined,
     });
     output = legacy.outputTokens;
     isAccountingValid &&= legacy.isAccountingValid;

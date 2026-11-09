@@ -11,6 +11,7 @@ interface TokenAccountingEvidence {
     cache_read_tokens_present: boolean;
     cache_creation_tokens: number;
     total_tokens: number;
+    total_tokens_present?: boolean;
   };
 }
 
@@ -25,5 +26,5 @@ export interface CanonicalTokenBreakdown {
 
 export type TokenAccounting = TokenAccountingEvidence & (
   | { status: 'complete'; token_breakdown: CanonicalTokenBreakdown }
-  | { status: Exclude<TokenAccountingStatus, 'legacy' | 'complete'>; token_breakdown?: CanonicalTokenBreakdown }
+  | { status: Exclude<TokenAccountingStatus, 'complete'>; token_breakdown?: CanonicalTokenBreakdown }
 );
