@@ -212,6 +212,12 @@ async function main() {
         failedRequests.push(`${response.status()} ${response.request().method()} ${url.pathname}`);
       }
     });
+    const insightsRangeWrites = [];
+    page.on('request', (request) => {
+      if (request.method() === 'PUT' && new URL(request.url()).pathname.endsWith('/preferences/insights_range')) {
+        insightsRangeWrites.push(request.url());
+      }
+    });
     page.on('requestfailed', (request) => {
       // Navigating to the next page deliberately cancels the previous page's polls.
       if (new URL(request.url()).origin === new URL(BASE).origin
@@ -253,6 +259,27 @@ async function main() {
           await turn.waitFor({ state: 'visible', timeout: REPLAY_TIMEOUT_MS });
           await turn.getByTestId('agent-view').waitFor({ state: 'visible', timeout: NAVIGATION_TIMEOUT_MS });
           if (await page.getByTestId('agent-rejected').count() > 0) throw new Error('the demonstration refused its own example question');
+        }
+        if (route.path === '/insights') {
+          const screen = page.getByTestId('insights-page');
+          const range = screen.locator('.range-trigger');
+          const readThirtyDays = () => Promise.all(['cube', 'rhythm'].map(view => page.waitForResponse(response => {
+            const url = new URL(response.url());
+            return url.pathname.endsWith(`/management/insights/${view}`) && url.searchParams.get('preset') === '30d'
+              && response.request().method() === 'GET' && response.ok();
+          })));
+          await range.click();
+          await Promise.all([
+            readThirtyDays(),
+            page.getByRole('option', { name: '近 30 天', exact: true }).click(),
+          ]);
+          await Promise.all([
+            readThirtyDays(),
+            screen.getByRole('button', { name: '刷新全部', exact: true }).click(),
+          ]);
+          if ((await range.innerText()) !== '近 30 天' || insightsRangeWrites.length !== 0) {
+            throw new Error('the demo failed to keep its temporary 30-day window without a preference write');
+          }
         }
         if (route.path === '/oauth-management') {
           await page.getByTestId('oauth-management-model-rules-open').first().click();
