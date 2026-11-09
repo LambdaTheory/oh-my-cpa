@@ -64,6 +64,15 @@ native formatter's distinct flow spacing, and reports only the synthetic marker,
 worker-asset status and error-toast presence when formatting fails. The selector
 does not replace `pnpm verify:browser` or certify the other release claims.
 
+## Usage total evidence
+
+`scripts/usage-tps.test.mjs` consumes the synthetic HTTP DTOs logged by
+`TestLegacyTotalEvidenceThroughDTO` in `internal/api/usage_tps_test.go` and runs
+both browser TPS modes against them. It covers real decoding, SQLite persistence,
+legacy pricing, absent/zero/original totals and historical rows without evidence.
+The API test remains independently runnable with Go; the repository test owns
+its connection to the TypeScript calculation.
+
 ## 1. Where a new test belongs
 
 Authentication evidence classification lives in `internal/authfailure`; quota fetcher

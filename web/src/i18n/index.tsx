@@ -2993,6 +2993,7 @@ const DICT: Record<string, [string, string]> = {
   'pro.traffic_failed': ['失败 {n}', '{n} failed'],
 
   'events.accounting_legacy': ['旧版计量：未保留 canonical 证据，沿用原始计数和已锁定的价格快照。', 'Legacy accounting: no canonical evidence was retained; original counts and locked price snapshots are preserved.'],
+  'events.accounting_legacy_evidence': ['旧版计量：未保留 canonical 证据，原始输入 {raw_input}、输出 {raw_output} 已保留，计价沿用原始计数。', 'Legacy accounting: no canonical evidence was retained; original input {raw_input} and output {raw_output} are preserved, and pricing uses the original counts.'],
   'events.accounting_complete': ['Canonical v{version}：原始输入 {raw_input}、输出 {raw_output} → 规范输入 {input}、输出 {output}（推理仅计一次）。', 'Canonical v{version}: raw input {raw_input}, output {raw_output} → normalized input {input}, output {output} (reasoning counted once).'],
   'events.accounting_unresolved': ['Token 计量{status}；原始输入 {raw_input}、输出 {raw_output}。无法确认完整的计费分区，此请求未计入费用估算。', 'Token accounting is {status}; raw input {raw_input}, output {raw_output}. A complete billable partition is unavailable, so this request is excluded from cost estimates.'],
   'events.accounting_status_invalid': ['无效', 'invalid'],

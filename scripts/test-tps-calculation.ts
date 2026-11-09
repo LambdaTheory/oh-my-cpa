@@ -54,16 +54,24 @@ for (const status of ['invalid', 'inconsistent', 'unsupported', 'unclassified'] 
 }
 // Legacy counts still support the end-to-end average. They cannot support subtraction when
 // reasoning is reported because the record does not locate the hidden-reasoning boundary.
-const inclusiveLegacy = { ...event, tokens: { ...event.tokens, reasoning: 20 } };
+const legacyEvidence = (total: number): TokenAccounting => ({
+  version: 0, status: 'legacy', raw_tokens: { ...accounting.raw_tokens, input_tokens: 20, output_tokens: 100, reasoning_tokens: 20, total_tokens: total, total_tokens_present: true },
+});
+const inclusiveLegacy = { ...event, token_accounting: legacyEvidence(120), tokens: { ...event.tokens, reasoning: 20 } };
 assert.deepEqual(eventTokensPerSecond(inclusiveLegacy, 'exclude_ttft'), absent('unavailable_reasoning'));
 assert.deepEqual(eventTokensPerSecond(inclusiveLegacy, 'include_ttft'), { tps: 50, formatted: '50.00 t/s', basis: 'include_ttft' });
 // A flat reasoning count can be independent of output. The grand total proves which convention
 // produced the record, so inclusion must not drop those tokens or count an inclusive one twice.
-const separateLegacy = { ...event, tokens: { ...inclusiveLegacy.tokens, input: 20, output: 100, reasoning: 20, total: 140 } };
+const separateLegacy = { ...event, token_accounting: legacyEvidence(140), tokens: { ...inclusiveLegacy.tokens, input: 20, output: 100, reasoning: 20, total: 140 } };
 assert.deepEqual(outputTotalWithReasoning({ inputTokens: 20, outputTokens: 100, reasoningTokens: 20, totalTokens: 140 }), { outputTokens: 120, isAccountingValid: true });
 assert.deepEqual(eventTokensPerSecond(separateLegacy, 'exclude_ttft'), absent('unavailable_reasoning'));
 assert.deepEqual(eventTokensPerSecond(separateLegacy, 'include_ttft'), { tps: 60, formatted: '60.00 t/s', basis: 'include_ttft' });
-assert.deepEqual(eventTokensPerSecond({ ...event, tokens: { ...separateLegacy.tokens, total: 130 } }, 'include_ttft'), absent('unavailable_accounting'));
+assert.deepEqual(eventTokensPerSecond({ ...event, token_accounting: legacyEvidence(130), tokens: { ...separateLegacy.tokens, total: 130 } }, 'include_ttft'), absent('unavailable_accounting'));
+for (const mode of ['exclude_ttft', 'include_ttft'] as const) {
+  for (const token_accounting of [undefined, null, { ...legacyEvidence(120), raw_tokens: { ...legacyEvidence(120).raw_tokens, total_tokens_present: false } }, legacyEvidence(0)]) {
+    assert.deepEqual(eventTokensPerSecond({ ...inclusiveLegacy, token_accounting }, mode), absent('unavailable_accounting'));
+  }
+}
 // The Playground observes first non-reasoning content, so only non-reasoning output belongs in its tail.
 const contentObservation = { outputTokens: 814, reasoningTokens: 767, durationMS: 20550, firstTokenMS: 20120, firstTokenKind: 'non_reasoning' as const };
 assert.deepEqual(calculateTokensPerSecond(contentObservation, 'exclude_ttft'), { tps: 47000 / 430, formatted: '109.30 t/s', basis: 'exclude_ttft_visible' });

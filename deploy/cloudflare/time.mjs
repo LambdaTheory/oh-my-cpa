@@ -40,6 +40,8 @@ const INSTANT_NAMED = new Set([
   'from_ms',
   'as_of_ms',
   'timestamp_ms',
+  'oldest_request_record_ms',
+  'horizon_ms',
   // A price version's start, moved with the history so the price book's timeline stays
   // in step with the usage it priced.
   'effective_from_ms',

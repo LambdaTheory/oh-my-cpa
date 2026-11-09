@@ -320,8 +320,8 @@ var demoExportRouteGaps = map[string]string{
 	// The repository-key lists are exported empty, so there is no row whose detail
 	// drawer could be opened. A seeded binding would also imply a key in the
 	// demonstration's gateway list, which the fixture deliberately does not have.
-	"/api/v1/management/repo-keys/{id}":              "the demonstration seeds no repository key, so no detail row exists",
-	"/api/v1/management/repo-keys/applications/{id}": "the demonstration seeds no key application, so no application detail exists",
+	"/api/v1/management/repo-keys/{id}":                     "the demonstration seeds no repository key, so no detail row exists",
+	"/api/v1/management/repo-keys/applications/{id}":        "the demonstration seeds no key application, so no application detail exists",
 	"/api/v1/management/repo-keys/applications/{id}/review": "the demonstration seeds no key application, so there is no application to review",
 	"/api/v1/management/repo-keys/apply-link/{token}":       "the demonstration issues no approval link, so no token ever opens a page",
 }
@@ -384,6 +384,12 @@ func TestExportDemoDataset(t *testing.T) {
 	if outDir == "" {
 		t.Skip("set OMCPA_DEMO_EXPORT_DIR to export the demo dataset")
 	}
+
+	// Windows initializes time.Local from the host zone rather than TZ. The
+	// export's rendered reset labels must share the generator's UTC reference.
+	previousLocal := time.Local
+	time.Local = time.UTC
+	t.Cleanup(func() { time.Local = previousLocal })
 
 	router, seededAt := demoExportRouter(t)
 	server := httptest.NewServer(router)

@@ -5,6 +5,7 @@ import { api, apiErrorCode } from '../../api/client';
 import { useT } from '../../i18n';
 import { useTheme } from '../../theme/ThemeContext';
 import { usePreference } from '../../hooks/usePreference';
+import { isDemoMode } from '../../types/demoMode';
 import { useIsPhoneViewport } from '../../hooks/useIsPhoneViewport';
 import { useOverlayHistory } from '../../hooks/useOverlayHistory';
 import { useViewSearchParams } from '../../hooks/useViewSearchParams';
@@ -119,7 +120,7 @@ function ChartFallback({ height }: { height: number }) {
  * One read per window - the cube, every dimension tuple's usage per bucket - and everything on the
  * page is pivoted from it in the browser, so filtering, regrouping and switching the metric answer on
  * the frame they are asked, and every panel ranks and colours the same snapshot. The window is a stored
- * preference; what the reader narrowed and measured is in the URL, so a view is a link.
+ * preference (a temporary view in the demo); what the reader narrowed and measured is in the URL, so a view is a link.
  */
 export const InsightsPage: React.FC = () => {
   useTimeZone();
@@ -138,9 +139,18 @@ export const InsightsPage: React.FC = () => {
   // A narrowing reshapes the panels above the row it was chosen in; the row stays under the finger.
   const anchorPress = useScrollAnchor(search.toString());
 
-  const { value: range, ready: isRangeReady, set: setRange } = usePreference<InsightsRange>(
+  const rangePreference = usePreference<InsightsRange>(
     INSIGHTS_RANGE_PREFERENCE, DEFAULT_INSIGHTS_RANGE, parseInsightsRange,
   );
+  const isDemo = isDemoMode();
+  const [demoRange, setDemoRange] = React.useState<InsightsRange>();
+  const range = isDemo ? demoRange ?? rangePreference.value : rangePreference.value;
+  const isRangeReady = rangePreference.ready;
+  // Demo windows are read-only views; persisting them would roll back on the Worker's 403.
+  const setRange = (next: InsightsRange) => {
+    if (isDemo) setDemoRange(next);
+    else void rangePreference.set(next);
+  };
 
   const cubeQuery = useQuery({
     queryKey: ['insights-cube', insightsRangeParams(range, view.bucket)],

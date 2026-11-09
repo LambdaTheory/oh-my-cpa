@@ -38,6 +38,7 @@ func TestRunQuotaRefreshModeStartsOnlyTheSelectedLoop(t *testing.T) {
 // it captured before; they used to stay forever because maintenance was built only
 // as part of the capture pipeline.
 func TestRetentionRunsWithCaptureOff(t *testing.T) {
+	t.Setenv("TZ", "UTC")
 	t.Setenv("OMCPA_MASTER_KEY", "app-test-master-key-0123456789abcdef")
 	t.Setenv("OMCPA_DATA_DIR", t.TempDir())
 	t.Setenv("OMCPA_USAGE_INGEST_MODE", "off")

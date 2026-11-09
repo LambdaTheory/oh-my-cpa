@@ -102,7 +102,7 @@ func lockUsagePrice(ctx context.Context, tx *sql.Tx, event usage.Event) (lockedP
 func lockUsageCost(ctx context.Context, tx *sql.Tx, event usage.Event, serviceTier string) (lockedPrice, error) {
 	// A supplied but unresolved partition cannot be turned into a billable one by
 	// guessing its dialect. Legacy records retain the established raw-count policy.
-	if event.Accounting != nil && event.Accounting.Status != "complete" {
+	if event.Accounting != nil && event.Accounting.Status != "complete" && event.Accounting.Status != "legacy" {
 		return lockedPrice{status: "unpriced"}, nil
 	}
 	version, err := scanPriceVersion(tx.QueryRowContext(ctx, priceVersionSelect+`

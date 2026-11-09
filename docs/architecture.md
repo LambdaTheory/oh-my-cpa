@@ -1460,7 +1460,9 @@ Migration `066_usage_token_accounting.sql` adds nullable, immutable
 `usage_events.token_accounting` evidence: the version, validation status, typed
 breakdown and original vendor token counts. Existing rows remain NULL and retain
 their original counts and locked prices. Missing evidence is explicitly legacy;
-new legacy-format records retain the established raw-count pricing policy.
+new legacy-format records retain the established raw-count pricing policy and save
+raw counts with `total_tokens_present`. Their inferred display totals cannot replace
+original total evidence. Historical rows remain unchanged.
 Supplied unsupported, malformed, inconsistent or unclassified accounting keeps
 its usage telemetry but is unpriced, even when the model has a configured price.
 It never manufactures a complete billable partition or changes an old snapshot.
@@ -2005,6 +2007,11 @@ Four properties are load-bearing:
   withheld as well as not stored, since the list it saw is the one being replaced.
 
 ### Streaming status and throughput (TPS) derivation
+
+Legacy reasoning scope requires an original, present raw total in stored accounting
+evidence. Historical display totals alone cannot establish whether output includes
+reasoning; those rates use `unavailable_accounting`. A measured zero total remains
+zero evidence, even if the display total is inferred from input and output.
 
 A usage record carries CPA's total `latency_ms`, optional `ttft_ms`, the raw token counts
 and, when available, canonical token accounting. OMC does not infer hidden reasoning timing

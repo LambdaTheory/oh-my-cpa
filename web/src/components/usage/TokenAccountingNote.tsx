@@ -4,6 +4,12 @@ import type { TokenAccounting } from '../../types/tokenAccounting';
 
 export function tokenAccountingMessage(t: ReturnType<typeof useT>, accounting?: TokenAccounting | null): string {
   if (!accounting) return t('events.accounting_legacy');
+  if (accounting.status === 'legacy') {
+    return t('events.accounting_legacy_evidence', {
+      raw_input: formatTokensFull(accounting.raw_tokens.input_tokens),
+      raw_output: formatTokensFull(accounting.raw_tokens.output_tokens),
+    });
+  }
   if (accounting.status !== 'complete') {
     return t('events.accounting_unresolved', {
       status: t(`events.accounting_status_${accounting.status}`),

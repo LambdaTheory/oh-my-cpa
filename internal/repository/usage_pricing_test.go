@@ -189,7 +189,7 @@ func TestCanonicalAccountingSurvivesPricingAndRetention(t *testing.T) {
 	}{
 		{"separate reasoning", 30, 2, "complete", 40, 170000, "complete", 20},
 		{"inclusive reasoning", 40, 2, "complete", 40, 170000, "complete", 20},
-		{"legacy", 30, 0, "", 30, 150000, "", 20},
+		{"legacy", 30, 0, "", 30, 150000, "legacy", 20},
 		{"future version", 30, 3, "complete", 30, 0, "unsupported", 20},
 		{"unclassified", 30, 2, "unclassified", 30, 0, "unclassified", 20},
 		{"inconsistent", 30, 2, "inconsistent", 30, 0, "inconsistent", 20},
@@ -268,11 +268,11 @@ func TestCanonicalAccountingSurvivesPricingAndRetention(t *testing.T) {
 			if tc.wantCost > 0 {
 				want.PricedRequests, want.CostedRequests = 1, 1
 			}
-			if tc.version != 0 {
+			if detail.Accounting != nil {
 				want.Accounting = TokenAccountingMeasures{RawInputTokens: 100, RawOutputTokens: tc.output, RawTotalTokens: 140}
 				if tc.wantStatus == "complete" {
 					want.Accounting.CanonicalRequests = 1
-				} else {
+				} else if tc.wantStatus != "legacy" {
 					want.Accounting.UnresolvedRequests = 1
 				}
 			}
