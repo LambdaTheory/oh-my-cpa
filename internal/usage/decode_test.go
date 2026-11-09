@@ -195,6 +195,9 @@ func TestDecodeEventInfersTotalWhenAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if event.Accounting == nil || event.Accounting.Status != "legacy" || event.Accounting.RawTokens.TotalTokensPresent || event.Accounting.RawTokens.TotalTokens != 0 {
+		t.Fatalf("inferred display total became accounting evidence: %+v", event.Accounting)
+	}
 	if event.TotalTokens != 75 {
 		t.Fatalf("total should fall back to input+output, got %d", event.TotalTokens)
 	}

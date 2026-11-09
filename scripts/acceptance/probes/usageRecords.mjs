@@ -469,11 +469,16 @@ export async function requestListInteractions({ base, page, check }) {
     .filter({ hasText: 'priority' }).click();
   await page.locator('label[for="req-multi-resolved_service_tier"]').click();
   await page.getByTestId('req-filter-apply').click();
-  await expect(page.locator('.req-filter-chip-text')).toHaveText('Resolved service tier: priority');
-  await expect(page).toHaveURL(/resolved_service_tier=priority/);
+  await until(async () => (await page.locator('.req-filter-chip-text').innerText()) === 'Resolved service tier: priority'
+    && new URL(page.url()).searchParams.get('resolved_service_tier') === 'priority', { label: 'resolved service tier filter' });
+  check('the resolved tier filter names its dimension in the chip and URL',
+    (await page.locator('.req-filter-chip-text').innerText()) === 'Resolved service tier: priority'
+    && new URL(page.url()).searchParams.get('resolved_service_tier') === 'priority');
   await page.getByRole('button', { name: 'Remove filter: Resolved service tier: priority', exact: true }).click();
-  await expect(page.locator('.req-filter-chip')).toHaveCount(0);
-  await expect(page).not.toHaveURL(/resolved_service_tier=/);
+  await until(async () => (await page.locator('.req-filter-chip').count()) === 0
+    && !new URL(page.url()).searchParams.has('resolved_service_tier'), { label: 'resolved service tier filter removed' });
+  check('removing the resolved tier chip clears that query dimension',
+    (await page.locator('.req-filter-chip').count()) === 0 && !new URL(page.url()).searchParams.has('resolved_service_tier'));
 
   check('request cells mount without dormant popup instances',
     await page.locator('.request-cell-tooltip').count() === 0);

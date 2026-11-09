@@ -2499,6 +2499,7 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "events.service_tier": "請求服務等級",
   "events.response_tier": "回應服務等級",
   "events.accounting_legacy": "舊版計量：未保留 canonical 證據，沿用原始計數和已鎖定的價格快照。",
+  "events.accounting_legacy_evidence": "舊版計量：未保留 canonical 證據，原始輸入 {raw_input}、輸出 {raw_output} 已保留，計價沿用原始計數。",
   "events.accounting_complete": "Canonical v{version}：原始輸入 {raw_input}、輸出 {raw_output} → 規範輸入 {input}、輸出 {output}（推理僅計一次）。",
   "events.accounting_unresolved": "Token 計量{status}；原始輸入 {raw_input}、輸出 {raw_output}。無法確認完整的計費分區，此請求未計入費用估算。",
   "events.accounting_status_invalid": "無效",

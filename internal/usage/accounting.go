@@ -30,7 +30,7 @@ type TokenOutputBreakdown struct {
 }
 
 // TokenAccounting keeps only allowlisted, non-secret accounting evidence. A nil
-// value means legacy counts with no canonical evidence, including old records.
+// value means historical counts whose original evidence cannot be recovered.
 type TokenAccounting struct {
 	Version   int             `json:"version"`
 	Status    string          `json:"status"`
@@ -40,7 +40,7 @@ type TokenAccounting struct {
 
 func decodeTokenAccounting(version, encoded json.RawMessage, raw TokenStats) *TokenAccounting {
 	if len(version) == 0 && len(encoded) == 0 {
-		return nil
+		return &TokenAccounting{Status: "legacy", RawTokens: raw}
 	}
 	accounting := &TokenAccounting{Status: "invalid", RawTokens: raw}
 	if len(version) == 0 || json.Unmarshal(version, &accounting.Version) != nil {

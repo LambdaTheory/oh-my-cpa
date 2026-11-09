@@ -1,4 +1,5 @@
 import { TokenAccountingNote } from '../usage/TokenAccountingNote';
+import { isUnresolvedAccounting } from '../../types/tokenAccounting';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
 import { Button } from 'antd';
@@ -55,7 +56,7 @@ export const CostBreakdownView: React.FC<CostBreakdownViewProps> = ({ breakdown,
       </div>
     );
   }
-  const hasUnresolvedAccounting = breakdown.token_accounting != null && breakdown.token_accounting.status !== 'complete';
+  const hasUnresolvedAccounting = isUnresolvedAccounting(breakdown.token_accounting);
   if (breakdown.status === 'unpriced' || breakdown.status === 'legacy_unpriced') {
     return (
       <div className={styles.breakdown} data-testid="cost-breakdown">

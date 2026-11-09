@@ -48,6 +48,17 @@ export async function insights({ base, page, check }) {
   await drawer.waitFor({ state: 'hidden' });
   check('Back closes the key overlay without leaving Insights', new URL(page.url()).pathname.endsWith('/insights') && await screen.isVisible());
 
+  const range = screen.locator('.range-trigger');
+  await range.click();
+  const saved = page.waitForResponse(response => response.request().method() === 'PUT'
+    && new URL(response.url()).pathname.endsWith('/preferences/insights_range') && response.ok());
+  await page.getByRole('option', { name: 'Last 30 days', exact: true }).click();
+  const write = await saved;
+  check('self-hosted Insights persists the selected window', write.request().postDataJSON().preset === '30d');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await range.getByText('Last 30 days', { exact: true }).waitFor({ state: 'visible' });
+  check('the stored Insights window survives a reload', (await range.innerText()) === 'Last 30 days');
+
   await page.setViewportSize({ width: 375, height: 844 });
   const ranking = screen.getByTestId('insights-ranking-key');
   await ranking.waitFor({ state: 'visible' });
