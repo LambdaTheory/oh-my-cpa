@@ -16,56 +16,53 @@ func predictionCardEvidenceForecast(observed time.Time) Alert {
 	}
 }
 
-func TestPredictionCardEvidenceKeepsForecastBesideBoundedHistory(t *testing.T) {
+func TestPredictionCardEvidenceKeepsForecastBesideCompactDiagnostics(t *testing.T) {
 	now := mustTime("2026-11-06T12:00:00Z")
 	old := now.Add(-17 * 24 * time.Hour)
-	for _, attempt := range []struct{ reason, label string }{{"network", "网络"}, {"parse", "解析"}, {"unknown", "原因未知"}} {
-		t.Run(attempt.reason, func(t *testing.T) {
-			report := Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "antigravity"}}}
-			msg := Message{Kind: predictionKindPrefix + KindMorning, EvidenceChecked: true, EvaluatedAt: now, GeneratedAt: old,
-				Report: &report, Alerts: []Alert{predictionCardEvidenceForecast(now.Add(-time.Minute))}}
-			for index := 0; index < 3; index++ {
-				key := fmt.Sprintf("synthetic-history-%d", index)
-				report.Providers[0].Accounts = append(report.Providers[0].Accounts, AccountReport{
-					Key: key, Label: key, State: StateStale, OK: true, ObservedAt: old, LastSuccessAt: old.Add(-time.Minute),
-					AuthFailed: true, AuthSignalObservedAt: old.Add(2 * time.Minute), CollectionFailed: true,
-					AttemptedAt: now.Add(-2 * time.Minute), AttemptOutcome: "failed", AttemptReason: attempt.reason,
-					Windows: []Window{accountWindow(100, nil)},
-				})
-				msg.Pending = append(msg.Pending, PendingItem{ID: ItemID(AlertCredential, "antigravity", key, ""),
-					Kind: AlertCredential, Provider: "antigravity", Key: key, Alias: key, Status: PendingOpen, Since: old, Action: "synthetic-old-login"})
-			}
-			renderer := NewPlainReportRenderer(time.UTC)
-			for _, card := range []map[string]any{renderer.Card(msg), renderer.CardSimple(msg)} {
-				payload := marshalTestJSON(card)
-				for _, want := range []string{
-					"1 个窗口撑不到重置", "Codex · synthetic-forecast · 每周窗口", "实际 88.0% · 期望 52.0%",
-					"预计 11-06 14:00 耗尽 · 撑不到重置", "额度观察 2026-11-06 11:59", "最新读数 11-06 11:59",
-					"数据质量诊断（与当前风险分列）", "额度观察 2026-10-20 12:00", "最后成功 2026-10-20 11:59",
-					"最近尝试 2026-11-06 11:58（失败/" + attempt.label + "）", "认证信号 2026-10-20 12:02",
-					"已过期", "历史未结，当前认证未知", "另有 1 项诊断见控制台",
-				} {
-					if !strings.Contains(payload, want) {
-						t.Fatalf("missing forecast or independent diagnostic %q: %s", want, payload)
-					}
-				}
-				for _, forbidden := range []string{"其他需要处理", "待处理：", "凭证失效", "额度已耗尽", "synthetic-old-login", "synthetic-history-2"} {
-					if strings.Contains(payload, forbidden) {
-						t.Fatalf("history escaped its bounded diagnostic as %q: %s", forbidden, payload)
-					}
-				}
-				elements := card["body"].(map[string]any)["elements"].([]map[string]any)
-				if len(elements) != 4 {
-					t.Fatalf("diagnostics must share the existing meta element: %s", payload)
-				}
-				for _, element := range elements {
-					content, _ := element["content"].(string)
-					if strings.Contains(content, "synthetic-history-") && !strings.Contains(content, "数据质量诊断") {
-						t.Fatalf("historical account became a current row: %s", content)
-					}
-				}
-			}
+	report := Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "antigravity"}}}
+	msg := Message{Kind: predictionKindPrefix + KindMorning, EvidenceChecked: true, EvaluatedAt: now, GeneratedAt: old,
+		Report: &report, Alerts: []Alert{predictionCardEvidenceForecast(now.Add(-time.Minute))}}
+	for index := 0; index < 3; index++ {
+		key := fmt.Sprintf("synthetic-history-%d", index)
+		report.Providers[0].Accounts = append(report.Providers[0].Accounts, AccountReport{
+			Key: key, Label: key, State: StateStale, OK: true, ObservedAt: old, LastSuccessAt: old.Add(-time.Minute),
+			AuthFailed: true, AuthSignalObservedAt: old.Add(2 * time.Minute), CollectionFailed: true,
+			AttemptedAt: now.Add(-2 * time.Minute), AttemptOutcome: "failed", AttemptReason: "network",
+			Windows: []Window{accountWindow(100, nil)},
 		})
+		msg.Pending = append(msg.Pending, PendingItem{ID: ItemID(AlertCredential, "antigravity", key, ""),
+			Kind: AlertCredential, Provider: "antigravity", Key: key, Alias: key, Status: PendingOpen, Since: old, Action: "synthetic-old-login"})
+	}
+	renderer := NewPlainReportRenderer(time.UTC)
+	for _, card := range []map[string]any{renderer.Card(msg), renderer.CardSimple(msg)} {
+		payload := marshalTestJSON(card)
+		for _, want := range []string{
+			"1 个窗口撑不到重置", "Codex · synthetic-forecast · 每周窗口", "实际 88.0% · 期望 52.0%",
+			"预计 11-06 14:00 耗尽 · 撑不到重置", "额度观察 2026-11-06 11:59", "最新读数 11-06 11:59",
+			"数据质量诊断（与当前风险分列）", "Antigravity · synthetic-history-0；",
+			"Antigravity · synthetic-history-1；", "认证信号 2026-10-20 12:02", "（历史未结）",
+			"另有 1 项诊断见控制台",
+		} {
+			if !strings.Contains(payload, want) {
+				t.Fatalf("missing forecast or compact diagnostic %q: %s", want, payload)
+			}
+		}
+		for _, forbidden := range []string{"其他需要处理", "待处理：", "凭证失效", "额度已耗尽", "synthetic-old-login",
+			"synthetic-history-2", "额度观察 2026-10-20", "最后成功", "最近尝试", "已过期"} {
+			if strings.Contains(payload, forbidden) {
+				t.Fatalf("history escaped its compact diagnostic as %q: %s", forbidden, payload)
+			}
+		}
+		elements := card["body"].(map[string]any)["elements"].([]map[string]any)
+		if len(elements) != 4 {
+			t.Fatalf("diagnostics must share the existing meta element: %s", payload)
+		}
+		for _, element := range elements {
+			content, _ := element["content"].(string)
+			if strings.Contains(content, "synthetic-history-") && !strings.Contains(content, "数据质量诊断") {
+				t.Fatalf("historical account became a current row: %s", content)
+			}
+		}
 	}
 }
 
@@ -88,12 +85,13 @@ func TestPredictionCardEvidenceUsesAuthClockBesideOldQuota(t *testing.T) {
 	for _, card := range []map[string]any{renderer.Card(msg), renderer.CardSimple(msg)} {
 		payload := marshalTestJSON(card)
 		for _, want := range []string{"其他需要处理", "凭证失效", "认证信号 2026-11-06 11:59", "额度观察 2026-11-06 11:55",
-			"最新读数 11-06 11:55", "额度观察 2026-10-20 12:00", "已过期", "最近尝试 2026-11-06 11:58（失败/认证拒绝）", "待处理："} {
+			"最新读数 11-06 11:55", "待处理："} {
 			if !strings.Contains(payload, want) {
 				t.Fatalf("fresh auth lost its own clock or actionable pending hint %q: %s", want, payload)
 			}
 		}
-		for _, forbidden := range []string{"历史未结，当前认证未知", "恢复 11-06 13:00", "最新读数 11-06 11:59", "已耗尽 0%"} {
+		for _, forbidden := range []string{"历史未结", "恢复 11-06 13:00", "最新读数 11-06 11:59", "已耗尽 0%",
+			"2026-10-20", "最近尝试", "数据质量诊断"} {
 			if strings.Contains(payload, forbidden) {
 				t.Fatalf("independent auth/quota evidence was conflated as %q: %s", forbidden, payload)
 			}
@@ -195,12 +193,12 @@ func TestPredictionCardEvidenceUnknownClocksDoNotBorrowAggregateTime(t *testing.
 			renderer := NewPlainReportRenderer(time.UTC)
 			for _, card := range []map[string]any{renderer.Card(msg), renderer.CardSimple(msg)} {
 				payload := marshalTestJSON(card)
-				for _, want := range []string{"额度观察：时间未知", "最新读数 时间未知", "最后成功：时间未知", "最近尝试：时间未知", "认证信号：时间未知", "历史未结，当前认证未知"} {
+				for _, want := range []string{"额度观察：时间未知", "最新读数 时间未知", "认证信号：时间未知", "（历史未结）"} {
 					if !strings.Contains(payload, want) {
 						t.Fatalf("unknown evidence was not explicit %q: %s", want, payload)
 					}
 				}
-				for _, forbidden := range []string{"11-06 12:00", "1970-01-01", "0001-01-01", "未发现异常", "全部正常", "其他需要处理"} {
+				for _, forbidden := range []string{"11-06 12:00", "1970-01-01", "0001-01-01", "未发现异常", "全部正常", "其他需要处理", "最后成功", "最近尝试"} {
 					if strings.Contains(payload, forbidden) {
 						t.Fatalf("unknown clock borrowed aggregate context as %q: %s", forbidden, payload)
 					}
@@ -228,12 +226,13 @@ func TestPredictionCardEvidencePendingStaysHistoricalWithoutEligibleAlert(t *tes
 			renderer := NewPlainReportRenderer(time.UTC)
 			for _, card := range []map[string]any{renderer.Card(msg), renderer.CardSimple(msg)} {
 				payload := marshalTestJSON(card)
-				for _, want := range []string{"数据质量诊断（与当前风险分列）", "synthetic-pending-0", "synthetic-pending-1", "历史待核验", "事件登记 2026-10-20 12:00", "当前证据未知，不代表当前风险", "另有 4 项诊断见控制台"} {
+				for _, want := range []string{"数据质量诊断（与当前风险分列）", "另有 6 项历史待核验，见控制台"} {
 					if !strings.Contains(payload, want) {
 						t.Fatalf("pending history lost its diagnostic meaning %q: %s", want, payload)
 					}
 				}
-				for _, forbidden := range []string{"待处理：", "其他需要处理", "synthetic-pending-2", "synthetic-resolved", "synthetic-old-login", "凭证失效", "未发现异常"} {
+				for _, forbidden := range []string{"待处理：", "其他需要处理", "synthetic-pending-0", "synthetic-pending-2",
+					"synthetic-resolved", "synthetic-old-login", "凭证失效", "未发现异常", "事件登记", "2026-10-20"} {
 					if strings.Contains(payload, forbidden) {
 						t.Fatalf("pending invented or exceeded a current risk row as %q: %s", forbidden, payload)
 					}

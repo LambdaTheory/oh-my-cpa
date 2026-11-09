@@ -46,3 +46,31 @@ func TestMetadataFreshTreatsUnknownAgeAsStale(t *testing.T) {
 		t.Fatal("an old metadata sync is not fresh")
 	}
 }
+
+// TestCredentialMetadataCurrentNeedsAFreshSweep pins the removal rule: a row
+// older than the window is stale only when the sweep that contains it is still
+// fresh. A stale sweep cannot distinguish a removed credential from one that
+// simply was not synced, so it must not hide anything.
+func TestCredentialMetadataCurrentNeedsAFreshSweep(t *testing.T) {
+	sweep := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		observed time.Time
+		sweep    time.Time
+		want     bool
+	}{
+		{"fresh row", sweep.Add(-time.Hour), sweep, true},
+		{"just inside the window", sweep.Add(-CredentialMetadataStaleAfter), sweep, true},
+		{"outside the window with a fresh sweep", sweep.Add(-CredentialMetadataStaleAfter - time.Second), sweep, false},
+		{"unknown row age", time.Time{}, sweep, true},
+		{"unknown sweep", sweep.Add(-19 * 24 * time.Hour), time.Time{}, true},
+		{"stale sweep keeps its rows", sweep.Add(-19 * 24 * time.Hour), sweep.Add(-19 * 24 * time.Hour), true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := IsCredentialMetadataCurrent(testCase.observed, testCase.sweep); got != testCase.want {
+				t.Fatalf("IsCredentialMetadataCurrent(%s, %s) = %v, want %v", testCase.observed, testCase.sweep, got, testCase.want)
+			}
+		})
+	}
+}

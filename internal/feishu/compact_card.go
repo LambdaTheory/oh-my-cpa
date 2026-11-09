@@ -436,16 +436,7 @@ func (r *PlainReportRenderer) compactCard(msg Message) map[string]any {
 	if omitted > 0 {
 		meta += fmt.Sprintf(" · 另有 %d 项见控制台", omitted)
 	}
-	visible := []Alert{}
-	for _, alert := range decisionAlerts(msg) {
-		for _, block := range blocks[:count] {
-			if block.kind == alert.Kind && (block.provider == alert.Provider || block.kind == AlertMonitorDown) {
-				visible = append(visible, alert)
-				break
-			}
-		}
-	}
-	if diagnostic := r.diagnosticText(msg, visible); diagnostic != "" {
+	if diagnostic := r.diagnosticText(msg); diagnostic != "" {
 		meta += "\n" + diagnostic
 		if color == "blue" {
 			color = "orange"

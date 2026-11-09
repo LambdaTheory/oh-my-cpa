@@ -146,6 +146,13 @@ management read or a refresh. It reads:
   `unavailable` flags). That disable flag is a cache from the last sync, so its
   age travels with the account as `MetadataObservedAt` and is never presented as
   live; a disabled credential is reported as disabled, not as an active failure.
+  A row discovery already marked `missing` is never read. When the newest
+  `last_seen_at` in the batch is still recent, rows older than
+  `CredentialMetadataStaleAfter` (seven days) are excluded as removed. A row is
+  stale only when the sweep moved on without it; when every row is equally old,
+  the sweep itself stopped and silence means "not synced", not "removed", so
+  nothing is dropped. The newest instant is the sweep's own progress signal, so
+  a stopped collector cannot hide credentials it merely stopped reading.
   The cached `unavailable` flag is never an auth failure: the stored details carry
   no error/status text, so a generic unavailable cannot be told apart from an
   exhausting or transiently broken credential. It reads as `stale` at worst,
@@ -377,15 +384,18 @@ unknown member timestamps remain unknown. Hidden rows do not choose a card-wide
 observation footer, and the newest aggregate report time cannot stand in for any
 row's evidence. A healthy folded quota summary dates only its qualifying accounts.
 
-Stale or untimed numeric data and historical authentication incidents live in a
-separate bounded diagnostic section. It shows quota observation, last success,
-latest attempt with bounded outcome/reason, and historical auth time independently.
-Old authentication evidence means current authentication is unknown, not a new
-login instruction. Pending-only history labels its time as incident registration,
-not observation or recovery. No-data/stale-only views cannot claim healthy. A fresh
-explicit rejection still renders as a credential problem even with old numeric
-quota, but cannot borrow that old quota's remaining share or reset as current facts.
-Full and simplified cards preserve the same source and age semantics.
+Stale or untimed numeric data and historical authentication incidents share one
+bounded diagnostic block: at most two current credentials, one line each, named
+by the account display name (the discovery file extension is dropped) and dated
+by the single most relevant clock — the authentication signal when present,
+otherwise the quota observation. Last-success and attempt clocks stay in the
+console; removed or long-unseen credentials never enter the block, and open
+history is one anonymous count line instead of a current row. Old authentication
+evidence means current authentication is unknown, not a new login instruction. A
+fresh explicit rejection stays in the current risk section instead of duplicating
+into diagnostics, and even with old numeric quota it cannot borrow that quota's
+remaining share or reset as current facts. No-data/stale-only views cannot claim
+healthy. Full and simplified cards preserve the same source and age semantics.
 
 Button fields were checked against the [official JSON 2.0 button reference](https://open.feishu.cn/document/feishu-cards/card-json-v2-components/interactive-components/button).
 Design evidence is `pre_render_design`: structure, missing data, single-recipient

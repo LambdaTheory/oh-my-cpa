@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -67,6 +68,7 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	metadataUnavailable := metaErr != nil || len(metadata) == 0
 
 	if !metadataUnavailable {
+		metadata = currentFeishuCredentialMetadata(metadata, h.logger)
 		authIndexes := make([]string, 0, len(metadata))
 		for _, entry := range metadata {
 			authIndexes = append(authIndexes, entry.AuthIndex)
@@ -159,6 +161,33 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	// has is true whenever a channel is known at all, so a configured-but-failing
 	// channel reaches the policy instead of reading as "no data yet".
 	return report, hasData || len(report.Providers) > 0
+}
+
+// currentFeishuCredentialMetadata drops credentials the discovery sweep stopped
+// seeing longer ago than CredentialMetadataStaleAfter. The newest last-seen
+// instant in the batch is the newest discovery evidence available: a row is
+// dropped only when the sweep moved on without it. When every row is equally
+// old, the sweep stopped and the age of one row cannot prove removal, so
+// nothing is dropped. A credential CPA marked missing never reaches this
+// function.
+func currentFeishuCredentialMetadata(metadata []repository.FeishuCredentialMetadata, logger *slog.Logger) []repository.FeishuCredentialMetadata {
+	sweepSeen := time.Time{}
+	for _, entry := range metadata {
+		if entry.ObservedAt.After(sweepSeen) {
+			sweepSeen = entry.ObservedAt
+		}
+	}
+	current := make([]repository.FeishuCredentialMetadata, 0, len(metadata))
+	for _, entry := range metadata {
+		if !feishu.IsCredentialMetadataCurrent(entry.ObservedAt, sweepSeen) {
+			continue
+		}
+		current = append(current, entry)
+	}
+	if removed := len(metadata) - len(current); removed > 0 {
+		logger.Debug("feishu report: excluded credentials absent from the current discovery sweep", "count", removed)
+	}
+	return current
 }
 
 // feishuCredentialProvider names the display channel for a stored credential. The

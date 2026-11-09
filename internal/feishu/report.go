@@ -154,6 +154,25 @@ func (a AccountReport) MetadataFresh(now time.Time, window time.Duration) bool {
 	return age <= window
 }
 
+// CredentialMetadataStaleAfter is how long a discovered credential may go
+// unseen before the report stops treating it as current. Discovery refreshes
+// last_seen_at on every sweep it completes, so a credential CPA removed stops
+// advancing while the rest of the sweep stays recent.
+const CredentialMetadataStaleAfter = 7 * 24 * time.Hour
+
+// IsCredentialMetadataCurrent reports whether one credential's last-seen
+// instant is recent enough to be reported as present. sweepSeen is the newest
+// last-seen instant in the same batch: a row is stale only when the sweep moved
+// on without it. If every row is equally old, the sweep itself stopped, and
+// silence cannot distinguish "not synced" from "removed", so the credential is
+// kept rather than hidden. Unknown instants are kept for the same reason.
+func IsCredentialMetadataCurrent(observed, sweepSeen time.Time) bool {
+	if observed.IsZero() || sweepSeen.IsZero() {
+		return true
+	}
+	return sweepSeen.Sub(observed) <= CredentialMetadataStaleAfter
+}
+
 // ReportSource supplies the newest evaluated report. It is implemented by the
 // integration owner over OMC's repository. has is true when stored channels are
 // known, even before their first success. ReadReport must not trigger a refresh.

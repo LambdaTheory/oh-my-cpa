@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -506,6 +507,151 @@ func TestFeishuReportSourceAuthFailureFromRealRefresh(t *testing.T) {
 	codex := reportProvider(t, report, "codex")
 	if len(codex.Accounts) != 1 || codex.Accounts[0].State != feishu.StateInvalid {
 		t.Fatalf("a real 401 must reach the report as invalid, got %+v", codex.Accounts)
+	}
+}
+
+// TestFeishuReportSourceExcludesCredentialsOutsideFreshSweep reproduces the
+// morning-card defect: two Antigravity credentials removed from CPA months ago
+// stayed in discovered_resources without ever being marked missing, and the card
+// replayed their 19-day-old auth evidence as a current diagnostic. A fresh sweep
+// of the four live credentials proves the silent rows are removed, not unread.
+func TestFeishuReportSourceExcludesCredentialsOutsideFreshSweep(t *testing.T) {
+	reference := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	var handler *Handler
+	_, _, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(h *Handler) {
+		handler = h
+		h.nowFn = func() time.Time { return reference }
+	})
+
+	currentSynced := reference.Add(-time.Hour)
+	removedSynced := reference.Add(-19 * 24 * time.Hour)
+	current := []struct{ index, name string }{
+		{"ag-current-1", "antigravity-hongwane3.json"},
+		{"ag-current-2", "antigravity-leacanva92.json"},
+		{"ag-current-3", "antigravity-leejhyijiaace5.json"},
+		{"ag-current-4", "antigravity-newoahil.json"},
+	}
+	removed := []struct{ index, name string }{
+		{"ag-removed-1", "antigravity-cedricnolan996@gmail.com.json"},
+		{"ag-removed-2", "antigravity-nolancendric996@gmail.com.json"},
+	}
+	for _, entry := range current {
+		seedAuthFile(t, repo, entry.index, entry.name, "antigravity", false, false, currentSynced)
+	}
+	for _, entry := range removed {
+		seedAuthFile(t, repo, entry.index, entry.name, "antigravity", false, false, removedSynced)
+		// The old rows carry the same shape the screenshot showed: a stale
+		// needs_reauth snapshot and a stale auth signal. Both must stay out of
+		// the current report.
+		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{
+			AuthIndex: entry.index, Provider: "antigravity", Status: "needs_reauth",
+			ObservedAtMS: removedSynced.Add(-3 * time.Hour).UnixMilli(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SaveFeishuAccountSignal(context.Background(), repository.FeishuAccountSignal{
+			AuthIndex: entry.index, Provider: "antigravity", State: repository.FeishuSignalAuthInvalid,
+			ObservedAt: removedSynced.Add(-time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two live credentials are still failing, so the current diagnostic block
+	// has real content to show once the removed rows are gone.
+	for index, entry := range current[:2] {
+		observed := reference.Add(-time.Duration(index+10) * 24 * time.Hour)
+		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{
+			AuthIndex: entry.index, Provider: "antigravity", Status: "needs_reauth",
+			ObservedAtMS: observed.UnixMilli(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range current[2:] {
+		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{
+			AuthIndex: entry.index, Provider: "antigravity", Status: "healthy",
+			ObservedAtMS: reference.Add(-5 * time.Minute).UnixMilli(),
+			WindowsJSON:  `[{"id":"weekly","label":"Weekly","scope":"standard","used_percent":42,"remaining_percent":58}]`,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, has := handler.BuildFeishuReportSource().ReadReport(context.Background())
+	if !has {
+		t.Fatal("a report with four known credentials must be available")
+	}
+	antigravity := reportProvider(t, report, "antigravity")
+	if len(antigravity.Accounts) != 4 {
+		t.Fatalf("antigravity accounts = %d, want the 4 current credentials: %+v", len(antigravity.Accounts), antigravity.Accounts)
+	}
+	seen := map[string]bool{}
+	for _, account := range antigravity.Accounts {
+		seen[account.Key] = true
+	}
+	for _, entry := range current {
+		if !seen[entry.index] {
+			t.Fatalf("current credential %q is missing from the report: %+v", entry.index, antigravity.Accounts)
+		}
+	}
+	for _, entry := range removed {
+		if seen[entry.index] {
+			t.Fatalf("removed credential %q must not be reported: %+v", entry.index, antigravity.Accounts)
+		}
+	}
+
+	message := feishu.Message{Kind: feishu.KindMorning, EvidenceChecked: true, EvaluatedAt: reference,
+		GeneratedAt: reference, Report: &report}
+	payload := marshalJSON(feishu.NewPlainReportRenderer(time.UTC).Card(message))
+	for _, entry := range removed {
+		if strings.Contains(payload, entry.name) {
+			t.Fatalf("removed credential %q reached the card: %s", entry.name, payload)
+		}
+	}
+	for _, banned := range []string{"cedricnolan996", "nolancendric996", ".json"} {
+		if strings.Contains(payload, banned) {
+			t.Fatalf("removed identity or file extension reached the card as %q: %s", banned, payload)
+		}
+	}
+	for _, entry := range current[:2] {
+		if !strings.Contains(payload, strings.TrimSuffix(entry.name, ".json")) {
+			t.Fatalf("current diagnostic %q is missing from the card: %s", entry.name, payload)
+		}
+	}
+	if !strings.Contains(payload, "数据质量诊断") || strings.Count(payload, "认证信号") < 2 {
+		t.Fatalf("the two current credentials must supply the diagnostic block: %s", payload)
+	}
+}
+
+// TestFeishuReportSourceKeepsCredentialsWhenSweepIsStale pins the distinction
+// between "removed" and "not synced": when the discovery sweep itself is old, no
+// row may be dropped on age, because the report cannot prove the gateway removed
+// it rather than the collector having stopped.
+func TestFeishuReportSourceKeepsCredentialsWhenSweepIsStale(t *testing.T) {
+	reference := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	var handler *Handler
+	_, _, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(h *Handler) {
+		handler = h
+		h.nowFn = func() time.Time { return reference }
+	})
+
+	staleSync := reference.Add(-19 * 24 * time.Hour)
+	for index := 0; index < 6; index++ {
+		seedAuthFile(t, repo, fmt.Sprintf("stale-%d", index), fmt.Sprintf("antigravity-stale-%d.json", index),
+			"antigravity", false, false, staleSync)
+	}
+
+	report, has := handler.BuildFeishuReportSource().ReadReport(context.Background())
+	if !has {
+		t.Fatal("a report with stored credentials must be available")
+	}
+	antigravity := reportProvider(t, report, "antigravity")
+	if len(antigravity.Accounts) != 6 {
+		t.Fatalf("a stale sweep must keep every credential, got %d: %+v", len(antigravity.Accounts), antigravity.Accounts)
 	}
 }
 
