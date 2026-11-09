@@ -1,4 +1,5 @@
 import { tokenAccountingMessage } from './TokenAccountingNote';
+import { isUnresolvedAccounting } from '../../types/tokenAccounting';
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
 import { RequestTooltip } from './RequestTooltip';
@@ -426,10 +427,10 @@ export const RequestRow = React.memo<RequestRowProps>(
             <strong className="req-cost-val">${event.cost_usd.toFixed(4)}</strong>
           ) : (
             <>
-              <RequestTooltip title={event.token_accounting && event.token_accounting.status !== 'complete' ? tokenAccountingMessage(t, event.token_accounting) : t('events.cost_unpriced')}>
+              <RequestTooltip title={isUnresolvedAccounting(event.token_accounting) ? tokenAccountingMessage(t, event.token_accounting) : t('events.cost_unpriced')}>
                 <span className="req-cost-none">—</span>
               </RequestTooltip>
-              {openPriceEditor && event.model && event.pricing_status !== 'legacy_unpriced' && (!event.token_accounting || event.token_accounting.status === 'complete') && (
+              {openPriceEditor && event.model && event.pricing_status !== 'legacy_unpriced' && !isUnresolvedAccounting(event.token_accounting) && (
                 <RequestTooltip title={t('cost.set_price', { model: event.model })}>
                   <button
                     type="button"

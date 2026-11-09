@@ -28,3 +28,14 @@ export type TokenAccounting = TokenAccountingEvidence & (
   | { status: 'complete'; token_breakdown: CanonicalTokenBreakdown }
   | { status: Exclude<TokenAccountingStatus, 'complete'>; token_breakdown?: CanonicalTokenBreakdown }
 );
+
+/**
+ * Whether the record cannot be priced from its counts at all.
+ *
+ * Legacy evidence is billable: it preserves the original totals and the pricing
+ * path accepts it. Only a record whose counts could not be reconciled is
+ * excluded, and changing the model's price is no remedy for that.
+ */
+export function isUnresolvedAccounting(accounting?: TokenAccounting | null): boolean {
+  return accounting != null && accounting.status !== 'complete' && accounting.status !== 'legacy';
+}

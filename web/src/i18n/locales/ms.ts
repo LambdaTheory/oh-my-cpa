@@ -2499,6 +2499,7 @@ export const MS: Readonly<Record<string, string>> = {
   "events.service_tier": "Peringkat perkhidmatan yang diminta",
   "events.response_tier": "Peringkat perkhidmatan tindak balas",
   "events.accounting_legacy": "Perakaunan legasi: tiada bukti kanonik disimpan; kiraan asal dan petikan harga terkunci dikekalkan.",
+  "events.accounting_legacy_evidence": "Perakaunan legasi: tiada bukti kanonik disimpan; input asal {raw_input} dan output {raw_output} dikekalkan, dan harga dikira daripada kiraan asal.",
   "events.accounting_complete": "Kanonik v{version}: input asal {raw_input}, output {raw_output} → input ternormal {input}, output {output} (penaakulan dikira sekali).",
   "events.accounting_unresolved": "Perakaunan token {status}; input asal {raw_input}, output {raw_output}. Pecahan boleh bil yang lengkap tidak tersedia, maka permintaan ini tidak termasuk dalam anggaran kos.",
   "events.accounting_status_invalid": "tidak sah",
