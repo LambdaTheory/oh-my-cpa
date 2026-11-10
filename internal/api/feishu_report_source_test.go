@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -510,12 +512,14 @@ func TestFeishuReportSourceAuthFailureFromRealRefresh(t *testing.T) {
 	}
 }
 
-// TestFeishuReportSourceExcludesCredentialsOutsideFreshSweep reproduces the
+// TestFeishuReportSourceDegradesCredentialsOutsideFreshSweep reproduces the
 // morning-card defect: two Antigravity credentials removed from CPA months ago
 // stayed in discovered_resources without ever being marked missing, and the card
 // replayed their 19-day-old auth evidence as a current diagnostic. A fresh sweep
-// of the four live credentials proves the silent rows are removed, not unread.
-func TestFeishuReportSourceExcludesCredentialsOutsideFreshSweep(t *testing.T) {
+// of the four live credentials proves the silent rows are behind the sweep, so
+// they leave the diagnostic block; the stored-only report still carries them
+// because one sweep cannot prove CPA removed them.
+func TestFeishuReportSourceDegradesCredentialsOutsideFreshSweep(t *testing.T) {
 	reference := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
 	var handler *Handler
 	_, _, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
@@ -584,21 +588,29 @@ func TestFeishuReportSourceExcludesCredentialsOutsideFreshSweep(t *testing.T) {
 		t.Fatal("a report with four known credentials must be available")
 	}
 	antigravity := reportProvider(t, report, "antigravity")
-	if len(antigravity.Accounts) != 4 {
-		t.Fatalf("antigravity accounts = %d, want the 4 current credentials: %+v", len(antigravity.Accounts), antigravity.Accounts)
+	if len(antigravity.Accounts) != 6 {
+		t.Fatalf("antigravity accounts = %d, want all 6 stored credentials: %+v", len(antigravity.Accounts), antigravity.Accounts)
 	}
 	seen := map[string]bool{}
+	accounts := map[string]feishu.AccountReport{}
 	for _, account := range antigravity.Accounts {
 		seen[account.Key] = true
+		accounts[account.Key] = account
 	}
 	for _, entry := range current {
 		if !seen[entry.index] {
 			t.Fatalf("current credential %q is missing from the report: %+v", entry.index, antigravity.Accounts)
 		}
+		if !accounts[entry.index].HasCurrentPresence(reference) {
+			t.Fatalf("current credential %q must count as current presence: %+v", entry.index, accounts[entry.index])
+		}
 	}
 	for _, entry := range removed {
-		if seen[entry.index] {
-			t.Fatalf("removed credential %q must not be reported: %+v", entry.index, antigravity.Accounts)
+		if !seen[entry.index] {
+			t.Fatalf("credential %q behind the sweep must stay in the report: %+v", entry.index, antigravity.Accounts)
+		}
+		if accounts[entry.index].HasCurrentPresence(reference) {
+			t.Fatalf("credential %q behind the sweep must not count as current presence: %+v", entry.index, accounts[entry.index])
 		}
 	}
 
@@ -622,6 +634,9 @@ func TestFeishuReportSourceExcludesCredentialsOutsideFreshSweep(t *testing.T) {
 	}
 	if !strings.Contains(payload, "数据质量诊断") || strings.Count(payload, "认证信号") < 2 {
 		t.Fatalf("the two current credentials must supply the diagnostic block: %s", payload)
+	}
+	if rows := strings.Count(payload, "Antigravity · "); rows != 2 {
+		t.Fatalf("diagnostic rows = %d, want at most 2: %s", rows, payload)
 	}
 }
 
@@ -652,6 +667,173 @@ func TestFeishuReportSourceKeepsCredentialsWhenSweepIsStale(t *testing.T) {
 	antigravity := reportProvider(t, report, "antigravity")
 	if len(antigravity.Accounts) != 6 {
 		t.Fatalf("a stale sweep must keep every credential, got %d: %+v", len(antigravity.Accounts), antigravity.Accounts)
+	}
+}
+
+// TestFeishuReportSourceHidesStaleBatchFromDiagnostics reproduces the production
+// state: no discovery sweep ran after two credentials were removed, so all six
+// last_seen_at values are 19 days old. The report keeps all six (stored-only
+// evidence cannot prove removal), but the two old failure rows must not take the
+// diagnostic block or turn the four healthy readings into "data missing".
+func TestFeishuReportSourceHidesStaleBatchFromDiagnostics(t *testing.T) {
+	reference := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	var handler *Handler
+	_, _, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(h *Handler) {
+		handler = h
+		h.nowFn = func() time.Time { return reference }
+	})
+
+	sweep := reference.Add(-19 * 24 * time.Hour)
+	live := []struct{ index, name string }{
+		{"batch-live-1", "antigravity-hongwane3.json"},
+		{"batch-live-2", "antigravity-leacanva92.json"},
+		{"batch-live-3", "antigravity-leejhyijiaace5.json"},
+		{"batch-live-4", "antigravity-newoahil.json"},
+	}
+	removed := []struct{ index, name string }{
+		{"batch-removed-1", "antigravity-cedricnolan996@gmail.com.json"},
+		{"batch-removed-2", "antigravity-nolancendric996@gmail.com.json"},
+	}
+	windows := `[{"id":"weekly","label":"Weekly","scope":"standard","used_percent":42,"remaining_percent":58}]`
+	for _, entry := range live {
+		seedAuthFile(t, repo, entry.index, entry.name, "antigravity", false, false, sweep)
+		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{
+			AuthIndex: entry.index, Provider: "antigravity", Status: "healthy",
+			ObservedAtMS: reference.Add(-10 * time.Minute).UnixMilli(), WindowsJSON: windows,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range removed {
+		seedAuthFile(t, repo, entry.index, entry.name, "antigravity", false, false, sweep)
+		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{
+			AuthIndex: entry.index, Provider: "antigravity", Status: "needs_reauth",
+			ObservedAtMS: sweep.Add(-12 * time.Hour).UnixMilli(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := repo.SaveFeishuAccountSignal(context.Background(), repository.FeishuAccountSignal{
+			AuthIndex: entry.index, Provider: "antigravity", State: repository.FeishuSignalAuthInvalid,
+			ObservedAt: sweep.Add(-25 * time.Hour),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, has := handler.BuildFeishuReportSource().ReadReport(context.Background())
+	if !has {
+		t.Fatal("a report with stored credentials must be available")
+	}
+	antigravity := reportProvider(t, report, "antigravity")
+	if len(antigravity.Accounts) != 6 {
+		t.Fatalf("antigravity accounts = %d, want all 6 stored credentials: %+v", len(antigravity.Accounts), antigravity.Accounts)
+	}
+	seen := map[string]bool{}
+	for _, account := range antigravity.Accounts {
+		seen[account.Key] = true
+	}
+	for _, entry := range live {
+		if !seen[entry.index] {
+			t.Fatalf("current credential %q is missing from the report: %+v", entry.index, antigravity.Accounts)
+		}
+	}
+
+	message := feishu.Message{Kind: feishu.KindMorning, EvidenceChecked: true, EvaluatedAt: reference,
+		GeneratedAt: reference, Report: &report}
+	for label, card := range map[string]map[string]any{
+		"Card":       feishu.NewPlainReportRenderer(time.UTC).Card(message),
+		"CardSimple": feishu.NewPlainReportRenderer(time.UTC).CardSimple(message),
+	} {
+		payload := marshalJSON(card)
+		if strings.Contains(payload, "数据质量诊断") {
+			t.Fatalf("%s: a stopped batch must not supply diagnostic rows: %s", label, payload)
+		}
+		for _, entry := range removed {
+			banned := strings.TrimSuffix(entry.name, ".json")
+			if strings.Contains(payload, banned) {
+				t.Fatalf("%s: removed credential %q reached the card: %s", label, entry.name, payload)
+			}
+		}
+		if strings.Contains(payload, ".json") {
+			t.Fatalf("%s: a file extension reached the card: %s", label, payload)
+		}
+		if !strings.Contains(payload, "今天暂不需要调整额度，未发现异常") {
+			t.Fatalf("%s: four healthy readings must stay healthy: %s", label, payload)
+		}
+	}
+}
+
+// TestFeishuReportSourceKeepsCredentialSkippedByOneSweep reproduces F2: a live
+// credential was omitted from one otherwise fresh discovery response. Its
+// last_seen_at is eight days behind, but the quota scheduler still read it
+// minutes ago. It must stay in the report and out of the diagnostic block, and
+// the exclusion must be visible at Warn with the auth index and count.
+func TestFeishuReportSourceKeepsCredentialSkippedByOneSweep(t *testing.T) {
+	reference := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	var logs bytes.Buffer
+	var handler *Handler
+	_, _, repo := startDashboardTestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(`{}`))
+	}, func(h *Handler) {
+		handler = h
+		h.nowFn = func() time.Time { return reference }
+		h.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	})
+
+	seedAuthFile(t, repo, "live-1", "antigravity-live-busy.json", "antigravity", false, false, reference.Add(-time.Hour))
+	seedAuthFile(t, repo, "live-2", "antigravity-live-skipped.json", "antigravity", false, false, reference.Add(-8*24*time.Hour))
+	for _, entry := range []struct {
+		index string
+		pct   int
+	}{{"live-1", 99}, {"live-2", 100}} {
+		windows := fmt.Sprintf(`[{"id":"weekly","label":"Weekly","scope":"standard","used_percent":%d,"remaining_percent":%d}]`, entry.pct, 100-entry.pct)
+		if err := repo.SaveQuotaSnapshot(context.Background(), repository.QuotaSnapshotRecord{
+			AuthIndex: entry.index, Provider: "antigravity", Status: "exhausted",
+			ObservedAtMS: reference.Add(-10 * time.Minute).UnixMilli(), WindowsJSON: windows,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, has := handler.BuildFeishuReportSource().ReadReport(context.Background())
+	if !has {
+		t.Fatal("a report with stored credentials must be available")
+	}
+	antigravity := reportProvider(t, report, "antigravity")
+	if len(antigravity.Accounts) != 2 {
+		t.Fatalf("antigravity accounts = %d, want both live credentials: %+v", len(antigravity.Accounts), antigravity.Accounts)
+	}
+	var skipped *feishu.AccountReport
+	for index := range antigravity.Accounts {
+		if antigravity.Accounts[index].Key == "live-2" {
+			skipped = &antigravity.Accounts[index]
+		}
+	}
+	if skipped == nil {
+		t.Fatalf("credential skipped by one sweep disappeared from the report: %+v", antigravity.Accounts)
+	}
+	if !skipped.HasCurrentPresence(reference) {
+		t.Fatalf("a fresh quota reading must still prove presence: %+v", *skipped)
+	}
+
+	logged := logs.String()
+	for _, want := range []string{"level=WARN", "count=1", "auth_indexes", "live-2"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("exclusion log is missing %q: %s", want, logged)
+		}
+	}
+
+	message := feishu.Message{Kind: feishu.KindMorning, EvaluatedAt: reference, GeneratedAt: reference, Report: &report}
+	payload := marshalJSON(feishu.NewPlainReportRenderer(time.UTC).Card(message))
+	for _, want := range []string{"额度已耗尽", "live-skipped"} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("a full skipped credential must stay visible as %q: %s", want, payload)
+		}
+	}
+	if strings.Contains(payload, "数据质量诊断") {
+		t.Fatalf("fresh readings must not supply diagnostic rows: %s", payload)
 	}
 }
 

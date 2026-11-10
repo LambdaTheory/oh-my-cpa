@@ -2633,9 +2633,11 @@ unreachable. It reads the safe credential metadata the discovery sync persisted,
 newest stored quota snapshot per credential, the enum-only collection signal
 (`feishu_account_signals`), correlated cooldowns and the Ollama module's persisted
 readings; a credential's observation time is its stored instant, never "now". A
-credential whose discovery row has not been seen for seven days is excluded only
-when the batch's newest `last_seen_at` moved past it, so a stopped collector is
-not mistaken for removed credentials. A
+credential whose discovery row is more than seven days behind the batch's newest
+`last_seen_at` is kept in the report but excluded from the current diagnostic
+block; it is never deleted on age alone, because no automatic discovery schedule
+advances `last_seen_at` and one skipped sweep cannot prove removal. When every
+row is equally old, the collector stopped and no row is behind. A
 quota snapshot exists only for a successful read, so an auth failure (whose
 `needs_reauth` recommendation is not persisted in the snapshot) is recorded as a
 safe `auth_invalid` signal through the same persist path a manual, MCP, scheduler or

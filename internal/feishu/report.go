@@ -161,16 +161,41 @@ func (a AccountReport) MetadataFresh(now time.Time, window time.Duration) bool {
 const CredentialMetadataStaleAfter = 7 * 24 * time.Hour
 
 // IsCredentialMetadataCurrent reports whether one credential's last-seen
-// instant is recent enough to be reported as present. sweepSeen is the newest
-// last-seen instant in the same batch: a row is stale only when the sweep moved
-// on without it. If every row is equally old, the sweep itself stopped, and
-// silence cannot distinguish "not synced" from "removed", so the credential is
-// kept rather than hidden. Unknown instants are kept for the same reason.
+// instant is within CredentialMetadataStaleAfter of the reference instant.
+// sweepSeen is the newest last-seen instant in the same batch: a row is stale
+// only when the sweep moved on without it. If every row is equally old, the
+// sweep itself stopped, and silence cannot distinguish "not synced" from
+// "removed", so the credential is kept rather than hidden. Unknown instants are
+// kept for the same reason. Callers may pass the current time as the reference
+// to apply an absolute age bound instead of a batch-relative one.
 func IsCredentialMetadataCurrent(observed, sweepSeen time.Time) bool {
 	if observed.IsZero() || sweepSeen.IsZero() {
 		return true
 	}
 	return sweepSeen.Sub(observed) <= CredentialMetadataStaleAfter
+}
+
+// HasCurrentPresence reports whether stored evidence still places this
+// credential in the current state. Discovery metadata older than
+// CredentialMetadataStaleAfter cannot prove the credential still exists, but it
+// is not proof of removal either: a reading, authentication signal or collection
+// attempt inside the same window is independent evidence that the credential
+// answered. Callers that judge current health use this to avoid counting a
+// removed row's old failure as a current reading while still keeping the row in
+// the report. Unknown metadata stays current, matching IsCredentialMetadataCurrent.
+func (a AccountReport) HasCurrentPresence(now time.Time) bool {
+	if IsCredentialMetadataCurrent(a.MetadataObservedAt, now) {
+		return true
+	}
+	if now.IsZero() {
+		return true
+	}
+	cutoff := now.Add(-CredentialMetadataStaleAfter)
+	return a.ObservedAt.After(cutoff) ||
+		a.LastSuccessAt.After(cutoff) ||
+		a.AuthSignalObservedAt.After(cutoff) ||
+		a.AttemptedAt.After(cutoff) ||
+		a.CollectionSignalObservedAt.After(cutoff)
 }
 
 // ReportSource supplies the newest evaluated report. It is implemented by the

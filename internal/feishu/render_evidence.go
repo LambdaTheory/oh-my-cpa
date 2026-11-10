@@ -111,6 +111,14 @@ func (r *PlainReportRenderer) diagnosticText(msg Message) string {
 				if !IsCredentialMetadataCurrent(account.MetadataObservedAt, sweepSeen) {
 					continue
 				}
+				// The batch-relative check cannot see a stopped collector: when
+				// every row is equally old, sweepSeen is old too and no row looks
+				// behind. The absolute age bound keeps a months-old credential out
+				// of the current diagnostic even then, while the report still
+				// carries it (stored-only evidence cannot prove removal).
+				if !IsCredentialMetadataCurrent(account.MetadataObservedAt, now) {
+					continue
+				}
 				// A fresh auth failure is current risk, already named by the
 				// decision rows or their overflow hint; repeating it here would
 				// spend a diagnostic slot on the same fact.

@@ -68,7 +68,7 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	metadataUnavailable := metaErr != nil || len(metadata) == 0
 
 	if !metadataUnavailable {
-		metadata = currentFeishuCredentialMetadata(metadata, h.logger)
+		logFeishuCredentialsBehindSweep(metadata, h.logger)
 		authIndexes := make([]string, 0, len(metadata))
 		for _, entry := range metadata {
 			authIndexes = append(authIndexes, entry.AuthIndex)
@@ -163,31 +163,30 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	return report, hasData || len(report.Providers) > 0
 }
 
-// currentFeishuCredentialMetadata drops credentials the discovery sweep stopped
-// seeing longer ago than CredentialMetadataStaleAfter. The newest last-seen
-// instant in the batch is the newest discovery evidence available: a row is
-// dropped only when the sweep moved on without it. When every row is equally
-// old, the sweep stopped and the age of one row cannot prove removal, so
-// nothing is dropped. A credential CPA marked missing never reaches this
-// function.
-func currentFeishuCredentialMetadata(metadata []repository.FeishuCredentialMetadata, logger *slog.Logger) []repository.FeishuCredentialMetadata {
+// logFeishuCredentialsBehindSweep names the credentials the newest discovery
+// sweep moved past. They stay in the report: one skipped sweep, a parse failure
+// or a stopped collector cannot prove CPA removed the credential, and deleting
+// it here also erased fresh readings the quota scheduler had collected
+// independently. The renderer keeps them out of the current diagnostic block.
+// The auth index is an opaque persistence key, never a secret.
+func logFeishuCredentialsBehindSweep(metadata []repository.FeishuCredentialMetadata, logger *slog.Logger) {
 	sweepSeen := time.Time{}
 	for _, entry := range metadata {
 		if entry.ObservedAt.After(sweepSeen) {
 			sweepSeen = entry.ObservedAt
 		}
 	}
-	current := make([]repository.FeishuCredentialMetadata, 0, len(metadata))
+	var behind []string
 	for _, entry := range metadata {
 		if !feishu.IsCredentialMetadataCurrent(entry.ObservedAt, sweepSeen) {
-			continue
+			behind = append(behind, entry.AuthIndex)
 		}
-		current = append(current, entry)
 	}
-	if removed := len(metadata) - len(current); removed > 0 {
-		logger.Debug("feishu report: excluded credentials absent from the current discovery sweep", "count", removed)
+	if len(behind) > 0 {
+		sort.Strings(behind)
+		logger.Warn("feishu report: credentials behind the current discovery sweep are kept but excluded from current diagnostics",
+			"count", len(behind), "auth_indexes", behind)
 	}
-	return current
 }
 
 // feishuCredentialProvider names the display channel for a stored credential. The

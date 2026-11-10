@@ -102,6 +102,43 @@ func TestCardDiagnosticsStayCurrentAndBounded(t *testing.T) {
 	}
 }
 
+// TestCardDiagnosticsDropBatchOlderThanWindow reproduces production with no
+// automatic discovery: all six rows stopped being seen 19 days ago, while four
+// credentials still have fresh healthy readings. The two stale failure rows must
+// not take diagnostic slots or flip the card to "data missing".
+func TestCardDiagnosticsDropBatchOlderThanWindow(t *testing.T) {
+	now := mustTime("2026-11-09T10:00:00Z")
+	old := now.Add(-19 * 24 * time.Hour)
+	window := []Window{accountWindow(42, nil)}
+	report := Report{GeneratedAt: now, Providers: []ProviderReport{{Provider: "antigravity", Accounts: []AccountReport{
+		{Key: "live-1", Label: "antigravity-hongwane3.json", State: StateHealthy, OK: true,
+			ObservedAt: now.Add(-10 * time.Minute), MetadataObservedAt: old, Windows: window},
+		{Key: "live-2", Label: "antigravity-leacanva92.json", State: StateHealthy, OK: true,
+			ObservedAt: now.Add(-10 * time.Minute), MetadataObservedAt: old, Windows: window},
+		{Key: "live-3", Label: "antigravity-leejhyijiaace5.json", State: StateHealthy, OK: true,
+			ObservedAt: now.Add(-10 * time.Minute), MetadataObservedAt: old, Windows: window},
+		{Key: "live-4", Label: "antigravity-newoahil.json", State: StateHealthy, OK: true,
+			ObservedAt: now.Add(-10 * time.Minute), MetadataObservedAt: old, Windows: window},
+		{Key: "removed-1", Label: "antigravity-cedricnolan996@gmail.com.json", State: StateStale, OK: true,
+			ObservedAt: old, AuthFailed: true, AuthSignalObservedAt: old, MetadataObservedAt: old, Windows: window},
+		{Key: "removed-2", Label: "antigravity-nolancendric996@gmail.com.json", State: StateStale, OK: true,
+			ObservedAt: old, AuthFailed: true, AuthSignalObservedAt: old, MetadataObservedAt: old, Windows: window},
+	}}}}
+	msg := Message{Kind: KindMorning, EvidenceChecked: true, EvaluatedAt: now, GeneratedAt: now, Report: &report}
+	renderer := NewPlainReportRenderer(time.UTC)
+	for _, card := range []map[string]any{renderer.Card(msg), renderer.CardSimple(msg)} {
+		payload := marshalTestJSON(card)
+		for _, banned := range []string{"数据质量诊断", "cedricnolan996", "nolancendric996", ".json"} {
+			if strings.Contains(payload, banned) {
+				t.Fatalf("a stopped batch reached the card as %q: %s", banned, payload)
+			}
+		}
+		if !strings.Contains(payload, "今天暂不需要调整额度，未发现异常") {
+			t.Fatalf("four healthy readings must stay healthy: %s", payload)
+		}
+	}
+}
+
 // diagnosticBlock returns the one markdown element that owns the block.
 func diagnosticBlock(t *testing.T, card map[string]any) string {
 	t.Helper()
