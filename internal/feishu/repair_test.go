@@ -365,7 +365,7 @@ func TestQueryHandlerPreservesScopedAnswerAndStaleNotice(t *testing.T) {
 	for _, tc := range []struct {
 		text, want string
 		stale      bool
-	}{{"异常", "当前没有异常项。", false}, {"gemini", "未找到该渠道的数据。", false}, {"额度", "数据 60 分钟前", true}} {
+	}{{"异常", "当前没有异常项。", false}, {"gemini", "未找到该渠道的数据。", false}, {"额度", "额度观察 2026-10-26 11:00 · 60 分钟前", true}} {
 		t.Run(tc.text, func(t *testing.T) {
 			observed := now
 			if tc.stale {

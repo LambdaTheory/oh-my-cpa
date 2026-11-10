@@ -46,3 +46,59 @@ func TestMetadataFreshTreatsUnknownAgeAsStale(t *testing.T) {
 		t.Fatal("an old metadata sync is not fresh")
 	}
 }
+
+// TestCredentialMetadataCurrentNeedsAFreshSweep pins the removal rule: a row
+// older than the window is stale only when the sweep that contains it is still
+// fresh. A stale sweep cannot distinguish a removed credential from one that
+// simply was not synced, so it must not hide anything.
+func TestCredentialMetadataCurrentNeedsAFreshSweep(t *testing.T) {
+	sweep := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		observed time.Time
+		sweep    time.Time
+		want     bool
+	}{
+		{"fresh row", sweep.Add(-time.Hour), sweep, true},
+		{"just inside the window", sweep.Add(-CredentialMetadataStaleAfter), sweep, true},
+		{"outside the window with a fresh sweep", sweep.Add(-CredentialMetadataStaleAfter - time.Second), sweep, false},
+		{"unknown row age", time.Time{}, sweep, true},
+		{"unknown sweep", sweep.Add(-19 * 24 * time.Hour), time.Time{}, true},
+		{"stale sweep keeps its rows", sweep.Add(-19 * 24 * time.Hour), sweep.Add(-19 * 24 * time.Hour), true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := IsCredentialMetadataCurrent(testCase.observed, testCase.sweep); got != testCase.want {
+				t.Fatalf("IsCredentialMetadataCurrent(%s, %s) = %v, want %v", testCase.observed, testCase.sweep, got, testCase.want)
+			}
+		})
+	}
+}
+
+// TestHasCurrentPresenceAcceptsIndependentEvidence pins the F2 distinction: an
+// old discovery row is not proof of removal when the quota scheduler read the
+// credential recently, and it is not proof of presence when every stored clock
+// is equally old.
+func TestHasCurrentPresenceAcceptsIndependentEvidence(t *testing.T) {
+	now := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	staleMetadata := now.Add(-19 * 24 * time.Hour)
+	oldReading := staleMetadata.Add(-time.Hour)
+	cases := []struct {
+		name    string
+		account AccountReport
+		want    bool
+	}{
+		{"current metadata", AccountReport{MetadataObservedAt: now.Add(-time.Hour)}, true},
+		{"unknown metadata", AccountReport{}, true},
+		{"old metadata and old reading", AccountReport{MetadataObservedAt: staleMetadata, ObservedAt: oldReading}, false},
+		{"old metadata and fresh reading", AccountReport{MetadataObservedAt: staleMetadata, ObservedAt: now.Add(-time.Minute)}, true},
+		{"old metadata and fresh attempt", AccountReport{MetadataObservedAt: staleMetadata, AttemptedAt: now.Add(-time.Minute)}, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := testCase.account.HasCurrentPresence(now); got != testCase.want {
+				t.Fatalf("HasCurrentPresence() = %v, want %v for %+v", got, testCase.want, testCase.account)
+			}
+		})
+	}
+}

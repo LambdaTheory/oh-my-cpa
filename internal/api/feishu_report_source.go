@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -67,6 +68,7 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	metadataUnavailable := metaErr != nil || len(metadata) == 0
 
 	if !metadataUnavailable {
+		logFeishuCredentialsBehindSweep(metadata, h.logger)
 		authIndexes := make([]string, 0, len(metadata))
 		for _, entry := range metadata {
 			authIndexes = append(authIndexes, entry.AuthIndex)
@@ -159,6 +161,32 @@ func (h *Handler) readFeishuReport(ctx context.Context) (feishu.Report, bool) {
 	// has is true whenever a channel is known at all, so a configured-but-failing
 	// channel reaches the policy instead of reading as "no data yet".
 	return report, hasData || len(report.Providers) > 0
+}
+
+// logFeishuCredentialsBehindSweep names the credentials the newest discovery
+// sweep moved past. They stay in the report: one skipped sweep, a parse failure
+// or a stopped collector cannot prove CPA removed the credential, and deleting
+// it here also erased fresh readings the quota scheduler had collected
+// independently. The renderer keeps them out of the current diagnostic block.
+// The auth index is an opaque persistence key, never a secret.
+func logFeishuCredentialsBehindSweep(metadata []repository.FeishuCredentialMetadata, logger *slog.Logger) {
+	sweepSeen := time.Time{}
+	for _, entry := range metadata {
+		if entry.ObservedAt.After(sweepSeen) {
+			sweepSeen = entry.ObservedAt
+		}
+	}
+	var behind []string
+	for _, entry := range metadata {
+		if !feishu.IsCredentialMetadataCurrent(entry.ObservedAt, sweepSeen) {
+			behind = append(behind, entry.AuthIndex)
+		}
+	}
+	if len(behind) > 0 {
+		sort.Strings(behind)
+		logger.Warn("feishu report: credentials behind the current discovery sweep are kept but excluded from current diagnostics",
+			"count", len(behind), "auth_indexes", behind)
+	}
 }
 
 // feishuCredentialProvider names the display channel for a stored credential. The

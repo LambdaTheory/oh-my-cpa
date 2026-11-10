@@ -161,6 +161,14 @@ func reportEvidenceHealthy(report Report, now time.Time) bool {
 			if account.Disabled || account.IsUnmonitored {
 				continue
 			}
+			// A row whose presence metadata is older than the stale window and
+			// whose readings are equally old is not current negative evidence:
+			// it may be a credential CPA no longer has. It stays in the report,
+			// but it must not turn an otherwise healthy reading into "data
+			// missing" for every account in the channel.
+			if !account.HasCurrentPresence(now) {
+				continue
+			}
 			hasAccount = true
 			if !hasFreshQuotaReading(account, now) {
 				return false

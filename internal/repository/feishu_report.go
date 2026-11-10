@@ -188,6 +188,11 @@ type FeishuCredentialMetadata struct {
 // A credential CPA has since removed is excluded via status = 'missing' rather
 // than reported as still configured. A resource whose auth index is empty cannot
 // be joined to a snapshot and is skipped; that collision is surfaced elsewhere.
+//
+// This reader returns every non-missing row, including rows discovery has not
+// refreshed for a long time: it has no reference for how fresh the last sweep
+// was. The report source applies the age rule with that reference, so a
+// deliberately stale sweep does not hide credentials that are merely unread.
 func (r *Repository) ListFeishuCredentialMetadata(ctx context.Context) ([]FeishuCredentialMetadata, error) {
 	if r == nil || r.SQL() == nil {
 		return nil, errors.New("repository is not initialized")
