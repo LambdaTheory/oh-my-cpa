@@ -21,6 +21,13 @@ type QuotaWindow struct {
 	PeriodHours      *float64 `json:"period_hours,omitempty"`
 	ResetAccuracy    string   `json:"reset_accuracy,omitempty"` // "exact", "derived", "approximate"
 
+	// Stale marks a plugin reading the plugin served from its last successful
+	// fetch rather than this refresh: the figures are real but old.
+	Stale bool `json:"stale,omitempty"`
+	// Note carries the plugin's own explanation for a window ("upstream reports
+	// this window rate limited", a stale reason) that has no dedicated field.
+	Note string `json:"note,omitempty"`
+
 	ModelFamilies []string `json:"model_families,omitempty"`
 	// Reset evidence survives snapshot retention until this scheduled cycle ends.
 	HasMidCycleReset     bool `json:"has_mid_cycle_reset,omitempty"`
@@ -123,6 +130,9 @@ type QuotaPlan struct {
 type QuotaCredits struct {
 	Balance     string `json:"balance,omitempty"`
 	IsUnlimited bool   `json:"unlimited,omitempty"`
+	// Stale marks a plugin-provided balance from a cached reading rather than
+	// this refresh.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // CodexResetCredit represents an individual Codex rate limit reset credit.
