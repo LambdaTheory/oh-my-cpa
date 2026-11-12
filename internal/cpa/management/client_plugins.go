@@ -195,6 +195,47 @@ func (c *Client) Plugins(ctx context.Context) ([]PluginItem, error) {
 	return list.Plugins, nil
 }
 
+// QuotaProviderInfo is one entry of CPA's `GET /credentials/quota/providers`: a
+// registered plugin that serves quota reads, the provider key it registers
+// under, and the credential provider keys it accepts. Keys are literal apart
+// from case and outer whitespace; the spaces inside a key are meaningful.
+type QuotaProviderInfo struct {
+	PluginID           string   `json:"plugin_id"`
+	Provider           string   `json:"provider"`
+	DisplayName        string   `json:"display_name"`
+	SupportedProviders []string `json:"supported_providers"`
+	SupportsReset      bool     `json:"supports_reset"`
+}
+
+// QuotaProviders reads the host's registered quota providers. A bare array is
+// still accepted, since it carries the same entries without the wrapper.
+func (c *Client) QuotaProviders(ctx context.Context) ([]QuotaProviderInfo, error) {
+	var raw json.RawMessage
+	if err := c.DoJSON(ctx, http.MethodGet, "/credentials/quota/providers", &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return []QuotaProviderInfo{}, nil
+	}
+	var list []QuotaProviderInfo
+	if err := json.Unmarshal(raw, &list); err == nil {
+		if list == nil {
+			list = []QuotaProviderInfo{}
+		}
+		return list, nil
+	}
+	var wrapped struct {
+		Providers []QuotaProviderInfo `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("decode CPA quota providers: %w", err)
+	}
+	if wrapped.Providers == nil {
+		wrapped.Providers = []QuotaProviderInfo{}
+	}
+	return wrapped.Providers, nil
+}
+
 func pluginEndpoint(id, suffix string) (string, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
