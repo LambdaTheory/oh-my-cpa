@@ -310,11 +310,11 @@ Windows 下用 `curl.exe`；`jq` 可换成 `python -m json.tool`。
 - AC：AC-7 / AC-9 · 类型：接口 · 优先级：P1 · 执行方式：可自动化
 - 前置：F-429（无缓存）；关闭自动刷新；清空 fake CPA `requests`。
 - 步骤：
-  1. 刷新 `fixture-cmc`。
+  1. 刷新 F-429 凭证（`auth-index-e2e-rate-limited`）。
   2. 立即再刷新一次。
 - 预期：
   - 首次结果 `outcome` 为限流/失败，`retry_after_ms` 约 120000 或 `retry_at_ms` 为未来时刻；错误信息含 429。
-  - `GET /management/quota` 中该条 `last_refresh` 记录本次失败，`observed_at_ms` 仍为 0/旧值，无伪造额度。
+  - `GET /management/quota` 中该条 `last_refresh` 记录本次失败（`outcome=rate_limited`、`http_status=429`、`retry_at_ms` 为未来时刻），`last_success_at_ms` 为 0/缺省（从未成功），无伪造额度；本次失败不写 `observed_at_ms` 快照。（2026-11-13 PM 决策：不改代码，保留所有 provider 现有 observed_at 语义，本子项改断言 `last_success_at_ms`。）
   - 重试窗口内第二次刷新不再向 CPA 发插件 quota POST（fake CPA 次数不增加），返回被退避的结果。
   - 若 P2 按 v8.0.47 真实行为把插件错误统一成 502（`impl-plan.md:67`），429 子项以 502 表现记，OMC 仍须是失败而非 0，并在记录中注明这一宿主差异。
 

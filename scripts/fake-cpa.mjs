@@ -348,12 +348,20 @@ export function createFakeCpaServer({
     },
   ];
   let pluginQuotaCredentialsEnabled = true;
+  // Credentials the quota scheduler must not pick up. A suite that runs the real
+  // auto-refresh loop uses this to keep a deliberately failing credential out of
+  // the round, where its 429 would park the whole provider for the fixture's
+  // Retry-After and race the reads the suite is asserting on.
+  const disabledCredentialIndexes = new Set();
   let authFiles = JSON.parse(JSON.stringify(baseAuthFiles));
   const syncPluginQuotaCredentials = () => {
     const quotaIDs = new Set(pluginQuotaAuthFiles.map((file) => file.id));
     authFiles = authFiles.filter((file) => !quotaIDs.has(file.id));
     if (pluginQuotaCredentialsEnabled) {
       authFiles.push(...JSON.parse(JSON.stringify(pluginQuotaAuthFiles)));
+    }
+    for (const file of authFiles) {
+      if (disabledCredentialIndexes.has(file.auth_index)) file.disabled = true;
     }
   };
   syncPluginQuotaCredentials();
@@ -1401,6 +1409,18 @@ export function createFakeCpaServer({
       syncPluginQuotaCredentials();
     },
     pluginQuotaCredentials() { return pluginQuotaCredentialsEnabled; },
+    // Take one credential out of the auto-refresh candidate pool by its index.
+    // The main quota scenario turns the scheduler's policy off instead; this is
+    // for the suite that runs the scheduler for real.
+    setCredentialDisabled(authIndex, disabled) {
+      const normalized = String(authIndex ?? '').trim();
+      if (!normalized) return;
+      if (disabled) disabledCredentialIndexes.add(normalized);
+      else disabledCredentialIndexes.delete(normalized);
+      for (const file of authFiles) {
+        if (file.auth_index === normalized) file.disabled = Boolean(disabled);
+      }
+    },
     // A second quota plugin claiming Command Code, so a refresh that resolves by
     // provider alone would be caught addressing it instead of `ollama-quota`.
     setDecoyPlugin(enabled) {
