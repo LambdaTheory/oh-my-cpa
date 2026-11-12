@@ -85,10 +85,39 @@ func resolvePluginQuotaID(plugins []management.PluginItem, provider string) (str
 	return "", fmt.Errorf("no enabled plugin provides quota for %q", provider)
 }
 
+// resolveQuotaProviderPluginID maps a credential's quota provider to the plugin
+// the host registers for it. Only a plugin that lists the provider is eligible:
+// an unlisted provider must not reach any plugin, even the only registered one.
+// Provider keys compare case-insensitively with outer whitespace trimmed; the
+// spaces inside a key are significant ("openai-compatible-command code").
+func resolveQuotaProviderPluginID(providers []management.QuotaProviderInfo, provider string) string {
+	target := strings.TrimSpace(provider)
+	if target == "" {
+		return ""
+	}
+	for _, entry := range providers {
+		pluginID := strings.TrimSpace(entry.PluginID)
+		if pluginID == "" || strings.TrimSpace(entry.Provider) == "" {
+			continue
+		}
+		for _, supported := range entry.SupportedProviders {
+			if strings.EqualFold(strings.TrimSpace(supported), target) {
+				return pluginID
+			}
+		}
+	}
+	return ""
+}
+
 // pluginQuotaTarget resolves the plugin id serving a plugin-quota credential.
 // CPA's own selection wins when the gateway reports it: matching names here
 // cannot see which plugin CPA has fused, so it could pick one CPA bypasses.
 // Gateways older than v8.0.25 report no selection and fall back to the match.
+// That match lists the installed plugins first; when the list cannot be read or
+// names no plugin for the credential, the host's quota-provider registry
+// (`GET /credentials/quota/providers`) is asked instead, which older hosts
+// serve even though their credential list carries no selection. Both routes
+// refuse to hand the credential to a plugin that does not list its provider.
 // Declarative quota_probe credentials have no v8 management route and report an
 // explicit unsupported message instead of failing a fetch.
 func (s *Service) pluginQuotaTarget(ctx context.Context, file management.AuthFile) (string, error) {
@@ -98,14 +127,30 @@ func (s *Service) pluginQuotaTarget(ctx context.Context, file management.AuthFil
 	if s.client == nil {
 		return "", errors.New("CPA client is not configured")
 	}
-	if len(nonNullJSON(file.QuotaProbe)) > 0 && strings.TrimSpace(file.QuotaProvider) == "" {
+	provider := strings.TrimSpace(file.QuotaProvider)
+	if len(nonNullJSON(file.QuotaProbe)) > 0 && provider == "" {
 		return "", errors.New("declarative quota probes are not available through the v8 management API")
 	}
-	plugins, err := s.client.Plugins(ctx)
-	if err != nil {
-		return "", err
+	plugins, pluginsErr := s.client.Plugins(ctx)
+	if pluginsErr == nil {
+		if pluginID, err := resolvePluginQuotaID(plugins, provider); err == nil {
+			return pluginID, nil
+		}
 	}
-	return resolvePluginQuotaID(plugins, file.QuotaProvider)
+	if provider == "" {
+		return "", errors.New("credential does not advertise a quota provider")
+	}
+	registered, err := s.client.QuotaProviders(ctx)
+	if err != nil {
+		if pluginsErr != nil {
+			return "", fmt.Errorf("list CPA plugins: %v; list CPA quota providers: %w", pluginsErr, err)
+		}
+		return "", fmt.Errorf("list CPA quota providers: %w", err)
+	}
+	if pluginID := resolveQuotaProviderPluginID(registered, provider); pluginID != "" {
+		return pluginID, nil
+	}
+	return "", fmt.Errorf("no enabled plugin provides quota for %q", provider)
 }
 
 // fetchPluginQuota reads a plugin quota payload and projects it onto the

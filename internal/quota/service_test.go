@@ -14,11 +14,12 @@ import (
 )
 
 type mockCPAClient struct {
-	apiCallFunc   func(ctx context.Context, req management.ApiCallRequest) (management.ApiCallResponse, error)
-	resetQuotaFn  func(ctx context.Context, authIndex string) error
-	authFilesFunc func(ctx context.Context) (management.AuthFilesResponse, error)
-	pluginsFunc   func(ctx context.Context) ([]management.PluginItem, error)
-	pluginQuotaFn func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error)
+	apiCallFunc        func(ctx context.Context, req management.ApiCallRequest) (management.ApiCallResponse, error)
+	resetQuotaFn       func(ctx context.Context, authIndex string) error
+	authFilesFunc      func(ctx context.Context) (management.AuthFilesResponse, error)
+	pluginsFunc        func(ctx context.Context) ([]management.PluginItem, error)
+	quotaProvidersFunc func(ctx context.Context) ([]management.QuotaProviderInfo, error)
+	pluginQuotaFn      func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error)
 }
 
 func (m *mockCPAClient) ApiCall(ctx context.Context, req management.ApiCallRequest) (management.ApiCallResponse, error) {
@@ -45,6 +46,13 @@ func (m *mockCPAClient) AuthFiles(ctx context.Context) (management.AuthFilesResp
 func (m *mockCPAClient) Plugins(ctx context.Context) ([]management.PluginItem, error) {
 	if m.pluginsFunc != nil {
 		return m.pluginsFunc(ctx)
+	}
+	return nil, errors.New("unimplemented")
+}
+
+func (m *mockCPAClient) QuotaProviders(ctx context.Context) ([]management.QuotaProviderInfo, error) {
+	if m.quotaProvidersFunc != nil {
+		return m.quotaProvidersFunc(ctx)
 	}
 	return nil, errors.New("unimplemented")
 }

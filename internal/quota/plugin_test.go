@@ -3,6 +3,7 @@ package quota
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,10 +98,16 @@ func TestPluginQuotaTargetRefusesDeclarativeProbe(t *testing.T) {
 // would pick fixture-limiter here, which CPA may have fused; the target follows
 // CPA without listing plugins at all.
 func TestPluginQuotaTargetPrefersCPASelection(t *testing.T) {
-	svc := NewService(&mockCPAClient{pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
-		t.Fatal("plugins listed although CPA named the quota plugin")
-		return nil, nil
-	}})
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			t.Fatal("plugins listed although CPA named the quota plugin")
+			return nil, nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			t.Fatal("quota providers listed although CPA named the quota plugin")
+			return nil, nil
+		},
+	})
 	got, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
 		AuthIndex:     "auth-selected",
 		Type:          "codebuddy",
@@ -110,6 +117,167 @@ func TestPluginQuotaTargetPrefersCPASelection(t *testing.T) {
 	})
 	if err != nil || got != "fixture-healthy" {
 		t.Fatalf("pluginQuotaTarget = %q, %v; want fixture-healthy", got, err)
+	}
+}
+
+// quotaProviderItems are the registry entries an older host serves: the plugin
+// ids, the provider each registers under, and the credential keys each accepts.
+// The entry without a provider name is not an eligible target even when its
+// supported list matches, so it sits first to prove it is skipped.
+func quotaProviderItems() []management.QuotaProviderInfo {
+	return []management.QuotaProviderInfo{
+		{PluginID: "fixture-anonymous", SupportedProviders: []string{"openai-compatible-command code"}},
+		{PluginID: "fixture-ollama", Provider: "ollama", DisplayName: "Ollama Quota", SupportedProviders: []string{"ollama"}},
+		{PluginID: "fixture-commandcode", Provider: "openai-compatible-command code", DisplayName: "Command Code Quota", SupportedProviders: []string{"openai-compatible-command code"}},
+		{PluginID: "fixture-opencode", Provider: "openai-compatible-opencode", DisplayName: "OpenCode Go Quota", SupportedProviders: []string{"openai-compatible-opencode"}},
+	}
+}
+
+// Older hosts report no quota_plugin_id and their installed-plugin list only
+// carries the ollama identifier, so the quota-provider registry is what names
+// the CMC and OPC plugins. The literal space inside the CMC key must survive.
+func TestPluginQuotaTargetFallsBackToQuotaProviders(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "command code", provider: "openai-compatible-command code", want: "fixture-commandcode"},
+		{name: "opencode", provider: "openai-compatible-opencode", want: "fixture-opencode"},
+		{name: "case and outer spaces", provider: "  OpenAI-Compatible-Command Code  ", want: "fixture-commandcode"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			svc := NewService(&mockCPAClient{
+				pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+					return pluginTestItems(), nil
+				},
+				quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+					return quotaProviderItems(), nil
+				},
+			})
+			got, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+				AuthIndex: "auth-fallback", Type: testCase.provider, SupportsQuota: true, QuotaProvider: testCase.provider,
+			})
+			if err != nil || got != testCase.want {
+				t.Fatalf("pluginQuotaTarget(%q) = %q, %v; want %q", testCase.provider, got, err, testCase.want)
+			}
+		})
+	}
+}
+
+// A failed installed-plugin read is not the end of resolution: the registry is
+// asked and can still name the plugin.
+func TestPluginQuotaTargetFallsBackWhenPluginListFails(t *testing.T) {
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return nil, errors.New("plugins unavailable")
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+	})
+	got, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+		AuthIndex: "auth-list-down", Type: "openai-compatible-opencode", SupportsQuota: true, QuotaProvider: "openai-compatible-opencode",
+	})
+	if err != nil || got != "fixture-opencode" {
+		t.Fatalf("pluginQuotaTarget = %q, %v; want fixture-opencode", got, err)
+	}
+}
+
+// A provider no plugin lists is an error, never a reason to pick the sole
+// registered plugin.
+func TestPluginQuotaTargetFallbackRefusesUnlistedProvider(t *testing.T) {
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return pluginTestItems(), nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+	})
+	_, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+		AuthIndex: "auth-unlisted", Type: "openai-compatible-other", SupportsQuota: true, QuotaProvider: "openai-compatible-other",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no enabled plugin provides quota") {
+		t.Fatalf("pluginQuotaTarget(unlisted) = %v, want the no-match error", err)
+	}
+}
+
+// A host that serves neither the plugin list nor the registry reports the
+// registry route's failure instead of guessing a target.
+func TestPluginQuotaTargetReportsQuotaProviderRouteFailure(t *testing.T) {
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return nil, nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return nil, errors.New("CPA returned HTTP 404: not found")
+		},
+	})
+	_, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+		AuthIndex: "auth-route-down", Type: "openai-compatible-opencode", SupportsQuota: true, QuotaProvider: "openai-compatible-opencode",
+	})
+	if err == nil || !strings.Contains(err.Error(), "quota providers") || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("pluginQuotaTarget(route down) = %v, want the registry route error", err)
+	}
+}
+
+// A refresh on an old host resolves through the registry and reads the quota
+// through the plugin it named.
+func TestRefreshCredentialQuotaUsesQuotaProviderFallback(t *testing.T) {
+	var calledPlugin, calledIndex string
+	client := &mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return pluginTestItems(), nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+		pluginQuotaFn: func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error) {
+			calledPlugin, calledIndex = pluginID, authIndex
+			return json.RawMessage(pluginQuotaFixture), nil
+		},
+	}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex: "auth-cmc-fallback", Name: "commandcode.json", Type: "openai-compatible-command code",
+		SupportsQuota: true, QuotaProvider: "openai-compatible-command code",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if calledPlugin != "fixture-commandcode" || calledIndex != "auth-cmc-fallback" {
+		t.Fatalf("fetch = (%q, %q), want (fixture-commandcode, auth-cmc-fallback)", calledPlugin, calledIndex)
+	}
+	if len(result.Windows) != 1 {
+		t.Fatalf("windows = %+v, want the fixture window", result.Windows)
+	}
+}
+
+// An unlisted provider stops before any quota request: the credential is not
+// sent to a plugin that never named it.
+func TestRefreshCredentialQuotaFallbackNoMatchSendsNothing(t *testing.T) {
+	fetched := false
+	client := &mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) { return nil, nil },
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+		pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+			fetched = true
+			return json.RawMessage(pluginQuotaFixture), nil
+		},
+	}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex: "auth-unlisted", Type: "openai-compatible-other", SupportsQuota: true, QuotaProvider: "openai-compatible-other",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if fetched {
+		t.Fatal("quota fetched from a plugin that does not list the provider")
+	}
+	if result.Status != "error" || result.Error == "" || len(result.Windows) != 0 || result.Plan != nil {
+		t.Fatalf("result = %+v, want an error without windows or plan", result)
 	}
 }
 

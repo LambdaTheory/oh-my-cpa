@@ -117,6 +117,7 @@ type CPAClient interface {
 	ResetQuota(ctx context.Context, authIndex string) error
 	AuthFiles(ctx context.Context) (management.AuthFilesResponse, error)
 	Plugins(ctx context.Context) ([]management.PluginItem, error)
+	QuotaProviders(ctx context.Context) ([]management.QuotaProviderInfo, error)
 	FetchPluginQuota(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error)
 }
 
