@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
@@ -108,26 +109,45 @@ func (s *Service) pluginQuotaTarget(ctx context.Context, file management.AuthFil
 }
 
 // fetchPluginQuota reads a plugin quota payload and projects it onto the
-// shared windows/plan shape. Plugin quotas reuse the Antigravity summary
-// shape (groups of buckets) with a plan/tier subscription beside it.
-func (s *Service) fetchPluginQuota(ctx context.Context, pluginID, authIndex string, nowMS int64) ([]QuotaWindow, *QuotaPlan, error) {
+// shared windows/plan shape. Plugin quotas reuse the Antigravity groups shape
+// (groups of buckets) with a plan/tier subscription and a summary beside it;
+// the plugin's description text carries the window names and the stale marker.
+// stale reports that the figures are the plugin's last successful reading and
+// observedAtMS when that reading was taken (0 when the payload states none).
+func (s *Service) fetchPluginQuota(ctx context.Context, pluginID, authIndex string, nowMS int64) (windows []QuotaWindow, plan *QuotaPlan, stale bool, observedAtMS int64, err error) {
 	if s.client == nil {
-		return nil, nil, errors.New("CPA client is not configured")
+		return nil, nil, false, 0, errors.New("CPA client is not configured")
 	}
 	raw, err := s.client.FetchPluginQuota(ctx, pluginID, authIndex)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, 0, err
 	}
-	windows, err := ParseAntigravityUsage(raw, nowMS, 0)
+	windows, observedAtMS, stale, err = ParsePluginQuotaWindows(raw, nowMS, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, 0, err
 	}
-	return windows, parsePluginQuotaPlan(raw), nil
+	return windows, parsePluginQuotaPlan(raw), stale, observedAtMS, nil
 }
 
-// parsePluginQuotaPlan projects a plugin quota subscription onto a plan. The
+// pluginQuotaMetric is one entry of a plugin payload's summary[]: a figure the
+// plugin states beside the plan, such as the account's balance.
+type pluginQuotaMetric struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Value    any    `json:"value"`
+	Format   string `json:"format"`
+	Currency string `json:"currency"`
+	Unit     string `json:"unit"`
+}
+
+// parsePluginQuotaPlan projects a plugin quota payload's plan fields onto a
+// plan: the subscription's display strings and the summary's balance. The
 // payload carries display strings only (no active flag, no windows), so tier
 // stays unknown rather than guessing elite/premium from a name.
+//
+// A payload with a balance but no plan name still returns a plan: the balance
+// lives on the plan, and the read-time projection drops a plan without a
+// PlanType, which would lose the only figure the provider published.
 func parsePluginQuotaPlan(raw []byte) *QuotaPlan {
 	var payload struct {
 		Subscription *struct {
@@ -135,22 +155,65 @@ func parsePluginQuotaPlan(raw []byte) *QuotaPlan {
 			TierName string `json:"tierName"`
 			TierID   string `json:"tierId"`
 		} `json:"subscription"`
+		Summary []pluginQuotaMetric `json:"summary"`
 	}
-	if json.Unmarshal(raw, &payload) != nil || payload.Subscription == nil {
+	if json.Unmarshal(raw, &payload) != nil {
 		return nil
 	}
-	plan := strings.TrimSpace(payload.Subscription.Plan)
-	tierName := strings.TrimSpace(payload.Subscription.TierName)
-	tierID := strings.TrimSpace(payload.Subscription.TierID)
-	label := plan
-	if label == "" {
-		label = tierName
+	label := ""
+	if payload.Subscription != nil {
+		label = strings.TrimSpace(payload.Subscription.Plan)
+		if label == "" {
+			label = strings.TrimSpace(payload.Subscription.TierName)
+		}
+		if label == "" {
+			label = strings.TrimSpace(payload.Subscription.TierID)
+		}
 	}
-	if label == "" {
-		label = tierID
-	}
-	if label == "" {
+	credits := parsePluginQuotaBalance(payload.Summary)
+	if label == "" && credits == nil {
 		return nil
 	}
-	return &QuotaPlan{PlanType: "unknown", PlanLabel: label, Tier: "unknown"}
+	return &QuotaPlan{PlanType: "unknown", PlanLabel: label, Tier: "unknown", Credits: credits}
+}
+
+// parsePluginQuotaBalance projects the first summary metric keyed "balance"
+// onto the credits slot. The balance keeps the plugin's own unit as text —
+// "12.34 USD" for a stated currency, "321 credits" for a plain number — because
+// the display slot is a text field and the currency is not always money.
+// A label containing "stale" (v0.3.0 writes "Balance · stale") marks the
+// figure as the plugin's cached reading.
+func parsePluginQuotaBalance(metrics []pluginQuotaMetric) *QuotaCredits {
+	for _, metric := range metrics {
+		if strings.TrimSpace(metric.Key) != "balance" {
+			continue
+		}
+		amount, ok := toFloat(metric.Value)
+		if !ok {
+			return nil
+		}
+		balance := formatPluginBalanceAmount(amount)
+		if strings.EqualFold(strings.TrimSpace(metric.Format), "currency") {
+			if currency := strings.TrimSpace(metric.Currency); currency != "" {
+				balance += " " + strings.ToUpper(currency)
+			}
+		} else if unit := strings.TrimSpace(metric.Unit); unit != "" {
+			balance += " " + unit
+		}
+		return &QuotaCredits{
+			Balance: balance,
+			Stale:   strings.Contains(strings.ToLower(metric.Label), "stale"),
+		}
+	}
+	return nil
+}
+
+// formatPluginBalanceAmount renders a balance with at most two decimals and no
+// trailing zeros: 12.34, 5.5, 321. A figure the plugin states as a whole number
+// must not read as 321.00, and one with cents must not be rounded away.
+func formatPluginBalanceAmount(value float64) string {
+	text := strconv.FormatFloat(value, 'f', 2, 64)
+	text = strings.TrimRight(text, "0")
+	text = strings.TrimRight(text, ".")
+	return text
 }

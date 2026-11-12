@@ -326,11 +326,18 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 		pluginID, err := s.pluginQuotaTarget(ctx, file)
 		if err != nil {
 			fetchErr = err
-		} else if windows, plan, err := s.fetchPluginQuota(ctx, pluginID, authIndex, nowMS); err != nil {
+		} else if windows, plan, stale, observedAtMS, err := s.fetchPluginQuota(ctx, pluginID, authIndex, nowMS); err != nil {
 			fetchErr = err
 		} else {
 			result.Windows = windows
 			result.Plan = plan
+			// A stale payload is the plugin's last successful reading. Keeping
+			// its observation time is what distinguishes those figures from a
+			// reading taken now; the stale marker travels on the windows and
+			// credits into the stored snapshot.
+			if stale && observedAtMS > 0 {
+				result.ObservedAtMS = observedAtMS
+			}
 		}
 	} else {
 		switch stdProvider {
