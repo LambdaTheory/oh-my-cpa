@@ -78,6 +78,16 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
   const hasDiagnostics = Object.keys(rawSignals).length > 0
     || Object.keys(item.model_quotas ?? {}).length > 0
     || Boolean(item.error);
+  // A plugin's cached reading is marked here as well as on the row: the Drawer is where the
+  // reader goes to see why a figure is old, so the plugin's own reasons travel with the mark.
+  const pluginStaleNotes = Array.from(new Set(
+    windows
+      .filter((window) => window.stale)
+      .map((window) => window.note)
+      .filter((note): note is string => Boolean(note)),
+  ));
+  const pluginStale = Boolean(item.plan?.credits?.stale || windows.some((window) => window.stale));
+  const pluginStaleTitle = [t('quota.plugin_stale_hint'), ...pluginStaleNotes].join(' · ');
 
   // Grant scope identifiers are upstream window ids, not display text: known
   // ones resolve to the localized window labels, anything upstream adds
@@ -114,6 +124,8 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
           resetAtMS={window.reset_at_ms}
           resetLabel={window.reset_label}
           resetAccuracy={window.reset_accuracy}
+          stale={window.stale}
+          note={window.note}
           capacity={window}
         />,
       );
@@ -132,6 +144,9 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
     >
       <div className={styles['quota-status-row']}>
         {quotaStatusTag(item, t, nowMS)}
+        {pluginStale && (
+          <Tag data-plugin-quota-stale="true" title={pluginStaleTitle}>{t('quota.plugin_stale')}</Tag>
+        )}
         {!item.capabilities?.refresh_supported && (
           <Tag>{t('omc.quota_unsupported')}</Tag>
         )}

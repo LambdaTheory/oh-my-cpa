@@ -3527,6 +3527,8 @@ const DICT: Record<string, [string, string]> = {
   'quota.last_success': ['上次成功读数：{time}', 'Last successful reading: {time}'],
   'quota.status_error': ['异常', 'Error'],
   'quota.status_stale': ['快照已过期', 'Stale'],
+  'quota.plugin_stale': ['缓存读数', 'Cached reading'],
+  'quota.plugin_stale_hint': ['插件返回的是上次成功读取，不是本次刷新结果', 'The plugin returned its last successful reading, not the result of this refresh'],
   'quota.status_idle': ['未拉取', 'Idle'],
   'quota.status_unpublished': ['未发布用量', 'No usage published'],
   'quota.cooldown_active_desc': ['检测到 CPA 触发的上游 429 限流保护', 'CPA 429 rate limit protection active'],
