@@ -101,7 +101,14 @@ function json(response, status, body, headers = {}) {
 // OpenCode Go would let a front-end slot pass while rendering a value the
 // upstream never sends. Reset times stay relative to the read, as every other
 // fixture does, so a window is never already expired when a suite runs.
-function pluginQuotaPayload(type, { stale = false, staleReadAtMS } = {}) {
+//
+// `balanceOnly` is the Ollama credential that carries an api_key and no cookie:
+// the plugin knows the USD balance but cannot read the windows, so the payload
+// must omit `groups` rather than send empty ones. `missing` drops the optional
+// halves of the other two shapes (Command Code's subscription/summary, OpenCode
+// Go's rolling and monthly buckets) so the console can be checked for rendering
+// absence instead of inventing a plan, a balance or a zero window.
+function pluginQuotaPayload(type, { stale = false, staleReadAtMS, balanceOnly = false, missing = false } = {}) {
   const now = Date.now();
   const readAt = new Date(stale && staleReadAtMS ? staleReadAtMS : now).toISOString();
   // A stale answer is a 200 carrying the plugin's last successful reading: the
@@ -121,32 +128,47 @@ function pluginQuotaPayload(type, { stale = false, staleReadAtMS } = {}) {
   });
   const summary = (metric) => [{ ...metric, label: stale ? `${metric.label} · stale` : metric.label }];
   switch (type) {
-    case 'ollama':
-      return {
+    case 'ollama': {
+      const payload = {
         subscription: { plan: '' },
-        summary: summary({ key: 'balance', label: 'Balance', value: 12.34, format: 'currency', currency: 'USD' }),
-        groups: [{ displayName: 'Ollama', buckets: [
+        summary: summary({ key: 'balance', label: 'Balance', value: balanceOnly ? 8.75 : 12.34, format: 'currency', currency: 'USD' }),
+      };
+      if (!balanceOnly && !missing) {
+        payload.groups = [{ displayName: 'Ollama', buckets: [
           bucket('5h', 0.6, 5 * 3600000, '5-hour session'),
           bucket('7d', 0.8, 7 * 86400000, 'Weekly'),
-        ] }],
-      };
-    case 'openai-compatible-command code':
+        ] }];
+      }
+      return payload;
+    }
+    case 'openai-compatible-command code': {
+      const groups = [{ displayName: 'Command Code', buckets: [
+        bucket('5h', 0.8, 5 * 3600000, '5-hour session'),
+        bucket('7d', 0.55, 7 * 86400000, 'Weekly'),
+      ] }];
+      if (missing) return { groups };
       return {
         subscription: { plan: 'Pro' },
         summary: summary({ key: 'balance', label: 'Balance', value: 321, format: 'number', unit: 'credits' }),
-        groups: [{ displayName: 'Command Code', buckets: [
-          bucket('5h', 0.8, 5 * 3600000, '5-hour session'),
-          bucket('7d', 0.55, 7 * 86400000, 'Weekly'),
-        ] }],
+        groups,
       };
-    case 'openai-compatible-opencode':
-      return {
-        groups: [{ displayName: 'OpenCode Go', buckets: [
-          bucket('rolling', 0.0, 3600000, 'Rolling', 'upstream reports this window rate limited'),
-          bucket('weekly', 0.42, 7 * 86400000, 'Weekly'),
-          bucket('monthly', 0.21, 30 * 86400000, 'Monthly'),
-        ] }],
-      };
+    }
+    case 'openai-compatible-opencode': {
+      if (missing) {
+        // C-06: the weekly bucket arrives without remainingFraction. Dropping the
+        // field (rather than sending 0) proves the console renders `--` instead
+        // of turning an absent figure into an empty tank.
+        const withoutFraction = bucket('weekly', 0.42, 7 * 86400000, 'Weekly');
+        delete withoutFraction.remainingFraction;
+        return { groups: [{ displayName: 'OpenCode Go', buckets: [withoutFraction] }] };
+      }
+      const buckets = [
+        bucket('rolling', 0.0, 3600000, 'Rolling', 'upstream reports this window rate limited'),
+        bucket('weekly', 0.42, 7 * 86400000, 'Weekly'),
+        bucket('monthly', 0.21, 30 * 86400000, 'Monthly'),
+      ];
+      return { groups: [{ displayName: 'OpenCode Go', buckets }] };
+    }
     default:
       return null;
   }
@@ -169,7 +191,7 @@ export function createFakeCpaServer({
   const requests = [];
   let legacyHostEnabled = legacyHost;
   let pluginQuotaMode = quotaMode;
-  const initialAuthFiles = [
+  const baseAuthFiles = [
     {
       id: 'auth-e2e-1', auth_index: 'auth-index-e2e-1', name: 'fixture-auth.json', type: 'codex', provider: 'codex',
       label: 'Primary fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
@@ -244,11 +266,19 @@ export function createFakeCpaServer({
       label: 'Runtime without index', status: 'ok', disabled: false, unavailable: false, runtime_only: true,
       success: 0, failed: 0, models: [], priority: 0, weight: 1,
     },
-    // The three disk credentials the quota plugin claims. Their `type` strings are
-    // the plugin's supported-provider keys verbatim, interior spaces included: CPA
-    // only lower-cases and trims, so a "normalized" spelling would no longer match
-    // and the credential would lose its quota card. The two compatible families
-    // carry a base_url because that is what CPA stores for an endpoint-backed file.
+  ];
+  // The disk credentials the quota plugin claims, plus the shapes the acceptance
+  // cases need. Their `type` strings are the plugin's supported-provider keys
+  // verbatim, interior spaces included: CPA only lower-cases and trims, so a
+  // "normalized" spelling would no longer match and the credential would lose its
+  // quota card. The two compatible families carry a base_url because that is what
+  // CPA stores for an endpoint-backed file.
+  //
+  // They are one switchable set because an unrelated acceptance scenario counts
+  // the default twelve credentials; these extra rows push its page-one records
+  // (runtime-no-index, xai) out of view. `setPluginQuotaCredentials(false)` keeps
+  // the old list for those scenarios, and the quota scenario turns it back on.
+  const pluginQuotaAuthFiles = [
     {
       id: 'auth-e2e-ollama', auth_index: 'auth-index-e2e-ollama', name: 'ollama-fixture.json', type: 'ollama', provider: 'ollama',
       label: 'Ollama fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
@@ -271,8 +301,62 @@ export function createFakeCpaServer({
       supports_quota: true, quota_provider: 'openai-compatible-opencode', quota_plugin_id: 'ollama-quota',
       success: 1, failed: 0, models: [], priority: 1, weight: 1,
     },
+    // An Ollama credential the plugin can answer with a balance but not with
+    // windows (the api_key form has no cookie to read the usage page).
+    {
+      id: 'auth-e2e-ollama-key', auth_index: 'auth-index-e2e-ollama-key', name: 'ollama-key-fixture.json',
+      type: 'ollama', provider: 'ollama',
+      label: 'Ollama API key fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
+      supports_quota: true, quota_provider: 'ollama', quota_plugin_id: 'ollama-quota',
+      success: 1, failed: 0, models: [], priority: 1, weight: 1,
+    },
+    // Two credentials the plugin answers with a failure for every read: one
+    // rate-limited (429 with Retry-After) and one upstream failure (502). They
+    // start without a snapshot so the no-cache UI can be reached without first
+    // erasing a successful reading.
+    {
+      id: 'auth-e2e-rate-limited', auth_index: 'auth-index-e2e-rate-limited', name: 'ollama-rate-limited.json',
+      type: 'ollama', provider: 'ollama',
+      label: 'Rate limited fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
+      supports_quota: true, quota_provider: 'ollama', quota_plugin_id: 'ollama-quota',
+      success: 1, failed: 0, models: [], priority: 1, weight: 1,
+    },
+    {
+      id: 'auth-e2e-upstream-error', auth_index: 'auth-index-e2e-upstream-error', name: 'command-code-upstream-error.json',
+      type: 'openai-compatible-command code', provider: 'openai-compatible-command code',
+      base_url: 'https://commandcode.example.test/v1',
+      label: 'Upstream error fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
+      supports_quota: true, quota_provider: 'openai-compatible-command code', quota_plugin_id: 'ollama-quota',
+      success: 1, failed: 0, models: [], priority: 1, weight: 1,
+    },
+    // A credential whose provider no enabled plugin claims. It must fail
+    // resolution without a plugin POST rather than borrow another plugin.
+    {
+      id: 'auth-e2e-unmatched', auth_index: 'auth-index-e2e-unmatched', name: 'unmatched-provider.json',
+      type: 'openai-compatible-unmatched', provider: 'openai-compatible-unmatched',
+      label: 'Unmatched provider fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
+      supports_quota: true, quota_provider: 'openai-compatible-unmatched',
+      success: 1, failed: 0, models: [], priority: 1, weight: 1,
+    },
+    // A Meta credential for the auto-refresh exclusion. It has no quota plugin;
+    // the scheduler must leave it to the manual path even when its snapshot is
+    // past the reset interval.
+    {
+      id: 'auth-e2e-meta', auth_index: 'auth-index-e2e-meta', name: 'meta-fixture.json', type: 'meta', provider: 'meta',
+      label: 'Meta fixture', status: 'ok', disabled: false, unavailable: false, runtime_only: false,
+      success: 1, failed: 0, models: [], priority: 1, weight: 1,
+    },
   ];
-  let authFiles = JSON.parse(JSON.stringify(initialAuthFiles));
+  let pluginQuotaCredentialsEnabled = true;
+  let authFiles = JSON.parse(JSON.stringify(baseAuthFiles));
+  const syncPluginQuotaCredentials = () => {
+    const quotaIDs = new Set(pluginQuotaAuthFiles.map((file) => file.id));
+    authFiles = authFiles.filter((file) => !quotaIDs.has(file.id));
+    if (pluginQuotaCredentialsEnabled) {
+      authFiles.push(...JSON.parse(JSON.stringify(pluginQuotaAuthFiles)));
+    }
+  };
+  syncPluginQuotaCredentials();
   let oauthModelAliases = {
     codex: [{ name: 'gpt-e2e', alias: 'gpt-e2e-preview', fork: true, 'force-mapping': false, 'display-name': 'GPT E2E Preview' }],
     claude: [{ name: 'claude-3-5-sonnet', alias: 'sonnet-latest' }],
@@ -392,6 +476,25 @@ export function createFakeCpaServer({
   };
   const renderConfigYaml = () => stringifyYaml(configDoc);
 
+  // Added only by the acceptance case that proves CPA's `quota_plugin_id` wins:
+  // this plugin claims the same provider as `ollama-quota`, so a client that
+  // resolved by provider alone could address the wrong plugin.
+  const decoyQuotaPlugin = {
+    id: 'decoy-quota',
+    path: 'plugins/decoy-quota.so',
+    configured: true,
+    registered: true,
+    enabled: true,
+    supports_oauth: false,
+    oauth_provider: '',
+    supports_quota: true,
+    quota_provider: 'openai-compatible-command code',
+    supported_providers: ['openai-compatible-command code'],
+    logo: '',
+    config_fields: [],
+    menus: [],
+    metadata: { name: 'Decoy Quota', version: '0.3.0', author: 'fixture', github_repository: '', logo: '', config_fields: [] },
+  };
   const plugins = new Map([
     ['fixture-logger', {
       id: 'fixture-logger',
@@ -1181,11 +1284,24 @@ export function createFakeCpaServer({
         json(response, 404, { error: 'auth_file_not_found', message: `credential ${authIndex} was not found` });
         return;
       }
+      // Two credentials answer with a failure for every read. They are addressed
+      // per auth index so the rest of the fixture keeps succeeding in the same
+      // run; the global modes below still fail every credential at once.
+      if (authIndex === 'auth-index-e2e-rate-limited') {
+        json(response, 429, { error: 'rate_limited', message: 'upstream rate limited the quota read' }, { 'Retry-After': '120' });
+        return;
+      }
+      if (authIndex === 'auth-index-e2e-upstream-error') {
+        json(response, 502, { error: 'upstream_error', message: 'upstream quota read failed' });
+        return;
+      }
       const quota = pluginQuotaPayload(credential.type, {
         stale: pluginQuotaMode === 'stale',
         // Two hours old: far enough in the past that the client's observed-at
         // backfill has to show an age rather than "just now".
         staleReadAtMS: pluginQuotaMode === 'stale' ? Date.now() - 2 * 3600000 : undefined,
+        balanceOnly: authIndex === 'auth-index-e2e-ollama-key',
+        missing: pluginQuotaMode === 'missing',
       });
       if (!quota) {
         json(response, 400, { error: 'unsupported_provider', message: `plugin ollama-quota does not serve ${credential.type}` });
@@ -1278,6 +1394,24 @@ export function createFakeCpaServer({
     setLegacyHost(enabled) { legacyHostEnabled = Boolean(enabled); },
     setQuotaMode(mode) { pluginQuotaMode = mode; },
     quotaMode() { return pluginQuotaMode; },
+    // The default list keeps the twelve pre-quota credentials; the quota suite
+    // adds the plugin credentials and the sparse/failing shapes it needs.
+    setPluginQuotaCredentials(enabled) {
+      pluginQuotaCredentialsEnabled = Boolean(enabled);
+      syncPluginQuotaCredentials();
+    },
+    pluginQuotaCredentials() { return pluginQuotaCredentialsEnabled; },
+    // A second quota plugin claiming Command Code, so a refresh that resolves by
+    // provider alone would be caught addressing it instead of `ollama-quota`.
+    setDecoyPlugin(enabled) {
+      if (!enabled) {
+        plugins.delete('decoy-quota');
+        pluginConfigs.delete('decoy-quota');
+        return;
+      }
+      plugins.set('decoy-quota', JSON.parse(JSON.stringify(decoyQuotaPlugin)));
+      pluginConfigs.set('decoy-quota', { enabled: true });
+    },
   };
   return { server, requests, fixture };
 }

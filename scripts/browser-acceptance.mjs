@@ -451,6 +451,7 @@ try {
     providerMarkImage,
     path,
     root,
+    fakeCpa,
   });
 
   if (!p0Only) {
