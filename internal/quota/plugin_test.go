@@ -163,6 +163,119 @@ func TestRefreshCredentialQuotaPluginBranch(t *testing.T) {
 	}
 }
 
+// A stale reading: v0.3.0 writes the marker into the balance label and the
+// bucket description, and the last-read instant into the description.
+const pluginStaleBalancePayload = `{
+	"subscription": {"plan": "Pro"},
+	"summary": [{"key": "balance", "label": "Balance · stale", "value": 321, "format": "number", "unit": "credits"}],
+	"groups": [{
+		"displayName": "Command Code",
+		"buckets": [
+			{"window": "5h", "remainingFraction": 0.8, "resetTime": "2026-11-12T13:00:00Z", "description": "5-hour session · stale · last read at 2026-11-12T07:55:00Z · upstream request failed: 429 Too Many Requests"}
+		]
+	}]
+}`
+
+// The three providers publish different plan fields: Ollama only a currency
+// balance, Command Code a plan plus a credits balance, OpenCode Go neither.
+func TestParsePluginQuotaPlan(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		raw         string
+		wantNil     bool
+		wantLabel   string
+		wantBalance string
+		wantStale   bool
+	}{
+		{name: "ollama balance only", raw: pluginOllamaBalanceOnlyPayload, wantBalance: "5.5 USD"},
+		{name: "ollama balance beside windows", raw: pluginOllamaCookiePayload, wantBalance: "12.34 USD"},
+		{name: "command code plan and credits", raw: pluginCommandCodePayload, wantLabel: "Pro", wantBalance: "321 credits"},
+		{name: "opencode windows only", raw: pluginOpenCodePayload, wantNil: true},
+		{name: "stale balance label", raw: pluginStaleBalancePayload, wantLabel: "Pro", wantBalance: "321 credits", wantStale: true},
+		{
+			name:        "currency without a code stays the plain amount",
+			raw:         `{"summary":[{"key":"balance","value":9,"format":"currency"}]}`,
+			wantBalance: "9",
+		},
+		{
+			name:        "number without a unit stays the plain amount",
+			raw:         `{"summary":[{"key":"balance","value":7,"format":"number"}]}`,
+			wantBalance: "7",
+		},
+		{
+			name:        "first balance metric wins",
+			raw:         `{"summary":[{"key":"other","value":1},{"key":"balance","value":2,"unit":"credits"},{"key":"balance","value":3,"unit":"credits"}]}`,
+			wantBalance: "2 credits",
+		},
+		{name: "subscription without a balance", raw: `{"subscription":{"plan":"Team"}}`, wantLabel: "Team"},
+		{name: "balance value unreadable", raw: `{"summary":[{"key":"balance","value":"n/a"}]}`, wantNil: true},
+		{name: "invalid payload", raw: `{`, wantNil: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			plan := parsePluginQuotaPlan([]byte(testCase.raw))
+			if testCase.wantNil {
+				if plan != nil {
+					t.Fatalf("parsePluginQuotaPlan = %+v, want nil", plan)
+				}
+				return
+			}
+			if plan == nil {
+				t.Fatalf("parsePluginQuotaPlan = nil, want a plan (label %q, balance %q)", testCase.wantLabel, testCase.wantBalance)
+			}
+			// A plan without a PlanType is dropped by the read-time projection,
+			// which would also lose the balance it carries.
+			if plan.PlanType != "unknown" || plan.Tier != "unknown" {
+				t.Errorf("plan type/tier = %q/%q, want unknown/unknown", plan.PlanType, plan.Tier)
+			}
+			if plan.PlanLabel != testCase.wantLabel {
+				t.Errorf("plan label = %q, want %q", plan.PlanLabel, testCase.wantLabel)
+			}
+			if testCase.wantBalance == "" {
+				if plan.Credits != nil {
+					t.Errorf("credits = %+v, want none", plan.Credits)
+				}
+				return
+			}
+			if plan.Credits == nil || plan.Credits.Balance != testCase.wantBalance || plan.Credits.Stale != testCase.wantStale {
+				t.Errorf("credits = %+v, want balance %q with stale=%v", plan.Credits, testCase.wantBalance, testCase.wantStale)
+			}
+		})
+	}
+}
+
+// The api_key Ollama path publishes a balance and no window: the refresh keeps
+// the balance on the plan, invents no window, and reads as unpublished because
+// the provider stated no window.
+func TestRefreshCredentialQuotaPluginBalanceOnly(t *testing.T) {
+	client := &mockCPAClient{
+		pluginQuotaFn: func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error) {
+			if pluginID != "fixture-meter" {
+				t.Fatalf("pluginID = %q, want CPA's quota_plugin_id", pluginID)
+			}
+			return json.RawMessage(pluginOllamaBalanceOnlyPayload), nil
+		},
+	}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex:     "auth-ollama-key",
+		Type:          "ollama",
+		SupportsQuota: true,
+		QuotaProvider: "ollama",
+		QuotaPluginID: "fixture-meter",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if result.Plan == nil || result.Plan.Credits == nil || result.Plan.Credits.Balance != "5.5 USD" {
+		t.Fatalf("plan = %+v, want the 5.5 USD balance kept", result.Plan)
+	}
+	if len(result.Windows) != 0 {
+		t.Fatalf("windows = %+v, want none", result.Windows)
+	}
+	if result.Status != QuotaStatusUnpublished {
+		t.Fatalf("status = %q, want %q for a balance-only read", result.Status, QuotaStatusUnpublished)
+	}
+}
+
 // An unresolvable plugin reads as an error, never as an empty success.
 func TestRefreshCredentialQuotaPluginUnresolvable(t *testing.T) {
 	client := &mockCPAClient{

@@ -917,3 +917,60 @@ func TestClaudeGrantFailurePreservesQuota(t *testing.T) {
 		})
 	}
 }
+
+// A stale plugin payload (200 with the plugin's cached reading) must keep the
+// instant those figures were read instead of presenting them as this refresh's
+// result; the stale markers travel with the reading.
+func TestRefreshCredentialQuotaPluginStaleKeepsReadingTime(t *testing.T) {
+	now := time.Date(2026, 11, 12, 8, 30, 0, 0, time.UTC)
+	readAt := time.Date(2026, 11, 12, 7, 55, 0, 0, time.UTC)
+	client := &mockCPAClient{pluginQuotaFn: func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error) {
+		return json.RawMessage(pluginStaleBalancePayload), nil
+	}}
+
+	result, err := NewServiceWithClock(client, func() time.Time { return now }).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex:     "auth-plugin-stale",
+		Type:          "commandcode",
+		SupportsQuota: true,
+		QuotaProvider: "commandcode",
+		QuotaPluginID: "fixture-meter",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if result.ObservedAtMS != readAt.UnixMilli() {
+		t.Errorf("ObservedAtMS = %d, want the plugin's last-read instant %d", result.ObservedAtMS, readAt.UnixMilli())
+	}
+	if len(result.Windows) != 1 || !result.Windows[0].Stale {
+		t.Errorf("windows = %+v, want the cached window marked stale", result.Windows)
+	}
+	if result.Plan == nil || result.Plan.Credits == nil || !result.Plan.Credits.Stale {
+		t.Errorf("plan = %+v, want the cached balance marked stale", result.Plan)
+	}
+}
+
+// A fresh plugin payload states its own read time too; the refresh keeps the
+// time it actually ran instead of adopting that instant as the observation.
+func TestRefreshCredentialQuotaPluginFreshKeepsRefreshTime(t *testing.T) {
+	now := time.Date(2026, 11, 12, 8, 30, 0, 0, time.UTC)
+	client := &mockCPAClient{pluginQuotaFn: func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error) {
+		return json.RawMessage(pluginOllamaCookiePayload), nil
+	}}
+
+	result, err := NewServiceWithClock(client, func() time.Time { return now }).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex:     "auth-plugin-fresh",
+		Type:          "ollama",
+		SupportsQuota: true,
+		QuotaProvider: "ollama",
+		QuotaPluginID: "fixture-meter",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if result.ObservedAtMS != now.UnixMilli() {
+		t.Errorf("ObservedAtMS = %d, want the refresh time %d", result.ObservedAtMS, now.UnixMilli())
+	}
+	if len(result.Windows) != 2 || result.Windows[0].Stale || result.Windows[1].Stale {
+		t.Errorf("windows = %+v, want two fresh windows", result.Windows)
+	}
+}
