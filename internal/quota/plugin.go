@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 )
 
@@ -165,6 +167,9 @@ func (s *Service) fetchPluginQuota(ctx context.Context, pluginID, authIndex stri
 	}
 	raw, err := s.client.FetchPluginQuota(ctx, pluginID, authIndex)
 	if err != nil {
+		if rateErr := pluginQuotaRateLimitError(pluginID, authIndex, err); rateErr != nil {
+			return nil, nil, false, 0, rateErr
+		}
 		return nil, nil, false, 0, err
 	}
 	windows, observedAtMS, stale, err = ParsePluginQuotaWindows(raw, nowMS, 0)
@@ -172,6 +177,35 @@ func (s *Service) fetchPluginQuota(ctx context.Context, pluginID, authIndex stri
 		return nil, nil, false, 0, err
 	}
 	return windows, parsePluginQuotaPlan(raw), stale, observedAtMS, nil
+}
+
+// pluginQuotaRateLimitError maps a plugin route's 429 onto the shared typed
+// refusal so callers park the credential exactly as they do for a built-in
+// provider. The plugin's Retry-After travels only on the response headers,
+// which management.FetchPluginQuota keeps on its error; without the header the
+// refusal reports HasRetryAfter=false and the caller applies the same default
+// exponential backoff the built-in readers use. Every other status keeps the
+// plain management error.
+func pluginQuotaRateLimitError(pluginID, authIndex string, err error) *RateLimitError {
+	var pluginErr *management.PluginQuotaHTTPError
+	var httpErr *management.HTTPError
+	var status int
+	var body string
+	var headers http.Header
+	switch {
+	case errors.As(err, &pluginErr):
+		status, body, headers = pluginErr.StatusCode, pluginErr.Body, pluginErr.Header
+	case errors.As(err, &httpErr):
+		status, body = httpErr.StatusCode, httpErr.Body
+	default:
+		return nil
+	}
+	if status != http.StatusTooManyRequests {
+		return nil
+	}
+	rateErr := NewRateLimitError("", authIndex, headers)
+	rateErr.Evidence = authfailure.Parse(authfailure.ControlPlane, "plugins/"+strings.TrimSpace(pluginID)+"/quota", status, []byte(body))
+	return rateErr
 }
 
 // pluginQuotaMetric is one entry of a plugin payload's summary[]: a figure the

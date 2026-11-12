@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 )
 
@@ -477,6 +480,101 @@ func TestCapabilitiesForFileFollowsTheQuotaReader(t *testing.T) {
 	plain := management.AuthFile{Type: "codebuddy", Provider: "codebuddy"}
 	if caps := CapabilitiesForFile(plain); caps.RefreshSupported {
 		t.Fatalf("unadvertised capabilities = %+v, want no refresh", caps)
+	}
+}
+
+func pluginRateLimitedAuthFile() management.AuthFile {
+	return management.AuthFile{
+		AuthIndex:     "auth-plugin-limited",
+		Name:          "codebuddy.json",
+		Type:          "codebuddy",
+		Provider:      "codebuddy",
+		SupportsQuota: true,
+		QuotaProvider: "codebuddy",
+		QuotaPluginID: "fixture-limiter",
+	}
+}
+
+// A plugin route's 429 joins the shared refusal: the plugin's Retry-After parks
+// the credential for exactly that wait, and the credential context travels with
+// the error so callers can record and clear the same park as for a built-in.
+func TestRefreshCredentialQuotaPluginRateLimitHonoursRetryAfter(t *testing.T) {
+	client := &mockCPAClient{pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+		return nil, &management.PluginQuotaHTTPError{
+			HTTPError: management.HTTPError{StatusCode: http.StatusTooManyRequests, Body: `{"error":"rate_limited","message":"slow down"}`},
+			Header:    http.Header{"Retry-After": {"120"}},
+		}
+	}}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), pluginRateLimitedAuthFile(), nil)
+	var rateErr *RateLimitError
+	if !errors.As(err, &rateErr) {
+		t.Fatalf("RefreshCredentialQuota error = %v, want *RateLimitError", err)
+	}
+	if !rateErr.HasRetryAfter || rateErr.RetryAfter != 120*time.Second {
+		t.Fatalf("rate limit = %+v, want the plugin's 120s Retry-After", rateErr)
+	}
+	if rateErr.Provider != "codebuddy" || rateErr.AuthIndex != "auth-plugin-limited" {
+		t.Fatalf("rate limit context = provider %q auth %q, want codebuddy/auth-plugin-limited", rateErr.Provider, rateErr.AuthIndex)
+	}
+	var evidence *authfailure.Evidence
+	if !errors.As(err, &evidence) || evidence.Source != authfailure.ControlPlane || evidence.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("evidence = %+v, want control-plane HTTP 429", evidence)
+	}
+	if result == nil || result.Status != "error" || result.Error != "rate_limited_backoff" {
+		t.Fatalf("result = %+v, want an error reading carrying the refusal", result)
+	}
+}
+
+// Without a Retry-After the refusal must report no header and leave the wait to
+// the shared default exponential backoff, exactly like the built-in readers. A
+// plain management HTTPError maps too, so a header-less path cannot bypass the
+// park and probe the plugin again.
+func TestRefreshCredentialQuotaPluginRateLimitWithoutRetryAfterUsesDefaultBackoff(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "plugin error without header", err: &management.PluginQuotaHTTPError{HTTPError: management.HTTPError{StatusCode: http.StatusTooManyRequests, Body: `{"error":"rate_limited"}`}}},
+		{name: "plain management error", err: &management.HTTPError{StatusCode: http.StatusTooManyRequests, Body: `{"error":"rate_limited"}`}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &mockCPAClient{pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+				return nil, testCase.err
+			}}
+			_, err := NewService(client).RefreshCredentialQuota(context.Background(), pluginRateLimitedAuthFile(), nil)
+			var rateErr *RateLimitError
+			if !errors.As(err, &rateErr) {
+				t.Fatalf("RefreshCredentialQuota error = %v, want *RateLimitError", err)
+			}
+			if rateErr.HasRetryAfter || rateErr.RetryAfter != 0 {
+				t.Fatalf("rate limit = %+v, want the default wait rather than a header", rateErr)
+			}
+			now := time.Now()
+			backoff := NewBackoff(DefaultBackoffBase, DefaultBackoffMax)
+			backoff.Record(rateErr.Provider, rateErr.AuthIndex, rateErr.RetryAfter, rateErr.HasRetryAfter, now)
+			blocked, until := backoff.CredentialBlocked(rateErr.AuthIndex, now)
+			if !blocked || until.Sub(now) != DefaultBackoffBase {
+				t.Fatalf("default park = %v until %v, want %v", blocked, until, DefaultBackoffBase)
+			}
+		})
+	}
+}
+
+// A non-429 plugin failure keeps its own error: the rate-limit mapping must not
+// turn a 502 into a park.
+func TestRefreshCredentialQuotaPluginUpstreamFailureStaysPlain(t *testing.T) {
+	client := &mockCPAClient{pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+		return nil, &management.PluginQuotaHTTPError{
+			HTTPError: management.HTTPError{StatusCode: http.StatusBadGateway, Body: `{"error":"upstream_error"}`},
+		}
+	}}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), pluginRateLimitedAuthFile(), nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error = %v, want the failure carried on the result", err)
+	}
+	if result == nil || result.Status != "error" || !strings.Contains(result.Error, "HTTP 502") {
+		t.Fatalf("result = %+v, want a plain 502 failure", result)
 	}
 }
 
