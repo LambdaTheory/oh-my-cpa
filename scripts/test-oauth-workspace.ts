@@ -19,6 +19,7 @@ import {
   workspaceProviderOptions,
 } from '../web/src/pages/oauthManagement/oauthWorkspaceLogic.ts';
 import type { OAuthProviderChoice } from '../web/src/pages/oauthProviderLogic.ts';
+import { credentialProviderIconId, getCredentialProviderMetadata } from '../web/src/components/common/providerMetadata.ts';
 import { pickCompactQuotaWindows, orderQuotaWindows, quotaWindowGroupKey, quotaWindowKindOf } from '../web/src/pages/quota/quotaWindowSelection.ts';
 import { formatShortDateTime, quotaResetCountdown, quotaResetText, resetAccuracyMarker } from '../web/src/pages/quota/quotaFormat.ts';
 import { matchesStatusFilter } from '../web/src/components/authFiles/authFileLogic.ts';
@@ -139,6 +140,44 @@ test('providers: Claude maps to anthropic while unknown providers remain selecti
   assert.equal(resolveAuthorizationProviderId('iflow', choices), 'iflow');
   assert.equal(resolveAuthorizationProviderId('mystery-plugin', choices), undefined);
   assert.notEqual(resolveAuthorizationProviderId('gemini', choices), 'antigravity');
+});
+
+test('providers: the two raw plugin keys collapse to Command Code and OpenCode Go', () => {
+  // CPA keeps the internal space in these keys and the quota plugin matches them
+  // literally; the display layer must collapse them without touching the raw string.
+  const raw = [
+    { type: 'openai-compatible-command code', id: 'commandcode', label: 'Command Code', icon: 'CommandCode' },
+    { type: 'openai-compatible-opencode', id: 'opencode', label: 'OpenCode Go', icon: 'OpenCode' },
+  ] as const;
+  const files = raw.map((entry) => file({
+    name: `${entry.id}.json`,
+    auth_index: `${entry.id}-index`,
+    type: entry.type,
+    provider: entry.type,
+  }));
+  for (const [index, entry] of raw.entries()) {
+    assert.equal(canonicalDisplayProviderKey(files[index]), entry.id, `${entry.type} collapses to ${entry.id}`);
+    const metadata = getCredentialProviderMetadata(entry.id);
+    assert.deepEqual([metadata.label, metadata.iconId], [entry.label, entry.icon], `${entry.id} keeps its label and mark`);
+    // A surface that looks up the raw provider string renders the same brand instead
+    // of the neutral fallback.
+    const rawMetadata = getCredentialProviderMetadata(entry.type);
+    assert.deepEqual([rawMetadata.label, rawMetadata.iconId], [entry.label, entry.icon]);
+    assert.equal(credentialProviderIconId(entry.type), entry.icon);
+  }
+  const projection = buildOAuthWorkspaceProjection(files, [], choices);
+  const options = workspaceProviderOptions(projection.records, choices);
+  // Both new providers appear after the pinned seven and can be filtered on.
+  assert.equal(options.indexOf('commandcode') > options.indexOf('meta'), true);
+  assert.equal(options.indexOf('opencode') > options.indexOf('meta'), true);
+  assert.deepEqual(
+    filterOAuthWorkspaceRecords(projection.records, '', 'commandcode', 'all', 'all').map((record) => record.fileName),
+    ['commandcode.json'],
+  );
+  assert.deepEqual(
+    filterOAuthWorkspaceRecords(projection.records, '', 'opencode', 'all', 'all').map((record) => record.fileName),
+    ['opencode.json'],
+  );
 });
 
 test('quota conditions: capability is independent from observed health and authenticity', () => {
