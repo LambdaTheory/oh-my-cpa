@@ -78,7 +78,7 @@ C-01/C-03/C-04/C-05/C-07/C-11/C-12 的既有断言在本轮扩展后的场景中
 - 打开：<http://127.0.0.1:18322/omc/oauth-management?page_size=48>，密码 `omc-e2e-management-key`（登录后即额度页；自动刷新策略已关闭，页面不会自己变化）。
 - 截图：`docs/delivery/2026-11-12-omc-three-credential-quota/acceptance/experience-quota-page.png`（同一张已复制到 inbox 证据目录）。
 - 三个体验亮点：
-  1. **三家插件凭证各成一行**：Command Code 显示 `Pro` + `321 credits` + 5 小时 80%/周 55%；Ollama cookie 显示 `12.34 USD` + 5 小时 60%/周 80%；OpenCode Go 显示三窗口（Rolling 0% 触发「配额已耗尽」是既有语义），行内只显示最短两个窗口、抽屉看全量。
+  1. **三家插件凭证各成一行**：Command Code 显示 `Pro` + `321 credits` + 5 小时 80%/周 55%；Ollama cookie 显示 `12.34 USD` + 5 小时 60%/周 80%；OpenCode Go 行内显示 Weekly 42% + Rolling 0%（「配额已耗尽」是 0% 触发的既有语义），抽屉可看全量三窗口。
   2. **失败不造数**：刷新固定 429 凭证显示「已限流 · HTTP 429 · 可重试时间」和「上次成功读数：未知」，窗口内再点刷新不会重发；502 显示「刷新失败 · HTTP 502」并保留旧读数；稀疏载荷只显示 `--`/空态，不写 0。
   3. **与既有七家并存**：Claude/Antigravity/Codex/xAI/Kimi/Devin/Meta 仍在同一页，Meta 被明确跳过实时刷新；自动刷新轮在 interval 模式下每个到期凭证只读一次、Meta 不参与（由 C-24 脚本验证，体验环境为保持页面静止已关闭策略）。
 - 关闭：`Stop-Process -Id 19152,49304`（app 与 node 控制器；若 PID 已变，读 `tmp/experience-env.json` 的 `appPid`/`nodePid`）。状态文件 `tmp/experience-env.json`，日志 `tmp/experience-app.log`。
