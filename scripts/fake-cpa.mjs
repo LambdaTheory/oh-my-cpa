@@ -101,20 +101,30 @@ function json(response, status, body, headers = {}) {
 // OpenCode Go would let a front-end slot pass while rendering a value the
 // upstream never sends. Reset times stay relative to the read, as every other
 // fixture does, so a window is never already expired when a suite runs.
-function pluginQuotaPayload(type) {
+function pluginQuotaPayload(type, { stale = false, staleReadAtMS } = {}) {
   const now = Date.now();
-  const readAt = new Date(now).toISOString();
+  const readAt = new Date(stale && staleReadAtMS ? staleReadAtMS : now).toISOString();
+  // A stale answer is a 200 carrying the plugin's last successful reading: the
+  // summary label and every bucket description say so, the read time is the
+  // earlier one, and the reason rides in the description the client projects
+  // into the window note. The figures themselves stay the real reading - a
+  // stale payload that zeroed them would let a cached reading pass as a fresh
+  // one with no quota left.
+  const bucketNote = stale ? ' · upstream timeout' : '';
   const bucket = (window, remainingFraction, resetAfterMS, label, note = '') => ({
     window,
     remainingFraction,
     resetTime: new Date(now + resetAfterMS).toISOString(),
-    description: `${label} · read at ${readAt}${note ? ` · ${note}` : ''}`,
+    description: stale
+      ? `${label} · stale · last read at ${readAt}${note ? ` · ${note}` : ''}${bucketNote}`
+      : `${label} · read at ${readAt}${note ? ` · ${note}` : ''}`,
   });
+  const summary = (metric) => [{ ...metric, label: stale ? `${metric.label} · stale` : metric.label }];
   switch (type) {
     case 'ollama':
       return {
         subscription: { plan: '' },
-        summary: [{ key: 'balance', label: 'Balance', value: 12.34, format: 'currency', currency: 'USD' }],
+        summary: summary({ key: 'balance', label: 'Balance', value: 12.34, format: 'currency', currency: 'USD' }),
         groups: [{ displayName: 'Ollama', buckets: [
           bucket('5h', 0.6, 5 * 3600000, '5-hour session'),
           bucket('7d', 0.8, 7 * 86400000, 'Weekly'),
@@ -123,7 +133,7 @@ function pluginQuotaPayload(type) {
     case 'openai-compatible-command code':
       return {
         subscription: { plan: 'Pro' },
-        summary: [{ key: 'balance', label: 'Balance', value: 321, format: 'number', unit: 'credits' }],
+        summary: summary({ key: 'balance', label: 'Balance', value: 321, format: 'number', unit: 'credits' }),
         groups: [{ displayName: 'Command Code', buckets: [
           bucket('5h', 0.8, 5 * 3600000, '5-hour session'),
           bucket('7d', 0.55, 7 * 86400000, 'Weekly'),
@@ -147,10 +157,18 @@ export function createFakeCpaServer({
   // Old gateways (before v8.0.25) never report `quota_plugin_id`, so the client
   // has to resolve the plugin through `GET /credentials/quota/providers`. The
   // fixture can emulate one for the whole server, and a single credentials read
-  // can override it with `?legacy_host=0|1`.
+  // can override it with `?legacy_host=0|1`. The in-process acceptance scenario
+  // flips the live server between generations through `fixture.setLegacyHost`.
   legacyHost = ['1', 'true'].includes(String(process.env.FAKE_CPA_LEGACY_HOST ?? '').toLowerCase()),
+  // What the quota plugin answers next: a fresh reading (`ok`), its cached 200
+  // with stale markers (`stale`), or an upstream failure with no cache
+  // (`rate-limit` / `upstream-error`). The scenario switches modes through
+  // `fixture.setQuotaMode`; the default keeps every other suite on fresh data.
+  quotaMode = 'ok',
 } = {}) {
   const requests = [];
+  let legacyHostEnabled = legacyHost;
+  let pluginQuotaMode = quotaMode;
   const initialAuthFiles = [
     {
       id: 'auth-e2e-1', auth_index: 'auth-index-e2e-1', name: 'fixture-auth.json', type: 'codex', provider: 'codex',
@@ -609,7 +627,7 @@ export function createFakeCpaServer({
 
     if (request.method === 'GET' && path === '/credentials') {
       const override = url.searchParams.get('legacy_host');
-      const legacy = override === null ? legacyHost : ['1', 'true'].includes(override.toLowerCase());
+      const legacy = override === null ? legacyHostEnabled : ['1', 'true'].includes(override.toLowerCase());
       // A legacy host omits the selection it never made; the credential keeps
       // advertising the provider, which is what the fallback has to resolve.
       json(response, 200, {
@@ -1163,9 +1181,22 @@ export function createFakeCpaServer({
         json(response, 404, { error: 'auth_file_not_found', message: `credential ${authIndex} was not found` });
         return;
       }
-      const quota = pluginQuotaPayload(credential.type);
+      const quota = pluginQuotaPayload(credential.type, {
+        stale: pluginQuotaMode === 'stale',
+        // Two hours old: far enough in the past that the client's observed-at
+        // backfill has to show an age rather than "just now".
+        staleReadAtMS: pluginQuotaMode === 'stale' ? Date.now() - 2 * 3600000 : undefined,
+      });
       if (!quota) {
         json(response, 400, { error: 'unsupported_provider', message: `plugin ollama-quota does not serve ${credential.type}` });
+        return;
+      }
+      if (pluginQuotaMode === 'rate-limit') {
+        json(response, 429, { error: 'rate_limited', message: 'upstream rate limited the quota read' }, { 'Retry-After': '120' });
+        return;
+      }
+      if (pluginQuotaMode === 'upstream-error') {
+        json(response, 502, { error: 'upstream_error', message: 'upstream quota read failed' });
         return;
       }
       json(response, 200, quota);
@@ -1239,5 +1270,14 @@ export function createFakeCpaServer({
     }
     json(response, 404, { error: 'not found' });
   });
-  return { server, requests };
+  // The live controls an in-process scenario needs to walk the same gateway
+  // through states that a real deployment only reaches by upgrading: a legacy
+  // host generation and a plugin answer that is cached or failing. Tests that
+  // spawn their own server keep ignoring this field.
+  const fixture = {
+    setLegacyHost(enabled) { legacyHostEnabled = Boolean(enabled); },
+    setQuotaMode(mode) { pluginQuotaMode = mode; },
+    quotaMode() { return pluginQuotaMode; },
+  };
+  return { server, requests, fixture };
 }
