@@ -13,6 +13,7 @@ import { CompactQuotaView } from '../src/pages/quota/CompactQuotaView';
 import { OAuthCredentialRecord } from '../src/pages/oauthManagement/OAuthCredentialRecord';
 import { buildOAuthWorkspaceProjection, countWorkspaceQuotaStatuses } from '../src/pages/oauthManagement/oauthWorkspaceLogic';
 import { quotaFreshnessMS, resolveQuotaStatus } from '../src/utils/quotaStatus';
+import { verifiedQuotaCredits } from '../src/utils/quotaCredits';
 import type { ManagementAuthFile } from '../src/types/managementAuthFile';
 import type { QuotaItem, QuotaWindow } from '../src/types/quota';
 
@@ -156,7 +157,35 @@ describe('credential quota board', () => {
     const boundary = { ...items[0], observed_at_ms: NOW_MS - quotaFreshnessMS(items[0]) };
     expect(resolveQuotaStatus(boundary, NOW_MS)).toBe('healthy');
     expect(resolveQuotaStatus(boundary, NOW_MS + 1)).toBe('stale');
-    expect(quotaFreshnessMS({ ...items[0], provider: 'ollama' })).toBe(30 * 60_000);
+    expect(quotaFreshnessMS({ ...items[0], auth_index: 'ollama:x', provider: 'ollama' })).toBe(30 * 60_000);
+  });
+  it('keys the Ollama balance and freshness guards on the account namespace, not the provider name', () => {
+    const credits = { balance: '12.50 USD' };
+    const plan = { plan_type: 'unknown', plan_label: '', tier: 'unknown' as const, credits };
+    // A plugin credential keeps CPA's opaque index; its balance is a real reading.
+    const plugin = quota('cpa-opaque-index', [], { provider: 'ollama', type: 'ollama', plan });
+    // OMC's own accounts namespace their index `ollama:<id>`; without the settings
+    // signal an old snapshot's inferred credits stay hidden.
+    const own = quota('ollama:acct-1', [], { provider: 'ollama', type: 'ollama', plan });
+    const ownVerified = quota('ollama:acct-2', [], {
+      provider: 'ollama', type: 'ollama', plan, raw_signals: { ollama_balance_source: 'settings_balance' },
+    });
+    expect(verifiedQuotaCredits(plugin)).toBe(credits);
+    expect(verifiedQuotaCredits(own)).toBeUndefined();
+    expect(verifiedQuotaCredits(ownVerified)).toBe(credits);
+    // The 30-minute tolerance likewise follows the namespace: a plugin Ollama row
+    // takes the generic window-based tolerance instead.
+    const windowed = [{ ...quotaWindow('five_hour', 80, 3), period_hours: 5 }];
+    expect(quotaFreshnessMS({ ...plugin, windows: windowed })).toBe(2 * HOUR_MS);
+    expect(quotaFreshnessMS({ ...own, windows: windowed })).toBe(30 * 60_000);
+
+    const { container } = render(<I18nProvider>
+      {[plugin, own].map((item) => <CompactQuotaView key={item.auth_index} item={item} nowMS={NOW_MS} />)}
+    </I18nProvider>);
+    const pluginRow = within(container.querySelector('[data-quota-body="cpa-opaque-index"]') as HTMLElement);
+    expect(pluginRow.getByText('Credit balance: 12.50 USD')).toBeTruthy();
+    const ownRow = within(container.querySelector('[data-quota-body="ollama:acct-1"]') as HTMLElement);
+    expect(ownRow.queryByText(/Credit balance/)).toBeNull();
   });
   it('orders credentials by what needs a decision first and only counts the disabled', () => {
     const board = buildCredentialQuotaBoard(FILES, QUOTAS, NOW_MS);

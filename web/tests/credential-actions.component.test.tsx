@@ -213,7 +213,9 @@ it('isolates a batch transport failure to per-credential refresh outcomes', asyn
 });
 
 it('hides unverified Ollama money but retains verified zero and independent reset credits', () => {
-  const quota: QuotaItem = { ...QUOTAS[0], provider: 'ollama', type: 'ollama', plan: {
+  // OMC's own accounts namespace their auth index `ollama:<id>`; only those carry the
+  // guard this test covers. A plugin Ollama credential keeps CPA's opaque index.
+  const quota: QuotaItem = { ...QUOTAS[0], auth_index: 'ollama:legacy', provider: 'ollama', type: 'ollama', plan: {
     plan_type: 'pro', plan_label: 'Legacy', tier: 'premium', credits: { balance: '$0' },
   } };
   const view = render(<I18nProvider><CompactQuotaView item={quota} nowMS={1} /></I18nProvider>);

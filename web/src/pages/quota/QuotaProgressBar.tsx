@@ -19,6 +19,10 @@ interface QuotaProgressBarProps {
   resetLabel?: string;
   resetAccuracy?: 'exact' | 'derived' | 'approximate';
   showPercent?: boolean;
+  /** The plugin returned its last successful reading for this window, not a fresh one. */
+  stale?: boolean;
+  /** Why the reading is cached or unusual, as the plugin stated it; absent when it stated none. */
+  note?: string;
   /** The window's recorded usage and estimated capacity, when the estimate applies to it. */
   capacity?: Pick<QuotaWindow, 'usage' | 'capacity' | 'capacity_unavailable'>;
 }
@@ -34,6 +38,8 @@ export const QuotaProgressBar: React.FC<QuotaProgressBarProps> = ({
   resetLabel,
   resetAccuracy = 'exact',
   showPercent = true,
+  stale,
+  note,
   capacity,
 }) => {
   const t = useT();
@@ -71,6 +77,15 @@ export const QuotaProgressBar: React.FC<QuotaProgressBarProps> = ({
         <span className={styles['progress-label']} title={resolvedLabel}>
           {resolvedLabel}
           {subLabel && <span className={styles['progress-sub-label']}>{subLabel}</span>}
+          {stale && (
+            <span
+              className={styles['progress-sub-label']}
+              data-quota-window-stale="true"
+              title={t('quota.plugin_stale_hint')}
+            >
+              {t('quota.plugin_stale')}
+            </span>
+          )}
         </span>
         {showPercent && (
           <span className={styles['progress-value']} style={{ color: hasData ? undefined : 'var(--meta)' }}>
@@ -84,6 +99,10 @@ export const QuotaProgressBar: React.FC<QuotaProgressBarProps> = ({
           {computedResetText}
         </span>
       </div>
+
+      {note && (
+        <div className={styles['capacity-note']} data-quota-window-note="true">{note}</div>
+      )}
 
       <div title={hasData ? `${resolvedLabel}: ${displayPercent}` : undefined}>
         <Meter

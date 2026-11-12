@@ -36,6 +36,13 @@ export const PROVIDER_ICON_IDS: Record<string, string> = {
   zhipu: 'Zhipu',
   doubao: 'Doubao',
   spark: 'Spark',
+  ollama: 'Ollama',
+  commandcode: 'CommandCode',
+  opencode: 'OpenCode',
+  // Request rows look this table up by the provider string as-is, so the two plugin
+  // keys keep their literal internal space here alongside their short aliases.
+  'openai-compatible-command code': 'CommandCode',
+  'openai-compatible-opencode': 'OpenCode',
 };
 
 /** The mark shown when a provider cannot be identified. */

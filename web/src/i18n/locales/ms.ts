@@ -2872,6 +2872,8 @@ export const MS: Readonly<Record<string, string>> = {
   "quota.last_success": "Bacaan terakhir berjaya: {time}",
   "quota.status_error": "Ralat",
   "quota.status_stale": "basi",
+  "quota.plugin_stale": "Bacaan cache",
+  "quota.plugin_stale_hint": "Pemalam memulangkan bacaan terakhir yang berjaya, bukan hasil muat semula ini",
   "quota.status_idle": "Terbiar",
   "quota.status_unpublished": "Tiada penggunaan diterbitkan",
   "quota.cooldown_active_desc": "Perlindungan had kadar CPA 429 aktif",

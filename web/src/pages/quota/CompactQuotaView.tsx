@@ -71,6 +71,18 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   const creditBalanceText = credits?.unlimited
     ? t('quota.credits_unlimited')
     : credits?.balance != null ? String(credits.balance) : undefined;
+  // A plugin can answer with its last successful reading (200 + stale) instead of failing. That
+  // is a different fact from the row's freshness: the reading is real, but it is not from this
+  // refresh, so it is marked beside the status and the plugin's own reasons stay in the tooltip
+  // rather than being dropped with the description the backend split them out of.
+  const pluginStaleNotes = Array.from(new Set(
+    (item.windows ?? [])
+      .filter((window) => window.stale)
+      .map((window) => window.note)
+      .filter((note): note is string => Boolean(note)),
+  ));
+  const pluginStale = Boolean(item.plan?.credits?.stale || (item.windows ?? []).some((window) => window.stale));
+  const pluginStaleTitle = [t('quota.plugin_stale_hint'), ...pluginStaleNotes].join(' · ');
 
   return (
     <div
@@ -82,6 +94,15 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
     >
       <div className={styles.head}>
         {quotaStatusTag(item, t, nowMS)}
+        {pluginStale && (
+          <span
+            className={styles.plan}
+            data-plugin-quota-stale="true"
+            title={pluginStaleTitle}
+          >
+            {t('quota.plugin_stale')}
+          </span>
+        )}
         <ResetAdviceTag advice={item.reset_advice} />
         {grantReadReason && <span className={styles.plan}>{t(`advice.reason.${grantReadReason}`)}</span>}
         {planText && <span className={styles.plan}>{planText}</span>}
