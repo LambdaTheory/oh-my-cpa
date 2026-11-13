@@ -4,8 +4,8 @@ import test from 'node:test';
 import { parse as parseYaml } from 'yaml';
 import { createFakeCpaServer, FAKE_CLIENT_SECRET, FAKE_CPA_MANAGEMENT_KEY, FAKE_PROVIDER_SECRET, FAKE_ACCOUNT_SECRET } from './fake-cpa.mjs';
 
-async function startFixture(context) {
-  const { server } = createFakeCpaServer();
+async function startFixture(context, options = {}) {
+  const { server } = createFakeCpaServer(options);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   context.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
@@ -14,6 +14,22 @@ async function startFixture(context) {
     ...options,
     headers: { ...(key ? { Authorization: `Bearer ${key}` } : {}), ...options.headers },
   });
+}
+
+// The same fixture with the live controls a browser scenario needs: the host
+// generation and the plugin's answer are switched while the server keeps
+// listening. Keeping it separate leaves every existing test on the plain helper.
+async function startControlledFixture(context, options = {}) {
+  const { server, requests, fixture } = createFakeCpaServer(options);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  context.after(() => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  const baseURL = `http://127.0.0.1:${server.address().port}`;
+  const request = (path, key, options = {}) => fetch(`${baseURL}${path}`, {
+    ...options,
+    headers: { ...(key ? { Authorization: `Bearer ${key}` } : {}), ...options.headers },
+  });
+  return { request, requests, fixture };
 }
 
 test('gateway directory authenticates client keys independently of management reads', async (context) => {
@@ -247,4 +263,202 @@ test('native plugin startup reads effective client keys and complete provider gr
   });
   assert.equal(sync.status, 200);
   assert.equal((await request('/v0/management/plugins/fixture-logger/state', FAKE_CPA_MANAGEMENT_KEY)).status, 200);
+});
+
+const QUOTA_PROVIDER_KEYS = ['ollama', 'openai-compatible-command code', 'openai-compatible-opencode'];
+
+test('quota plugin advertises the raw provider keys and claims their credentials', async (context) => {
+  const request = await startFixture(context);
+  const reply = await request('/v8/management/credentials', FAKE_CPA_MANAGEMENT_KEY);
+  assert.equal(reply.status, 200);
+  const files = new Map((await reply.json()).files.map((file) => [file.auth_index, file]));
+  const expected = [
+    ['auth-index-e2e-ollama', 'ollama-fixture.json', 'ollama', undefined],
+    ['auth-index-e2e-command-code', 'command-code-fixture.json', 'openai-compatible-command code', 'https://commandcode.example.test/v1'],
+    ['auth-index-e2e-opencode', 'opencode-go-fixture.json', 'openai-compatible-opencode', 'https://opencode.example.test/v1'],
+  ];
+  for (const [authIndex, name, type, baseURL] of expected) {
+    const file = files.get(authIndex);
+    assert.ok(file, `credential ${authIndex} is listed`);
+    assert.equal(file.name, name);
+    assert.equal(file.type, type);
+    assert.equal(file.provider, type);
+    assert.equal(file.base_url, baseURL);
+    assert.equal(file.supports_quota, true);
+    assert.equal(file.quota_provider, type);
+    assert.equal(file.quota_plugin_id, 'ollama-quota');
+  }
+  const pluginsReply = await request('/v8/management/plugins', FAKE_CPA_MANAGEMENT_KEY);
+  assert.equal(pluginsReply.status, 200);
+  const quotaPlugin = (await pluginsReply.json()).plugins.find((plugin) => plugin.id === 'ollama-quota');
+  assert.ok(quotaPlugin, 'ollama-quota is installed');
+  assert.equal(quotaPlugin.registered, true);
+  assert.equal(quotaPlugin.effective_enabled, true);
+  assert.equal(quotaPlugin.supports_quota, true);
+  assert.equal(quotaPlugin.quota_provider, 'ollama');
+  assert.deepEqual(quotaPlugin.supported_providers, QUOTA_PROVIDER_KEYS);
+});
+
+test('plugin quota route serves each provider shape and refuses what it cannot answer', async (context) => {
+  const request = await startFixture(context);
+  const quota = (authIndex, key = FAKE_CPA_MANAGEMENT_KEY) => request('/v8/management/plugins/ollama-quota/quota', key, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_index: authIndex }),
+  });
+
+  assert.equal((await quota('auth-index-e2e-ollama', null)).status, 401);
+  assert.equal((await quota('auth-index-e2e-ollama', 'wrong-management-key')).status, 401);
+
+  const ollama = await quota('auth-index-e2e-ollama');
+  assert.equal(ollama.status, 200);
+  const ollamaBody = await ollama.json();
+  assert.deepEqual(ollamaBody.subscription, { plan: '' });
+  assert.deepEqual(ollamaBody.summary, [{ key: 'balance', label: 'Balance', value: 12.34, format: 'currency', currency: 'USD' }]);
+  assert.equal(ollamaBody.groups.length, 1);
+  assert.equal(ollamaBody.groups[0].displayName, 'Ollama');
+  assert.deepEqual(ollamaBody.groups[0].buckets.map((bucket) => bucket.window), ['5h', '7d']);
+  assert.deepEqual(ollamaBody.groups[0].buckets.map((bucket) => bucket.remainingFraction), [0.6, 0.8]);
+  for (const bucket of ollamaBody.groups[0].buckets) {
+    assert.ok(!Number.isNaN(Date.parse(bucket.resetTime)), `resetTime ${bucket.resetTime} is RFC3339`);
+    assert.match(bucket.description, /read at/);
+  }
+
+  const commandCode = await (await quota('auth-index-e2e-command-code')).json();
+  assert.deepEqual(commandCode.subscription, { plan: 'Pro' });
+  assert.deepEqual(commandCode.summary, [{ key: 'balance', label: 'Balance', value: 321, format: 'number', unit: 'credits' }]);
+  assert.equal(commandCode.groups[0].displayName, 'Command Code');
+  assert.deepEqual(commandCode.groups[0].buckets.map((bucket) => bucket.window), ['5h', '7d']);
+  assert.deepEqual(commandCode.groups[0].buckets.map((bucket) => bucket.remainingFraction), [0.8, 0.55]);
+
+  const openCodeReply = await quota('auth-index-e2e-opencode');
+  assert.equal(openCodeReply.status, 200);
+  const openCode = await openCodeReply.json();
+  assert.equal(Object.hasOwn(openCode, 'summary'), false, 'OpenCode Go sends no balance');
+  assert.equal(Object.hasOwn(openCode, 'subscription'), false, 'OpenCode Go sends no plan');
+  assert.equal(openCode.groups[0].displayName, 'OpenCode Go');
+  assert.deepEqual(openCode.groups[0].buckets.map((bucket) => bucket.window), ['rolling', 'weekly', 'monthly']);
+  assert.deepEqual(openCode.groups[0].buckets.map((bucket) => bucket.remainingFraction), [0, 0.42, 0.21]);
+
+  assert.equal((await quota('auth-index-e2e-unknown')).status, 404);
+  assert.equal((await quota('auth-index-e2e-1')).status, 400);
+  assert.equal((await request('/v8/management/plugins/unknown-quota/quota', FAKE_CPA_MANAGEMENT_KEY, {
+    method: 'POST', body: JSON.stringify({ auth_index: 'auth-index-e2e-ollama' }),
+  })).status, 404);
+  assert.equal((await request('/v8/management/plugins/ollama-quota/quota', FAKE_CPA_MANAGEMENT_KEY, {
+    method: 'POST', body: JSON.stringify({}),
+  })).status, 400);
+});
+
+test('quota providers fallback route lists the plugin and its raw provider keys', async (context) => {
+  const request = await startFixture(context);
+  assert.equal((await request('/v8/management/credentials/quota/providers')).status, 401);
+  const reply = await request('/v8/management/credentials/quota/providers', FAKE_CPA_MANAGEMENT_KEY);
+  assert.equal(reply.status, 200);
+  assert.deepEqual(await reply.json(), {
+    providers: [{
+      plugin_id: 'ollama-quota',
+      provider: 'ollama',
+      display_name: 'Ollama',
+      supported_providers: QUOTA_PROVIDER_KEYS,
+      supports_reset: false,
+    }],
+  });
+});
+
+test('a legacy host omits quota_plugin_id while keeping the provider advertisement', async (context) => {
+  const request = await startFixture(context, { legacyHost: true });
+  const reply = await request('/v8/management/credentials', FAKE_CPA_MANAGEMENT_KEY);
+  assert.equal(reply.status, 200);
+  const files = new Map((await reply.json()).files.map((file) => [file.auth_index, file]));
+  for (const [authIndex, type] of [
+    ['auth-index-e2e-ollama', 'ollama'],
+    ['auth-index-e2e-command-code', 'openai-compatible-command code'],
+    ['auth-index-e2e-opencode', 'openai-compatible-opencode'],
+  ]) {
+    const file = files.get(authIndex);
+    assert.ok(file);
+    assert.equal(file.supports_quota, true);
+    assert.equal(file.quota_provider, type);
+    assert.equal(Object.hasOwn(file, 'quota_plugin_id'), false, `${authIndex} must let the client resolve the plugin`);
+  }
+});
+
+test('a credentials read can override the host generation it is answered from', async (context) => {
+  const request = await startFixture(context);
+  const read = async (query) => {
+    const reply = await request(`/v8/management/credentials${query}`, FAKE_CPA_MANAGEMENT_KEY);
+    assert.equal(reply.status, 200);
+    return (await reply.json()).files.find((file) => file.auth_index === 'auth-index-e2e-ollama');
+  };
+  assert.equal((await read('')).quota_plugin_id, 'ollama-quota');
+  assert.equal(Object.hasOwn(await read('?legacy_host=1'), 'quota_plugin_id'), false);
+  assert.equal((await read('?legacy_host=0')).quota_plugin_id, 'ollama-quota');
+});
+
+test('the quota plugin can answer from its stale cache', async (context) => {
+  const { request, requests, fixture } = await startControlledFixture(context);
+  fixture.setQuotaMode('stale');
+  const reply = await request('/v8/management/plugins/ollama-quota/quota', FAKE_CPA_MANAGEMENT_KEY, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_index: 'auth-index-e2e-command-code' }),
+  });
+  assert.equal(reply.status, 200);
+  const body = await reply.json();
+  assert.deepEqual(body.subscription, { plan: 'Pro' });
+  assert.deepEqual(body.summary, [{ key: 'balance', label: 'Balance · stale', value: 321, format: 'number', unit: 'credits' }]);
+  const [fiveHour, weekly] = body.groups[0].buckets;
+  assert.match(fiveHour.description, /^5-hour session · stale · last read at \d{4}-\d{2}-\d{2}T[^ ]+ · upstream timeout$/);
+  assert.match(weekly.description, /^Weekly · stale · last read at \d{4}-\d{2}-\d{2}T[^ ]+ · upstream timeout$/);
+  // A cached reading keeps its real figures; only the freshness is old.
+  assert.equal(fiveHour.remainingFraction, 0.8);
+  assert.equal(weekly.remainingFraction, 0.55);
+  const logged = requests.filter((entry) => entry.method === 'POST' && entry.path === '/v8/management/plugins/ollama-quota/quota');
+  assert.equal(logged.length, 1);
+  assert.deepEqual(JSON.parse(logged[0].body), { auth_index: 'auth-index-e2e-command-code' });
+});
+
+test('the quota plugin can report an upstream rate limit and failure', async (context) => {
+  const { request, fixture } = await startControlledFixture(context);
+  const quota = () => request('/v8/management/plugins/ollama-quota/quota', FAKE_CPA_MANAGEMENT_KEY, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ auth_index: 'auth-index-e2e-command-code' }),
+  });
+  fixture.setQuotaMode('rate-limit');
+  const limited = await quota();
+  assert.equal(limited.status, 429);
+  assert.equal(limited.headers.get('retry-after'), '120');
+  fixture.setQuotaMode('upstream-error');
+  const failed = await quota();
+  assert.equal(failed.status, 502);
+  fixture.setQuotaMode('ok');
+  assert.equal((await quota()).status, 200);
+});
+
+test('the host generation can be switched on a running server', async (context) => {
+  const { request, fixture } = await startControlledFixture(context);
+  const read = async () => {
+    const reply = await request('/v8/management/credentials', FAKE_CPA_MANAGEMENT_KEY);
+    assert.equal(reply.status, 200);
+    return (await reply.json()).files.find((file) => file.auth_index === 'auth-index-e2e-command-code');
+  };
+  assert.equal((await read()).quota_plugin_id, 'ollama-quota');
+  fixture.setLegacyHost(true);
+  const legacyFile = await read();
+  assert.equal(legacyFile.supports_quota, true);
+  assert.equal(Object.hasOwn(legacyFile, 'quota_plugin_id'), false);
+  fixture.setLegacyHost(false);
+  assert.equal((await read()).quota_plugin_id, 'ollama-quota');
+});
+
+test('the legacy host default can come from FAKE_CPA_LEGACY_HOST', async (context) => {
+  const previous = process.env.FAKE_CPA_LEGACY_HOST;
+  process.env.FAKE_CPA_LEGACY_HOST = '1';
+  try {
+    const request = await startFixture(context);
+    const reply = await request('/v8/management/credentials', FAKE_CPA_MANAGEMENT_KEY);
+    assert.equal(reply.status, 200);
+    const file = (await reply.json()).files.find((candidate) => candidate.auth_index === 'auth-index-e2e-ollama');
+    assert.ok(file);
+    assert.equal(Object.hasOwn(file, 'quota_plugin_id'), false);
+  } finally {
+    if (previous === undefined) delete process.env.FAKE_CPA_LEGACY_HOST;
+    else process.env.FAKE_CPA_LEGACY_HOST = previous;
+  }
 });

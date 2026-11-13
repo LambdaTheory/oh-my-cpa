@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 )
 
@@ -84,10 +87,39 @@ func resolvePluginQuotaID(plugins []management.PluginItem, provider string) (str
 	return "", fmt.Errorf("no enabled plugin provides quota for %q", provider)
 }
 
+// resolveQuotaProviderPluginID maps a credential's quota provider to the plugin
+// the host registers for it. Only a plugin that lists the provider is eligible:
+// an unlisted provider must not reach any plugin, even the only registered one.
+// Provider keys compare case-insensitively with outer whitespace trimmed; the
+// spaces inside a key are significant ("openai-compatible-command code").
+func resolveQuotaProviderPluginID(providers []management.QuotaProviderInfo, provider string) string {
+	target := strings.TrimSpace(provider)
+	if target == "" {
+		return ""
+	}
+	for _, entry := range providers {
+		pluginID := strings.TrimSpace(entry.PluginID)
+		if pluginID == "" || strings.TrimSpace(entry.Provider) == "" {
+			continue
+		}
+		for _, supported := range entry.SupportedProviders {
+			if strings.EqualFold(strings.TrimSpace(supported), target) {
+				return pluginID
+			}
+		}
+	}
+	return ""
+}
+
 // pluginQuotaTarget resolves the plugin id serving a plugin-quota credential.
 // CPA's own selection wins when the gateway reports it: matching names here
 // cannot see which plugin CPA has fused, so it could pick one CPA bypasses.
 // Gateways older than v8.0.25 report no selection and fall back to the match.
+// That match lists the installed plugins first; when the list cannot be read or
+// names no plugin for the credential, the host's quota-provider registry
+// (`GET /credentials/quota/providers`) is asked instead, which older hosts
+// serve even though their credential list carries no selection. Both routes
+// refuse to hand the credential to a plugin that does not list its provider.
 // Declarative quota_probe credentials have no v8 management route and report an
 // explicit unsupported message instead of failing a fetch.
 func (s *Service) pluginQuotaTarget(ctx context.Context, file management.AuthFile) (string, error) {
@@ -97,37 +129,104 @@ func (s *Service) pluginQuotaTarget(ctx context.Context, file management.AuthFil
 	if s.client == nil {
 		return "", errors.New("CPA client is not configured")
 	}
-	if len(nonNullJSON(file.QuotaProbe)) > 0 && strings.TrimSpace(file.QuotaProvider) == "" {
+	provider := strings.TrimSpace(file.QuotaProvider)
+	if len(nonNullJSON(file.QuotaProbe)) > 0 && provider == "" {
 		return "", errors.New("declarative quota probes are not available through the v8 management API")
 	}
-	plugins, err := s.client.Plugins(ctx)
-	if err != nil {
-		return "", err
+	plugins, pluginsErr := s.client.Plugins(ctx)
+	if pluginsErr == nil {
+		if pluginID, err := resolvePluginQuotaID(plugins, provider); err == nil {
+			return pluginID, nil
+		}
 	}
-	return resolvePluginQuotaID(plugins, file.QuotaProvider)
+	if provider == "" {
+		return "", errors.New("credential does not advertise a quota provider")
+	}
+	registered, err := s.client.QuotaProviders(ctx)
+	if err != nil {
+		if pluginsErr != nil {
+			return "", fmt.Errorf("list CPA plugins: %v; list CPA quota providers: %w", pluginsErr, err)
+		}
+		return "", fmt.Errorf("list CPA quota providers: %w", err)
+	}
+	if pluginID := resolveQuotaProviderPluginID(registered, provider); pluginID != "" {
+		return pluginID, nil
+	}
+	return "", fmt.Errorf("no enabled plugin provides quota for %q", provider)
 }
 
 // fetchPluginQuota reads a plugin quota payload and projects it onto the
-// shared windows/plan shape. Plugin quotas reuse the Antigravity summary
-// shape (groups of buckets) with a plan/tier subscription beside it.
-func (s *Service) fetchPluginQuota(ctx context.Context, pluginID, authIndex string, nowMS int64) ([]QuotaWindow, *QuotaPlan, error) {
+// shared windows/plan shape. Plugin quotas reuse the Antigravity groups shape
+// (groups of buckets) with a plan/tier subscription and a summary beside it;
+// the plugin's description text carries the window names and the stale marker.
+// stale reports that the figures are the plugin's last successful reading and
+// observedAtMS when that reading was taken (0 when the payload states none).
+func (s *Service) fetchPluginQuota(ctx context.Context, pluginID, authIndex string, nowMS int64) (windows []QuotaWindow, plan *QuotaPlan, stale bool, observedAtMS int64, err error) {
 	if s.client == nil {
-		return nil, nil, errors.New("CPA client is not configured")
+		return nil, nil, false, 0, errors.New("CPA client is not configured")
 	}
 	raw, err := s.client.FetchPluginQuota(ctx, pluginID, authIndex)
 	if err != nil {
-		return nil, nil, err
+		if rateErr := pluginQuotaRateLimitError(pluginID, authIndex, err); rateErr != nil {
+			return nil, nil, false, 0, rateErr
+		}
+		return nil, nil, false, 0, err
 	}
-	windows, err := ParseAntigravityUsage(raw, nowMS, 0)
+	windows, observedAtMS, stale, err = ParsePluginQuotaWindows(raw, nowMS, 0)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, 0, err
 	}
-	return windows, parsePluginQuotaPlan(raw), nil
+	return windows, parsePluginQuotaPlan(raw), stale, observedAtMS, nil
 }
 
-// parsePluginQuotaPlan projects a plugin quota subscription onto a plan. The
+// pluginQuotaRateLimitError maps a plugin route's 429 onto the shared typed
+// refusal so callers park the credential exactly as they do for a built-in
+// provider. The plugin's Retry-After travels only on the response headers,
+// which management.FetchPluginQuota keeps on its error; without the header the
+// refusal reports HasRetryAfter=false and the caller applies the same default
+// exponential backoff the built-in readers use. Every other status keeps the
+// plain management error.
+func pluginQuotaRateLimitError(pluginID, authIndex string, err error) *RateLimitError {
+	var pluginErr *management.PluginQuotaHTTPError
+	var httpErr *management.HTTPError
+	var status int
+	var body string
+	var headers http.Header
+	switch {
+	case errors.As(err, &pluginErr):
+		status, body, headers = pluginErr.StatusCode, pluginErr.Body, pluginErr.Header
+	case errors.As(err, &httpErr):
+		status, body = httpErr.StatusCode, httpErr.Body
+	default:
+		return nil
+	}
+	if status != http.StatusTooManyRequests {
+		return nil
+	}
+	rateErr := NewRateLimitError("", authIndex, headers)
+	rateErr.Evidence = authfailure.Parse(authfailure.ControlPlane, "plugins/"+strings.TrimSpace(pluginID)+"/quota", status, []byte(body))
+	return rateErr
+}
+
+// pluginQuotaMetric is one entry of a plugin payload's summary[]: a figure the
+// plugin states beside the plan, such as the account's balance.
+type pluginQuotaMetric struct {
+	Key      string `json:"key"`
+	Label    string `json:"label"`
+	Value    any    `json:"value"`
+	Format   string `json:"format"`
+	Currency string `json:"currency"`
+	Unit     string `json:"unit"`
+}
+
+// parsePluginQuotaPlan projects a plugin quota payload's plan fields onto a
+// plan: the subscription's display strings and the summary's balance. The
 // payload carries display strings only (no active flag, no windows), so tier
 // stays unknown rather than guessing elite/premium from a name.
+//
+// A payload with a balance but no plan name still returns a plan: the balance
+// lives on the plan, and the read-time projection drops a plan without a
+// PlanType, which would lose the only figure the provider published.
 func parsePluginQuotaPlan(raw []byte) *QuotaPlan {
 	var payload struct {
 		Subscription *struct {
@@ -135,22 +234,65 @@ func parsePluginQuotaPlan(raw []byte) *QuotaPlan {
 			TierName string `json:"tierName"`
 			TierID   string `json:"tierId"`
 		} `json:"subscription"`
+		Summary []pluginQuotaMetric `json:"summary"`
 	}
-	if json.Unmarshal(raw, &payload) != nil || payload.Subscription == nil {
+	if json.Unmarshal(raw, &payload) != nil {
 		return nil
 	}
-	plan := strings.TrimSpace(payload.Subscription.Plan)
-	tierName := strings.TrimSpace(payload.Subscription.TierName)
-	tierID := strings.TrimSpace(payload.Subscription.TierID)
-	label := plan
-	if label == "" {
-		label = tierName
+	label := ""
+	if payload.Subscription != nil {
+		label = strings.TrimSpace(payload.Subscription.Plan)
+		if label == "" {
+			label = strings.TrimSpace(payload.Subscription.TierName)
+		}
+		if label == "" {
+			label = strings.TrimSpace(payload.Subscription.TierID)
+		}
 	}
-	if label == "" {
-		label = tierID
-	}
-	if label == "" {
+	credits := parsePluginQuotaBalance(payload.Summary)
+	if label == "" && credits == nil {
 		return nil
 	}
-	return &QuotaPlan{PlanType: "unknown", PlanLabel: label, Tier: "unknown"}
+	return &QuotaPlan{PlanType: "unknown", PlanLabel: label, Tier: "unknown", Credits: credits}
+}
+
+// parsePluginQuotaBalance projects the first summary metric keyed "balance"
+// onto the credits slot. The balance keeps the plugin's own unit as text —
+// "12.34 USD" for a stated currency, "321 credits" for a plain number — because
+// the display slot is a text field and the currency is not always money.
+// A label containing "stale" (v0.3.0 writes "Balance · stale") marks the
+// figure as the plugin's cached reading.
+func parsePluginQuotaBalance(metrics []pluginQuotaMetric) *QuotaCredits {
+	for _, metric := range metrics {
+		if strings.TrimSpace(metric.Key) != "balance" {
+			continue
+		}
+		amount, ok := toFloat(metric.Value)
+		if !ok {
+			return nil
+		}
+		balance := formatPluginBalanceAmount(amount)
+		if strings.EqualFold(strings.TrimSpace(metric.Format), "currency") {
+			if currency := strings.TrimSpace(metric.Currency); currency != "" {
+				balance += " " + strings.ToUpper(currency)
+			}
+		} else if unit := strings.TrimSpace(metric.Unit); unit != "" {
+			balance += " " + unit
+		}
+		return &QuotaCredits{
+			Balance: balance,
+			Stale:   strings.Contains(strings.ToLower(metric.Label), "stale"),
+		}
+	}
+	return nil
+}
+
+// formatPluginBalanceAmount renders a balance with at most two decimals and no
+// trailing zeros: 12.34, 5.5, 321. A figure the plugin states as a whole number
+// must not read as 321.00, and one with cents must not be rounded away.
+func formatPluginBalanceAmount(value float64) string {
+	text := strconv.FormatFloat(value, 'f', 2, 64)
+	text = strings.TrimRight(text, "0")
+	text = strings.TrimRight(text, ".")
+	return text
 }

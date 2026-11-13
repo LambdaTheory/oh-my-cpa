@@ -42,6 +42,14 @@ export const CREDENTIAL_PROVIDERS: Record<string, ProviderMetadata> = {
   spark: { id: 'spark', label: 'Spark', iconId: 'Spark' },
   openai: { id: 'openai', label: 'OpenAI', iconId: 'OpenAI' },
   ollama: { id: 'ollama', label: 'Ollama', iconId: 'Ollama' },
+  // CPA withholds the internal space in these two plugin provider keys, and the quota
+  // plugin matches on the literal string; only lower/trim is applied, never collapsed.
+  // The short aliases keep a second lookup after `canonicalDisplayProviderKey` collapses
+  // the raw key to its metadata id from falling through to the unknown placeholder.
+  'openai-compatible-command code': { id: 'commandcode', label: 'Command Code', iconId: 'CommandCode' },
+  commandcode: { id: 'commandcode', label: 'Command Code', iconId: 'CommandCode' },
+  'openai-compatible-opencode': { id: 'opencode', label: 'OpenCode Go', iconId: 'OpenCode' },
+  opencode: { id: 'opencode', label: 'OpenCode Go', iconId: 'OpenCode' },
 };
 
 export function getCredentialProviderMetadata(providerKey: string): ProviderMetadata {

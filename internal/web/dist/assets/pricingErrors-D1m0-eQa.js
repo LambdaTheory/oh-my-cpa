@@ -1,0 +1,1 @@
+import{ac as o,K as a}from"./index-CmfOor_j.js";function e(n,i){if(i instanceof o&&i.data&&typeof i.data=="object"){const t=i.data.code;if(typeof t=="string"&&c.has(t))return n(`pricing.error.${t}`)}return a(i)}const c=new Set(["pricing_model_not_in_catalog","pricing_upstream_not_found","pricing_no_automatic_match","pricing_invalid_mode"]);export{e as p};
