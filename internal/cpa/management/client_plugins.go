@@ -1,6 +1,7 @@
 package management
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -195,6 +196,47 @@ func (c *Client) Plugins(ctx context.Context) ([]PluginItem, error) {
 	return list.Plugins, nil
 }
 
+// QuotaProviderInfo is one entry of CPA's `GET /credentials/quota/providers`: a
+// registered plugin that serves quota reads, the provider key it registers
+// under, and the credential provider keys it accepts. Keys are literal apart
+// from case and outer whitespace; the spaces inside a key are meaningful.
+type QuotaProviderInfo struct {
+	PluginID           string   `json:"plugin_id"`
+	Provider           string   `json:"provider"`
+	DisplayName        string   `json:"display_name"`
+	SupportedProviders []string `json:"supported_providers"`
+	SupportsReset      bool     `json:"supports_reset"`
+}
+
+// QuotaProviders reads the host's registered quota providers. A bare array is
+// still accepted, since it carries the same entries without the wrapper.
+func (c *Client) QuotaProviders(ctx context.Context) ([]QuotaProviderInfo, error) {
+	var raw json.RawMessage
+	if err := c.DoJSON(ctx, http.MethodGet, "/credentials/quota/providers", &raw); err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return []QuotaProviderInfo{}, nil
+	}
+	var list []QuotaProviderInfo
+	if err := json.Unmarshal(raw, &list); err == nil {
+		if list == nil {
+			list = []QuotaProviderInfo{}
+		}
+		return list, nil
+	}
+	var wrapped struct {
+		Providers []QuotaProviderInfo `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err != nil {
+		return nil, fmt.Errorf("decode CPA quota providers: %w", err)
+	}
+	if wrapped.Providers == nil {
+		wrapped.Providers = []QuotaProviderInfo{}
+	}
+	return wrapped.Providers, nil
+}
+
 func pluginEndpoint(id, suffix string) (string, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -202,6 +244,19 @@ func pluginEndpoint(id, suffix string) (string, error) {
 	}
 	return "/plugins/" + url.PathEscape(id) + suffix, nil
 }
+
+// PluginQuotaHTTPError is a non-2xx answer to a plugin quota read. It carries
+// the status and body HTTPError already exposes plus the response headers: a
+// 429's Retry-After lives only there, and the quota layer needs it to park the
+// credential for the wait the plugin asked for instead of probing again.
+type PluginQuotaHTTPError struct {
+	HTTPError
+	Header http.Header
+}
+
+// Unwrap keeps the plain management error visible to callers that classify a
+// non-2xx answer through *HTTPError.
+func (e *PluginQuotaHTTPError) Unwrap() error { return &e.HTTPError }
 
 // FetchPluginQuota reads one credential's quota through the plugin that
 // provides it (`POST /plugins/:id/quota`). It is an ordinary CPA management
@@ -215,8 +270,21 @@ func (c *Client) FetchPluginQuota(ctx context.Context, pluginID, authIndex strin
 	if authIndex == "" {
 		return nil, errors.New("auth_index is required")
 	}
+	data, err := json.Marshal(map[string]string{"auth_index": authIndex})
+	if err != nil {
+		return nil, fmt.Errorf("encode CPA request: %w", err)
+	}
+	request, err := c.newRequest(ctx, http.MethodPost, endpoint, bytes.NewReader(data), "application/json")
+	if err != nil {
+		return nil, err
+	}
 	var raw json.RawMessage
-	if err := c.doJSONBody(ctx, http.MethodPost, endpoint, map[string]string{"auth_index": authIndex}, &raw); err != nil {
+	meta, err := c.do(request, &raw)
+	if err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) {
+			return nil, &PluginQuotaHTTPError{HTTPError: *httpErr, Header: meta.Header}
+		}
 		return nil, err
 	}
 	return raw, nil

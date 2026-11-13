@@ -996,11 +996,16 @@ pumped on its own interval (ADR 0119).
 ### Quota resolution and partial-success boundary
 
 Plugin quota resolution requires a matching quota identifier, plugin ID, or auth
-provider; an unmatched credential is never sent to another plugin. A successful
-Codex redemption with a failed gateway cooldown clear stays successful and
-returns `cooldown_cleared: false` plus `cooldown_error: "cooldown_clear_failed"`;
-only the HTTP status is retained in the service diagnostic, and the console
-renders localized guidance.
+provider; an unmatched credential is never sent to another plugin. Plugin
+payloads project a `summary` balance onto credits and a bucket `description`
+onto the window name, stale marker and last-read instant. A host that reports
+no `quota_plugin_id` falls back to `GET /credentials/quota/providers`, matching
+the credential's provider against each registered plugin's `supported_providers`
+(the key is literal: only case and outer whitespace are ignored) under the same
+refusal. A successful Codex redemption with a failed gateway cooldown clear
+stays successful and returns `cooldown_cleared: false` plus
+`cooldown_error: "cooldown_clear_failed"`; only the HTTP status is retained in
+the service diagnostic, and the console renders localized guidance.
 
 ## 3. Frontend shape
 

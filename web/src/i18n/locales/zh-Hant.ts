@@ -2872,6 +2872,8 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "quota.last_success": "上次成功讀數：{time}",
   "quota.status_error": "異常",
   "quota.status_stale": "快照已過期",
+  "quota.plugin_stale": "快取讀數",
+  "quota.plugin_stale_hint": "外掛回傳的是上次成功讀取，不是本次重新整理的結果",
   "quota.status_idle": "未取得",
   "quota.status_unpublished": "未發布用量",
   "quota.cooldown_active_desc": "檢測到 CPA 觸發的上游 429 限流保護",

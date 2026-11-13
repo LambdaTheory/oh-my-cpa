@@ -888,7 +888,13 @@ retain layout and rule-editing coverage.
 
 `internal/quota/plugin_test.go` owns exact plugin resolution and refusal to send
 an unmatched credential's auth index to an unrelated plugin, even when it is the
-only candidate. `internal/api/management_quota_test.go` owns the redemption wire
+only candidate. It also owns the old-host fallback: a host without
+`quota_plugin_id` resolves through `GET /credentials/quota/providers`, keeps the
+literal key `openai-compatible-command code`, refuses an unlisted provider before
+any quota request, and reports the registry route's failure.
+`internal/cpa/management/client_plugins_test.go` owns that route's wrapped and
+bare-array decoding, the empty registry and its HTTP failure.
+`internal/api/management_quota_test.go` owns the redemption wire
 contract: a failed cooldown clear still returns HTTP 200 with a successful
 redemption and the fixed `cooldown_clear_failed` code, without the raw CPA body.
 `web/tests/ice-servers-editor.component.test.tsx` owns the rendered secret state:

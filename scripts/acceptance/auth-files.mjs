@@ -21,7 +21,14 @@ export async function runAuthFilesAcceptance({
   providerMarkImage,
   path,
   root,
+  fakeCpa,
 }) {
+    // This suite was written against the twelve pre-quota credentials and its
+    // page-one checks assume they all fit. The plugin-quota additions belong to
+    // the dedicated scenario; leaving them in this run pushes runtime-no-index
+    // and the xAI row onto page two and turns a fixture change into a false
+    // regression.
+    fakeCpa.fixture.setPluginQuotaCredentials(false);
     let oauthStarts = 0;
     page.on('request', (request) => {
       if (request.url().includes('/api/v1/management/oauth/start')) oauthStarts += 1;

@@ -13,8 +13,9 @@ export function quotaRefreshReasonLabel(attempt: QuotaItem['last_refresh'], t: T
 }
 
 // Two idle scheduler cycles allow a delayed collection without trusting an old
-// reading indefinitely. Ollama collects every 15 minutes; CPA adaptive idle is
-// two hours. Short provider windows cap that tolerance to one quarter-cycle.
+// reading indefinitely. OMC's own Ollama collector runs every 15 minutes; CPA
+// adaptive idle is two hours. Short provider windows cap that tolerance to one
+// quarter-cycle.
 export const QUOTA_FRESHNESS_MS = 4 * 60 * 60_000;
 export const OLLAMA_QUOTA_FRESHNESS_MS = 30 * 60_000;
 export const QUOTA_WINDOW_FRESHNESS_FRACTION = 0.25;
@@ -23,7 +24,10 @@ export const QUOTA_MIN_FRESHNESS_MS = 2 * 60 * 60_000;
 export type QuotaDisplayStatus = QuotaItem['status'] | 'refresh_failed' | 'rate_limited' | 'disabled';
 
 export function quotaFreshnessMS(item: QuotaItem): number {
-  if (item.provider === 'ollama') return OLLAMA_QUOTA_FRESHNESS_MS;
+  // The 30-minute tolerance belongs to OMC's own Ollama accounts, which namespace
+  // their auth index `ollama:<id>`. A plugin Ollama credential has CPA's opaque index
+  // and reports its own windows, so it takes the generic window-based tolerance.
+  if (item.auth_index?.startsWith('ollama:')) return OLLAMA_QUOTA_FRESHNESS_MS;
   const periods = (item.windows ?? []).map((window) => window.period_hours).filter((hours): hours is number => hours != null && hours > 0);
   const windowBound = periods.length ? Math.min(...periods) * 60 * 60_000 * QUOTA_WINDOW_FRESHNESS_FRACTION : QUOTA_FRESHNESS_MS;
   return Math.max(QUOTA_MIN_FRESHNESS_MS, Math.min(QUOTA_FRESHNESS_MS, windowBound));

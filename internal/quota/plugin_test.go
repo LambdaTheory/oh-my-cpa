@@ -3,9 +3,13 @@ package quota
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 )
 
@@ -97,10 +101,16 @@ func TestPluginQuotaTargetRefusesDeclarativeProbe(t *testing.T) {
 // would pick fixture-limiter here, which CPA may have fused; the target follows
 // CPA without listing plugins at all.
 func TestPluginQuotaTargetPrefersCPASelection(t *testing.T) {
-	svc := NewService(&mockCPAClient{pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
-		t.Fatal("plugins listed although CPA named the quota plugin")
-		return nil, nil
-	}})
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			t.Fatal("plugins listed although CPA named the quota plugin")
+			return nil, nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			t.Fatal("quota providers listed although CPA named the quota plugin")
+			return nil, nil
+		},
+	})
 	got, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
 		AuthIndex:     "auth-selected",
 		Type:          "codebuddy",
@@ -110,6 +120,167 @@ func TestPluginQuotaTargetPrefersCPASelection(t *testing.T) {
 	})
 	if err != nil || got != "fixture-healthy" {
 		t.Fatalf("pluginQuotaTarget = %q, %v; want fixture-healthy", got, err)
+	}
+}
+
+// quotaProviderItems are the registry entries an older host serves: the plugin
+// ids, the provider each registers under, and the credential keys each accepts.
+// The entry without a provider name is not an eligible target even when its
+// supported list matches, so it sits first to prove it is skipped.
+func quotaProviderItems() []management.QuotaProviderInfo {
+	return []management.QuotaProviderInfo{
+		{PluginID: "fixture-anonymous", SupportedProviders: []string{"openai-compatible-command code"}},
+		{PluginID: "fixture-ollama", Provider: "ollama", DisplayName: "Ollama Quota", SupportedProviders: []string{"ollama"}},
+		{PluginID: "fixture-commandcode", Provider: "openai-compatible-command code", DisplayName: "Command Code Quota", SupportedProviders: []string{"openai-compatible-command code"}},
+		{PluginID: "fixture-opencode", Provider: "openai-compatible-opencode", DisplayName: "OpenCode Go Quota", SupportedProviders: []string{"openai-compatible-opencode"}},
+	}
+}
+
+// Older hosts report no quota_plugin_id and their installed-plugin list only
+// carries the ollama identifier, so the quota-provider registry is what names
+// the CMC and OPC plugins. The literal space inside the CMC key must survive.
+func TestPluginQuotaTargetFallsBackToQuotaProviders(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		provider string
+		want     string
+	}{
+		{name: "command code", provider: "openai-compatible-command code", want: "fixture-commandcode"},
+		{name: "opencode", provider: "openai-compatible-opencode", want: "fixture-opencode"},
+		{name: "case and outer spaces", provider: "  OpenAI-Compatible-Command Code  ", want: "fixture-commandcode"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			svc := NewService(&mockCPAClient{
+				pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+					return pluginTestItems(), nil
+				},
+				quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+					return quotaProviderItems(), nil
+				},
+			})
+			got, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+				AuthIndex: "auth-fallback", Type: testCase.provider, SupportsQuota: true, QuotaProvider: testCase.provider,
+			})
+			if err != nil || got != testCase.want {
+				t.Fatalf("pluginQuotaTarget(%q) = %q, %v; want %q", testCase.provider, got, err, testCase.want)
+			}
+		})
+	}
+}
+
+// A failed installed-plugin read is not the end of resolution: the registry is
+// asked and can still name the plugin.
+func TestPluginQuotaTargetFallsBackWhenPluginListFails(t *testing.T) {
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return nil, errors.New("plugins unavailable")
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+	})
+	got, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+		AuthIndex: "auth-list-down", Type: "openai-compatible-opencode", SupportsQuota: true, QuotaProvider: "openai-compatible-opencode",
+	})
+	if err != nil || got != "fixture-opencode" {
+		t.Fatalf("pluginQuotaTarget = %q, %v; want fixture-opencode", got, err)
+	}
+}
+
+// A provider no plugin lists is an error, never a reason to pick the sole
+// registered plugin.
+func TestPluginQuotaTargetFallbackRefusesUnlistedProvider(t *testing.T) {
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return pluginTestItems(), nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+	})
+	_, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+		AuthIndex: "auth-unlisted", Type: "openai-compatible-other", SupportsQuota: true, QuotaProvider: "openai-compatible-other",
+	})
+	if err == nil || !strings.Contains(err.Error(), "no enabled plugin provides quota") {
+		t.Fatalf("pluginQuotaTarget(unlisted) = %v, want the no-match error", err)
+	}
+}
+
+// A host that serves neither the plugin list nor the registry reports the
+// registry route's failure instead of guessing a target.
+func TestPluginQuotaTargetReportsQuotaProviderRouteFailure(t *testing.T) {
+	svc := NewService(&mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return nil, nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return nil, errors.New("CPA returned HTTP 404: not found")
+		},
+	})
+	_, err := svc.pluginQuotaTarget(context.Background(), management.AuthFile{
+		AuthIndex: "auth-route-down", Type: "openai-compatible-opencode", SupportsQuota: true, QuotaProvider: "openai-compatible-opencode",
+	})
+	if err == nil || !strings.Contains(err.Error(), "quota providers") || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("pluginQuotaTarget(route down) = %v, want the registry route error", err)
+	}
+}
+
+// A refresh on an old host resolves through the registry and reads the quota
+// through the plugin it named.
+func TestRefreshCredentialQuotaUsesQuotaProviderFallback(t *testing.T) {
+	var calledPlugin, calledIndex string
+	client := &mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) {
+			return pluginTestItems(), nil
+		},
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+		pluginQuotaFn: func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error) {
+			calledPlugin, calledIndex = pluginID, authIndex
+			return json.RawMessage(pluginQuotaFixture), nil
+		},
+	}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex: "auth-cmc-fallback", Name: "commandcode.json", Type: "openai-compatible-command code",
+		SupportsQuota: true, QuotaProvider: "openai-compatible-command code",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if calledPlugin != "fixture-commandcode" || calledIndex != "auth-cmc-fallback" {
+		t.Fatalf("fetch = (%q, %q), want (fixture-commandcode, auth-cmc-fallback)", calledPlugin, calledIndex)
+	}
+	if len(result.Windows) != 1 {
+		t.Fatalf("windows = %+v, want the fixture window", result.Windows)
+	}
+}
+
+// An unlisted provider stops before any quota request: the credential is not
+// sent to a plugin that never named it.
+func TestRefreshCredentialQuotaFallbackNoMatchSendsNothing(t *testing.T) {
+	fetched := false
+	client := &mockCPAClient{
+		pluginsFunc: func(context.Context) ([]management.PluginItem, error) { return nil, nil },
+		quotaProvidersFunc: func(context.Context) ([]management.QuotaProviderInfo, error) {
+			return quotaProviderItems(), nil
+		},
+		pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+			fetched = true
+			return json.RawMessage(pluginQuotaFixture), nil
+		},
+	}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex: "auth-unlisted", Type: "openai-compatible-other", SupportsQuota: true, QuotaProvider: "openai-compatible-other",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if fetched {
+		t.Fatal("quota fetched from a plugin that does not list the provider")
+	}
+	if result.Status != "error" || result.Error == "" || len(result.Windows) != 0 || result.Plan != nil {
+		t.Fatalf("result = %+v, want an error without windows or plan", result)
 	}
 }
 
@@ -163,6 +334,119 @@ func TestRefreshCredentialQuotaPluginBranch(t *testing.T) {
 	}
 }
 
+// A stale reading: v0.3.0 writes the marker into the balance label and the
+// bucket description, and the last-read instant into the description.
+const pluginStaleBalancePayload = `{
+	"subscription": {"plan": "Pro"},
+	"summary": [{"key": "balance", "label": "Balance · stale", "value": 321, "format": "number", "unit": "credits"}],
+	"groups": [{
+		"displayName": "Command Code",
+		"buckets": [
+			{"window": "5h", "remainingFraction": 0.8, "resetTime": "2026-11-12T13:00:00Z", "description": "5-hour session · stale · last read at 2026-11-12T07:55:00Z · upstream request failed: 429 Too Many Requests"}
+		]
+	}]
+}`
+
+// The three providers publish different plan fields: Ollama only a currency
+// balance, Command Code a plan plus a credits balance, OpenCode Go neither.
+func TestParsePluginQuotaPlan(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		raw         string
+		wantNil     bool
+		wantLabel   string
+		wantBalance string
+		wantStale   bool
+	}{
+		{name: "ollama balance only", raw: pluginOllamaBalanceOnlyPayload, wantBalance: "5.5 USD"},
+		{name: "ollama balance beside windows", raw: pluginOllamaCookiePayload, wantBalance: "12.34 USD"},
+		{name: "command code plan and credits", raw: pluginCommandCodePayload, wantLabel: "Pro", wantBalance: "321 credits"},
+		{name: "opencode windows only", raw: pluginOpenCodePayload, wantNil: true},
+		{name: "stale balance label", raw: pluginStaleBalancePayload, wantLabel: "Pro", wantBalance: "321 credits", wantStale: true},
+		{
+			name:        "currency without a code stays the plain amount",
+			raw:         `{"summary":[{"key":"balance","value":9,"format":"currency"}]}`,
+			wantBalance: "9",
+		},
+		{
+			name:        "number without a unit stays the plain amount",
+			raw:         `{"summary":[{"key":"balance","value":7,"format":"number"}]}`,
+			wantBalance: "7",
+		},
+		{
+			name:        "first balance metric wins",
+			raw:         `{"summary":[{"key":"other","value":1},{"key":"balance","value":2,"unit":"credits"},{"key":"balance","value":3,"unit":"credits"}]}`,
+			wantBalance: "2 credits",
+		},
+		{name: "subscription without a balance", raw: `{"subscription":{"plan":"Team"}}`, wantLabel: "Team"},
+		{name: "balance value unreadable", raw: `{"summary":[{"key":"balance","value":"n/a"}]}`, wantNil: true},
+		{name: "invalid payload", raw: `{`, wantNil: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			plan := parsePluginQuotaPlan([]byte(testCase.raw))
+			if testCase.wantNil {
+				if plan != nil {
+					t.Fatalf("parsePluginQuotaPlan = %+v, want nil", plan)
+				}
+				return
+			}
+			if plan == nil {
+				t.Fatalf("parsePluginQuotaPlan = nil, want a plan (label %q, balance %q)", testCase.wantLabel, testCase.wantBalance)
+			}
+			// A plan without a PlanType is dropped by the read-time projection,
+			// which would also lose the balance it carries.
+			if plan.PlanType != "unknown" || plan.Tier != "unknown" {
+				t.Errorf("plan type/tier = %q/%q, want unknown/unknown", plan.PlanType, plan.Tier)
+			}
+			if plan.PlanLabel != testCase.wantLabel {
+				t.Errorf("plan label = %q, want %q", plan.PlanLabel, testCase.wantLabel)
+			}
+			if testCase.wantBalance == "" {
+				if plan.Credits != nil {
+					t.Errorf("credits = %+v, want none", plan.Credits)
+				}
+				return
+			}
+			if plan.Credits == nil || plan.Credits.Balance != testCase.wantBalance || plan.Credits.Stale != testCase.wantStale {
+				t.Errorf("credits = %+v, want balance %q with stale=%v", plan.Credits, testCase.wantBalance, testCase.wantStale)
+			}
+		})
+	}
+}
+
+// The api_key Ollama path publishes a balance and no window: the refresh keeps
+// the balance on the plan, invents no window, and reads as unpublished because
+// the provider stated no window.
+func TestRefreshCredentialQuotaPluginBalanceOnly(t *testing.T) {
+	client := &mockCPAClient{
+		pluginQuotaFn: func(ctx context.Context, pluginID, authIndex string) (json.RawMessage, error) {
+			if pluginID != "fixture-meter" {
+				t.Fatalf("pluginID = %q, want CPA's quota_plugin_id", pluginID)
+			}
+			return json.RawMessage(pluginOllamaBalanceOnlyPayload), nil
+		},
+	}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), management.AuthFile{
+		AuthIndex:     "auth-ollama-key",
+		Type:          "ollama",
+		SupportsQuota: true,
+		QuotaProvider: "ollama",
+		QuotaPluginID: "fixture-meter",
+	}, nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error: %v", err)
+	}
+	if result.Plan == nil || result.Plan.Credits == nil || result.Plan.Credits.Balance != "5.5 USD" {
+		t.Fatalf("plan = %+v, want the 5.5 USD balance kept", result.Plan)
+	}
+	if len(result.Windows) != 0 {
+		t.Fatalf("windows = %+v, want none", result.Windows)
+	}
+	if result.Status != QuotaStatusUnpublished {
+		t.Fatalf("status = %q, want %q for a balance-only read", result.Status, QuotaStatusUnpublished)
+	}
+}
+
 // An unresolvable plugin reads as an error, never as an empty success.
 func TestRefreshCredentialQuotaPluginUnresolvable(t *testing.T) {
 	client := &mockCPAClient{
@@ -196,6 +480,101 @@ func TestCapabilitiesForFileFollowsTheQuotaReader(t *testing.T) {
 	plain := management.AuthFile{Type: "codebuddy", Provider: "codebuddy"}
 	if caps := CapabilitiesForFile(plain); caps.RefreshSupported {
 		t.Fatalf("unadvertised capabilities = %+v, want no refresh", caps)
+	}
+}
+
+func pluginRateLimitedAuthFile() management.AuthFile {
+	return management.AuthFile{
+		AuthIndex:     "auth-plugin-limited",
+		Name:          "codebuddy.json",
+		Type:          "codebuddy",
+		Provider:      "codebuddy",
+		SupportsQuota: true,
+		QuotaProvider: "codebuddy",
+		QuotaPluginID: "fixture-limiter",
+	}
+}
+
+// A plugin route's 429 joins the shared refusal: the plugin's Retry-After parks
+// the credential for exactly that wait, and the credential context travels with
+// the error so callers can record and clear the same park as for a built-in.
+func TestRefreshCredentialQuotaPluginRateLimitHonoursRetryAfter(t *testing.T) {
+	client := &mockCPAClient{pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+		return nil, &management.PluginQuotaHTTPError{
+			HTTPError: management.HTTPError{StatusCode: http.StatusTooManyRequests, Body: `{"error":"rate_limited","message":"slow down"}`},
+			Header:    http.Header{"Retry-After": {"120"}},
+		}
+	}}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), pluginRateLimitedAuthFile(), nil)
+	var rateErr *RateLimitError
+	if !errors.As(err, &rateErr) {
+		t.Fatalf("RefreshCredentialQuota error = %v, want *RateLimitError", err)
+	}
+	if !rateErr.HasRetryAfter || rateErr.RetryAfter != 120*time.Second {
+		t.Fatalf("rate limit = %+v, want the plugin's 120s Retry-After", rateErr)
+	}
+	if rateErr.Provider != "codebuddy" || rateErr.AuthIndex != "auth-plugin-limited" {
+		t.Fatalf("rate limit context = provider %q auth %q, want codebuddy/auth-plugin-limited", rateErr.Provider, rateErr.AuthIndex)
+	}
+	var evidence *authfailure.Evidence
+	if !errors.As(err, &evidence) || evidence.Source != authfailure.ControlPlane || evidence.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("evidence = %+v, want control-plane HTTP 429", evidence)
+	}
+	if result == nil || result.Status != "error" || result.Error != "rate_limited_backoff" {
+		t.Fatalf("result = %+v, want an error reading carrying the refusal", result)
+	}
+}
+
+// Without a Retry-After the refusal must report no header and leave the wait to
+// the shared default exponential backoff, exactly like the built-in readers. A
+// plain management HTTPError maps too, so a header-less path cannot bypass the
+// park and probe the plugin again.
+func TestRefreshCredentialQuotaPluginRateLimitWithoutRetryAfterUsesDefaultBackoff(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{name: "plugin error without header", err: &management.PluginQuotaHTTPError{HTTPError: management.HTTPError{StatusCode: http.StatusTooManyRequests, Body: `{"error":"rate_limited"}`}}},
+		{name: "plain management error", err: &management.HTTPError{StatusCode: http.StatusTooManyRequests, Body: `{"error":"rate_limited"}`}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &mockCPAClient{pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+				return nil, testCase.err
+			}}
+			_, err := NewService(client).RefreshCredentialQuota(context.Background(), pluginRateLimitedAuthFile(), nil)
+			var rateErr *RateLimitError
+			if !errors.As(err, &rateErr) {
+				t.Fatalf("RefreshCredentialQuota error = %v, want *RateLimitError", err)
+			}
+			if rateErr.HasRetryAfter || rateErr.RetryAfter != 0 {
+				t.Fatalf("rate limit = %+v, want the default wait rather than a header", rateErr)
+			}
+			now := time.Now()
+			backoff := NewBackoff(DefaultBackoffBase, DefaultBackoffMax)
+			backoff.Record(rateErr.Provider, rateErr.AuthIndex, rateErr.RetryAfter, rateErr.HasRetryAfter, now)
+			blocked, until := backoff.CredentialBlocked(rateErr.AuthIndex, now)
+			if !blocked || until.Sub(now) != DefaultBackoffBase {
+				t.Fatalf("default park = %v until %v, want %v", blocked, until, DefaultBackoffBase)
+			}
+		})
+	}
+}
+
+// A non-429 plugin failure keeps its own error: the rate-limit mapping must not
+// turn a 502 into a park.
+func TestRefreshCredentialQuotaPluginUpstreamFailureStaysPlain(t *testing.T) {
+	client := &mockCPAClient{pluginQuotaFn: func(context.Context, string, string) (json.RawMessage, error) {
+		return nil, &management.PluginQuotaHTTPError{
+			HTTPError: management.HTTPError{StatusCode: http.StatusBadGateway, Body: `{"error":"upstream_error"}`},
+		}
+	}}
+	result, err := NewService(client).RefreshCredentialQuota(context.Background(), pluginRateLimitedAuthFile(), nil)
+	if err != nil {
+		t.Fatalf("RefreshCredentialQuota error = %v, want the failure carried on the result", err)
+	}
+	if result == nil || result.Status != "error" || !strings.Contains(result.Error, "HTTP 502") {
+		t.Fatalf("result = %+v, want a plain 502 failure", result)
 	}
 }
 

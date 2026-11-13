@@ -36,6 +36,7 @@ import { runThemeBrandAcceptance } from './acceptance/theme-brand.mjs';
 import { runOAuthFlowAcceptance } from './acceptance/oauth-flow.mjs';
 import { parseBrowserSelection } from './acceptance/browser-selection.mjs';
 import { runYamlFormatAcceptance } from './acceptance/configuration-plugins.mjs';
+import { runPluginQuotaAcceptance } from './acceptance/plugin-quota.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -368,6 +369,8 @@ try {
 
   if (scenarioId === 'config-yaml-format') {
     await runYamlFormatAcceptance({ appURL, page, check });
+  } else if (scenarioId === 'plugin-quota') {
+    await runPluginQuotaAcceptance({ appURL, page, check, checkEventually, fakeCpa });
   } else {
   await auditPage(page, responseBodies, '/dashboard', '.dashboard-page', { pageSecrets: providerSecrets });
 
@@ -448,6 +451,7 @@ try {
     providerMarkImage,
     path,
     root,
+    fakeCpa,
   });
 
   if (!p0Only) {

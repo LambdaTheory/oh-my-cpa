@@ -23,6 +23,10 @@ export interface QuotaWindow {
   reset_label?: string;
   period_hours?: number;
   reset_accuracy?: 'exact' | 'derived' | 'approximate';
+  /** The plugin returned its last successful reading for this window, not a fresh one. */
+  stale?: boolean;
+  /** Why the reading is cached or unusual, as the plugin stated it; absent when it stated none. */
+  note?: string;
   /** What this deployment recorded for the credential in the window's current cycle, up to the observation. */
   usage?: QuotaWindowUsage;
   /** The estimated size of the whole window; absent when `capacity_unavailable` says why. */
@@ -116,6 +120,8 @@ export interface QuotaCredits {
   /** Upstream's decimal text; absent when credits are unlimited. */
   balance?: string;
   unlimited?: boolean;
+  /** The plugin returned its last successful reading of the balance, not a fresh one. */
+  stale?: boolean;
 }
 
 export interface CodexResetCredit {
