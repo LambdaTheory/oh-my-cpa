@@ -3920,6 +3920,7 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "dash.prediction.window.daily": "每日",
   "dash.prediction.window.weekly": "每週",
   "dash.prediction.window.monthly": "每月",
+  "dash.prediction.window.rolling": "滾動",
   "dash.prediction.window.model_scoped": "模型視窗",
   "dash.prediction.window.unknown": "未知視窗",
   "dash.prediction.verdict.will_exhaust": "將耗盡",

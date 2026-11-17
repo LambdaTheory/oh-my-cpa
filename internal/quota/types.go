@@ -9,7 +9,7 @@ import (
 type QuotaWindow struct {
 	ID               string   `json:"id"`
 	Label            string   `json:"label"`
-	Kind             string   `json:"kind,omitempty"` // "five_hour", "weekly", "daily", "monthly", "model_scoped", "credit_usage", "custom"
+	Kind             string   `json:"kind,omitempty"` // "five_hour", "weekly", "daily", "monthly", "rolling", "model_scoped", "credit_usage", "custom"
 	Scope            string   `json:"scope"`          // "standard", "model", "group"
 	Model            string   `json:"model,omitempty"`
 	Used             *float64 `json:"used,omitempty"`
