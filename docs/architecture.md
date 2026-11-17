@@ -942,7 +942,9 @@ than by following a tail. An older `/logs?source=audit` link redirects there.
 - **Service log** — Oh My CPA's own process log. `cmd/oh-my-cpa` builds the logger as
   `applog.NewHandler(jsonStderrHandler, buffer)`, so stderr remains the durable log a
   deployment collects, and `NewHandler` in `internal/api` finds the buffer through
-  `applog.BufferOf`. The buffer keeps the latest `applog.DefaultCapacity` records,
+  `applog.BufferOf`, which walks the handler chain's `Unwrap() slog.Handler` - the
+  timezone handler `internal/app` wraps around the logger does not hide the tee. The
+  buffer keeps the latest `applog.DefaultCapacity` records,
   numbers them with a sequence that only grows for the life of the process, and is
   served by `GET /api/v1/management/service-logs?after=<seq>&limit=`. A reader that fell
   more than a page behind jumps to the newest records and is told `gap: true` rather
@@ -1676,7 +1678,11 @@ automatic granularity is coarsened and reported in `window.bucket`; an explicit 
 400. Windows and Calendar Presets are resolved by the server in the OMC Time Zone
 (`internal/api/insights_window.go`). The rhythm grid needs local hours under day buckets,
 so `GET /management/insights/rhythm` is its own read. It takes the request list's filter
-parameters, and fingerprints a raw key value server-side.
+parameters, and fingerprints a raw key value server-side. Resolving each key's display mask
+is one top-of-index probe per key (`ClientKeyMasksFor`, seeded by `INDEXED BY
+idx_usage_events_group_time` so the plan cannot fall back to walking the key's history),
+which keeps the cube's cost independent of how many requests a key has served;
+`BenchmarkClientKeyMasksFor` pins it over 100 000 and 600 000 records.
 
 **The detail horizon.** Once the lifecycle pass has removed request records before an
 instant, the ragged edges and the fine grids behind it can no longer be read. The instant is

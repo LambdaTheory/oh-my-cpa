@@ -36,12 +36,30 @@ func NewHandler(next slog.Handler, buffer *Buffer) *Handler {
 }
 
 // BufferOf returns the buffer behind a logger built with NewHandler, or nil.
+//
+// It looks through handlers that wrap another one. The process's logger is
+// wrapped after NewHandler - internal/app adds the timezone handler so log lines
+// carry the operator's zone - and the buffer has to stay reachable from the
+// wrapped logger, or the console's service log is permanently empty.
 func BufferOf(logger *slog.Logger) *Buffer {
 	if logger == nil {
 		return nil
 	}
-	if handler, ok := logger.Handler().(*Handler); ok {
-		return handler.buffer
+	return bufferOf(logger.Handler())
+}
+
+// bufferOf walks the chain of handlers that expose the standard wrapping escape
+// hatch, `Unwrap() slog.Handler`. Every supported wrapper declares it; an
+// unrecognised handler simply ends the walk.
+func bufferOf(handler slog.Handler) *Buffer {
+	if handler == nil {
+		return nil
+	}
+	if tee, ok := handler.(*Handler); ok {
+		return tee.buffer
+	}
+	if wrapper, ok := handler.(interface{ Unwrap() slog.Handler }); ok {
+		return bufferOf(wrapper.Unwrap())
 	}
 	return nil
 }

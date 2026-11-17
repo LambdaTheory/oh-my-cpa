@@ -3,6 +3,7 @@ package timezone
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -44,5 +45,27 @@ func TestLoggerResolvesTimezoneForEachRecord(t *testing.T) {
 	_ = handler.Handle(context.Background(), record)
 	if !strings.Contains(output.String(), "2026-01-01T18:45:00Z") || !strings.Contains(output.String(), "2026-01-02T00:30:00+05:45") {
 		t.Fatal(output.String())
+	}
+}
+
+// TestHandlerUnwrapsTheWrappedHandler guards the console's service log: applog
+// finds its buffer by walking Unwrap from the outermost handler, so the
+// timezone wrapper must hand back the handler it wraps - including one that
+// went through WithAttrs or WithGroup first.
+func TestHandlerUnwrapsTheWrappedHandler(t *testing.T) {
+	inner := slog.NewJSONHandler(io.Discard, nil)
+	settings := New(time.UTC)
+	for name, handler := range map[string]slog.Handler{
+		"plain":      Handler{Handler: inner, Location: settings.Location},
+		"with attrs": Handler{Handler: inner, Location: settings.Location}.WithAttrs([]slog.Attr{slog.String("component", "test")}),
+		"with group": Handler{Handler: inner, Location: settings.Location}.WithGroup("request"),
+	} {
+		wrapper, ok := handler.(interface{ Unwrap() slog.Handler })
+		if !ok {
+			t.Fatalf("%s: handler does not expose Unwrap", name)
+		}
+		if wrapper.Unwrap() == nil {
+			t.Fatalf("%s: Unwrap returned nil", name)
+		}
 	}
 }

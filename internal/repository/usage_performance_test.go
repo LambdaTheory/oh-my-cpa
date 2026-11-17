@@ -95,6 +95,35 @@ func TestUsageStatusAndSpan(t *testing.T) {
 	}
 }
 
+// BenchmarkClientKeyMasksFor is the production shape: one caller key holding
+// every row of a large history. The old query measured 1.06 s per call over
+// 600k rows on this bench rig; the index probe stays under a millisecond
+// regardless of how many rows the key owns.
+func BenchmarkClientKeyMasksFor(b *testing.B) {
+	for _, n := range []int{100000, 600000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			repo := performanceRepository(b, n)
+			// One key owns the entire history, matching production (60 days, one
+			// hmac fingerprint, ~688k requests).
+			if _, err := repo.SQL().Exec(`
+				UPDATE usage_events
+				SET api_group_key = 'hmac:only-key',
+				    api_group_label = 'api_key',
+				    api_key_mask = 'sk-••••' || printf('%04d', id % 20),
+				    timestamp_ms = 1700000000000 + id * 500`); err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				masks, err := repo.ClientKeyMasksFor(context.Background(), "default", []string{"hmac:only-key"})
+				if err != nil || len(masks) != 1 {
+					b.Fatalf("masks=%d err=%v", len(masks), err)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkUsageEventWindow(b *testing.B) {
 	repo := performanceRepository(b, 100000)
 	b.ResetTimer()

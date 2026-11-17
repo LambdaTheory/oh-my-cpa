@@ -768,6 +768,15 @@ and identity remain covered by the workspace and plugin-logo logic suites.
   per-dimension caps and normalized masks, and checks canceled/uninitialized reads. Its
   strategy benchmarks compare populated and high-cardinality windows without duplicating
   benchmark fixture creation inside the timed portion.
+- `internal/repository/client_key_aliases_test.go` owns the Insights key-mask read: newest
+  non-empty mask per key, request time over insertion order, empty and unseen fingerprints,
+  batch boundaries past 64 keys, instance scoping, and the query plan
+  (`TestClientKeyMasksForUsesTheGroupTimeIndex` fails if `INDEXED BY
+  idx_usage_events_group_time` stops taking effect). `BenchmarkClientKeyMasksFor` measures
+  the production shape - one key owning the whole history - at 100 000 and 600 000 records.
+  The wrapped-logger case is `internal/applog/applog_test.go`
+  `TestBufferOfLooksThroughWrappers`; the timezone handler's `Unwrap` is covered in
+  `internal/timezone/timezone_test.go`.
 
 - The existing `dashboard-heatmap` probe owns active popup anchor geometry, one-popup
   ownership, its cell's ARIA description, pointer/keyboard dismissal, focus restoration,

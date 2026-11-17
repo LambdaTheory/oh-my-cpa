@@ -2,7 +2,9 @@ package applog
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -90,4 +92,55 @@ func messages(records []Record) string {
 		builder.WriteString(record.Message)
 	}
 	return builder.String()
+}
+
+// wrapper stands in for internal/timezone's handler: it only changes the record
+// and hands it on, exposing the wrapped handler through Unwrap.
+type wrapper struct {
+	slog.Handler
+}
+
+func (w wrapper) Handle(ctx context.Context, record slog.Record) error {
+	record.Time = record.Time.UTC()
+	return w.Handler.Handle(ctx, record)
+}
+
+func (w wrapper) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return wrapper{w.Handler.WithAttrs(attrs)}
+}
+
+func (w wrapper) Unwrap() slog.Handler { return w.Handler }
+
+// TestBufferOfLooksThroughWrappers is the regression guard for the console's
+// permanently empty service log: the process logger is wrapped after NewHandler,
+// so a BufferOf that only type-asserts the outermost handler silently reports
+// "this build keeps no copy" on every deployment.
+func TestBufferOfLooksThroughWrappers(t *testing.T) {
+	buffer := NewBuffer(10)
+	inner := NewHandler(slog.NewJSONHandler(io.Discard, nil), buffer)
+
+	if got := BufferOf(slog.New(inner)); got != buffer {
+		t.Fatalf("unwrapped logger: BufferOf = %p, want %p", got, buffer)
+	}
+	wrapped := slog.New(wrapper{inner})
+	if got := BufferOf(wrapped); got != buffer {
+		t.Fatalf("wrapped logger: BufferOf = %p, want %p", got, buffer)
+	}
+	// The record still reaches the tee through the wrapper.
+	wrapped.Info("reached the console")
+	if page := buffer.Since(0, 10); len(page.Records) != 1 || page.Records[0].Message != "reached the console" {
+		t.Fatalf("records = %#v, want the wrapped line", page.Records)
+	}
+
+	if BufferOf(nil) != nil {
+		t.Fatal("nil logger must report no buffer")
+	}
+	if BufferOf(slog.New(slog.NewJSONHandler(io.Discard, nil))) != nil {
+		t.Fatal("a logger with no tee must report no buffer")
+	}
+	// A handler that wraps something unrecognised ends the walk instead of
+	// panicking.
+	if BufferOf(slog.New(wrapper{slog.NewJSONHandler(io.Discard, nil)})) != nil {
+		t.Fatal("a wrapper over a plain handler must report no buffer")
+	}
 }
