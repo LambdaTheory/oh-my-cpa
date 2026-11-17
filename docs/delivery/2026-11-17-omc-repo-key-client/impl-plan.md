@@ -11,6 +11,12 @@ summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密�
 
 > 依据：浩文 2026-11-17 需求原话（`E:/works/Homan-context/runs/msgs/2026-11-17-2026-11-17-T5-0.md`）、T5 运行记录的「拆分」与 AC-1～9、`E:/works/Homan-context/inbox/agents/交付/2026-11-12-omc-分key-可用性评估.md`（第 3～5 节）、`E:/works/Homan-context/inbox/agents/调研/2026-11-12-omc分key可用性-S2.md`（三家运行时落点与实测）。代码基线为本地分支 `11-17-t5-omc-dev-base`（= `origin/dev` `ba9e2ee7`）；下文提到现有代码时按该基线核对。本稿只写方案，不写产品代码、不跑构建。
 
+## 评审入口
+
+- 先读 §2 的十个设计结论；要拍板的看 §12；要验收的看 §10。
+- 最容易被实现细节绑死、需要 PM 先确认的三处：`$OMC_HOME` 默认一份还是每 agent 一份（§2.1、§12 第 1 条）、Codex `exec` 只接受 `codex` 本身（§2.6、§12 第 3 条）、OpenCode 不自动写 `models`（§2.7、§12 第 4 条）。
+- 本计划没有改任何产品代码；§7.2 的文件归属是给 S2a/S2b/S3/S4 并行开工用的，不是已经存在的文件。
+
 ## 0. 一页结论
 
 - **工具形态**：做成 `oh-my-cpa key` 子命令族，长在 OMC 自己的二进制里，复用 `internal/repokey` 的 `Decrypt` / `ParsePublicKey` / `PublicKeyFingerprint` / `NormalizeRepo` / `RepoDisplay`。`key` 在加载服务配置、数据库和 CPA 客户端之前分发，不需要启动控制台。
