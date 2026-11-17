@@ -175,7 +175,7 @@ func TestStartupEpisodesAreNotRepeatedInMorning(t *testing.T) {
 				// service replacement; no in-memory minute flag can satisfy this case.
 				web, overlay := readyConfig()
 				env.service = NewService(Options{Web: web, Overlay: overlay, Store: env.store, Source: env.source, Now: func() time.Time { return *env.clock }, SenderFactory: func(Resolved) Sender { return env.sender }, SourceFactory: func(Resolved) EventSource { return env.events }})
-				if !strings.Contains(marshalTestJSON(env.sender.lastCard()), "already-reported") {
+				if !strings.Contains(marshalTestJSON(env.sender.lastCard()), "另有 1 项历史待核验") {
 					t.Fatal("startup omitted persisted item")
 				}
 				*env.clock = mustTime("2026-10-27T10:00:00Z")

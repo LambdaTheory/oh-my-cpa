@@ -159,7 +159,7 @@ func (r *PlainReportRenderer) Text(msg Message) string {
 	for _, alert := range decisionRiskAlerts(decisionAlerts(msg)) {
 		b.WriteString(r.textAlert(alert))
 	}
-	if diagnostic := r.diagnosticText(msg, decisionAlerts(msg)); diagnostic != "" {
+	if diagnostic := r.diagnosticText(msg); diagnostic != "" {
 		b.WriteString("\n" + diagnostic + "\n")
 	}
 	if len(msg.Tight) > 0 {

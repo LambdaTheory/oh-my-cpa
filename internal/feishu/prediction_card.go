@@ -74,7 +74,7 @@ func (r *PlainReportRenderer) predictionCard(msg Message) map[string]any {
 		}
 		meta += fmt.Sprintf("另有 %d 项，见控制台", omitted)
 	}
-	if diagnostic := r.diagnosticText(msg, visible); diagnostic != "" {
+	if diagnostic := r.diagnosticText(msg); diagnostic != "" {
 		if meta != "" {
 			meta += "\n"
 		}
