@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -396,56 +397,158 @@ func predictionObservationsFromBuckets(buckets []repository.QuotaObservationBuck
 	return observations
 }
 
-// predictionBucketsHaveReset combines the ordered within-bucket evidence with
+const (
+	predictionResetCheckBucketUsed       = "bucket_used_drop"
+	predictionResetCheckBucketResetAt    = "bucket_reset_at_moved"
+	predictionResetCheckBucketFlag       = "bucket_reset_detected"
+	predictionResetCheckBucketResetRange = "bucket_reset_at_spread"
+	predictionResetCheckCurrentUsed      = "current_used_drop"
+	predictionResetCheckCurrentResetAt   = "current_reset_at_moved"
+)
+
+// predictionResetSignal names the comparison that concluded a cycle was reset.
+// Within-bucket checks repeat the same bucket on both sides; the check name says
+// which pair of readings actually fired.
+type predictionResetSignal struct {
+	Check                   string
+	PreviousStartMS         int64
+	CurrentStartMS          int64
+	PreviousLastUsedPercent float64
+	CurrentMinUsedPercent   float64
+	PreviousLastResetAtMS   *int64
+	CurrentMinResetAtMS     *int64
+}
+
+func (signal predictionResetSignal) usedDifference() float64 {
+	return signal.PreviousLastUsedPercent - signal.CurrentMinUsedPercent
+}
+
+func (signal predictionResetSignal) resetDifferenceMS() int64 {
+	if signal.PreviousLastResetAtMS == nil || signal.CurrentMinResetAtMS == nil {
+		return 0
+	}
+	return *signal.PreviousLastResetAtMS - *signal.CurrentMinResetAtMS
+}
+
+// predictionBucketsResetSignal combines the ordered within-bucket evidence with
 // adjacent-bucket minima. The bucket flag preserves a drop that recovered before
 // the bucket's last reading; the cross-bucket comparison catches a drop between
 // the previous bucket's end and this bucket's low point.
-func predictionBucketsHaveReset(buckets []repository.QuotaObservationBucket) bool {
+func predictionBucketsResetSignal(buckets []repository.QuotaObservationBucket) *predictionResetSignal {
 	for index := 1; index < len(buckets); index++ {
 		previous, current := buckets[index-1], buckets[index]
 		if previous.LastUsedPercent > current.MinUsedPercent+quotaPredictionResetTolerancePercent {
-			return true
+			return &predictionResetSignal{
+				Check:           predictionResetCheckBucketUsed,
+				PreviousStartMS: previous.StartMS, CurrentStartMS: current.StartMS,
+				PreviousLastUsedPercent: previous.LastUsedPercent, CurrentMinUsedPercent: current.MinUsedPercent,
+				PreviousLastResetAtMS: previous.LastResetAtMS, CurrentMinResetAtMS: current.MinResetAtMS,
+			}
 		}
 		if previous.LastResetAtMS != nil && current.MinResetAtMS != nil &&
 			float64(*previous.LastResetAtMS)-float64(*current.MinResetAtMS) > float64(quotaPredictionResetToleranceMS) {
-			return true
+			return &predictionResetSignal{
+				Check:           predictionResetCheckBucketResetAt,
+				PreviousStartMS: previous.StartMS, CurrentStartMS: current.StartMS,
+				PreviousLastUsedPercent: previous.LastUsedPercent, CurrentMinUsedPercent: current.MinUsedPercent,
+				PreviousLastResetAtMS: previous.LastResetAtMS, CurrentMinResetAtMS: current.MinResetAtMS,
+			}
 		}
 	}
 	for _, bucket := range buckets {
 		if bucket.ResetDetected {
-			return true
+			previousResetAt := bucket.LastResetAtMS
+			if previousResetAt == nil {
+				previousResetAt = bucket.MaxResetAtMS
+			}
+			return &predictionResetSignal{
+				Check:           predictionResetCheckBucketFlag,
+				PreviousStartMS: bucket.StartMS, CurrentStartMS: bucket.StartMS,
+				PreviousLastUsedPercent: bucket.LastUsedPercent, CurrentMinUsedPercent: bucket.MinUsedPercent,
+				PreviousLastResetAtMS: previousResetAt, CurrentMinResetAtMS: bucket.MinResetAtMS,
+			}
 		}
 		if bucket.MinResetAtMS != nil && bucket.MaxResetAtMS != nil &&
 			float64(*bucket.MaxResetAtMS)-float64(*bucket.MinResetAtMS) > float64(quotaPredictionResetToleranceMS) {
-			return true
+			return &predictionResetSignal{
+				Check:           predictionResetCheckBucketResetRange,
+				PreviousStartMS: bucket.StartMS, CurrentStartMS: bucket.StartMS,
+				PreviousLastUsedPercent: bucket.LastUsedPercent, CurrentMinUsedPercent: bucket.MinUsedPercent,
+				PreviousLastResetAtMS: bucket.MaxResetAtMS, CurrentMinResetAtMS: bucket.MinResetAtMS,
+			}
 		}
 	}
-	return false
+	return nil
 }
 
-// predictionCurrentReadingHasReset checks the reading that replaces the current
-// bucket. That bucket is omitted from the fitted sample, so a drop from its last
-// stored reading to the current snapshot would otherwise be invisible to both
-// the ordered bucket flag and the adjacent-bucket comparison. The bucket's last
-// reading is sufficient because an earlier higher reading necessarily produced a
-// within-bucket drop and already set ResetDetected.
-func predictionCurrentReadingHasReset(buckets []repository.QuotaObservationBucket, window quota.QuotaWindow, observedAtMS int64) bool {
+// predictionCurrentReadingResetSignal checks the reading that replaces the
+// current bucket. That bucket is omitted from the fitted sample, so a drop from
+// its last stored reading to the current snapshot would otherwise be invisible
+// to both the ordered bucket flag and the adjacent-bucket comparison. The
+// bucket's last reading is sufficient because an earlier higher reading
+// necessarily produced a within-bucket drop and already set ResetDetected.
+func predictionCurrentReadingResetSignal(buckets []repository.QuotaObservationBucket, window quota.QuotaWindow, observedAtMS int64) *predictionResetSignal {
 	if window.UsedPercent == nil || len(buckets) == 0 {
-		return false
+		return nil
 	}
 	currentBucketStart := (observedAtMS / quota.PredictionBucketMS) * quota.PredictionBucketMS
 	last := buckets[len(buckets)-1]
 	if last.StartMS != currentBucketStart {
-		return false
+		return nil
 	}
 	if last.LastUsedPercent > *window.UsedPercent+quotaPredictionResetTolerancePercent {
-		return true
+		return &predictionResetSignal{
+			Check:           predictionResetCheckCurrentUsed,
+			PreviousStartMS: last.StartMS, CurrentStartMS: currentBucketStart,
+			PreviousLastUsedPercent: last.LastUsedPercent, CurrentMinUsedPercent: *window.UsedPercent,
+			PreviousLastResetAtMS: last.LastResetAtMS, CurrentMinResetAtMS: window.ResetAtMS,
+		}
 	}
 	if last.LastResetAtMS != nil && window.ResetAtMS != nil &&
 		float64(*last.LastResetAtMS)-float64(*window.ResetAtMS) > float64(quotaPredictionResetToleranceMS) {
-		return true
+		return &predictionResetSignal{
+			Check:           predictionResetCheckCurrentResetAt,
+			PreviousStartMS: last.StartMS, CurrentStartMS: currentBucketStart,
+			PreviousLastUsedPercent: last.LastUsedPercent, CurrentMinUsedPercent: *window.UsedPercent,
+			PreviousLastResetAtMS: last.LastResetAtMS, CurrentMinResetAtMS: window.ResetAtMS,
+		}
 	}
-	return false
+	return nil
+}
+
+// logPredictionReset records the exact comparison that marked a cycle as reset.
+// The tolerance is deliberately unchanged here: this log is how the next
+// production trigger is located before any threshold is adjusted. A zero reset
+// timestamp means the bucket did not carry one.
+func (s *Service) logPredictionReset(reading Quota, window quota.QuotaWindow, windowKind string, signal predictionResetSignal) {
+	logger := s.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("quota prediction mid-cycle reset detected",
+		"auth_index", reading.AuthIndex,
+		"provider", reading.Provider,
+		"window_kind", windowKind,
+		"window_id", window.ID,
+		"window_scope", window.Scope,
+		"window_model", window.Model,
+		"check", signal.Check,
+		"previous_bucket_start_ms", signal.PreviousStartMS,
+		"current_bucket_start_ms", signal.CurrentStartMS,
+		"previous_last_used_percent", signal.PreviousLastUsedPercent,
+		"current_min_used_percent", signal.CurrentMinUsedPercent,
+		"used_difference", signal.usedDifference(),
+		"previous_last_reset_at_ms", pointerInt64Value(signal.PreviousLastResetAtMS),
+		"current_min_reset_at_ms", pointerInt64Value(signal.CurrentMinResetAtMS),
+		"reset_difference_ms", signal.resetDifferenceMS(),
+	)
+}
+
+func pointerInt64Value(value *int64) int64 {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window quota.QuotaWindow, reportedKind, storedKind string, nowMS int64) QuotaPredictionItem {
@@ -460,21 +563,42 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 		predictionInput.Status = "healthy"
 	}
 	fromMS, toMS, boundaryReason := quota.WindowCycleRange(window, observedAtMS, nowMS)
-	if boundaryReason == "" {
-		buckets, hasMore, err := s.Repo.ListQuotaObservationBuckets(ctx, repository.QuotaObservationBucketFilter{
-			AuthIndex: reading.AuthIndex, Provider: reading.Provider, WindowKind: storedKind,
-			Scope: window.Scope, Model: window.Model, FromMS: fromMS, ToMS: toMS,
-		}, quotaPredictionBucketLimit)
-		if err == nil && !hasMore {
-			predictionInput.Observations = predictionObservationsFromBuckets(buckets, observedAtMS)
-			if predictionBucketsHaveReset(buckets) || predictionCurrentReadingHasReset(buckets, window, observedAtMS) {
-				predictionInput.Window.HasMidCycleReset = true
+	// A rolling window always carries a trailing usage interval. A window whose
+	// boundary is unknown gets one too when its period is known and its used
+	// share is zero: that read serves the zero-traffic fact and nothing else, so
+	// the boundary stays unknown.
+	needsTrailingUsage := boundaryReason == quota.CapacityReasonRollingWindow ||
+		boundaryReason == quota.CapacityReasonBoundaryUnknown && window.PeriodHours != nil &&
+			window.UsedPercent != nil && *window.UsedPercent == 0
+	if boundaryReason == "" || needsTrailingUsage {
+		if boundaryReason == "" {
+			buckets, hasMore, err := s.Repo.ListQuotaObservationBuckets(ctx, repository.QuotaObservationBucketFilter{
+				AuthIndex: reading.AuthIndex, Provider: reading.Provider, WindowKind: storedKind,
+				Scope: window.Scope, Model: window.Model, FromMS: fromMS, ToMS: toMS,
+			}, quotaPredictionBucketLimit)
+			if err == nil && !hasMore {
+				predictionInput.Observations = predictionObservationsFromBuckets(buckets, observedAtMS)
+				if signal := predictionBucketsResetSignal(buckets); signal != nil {
+					s.logPredictionReset(reading, window, storedKind, *signal)
+					predictionInput.Window.HasMidCycleReset = true
+				} else if signal := predictionCurrentReadingResetSignal(buckets, window, observedAtMS); signal != nil {
+					s.logPredictionReset(reading, window, storedKind, *signal)
+					predictionInput.Window.HasMidCycleReset = true
+				}
+			} else {
+				predictionInput.Window.HasIncompleteHistory = true
 			}
-		} else {
-			predictionInput.Window.HasIncompleteHistory = true
 		}
-		usage, reason := s.predictionUsage(ctx, reading.AuthIndex, window, fromMS, toMS)
-		predictionInput.Usage, predictionInput.UsageReason = usage, reason
+		// A rolling window has no fixed cycle, but the period before the reading
+		// is still the interval its counter describes.
+		usageFromMS, usageToMS := fromMS, toMS
+		if boundaryReason != "" {
+			usageFromMS, usageToMS, _ = quota.WindowTrailingUsageRange(window, observedAtMS)
+		}
+		if usageFromMS < usageToMS {
+			usage, reason := s.predictionUsage(ctx, reading.AuthIndex, window, usageFromMS, usageToMS)
+			predictionInput.Usage, predictionInput.UsageReason = usage, reason
+		}
 	}
 	predicted := quota.PredictWindow(predictionInput)
 	return QuotaPredictionItem{

@@ -627,7 +627,7 @@ func TestPredictionCurrentReadingHasResetConditions(t *testing.T) {
 		if test.name == "no current bucket" {
 			observedAtMS = 600_000
 		}
-		if got := predictionCurrentReadingHasReset(buckets, test.window, observedAtMS); got != test.want {
+		if got := predictionCurrentReadingResetSignal(buckets, test.window, observedAtMS) != nil; got != test.want {
 			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
 		}
 	}
@@ -657,7 +657,7 @@ func TestPredictionBucketsHaveResetConditions(t *testing.T) {
 			bucket.MinResetAtMS = reset(9_500)
 		}, false},
 	} {
-		if got := predictionBucketsHaveReset(buckets(test.mutate)); got != test.want {
+		if got := predictionBucketsResetSignal(buckets(test.mutate)) != nil; got != test.want {
 			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
 		}
 	}
