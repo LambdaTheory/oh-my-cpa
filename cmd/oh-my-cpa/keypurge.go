@@ -75,7 +75,7 @@ func runKeyPurge(ctx context.Context, args []string, stdout, stderr io.Writer) e
 		Now:     time.Now(),
 		Warn:    stderr,
 	})
-	reportPurge(stdout, stderr, result, *dryRun)
+	reportPurge(stdout, stderr, result, *dryRun, err == nil)
 	if err != nil {
 		return err
 	}
@@ -93,7 +93,11 @@ func runKeyPurge(ctx context.Context, args []string, stdout, stderr io.Writer) e
 // reportPurge prints the three lists a person needs: what went, what stayed and why,
 // and what is still installed. On a dry run the wording is future tense throughout, so
 // the output cannot be mistaken for a result.
-func reportPurge(stdout, stderr io.Writer, result keyclient.PurgeResult, dryRun bool) {
+//
+// "already clean" is printed only when the run succeeded with nothing to do. A run that
+// failed has a zero result, and calling that clean would contradict the error printed
+// right after it.
+func reportPurge(stdout, stderr io.Writer, result keyclient.PurgeResult, dryRun, succeeded bool) {
 	removedVerb, keptVerb := "removed", "kept"
 	if dryRun {
 		removedVerb = "would remove"
@@ -107,7 +111,7 @@ func reportPurge(stdout, stderr io.Writer, result keyclient.PurgeResult, dryRun 
 	if result.BackupScanUnavailable {
 		fmt.Fprintln(stderr, "warning: the private key is already gone, so a backup can only be recognised from what state recorded; the rest are kept")
 	}
-	if len(result.Removed) == 0 && len(result.Pending) == 0 {
+	if succeeded && len(result.Removed) == 0 && len(result.Pending) == 0 {
 		fmt.Fprintln(stdout, "nothing to remove; the repository was already clean")
 	}
 	for _, pending := range result.Pending {

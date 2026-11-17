@@ -188,6 +188,24 @@ func TestKeyPurgeRefusesABorrowedValue(t *testing.T) {
 	}
 }
 
+// TestKeyPurgeFailureDoesNotClaimItWasClean keeps the report honest: a run that stopped
+// with an error has an empty result, and printing "already clean" beside that error would
+// contradict it.
+func TestKeyPurgeFailureDoesNotClaimItWasClean(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	prepareKeyedRepo(t, home, "org/repo", commandTestGatewayKey)
+	code, stdout, stderr := runKeyCommand(t, "purge", "--home", home, "--repo", "org/repo", "--runtime", "codex")
+	if code != keyclient.EXIT_NOT_FOUND {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, keyclient.EXIT_NOT_FOUND, stderr)
+	}
+	if strings.Contains(stdout, "already clean") {
+		t.Fatalf("a failed run claimed the repository was clean:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, keyclient.CODE_NOT_INSTALLED) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
 func TestKeyPurgeRepeatIsNotAFailure(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "home")
 	prepareKeyedRepo(t, home, "org/repo", commandTestGatewayKey)
