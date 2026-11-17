@@ -5,7 +5,7 @@ status: draft
 updated: 2026-11-17
 branch: 11-17-t5-integration
 commit: 6db0300b996006572cae458b7b430980ddfd35e7
-cases: docs/delivery/2026-11-17-omc-repo-key-client/cases.md（在 Newoahil/11-17-t5-s2-claude 的 92f6d075，未合入集成分支）
+cases: docs/delivery/2026-11-17-omc-repo-key-client/ 下的 cases.md（在 Newoahil/11-17-t5-s2-claude 的 92f6d075，未合入集成分支）
 summary: "S14 集成验收 r1：44 条用例 38 通过 / 5 部分 / 1 不可测；要修 2 条（R-05 文档 P2、--json 未知 flag 边界 P3）；build/vet/两包单测/e2e 全绿"
 ---
 
@@ -25,7 +25,7 @@ summary: "S14 集成验收 r1：44 条用例 38 通过 / 5 部分 / 1 不可测�
 |---|---|
 | 被测分支 / 提交 | `11-17-t5-integration` / `6db0300b996006572cae458b7b430980ddfd35e7` |
 | 验收工作区 | `E:/works/Newoahil__oh-my-cpa/11-17-t5-s14-claude`（从集成分支切出，未改产品代码） |
-| 验收用例 | `docs/delivery/2026-11-17-omc-repo-key-client/cases.md`，44 条，AC-1～AC-9（取自 `92f6d075`；集成分支上没有该文件） |
+| 验收用例 | `docs/delivery/2026-11-17-omc-repo-key-client/` 下的 cases.md，44 条，AC-1～AC-9（取自 `92f6d075`；集成分支上没有该文件） |
 | 方案 | `docs/delivery/2026-11-17-omc-repo-key-client/impl-plan.md`（含 §12 PM 已定八条） |
 | 前两轮审查 | `acceptance/review-r1.md`（代码，P0×1/P1×1/P2×10）、`acceptance/review-docs.md`（文档，P0×1/P1×3/P2×7） |
 | 门禁基线 | PM 2026-11-17 亲手跑过 build/vet/两包单测；本报告是独立复跑，不引用其结论 |
@@ -59,19 +59,19 @@ e2e 证据：`key-cli-loop.json` 14 个步骤、**115 个断言全部为 true**�
 |---|---|---|
 | C-01 命令面齐全、帮助可读、未知子命令退出码 | 通过 | `case-logs/case-01-surface-gen.log`：六个 `--help` 退出 0；`key nope` 退出 2、stderr 有 `unknown command` 与用法、stdout 为空 |
 | C-02 七步与五条命令的对应关系可走通 | 通过 | 同上：空 home `status` 退出 0 并指 `key gen`；伪造信封后 `exec` 退出 1、错误点名 envelope，无 panic |
-| C-03 既有子命令不回归 | 通过 | `mcp -h` 用量在 stderr、stdout 为空；`updater -h` 退出 0；`repo_key_query` 仍注册（`internal/operations/repo_keys.go:1088`），`repo_key_apply/status/ciphertext` 在 e2e 实跑；两包单测全过 |
+| C-03 既有子命令不回归 | 通过 | `mcp -h` 用量在 stderr、stdout 为空；`updater -h` 退出 0；`repo_key_query` 仍注册（`internal/operations/repo_keys.go` 的 `registerRepoKeys`），`repo_key_apply/status/ciphertext` 在 e2e 实跑；两包单测全过 |
 
 ### AC-2 `key gen`
 
 | 用例 | 结果 | 证据 |
 |---|---|---|
 | C-04 首次生成：私钥落盘、stdout 只有公钥 | 通过 | `case-01`：stdout 一行 `x25519:`、base64 解码 32 字节；私钥 32 字节；stderr 只有 `generated a key …` |
-| C-05 私钥 0600（Unix 必验） | 通过（Unix）；Windows 为缺口 | `stat -c %a` = `600`；`su nobody … cat` 权限拒绝；源码 `home.go:33-34` 的 `FILE_MODE=0o600`、`home_unix.go:39` 的 `Chmod`。Windows ACL 运行时断言见 §6 |
+| C-05 私钥 0600（Unix 必验） | 通过（Unix）；Windows 为缺口 | `stat -c %a` = `600`；`su nobody … cat` 权限拒绝；源码 `internal/keyclient/home.go` 的 `FILE_MODE=0o600`、`internal/keyclient/home_unix.go` 的 `Chmod`。Windows ACL 运行时断言见 §6 |
 | C-06 仓库标识归一化与文件名安全 | 通过 | `case-01`：三种写法复用同一把 key、同一个文件；`../../etc/passwd`、`a/../../b`、空串、TAB、300 字符均退出 2；`$OMC_HOME` 外无新文件（P2-7 已修） |
 | C-07 同一仓库重复 `key gen` | 通过 | `case-01`：第二次退出 0、公钥与私钥哈希不变、stderr 说 `reused`（方案 §5.3 的复用语义） |
 | C-08 目录不可写 / 只读文件 / `OMC_HOME` 是普通文件 | 通过 | `case-logs/case-01b-c08.log`：只读 keys 目录退出 1 且报 permission denied；home 是普通文件退出 1 且报 `not a directory`；可写 home 恢复生成；无 0 字节残留。只读私钥同仓 `gen` 按方案复用（退出 0）——用例原预期与方案 §5.3 冲突，按方案判 |
 | C-09 只打印公钥：stdout / stderr / 落盘扫描 | 通过 | `case-01`：私钥 hex/base64 不在 gen 两路输出；除私钥文件自身外，工作目录内无任何文件含私钥 |
-| C-10 单测：私钥创建 0600 断言 | 通过 | `gate-unit-targeted.log`：`TestHomePermissionsAreOwnerOnly`、`TestPrivateKeyKeepsItsModeUnderAPermissiveUmask`、`TestAcceptedEnvelopeFileIsOwnerOnlyAndAtomic` 全 PASS；源码 `keystore.go:127-166` 创建后 `Chmod`，`home_unix_test.go:38,51` 断言 `Perm()` |
+| C-10 单测：私钥创建 0600 断言 | 通过 | `gate-unit-targeted.log`：`TestHomePermissionsAreOwnerOnly`、`TestPrivateKeyKeepsItsModeUnderAPermissiveUmask`、`TestAcceptedEnvelopeFileIsOwnerOnlyAndAtomic` 全 PASS；源码 `internal/keyclient/keystore.go` 的 `WritePrivateKey` 创建后 `Chmod`，`internal/keyclient/home_unix_test.go` 的 `assertMode` 断言 `Perm()` |
 
 ### AC-3 `key status`
 
@@ -141,7 +141,7 @@ e2e 证据：`key-cli-loop.json` 14 个步骤、**115 个断言全部为 true**�
 | C-40 明文不外泄逐条检查（日志/错误/verbose/shell history/git） | 通过 | `key` 无 `--verbose`（方案未提供）；错误全文见 C-21；`case-02` 扫描零命中；e2e 的 `no-plaintext` 扫描 CLI 流/HTTP body/服务日志；`git status`/`git log` 无夹具或证据产物；报告与脚本里没有把明文写进命令参数的示例 |
 | C-41 文档从零照做能走通 | 通过 | `case-logs/case-05-doc-walk.log`：按 `docs/repo-key-client.md` 走 status→gen→关联 application→accept→exec（三家变量形状）→install→dry-run→purge→exec 失败，17 项断言全过；命令、`--json` 字段、accept 输出行与页面一致 |
 | C-42 禁止事项齐备且具体 | 通过 | `docs/repo-key-client.md` §4 八行表格覆盖：不打印、不进对话、不进 git、不提交运行时配置、不把 `$OMC_HOME` 放仓库、不用 shell 重定向写信封、不转发密文、purge 不是吊销；§7 另写同用户 `/proc/<pid>/environ`、Windows 内存转储、install 落盘、备份可能含其他凭据等已知风险 |
-| C-43 能力索引与架构/安装文档同步 | 通过 | `docs/agent-capabilities.md`「Repository-owned API keys」新增 `oh-my-cpa key` 六命令与指向 `docs/repo-key-client.md` 的指针；`docs/architecture.md:156,447`、`docs/install.md:487,521`、`docs/install-for-agents.md:216,242`、`docs/operations.md:416`、`docs/testing.md:37-87` 已同步；`node --test scripts/check-docs.test.mjs` 13 pass；`check-docs` 只剩既有 T18 文档红项 |
+| C-43 能力索引与架构/安装文档同步 | 通过 | `docs/agent-capabilities.md`「Repository-owned API keys」新增 `oh-my-cpa key` 六命令与指向 `docs/repo-key-client.md` 的指针；`docs/architecture.md`（模块表与运行时说明）、`docs/install.md`、`docs/install-for-agents.md`、`docs/operations.md`、`docs/testing.md` 已同步；`node --test scripts/check-docs.test.mjs` 13 pass；`check-docs` 只剩既有 T18 文档红项 |
 | C-44 文档命令面与 `--help` 逐字一致 | 通过 | 文档出现的自有 flag（`--repo/--runtime/--remote/--json/--base-url/--replace/--config/--home/--dry-run/--application-id/--help`）在六份 `--help` 里全部存在；`--version` 属 opencode 自身、`--model` 文档明确写“不提供”；原文见 `case-logs/help/` |
 
 ## 4. AC-1～AC-9 汇总
@@ -171,7 +171,7 @@ e2e 证据：`key-cli-loop.json` 14 个步骤、**115 个断言全部为 true**�
   3. `oh-my-cpa key install --runtime claude --repo org/repo --home <home> --base-url http://10.9.9.9:8317`
      实际 stderr 另有一条 `warning: … is plain http to a host other than this machine, so the key crosses the network unencrypted`，同样没有 code。
 - **预期**：文档与实现一致。二选一：实现里构造并输出 `insecure_base_url`（并说明 gen 是否提示），或把文档改成「`exec`/`install` 对非 loopback `http://` 打一条普通警告；`gen` 只记录地址、不警告；警告不带稳定 code」。
-- **实际**：`CODE_INSECURE_BASE_URL` 在 `internal/keyclient/errors.go:31` 定义后从未被构造；两处警告分别在 `internal/keyclient/exec.go:146`、`cmd/oh-my-cpa/keyinstall.go:123`，都没有 code；`gen` 完全不警告。
+- **实际**：`CODE_INSECURE_BASE_URL` 在 `internal/keyclient/errors.go` 定义后从未被构造；两处警告分别在 `internal/keyclient/exec.go`（exec 的 plain-http 警告）与 `cmd/oh-my-cpa/keyinstall.go`（install 的 plain-http 警告），都没有 code；`gen` 完全不警告。
 - **为什么是范围内**：R-05 是 `review-docs.md` 的 P2 项，PM 在 S10 派发说明第 6 条明确要求「改实现让文案统一，或者改文档，选改动小的那个并在进度文件里说明理由」；S10b 的提交 `7dbef501` 没有处理它。
 - **证据**：`artifacts/case-logs/case-07b-reverify.log`（三条命令的实际 stderr）。
 - **严重程度**：P2（不阻断任何流程，但文档对稳定 code 的承诺不成立，会误导按 code 分支的脚本）。
@@ -185,7 +185,7 @@ e2e 证据：`key-cli-loop.json` 14 个步骤、**115 个断言全部为 true**�
   {"code":"usage","message":"flag provided but not defined: -bogus"}
   ```
 - **预期**：运行手册第 513-521 行承诺「With `--json`, a failure writes one JSON object to stderr … the object is one line」。
-- **原因**：`newKeyFlagSet` 把 flag 包的输出接到 stderr（`cmd/oh-my-cpa/key.go:278`），解析失败时 flag 先打印一行；随后 `writeKeyFailure` 再写 JSON（`key.go:223`）。
+- **原因**：`newKeyFlagSet` 把 flag 包的输出接到 stderr（`cmd/oh-my-cpa/key.go`），解析失败时 flag 先打印一行；随后 `writeKeyFailure`（同文件）再写 JSON。
 - **建议**：请求了 `--json` 时把 `FlagSet` 的输出改为丢弃（或只进 JSON），由 `writeKeyFailure` 统一输出；若决定保留，则在手册注明「flag 解析错误会先有一行文本」。六个子命令的**运行期**失败已经严格一行 JSON（`case-04`），只有用法错误受影响。
 - **证据**：`artifacts/case-logs/json-errors/usage.err`。
 - **严重程度**：P3（只影响未知 flag 这类用法错误的机器解析）。
@@ -205,11 +205,11 @@ e2e 证据：`key-cli-loop.json` 14 个步骤、**115 个断言全部为 true**�
 ## 7. 范围外观察（只记录，不要求本次改）
 
 1. **C-15：`key status` 不标记坏文件**。0 字节私钥、非法信封在状态页仍显示为“存在”，只有 `key exec` 会报 `key_unreadable`/`envelope_invalid`。方案 §2.4 只要求按文件名/存在性报告，AC-3 也未要求完整性校验；若希望状态页能标坏文件，应作为后续增强。
-2. **C-18：信号终止的子进程退出码是 1，不是 143**。Go 的 `ExitCode()` 对信号返回 -1，`exec.go:168` 回退到 1；方案 §3.4 明确「被 Ctrl-C 中断时以控制台/进程组行为为准，工具不额外转换」，故按方案判过。
+2. **C-18：信号终止的子进程退出码是 1，不是 143**。Go 的 `ExitCode()` 对信号返回 -1，`internal/keyclient/exec.go` 的退出码回退取 1；方案 §3.4 明确「被 Ctrl-C 中断时以控制台/进程组行为为准，工具不额外转换」，故按方案判过。
 3. **C-23：读到 644 的信封不警告**。方案只保证写入 0600；读取时校验权限不在方案与 AC 内。
 4. **C-29：一行 junk TOML 被接受**。`this is [ not toml` 不是表头，行式编辑器把它当普通顶层文本，仍追加了受管块；未闭合表头、损坏 JSON 都会被拒绝且原文件不变。方案的行式编辑器只承诺拒绝“无法确定顶层边界”的情况。
 5. **`key status --json` 的字段省略**。`decided_at`、`repo_state`、`repo_state_updated_at`、`remote_error` 在从未取到值时按 `omitempty` 省略；方案 §5.7 的示例把它们画成常驻字段，脚本作者应按“未知时省略”处理。另外 `base_url_source` 的 `flag` 对 `status` 不可达（status 没有 `--base-url`），手册照方案列了四值。
-6. **P2-3 / P2-8 未处理**：`ValueFingerprint` 与 `KeyValueFingerprint` 仍是两份相同实现（`accept.go:230`、`install.go:54`）；Windows ACL 测试只断言“没有宽 ACE”，未断言当前用户 SID 有 full control（`home_windows_test.go:80-88`）。两项都不在 PM 的 S10 修复选择里，且 P2-8 的运行时证据本来就是缺口。
+6. **P2-3 / P2-8 未处理**：`ValueFingerprint` 与 `KeyValueFingerprint` 仍是两份相同实现（`internal/keyclient/accept.go` 与 `internal/keyclient/install.go`）；Windows ACL 测试只断言“没有宽 ACE”，未断言当前用户 SID 有 full control（`internal/keyclient/home_windows_test.go`）。两项都不在 PM 的 S10 修复选择里，且 P2-8 的运行时证据本来就是缺口。
 7. **`check-docs` 的既有红项**：9 个 missing-path + 25 个 line-reference 全部在 `docs/delivery/2026-11-12-omc-three-credential-quota/impl-plan.md`（T18），本需求文件逐文件 0 红项；与 review-docs 的结论一致。
 8. **`cases.md` 不在集成分支**：只在 `Newoahil/11-17-t5-s2-claude` 的 `92f6d075`。本报告按该提交执行；建议 PM 在 S12 一并合入或补文件，否则交付缺执行清单。
 
@@ -226,7 +226,7 @@ e2e 证据：`key-cli-loop.json` 14 个步骤、**115 个断言全部为 true**�
 | R-07 install 备份说明缺条件 | **已修** | 手册第 344-346 行写明“目标存在时才有备份” |
 | R-08 换仓需要 `--replace` | **已修** | 手册第 349-352 行写明“with `--replace`（或先 purge 另一个仓库）” |
 | R-09 `status --json` 字段不完整 | **已修** | 手册补齐 `orphan_files`、`installed`、`decided_at`、`remote_error`、`config_path/backup_path`；实际 JSON 顶层与文档一致（省略规则见 §7.5） |
-| R-10 `docs/testing.md` TODO | **已修** | 全仓已无该 TODO；`docs/testing.md:76-87` 是真实文件与用例映射 |
+| R-10 `docs/testing.md` TODO | **已修** | 全仓已无该 TODO；`docs/testing.md` 的「Repository key client regressions」一节是真实文件与用例映射 |
 | R-11 Windows `--home` 理由 | **已修（文档）** | 手册第 61-64 与错误码表写清“已有目录只检查不重新 ACL；继承父 ACL 会被拒绝 + icacls 指引” |
 | P2-1 `status --help` 措辞 | **已修** | `KEY_STATUS_USAGE` 现称 `--remote` 与 `--application-id` 都会写 state |
 | P2-2 手册 `--base-url` 记忆说法 | **已修** | 同 R-03 |
