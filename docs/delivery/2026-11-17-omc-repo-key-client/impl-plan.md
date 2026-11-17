@@ -1279,9 +1279,9 @@ S1 75
 
 ## 15. 交付前检查清单
 
-- [ ] `node scripts/check-docs.mjs` 通过（本文件不引用不存在的 backtick 路径，不写绝对行号）。
-- [ ] `node --test scripts/check-docs.test.mjs` 通过。
-- [ ] `pnpm test:fast` 选中的 docs 检查通过（若本机 node_modules 已装；没有就跑直接的 node 检查）。
+- [x] `node scripts/check-docs.mjs --file docs/delivery/2026-11-17-omc-repo-key-client/impl-plan.md` 通过（missing-path=0、retired-reference=0、line-reference=0）。
+- [x] `node --test scripts/check-docs.test.mjs` 通过（13 pass / 0 fail）。
+- [x] `pnpm test:fast --base ba9e2ee7` 已跑：本文件通过；全量 docs 的失败项全部在基线已有的 T18 交付文档（9 missing-path + 25 line-reference），不是本文件引入，也没有改那些文件。
 - [ ] 本文件里的命令面与 `--help` 草案一致；S2a/S2b/S3/S4 的文件归属无重叠。
 - [ ] AC-1～9 每条都能在 §10 找到切片、测试/证据和缺口。
 - [ ] §12 的待定项已由 PM 给出选择，或明确保留为「按推荐执行」。
