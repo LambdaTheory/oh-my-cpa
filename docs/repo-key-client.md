@@ -55,11 +55,20 @@ envelopes, the configuration backups, the local state, and the remembered gatewa
 | `OMC_HOME` | used as given |
 | neither | `~/.omc` (`%USERPROFILE%\.omc` on Windows) |
 
-The directory is created with owner-only permissions: `0700` on Unix, a DACL that names
-only the current user on Windows, with inheritance removed. A directory that cannot be
+The directory is created with owner-only permissions: `0700` on Unix, and on Windows a
+DACL that names only the current user with inheritance removed. A directory that cannot be
 locked down stops the command with `home_insecure` rather than writing a private key other
-accounts can read. On Windows that includes FAT32, exFAT and some network shares, which
-cannot carry an ACL; put `OMC_HOME` on an NTFS path under the user profile.
+accounts can read. On Windows, `key` restricts a directory it creates; it checks one that
+already exists but does not re-ACL it. An existing directory that still inherits its
+parent's permissions is refused even when the inherited entries are not broad, so let `key`
+create `OMC_HOME`, or remove inheritance and grant only your own account first:
+
+```powershell
+icacls "$env:USERPROFILE\.omc" /inheritance:r /grant:r "${env:USERNAME}:(OI)(CI)F"
+```
+
+FAT32, exFAT and some network shares cannot carry an ACL at all; put `OMC_HOME` on an NTFS
+path under the user profile.
 
 ```text
 $OMC_HOME/
@@ -152,13 +161,31 @@ gateway address (and which of the three sources supplied it), and one block per 
 with the private key, the envelope, the application, the last known approval state and the
 runtimes that have it installed.
 
-`--json` is the stable shape for a script: `home`, `base_url`, `base_url_source`
-(`flag` / `env` / `config` / `absent`), `repos[]`, and `runtimes{}`. Read
-`approval_status` (`not_applied`, `unknown`, `pending`, `approved`, `rejected`, `stopped`)
-and `status_source` (`gen`, `local`, `remote`, `accept`) together: the second says where the
-first came from. `repo_state` (`active`, `stopped`, `none`, `unknown`) is the repository's
-key state, which is a different question from this application's outcome — an application
-can be rejected while the repository still has someone else's active key.
+`--json` is the stable shape for a script. The top level carries `home`, `base_url`,
+`base_url_source` (`flag` / `env` / `config` / `absent`), `orphan_files`
+(`{"keys": n, "envelopes": n}`), `repos[]`, and `runtimes{}`.
+
+Each `repos[]` entry carries:
+
+| Field | Meaning |
+| --- | --- |
+| `repo`, `repo_display` | the normalized identity and the spelling that was submitted |
+| `public_key`, `public_key_fingerprint` | the key pair's public half, omitted when there is no key |
+| `private_key_file`, `private_key_present` | the path under `$OMC_HOME` and whether it exists |
+| `envelope_file`, `envelope_present`, `envelope_received_at` | the stored envelope |
+| `application_id`, `application_kind` | the recorded application |
+| `approval_status`, `status_source`, `status_updated_at`, `decided_at` | the application's last known state, where it came from, and when |
+| `key_mask` | the display mask CPA assigned |
+| `repo_state`, `repo_state_updated_at` | the repository's own key state, which is a different question |
+| `remote_error` | `remote_error:<code>` when the last `--remote` read for this repository failed |
+| `installed` | `{"claude": true, ...}`, one entry per runtime that holds this key |
+
+Each value in `runtimes{}` is `{"repo", "installed_at", "config_path", "backup_path"}`.
+Read `approval_status` (`not_applied`, `unknown`, `pending`, `approved`, `rejected`,
+`stopped`) and `status_source` (`gen`, `local`, `remote`, `accept`) together: the second
+says where the first came from. `repo_state` (`active`, `stopped`, `none`, `unknown`) is the
+repository's key state, which is a different question from this application's outcome — an
+application can be rejected while the repository still has someone else's active key.
 
 No base URL is not an error here; `base_url_source: absent` is a normal answer for a
 machine that has a key and no gateway yet.
@@ -251,11 +278,18 @@ or as an object, or a bare envelope
 Expected stdout, one line:
 
 ```text
-accepted <repo-display>: key <key-mask>
+accepted <repo-display>: key <key-mask> at <envelope-file>
 ```
 
-Add `--json` for a machine-readable line. Nothing from the input is echoed, and input above
-1 MiB is refused.
+`<repo-display>` is the spelling submitted, followed by the normalized identity in
+parentheses when the two differ (`Org/Repo (org/repo)`); `<envelope-file>` is the path under
+`$OMC_HOME/envelopes/`. Accepting again for the same repository prints
+`replaced the envelope for <repo-display>: ...` instead of `accepted ...`.
+
+`--json` prints a pretty-printed object instead of that line, with `repo`, `repo_display`,
+`application_id`, `application_kind`, `key_mask`, `approval_status`, `status_source`,
+`envelope_file`, `envelope_received_at`, `envelope_algorithm`, and `replaced`. Nothing from
+the input is echoed, and input above 1 MiB is refused.
 
 Before storing anything, `accept` checks the algorithm and the envelope version, then opens
 the envelope once in memory with the local private key. Only if that succeeds does it write
@@ -307,12 +341,15 @@ the runtime cannot be started through `key exec`:
 oh-my-cpa key install --runtime codex --repo org/repo
 ```
 
-`install` is the only command that leaves plaintext on disk, and it says so on stderr. It
-copies the target file to `$OMC_HOME/backups/` first, refuses to write if the copy fails,
-re-reads the file after writing to confirm the change and the preserved keys, and restores
-the backup if that check fails. A slot already holding a value this tool did not write
-needs `--replace`. One slot per runtime per machine: installing another repository replaces
-the slot and the previous values survive only in the backup.
+`install` is the only command that leaves plaintext on disk, and it says so on stderr. When
+the target file already exists, it copies it to `$OMC_HOME/backups/` first and refuses to
+write if the copy fails; a first install has no previous file to back up. After writing it
+re-reads the file to confirm the change and the preserved keys, and restores the backup if
+that check fails. A slot already holding a value this tool did not write needs `--replace`.
+One slot per runtime per machine: installing another repository replaces the slot only with
+`--replace` (or after `key purge --repo <the other repository>`); without it the install
+stops with `config_owned_by_another_repo` (exit 5), and the previous values survive only in
+the backup.
 
 Then remove what this machine holds:
 
@@ -473,15 +510,25 @@ Exit codes:
 
 `key exec` returns the child's exit code once the child has started.
 
-Error codes are stable and are written at the front of the message, and as `code` in
-`--json` output. The common ones:
+Error codes are stable and are written at the front of a text message. With `--json`, a
+failure writes one JSON object to stderr instead, and leaves stdout as it is:
+
+```json
+{"code":"<code>","message":"<sentence>"}
+```
+
+The exit code is unchanged, and the object is one line, so a caller can read stderr a line
+at a time. `unexpected` is the code for a failure that carried no stable code of its own.
+`status` and `accept` use `--json` for their success document as well; the other subcommands
+accept it to select this failure envelope and keep their normal output on success. The
+common codes:
 
 | Code | What to do |
 | --- | --- |
 | `base_url_required` | No `--base-url`, no `OMCPA_CPA_BASE_URL`, no `config.json` entry. Set one; `key gen --base-url` remembers it. |
 | `base_url_invalid` | The URL is not http/https, has userinfo, a query or a fragment, or names a concrete endpoint. Give the gateway root. |
 | `home_unavailable` | `$OMC_HOME` cannot be created or written. Fix the path or its ownership. |
-| `home_insecure` | The directory cannot be restricted to this user, or it already lets group/other write. Move it to an NTFS user directory or fix permissions. Nothing was written. |
+| `home_insecure` | The directory cannot be restricted to this user, or it already lets group/other write. On Windows an existing directory that still inherits its parent's ACL is refused even when the inherited entries are not broad: `key` restricts a directory it creates but does not re-ACL one it did not. Let `key` create `OMC_HOME` under the user profile, or remove inheritance and grant only your account (`icacls`). Nothing was written. |
 | `repo_required` | No `--repo`, and the current directory does not identify a repository. Run from the repository root or pass `--repo org/repo`. |
 | `repo_invalid` | The repository identity is not usable. `org/repo` is the expected shape; a bare directory name works for a checkout with no remote. An absolute path or one with `..` segments is refused: run the command from the directory, or pass its name. |
 | `key_not_found` | This repository has no private key here. `key gen --repo <repo>`. |

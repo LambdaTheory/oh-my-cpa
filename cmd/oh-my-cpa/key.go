@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/keyclient"
@@ -36,6 +38,11 @@ const KEY_USAGE_EPILOGUE = "\n" +
 	"  OMCPA_CPA_MANAGEMENT_KEY  the management key, for `status --remote`\n" +
 	"  OMCPA_AGENT_NAME          the agent name reported by `status --remote`\n" +
 	"  OMCPA_DEVICE_NAME         the device name reported by `status --remote`\n" +
+	"\n" +
+	"Output:\n" +
+	"  --json                    on a failure, write {\"code\":...,\"message\":...} to\n" +
+	"                            stderr as one line; `status` and `accept` also use it\n" +
+	"                            for their success output\n" +
 	"\n" +
 	"Exit codes:\n" +
 	"  0  success\n" +
@@ -132,11 +139,12 @@ func runKey(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stderr, KeyUsage())
 		return keyclient.EXIT_USAGE
 	}
+	jsonFailures := wantsKeyJSON(args[1:])
 	if err := command.Run(ctx, args[1:], stdout, stderr); err != nil {
 		if code := exitCodeCarrierOf(err); code >= 0 {
 			return code
 		}
-		fmt.Fprintf(stderr, "%s\n", keyclientMessage(err))
+		writeKeyFailure(stderr, err, jsonFailures)
 		return keyclient.ExitCode(err)
 	}
 	return keyclient.EXIT_OK
@@ -170,6 +178,64 @@ func keyclientMessage(err error) string {
 	return err.Error()
 }
 
+// UNEXPECTED_ERROR_CODE is the code a --json failure carries when the error has no stable
+// code of its own. It is not produced by keyclient; it keeps both envelope fields present
+// so a script never has to branch on a missing key.
+const UNEXPECTED_ERROR_CODE = "unexpected"
+
+// keyFailureJSON is the machine form of a failed key command: one object, one line, on
+// stderr, so stdout stays reserved for the command's own output.
+type keyFailureJSON struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// wantsKeyJSON reports whether the arguments after the subcommand ask for machine-readable
+// failures. It reads the tokens flag.Parse will see and stops at "--", because everything
+// after the terminator belongs to an `exec` child and is not this process's output choice.
+func wantsKeyJSON(args []string) bool {
+	asJSON := false
+	for _, argument := range args {
+		if argument == "--" {
+			break
+		}
+		if !strings.HasPrefix(argument, "-") {
+			continue
+		}
+		name, value, hasValue := strings.Cut(strings.TrimLeft(argument, "-"), "=")
+		if name != "json" {
+			continue
+		}
+		if !hasValue {
+			asJSON = true
+			continue
+		}
+		parsed, err := strconv.ParseBool(value)
+		// An unparsable value is still a request for JSON: flag will reject it, and the
+		// rejection is the failure the caller wanted to read as JSON.
+		asJSON = err != nil || parsed
+	}
+	return asJSON
+}
+
+// writeKeyFailure prints one failure. The text form names the stable code first; the JSON
+// form keeps the same fields, without the code prefix, for a caller that asked for it.
+func writeKeyFailure(writer io.Writer, err error, asJSON bool) {
+	if !asJSON {
+		fmt.Fprintf(writer, "%s\n", keyclientMessage(err))
+		return
+	}
+	code := keyclient.CodeOf(err)
+	if code == "" {
+		code = UNEXPECTED_ERROR_CODE
+	}
+	encoder := json.NewEncoder(writer)
+	// A message naming a repository reads better as <org/repo> than as \u003corg/repo\u003e;
+	// the bytes are still strict JSON.
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(keyFailureJSON{Code: code, Message: keyclient.MessageOf(err)})
+}
+
 // parseKeyFlags parses a command's own flags, keeping every argument after "--" for the
 // command to run. flag.Parse stops at the terminator and drops it; `key exec` needs both
 // the delimiter and the child's arguments, which may themselves start with "-".
@@ -189,6 +255,12 @@ func parseKeyFlags(flags *flag.FlagSet, args []string) (rest []string, help bool
 		if argument == "-h" || argument == "--help" || argument == "-help" {
 			return rest, true, nil
 		}
+	}
+	// A command without its own successful JSON document still accepts --json: it selects
+	// the failure envelope. Answering an explicit request for JSON with a usage error about
+	// the flag itself would invert the choice the caller made.
+	if flags.Lookup("json") == nil {
+		flags.Bool("json", false, "print a JSON object on failure")
 	}
 	if parseErr := flags.Parse(before); parseErr != nil {
 		return nil, false, keyclient.Errorf(keyclient.CODE_USAGE, "%v", parseErr)

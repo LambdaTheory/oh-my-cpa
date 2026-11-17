@@ -30,8 +30,10 @@ Only the user-level file of each runtime is written: a project-level
 the key in it.
 
 One installed slot per runtime per machine. Installing another repository
-replaces the slot and the previous values survive only in the backup.
---replace is required when the slot holds a value this tool did not write.
+replaces the slot only with --replace (or after purging the other repository);
+without it the install stops with config_owned_by_another_repo. The previous
+values survive only in the backup. --replace is also required when the slot
+holds a value this tool did not write.
 
 --repo defaults to the repository of the current directory. --config names
 the configuration file instead of the runtime's default.

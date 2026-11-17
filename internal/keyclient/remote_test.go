@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,9 @@ type fakeCapability struct {
 	refusals map[string]string
 	// status is the HTTP status the next request gets; zero means 200.
 	status int
+	// agent and device are the caller headers on the most recent request.
+	agent  string
+	device string
 	// calls records what the client asked for, so a test can assert the arguments.
 	calls []map[string]any
 }
@@ -36,6 +40,8 @@ func newFakeCapability(t *testing.T) *fakeCapability {
 			_, _ = io.WriteString(writer, `{"code":"unauthorized"}`)
 			return
 		}
+		fake.agent = request.Header.Get("X-Omc-Agent")
+		fake.device = request.Header.Get("X-Omc-Device")
 		if fake.status != 0 {
 			writer.WriteHeader(fake.status)
 			_, _ = io.WriteString(writer, `{"code":"server_error"}`)
@@ -285,5 +291,46 @@ func TestNewRemoteClientRefusesPlainRemoteHTTP(t *testing.T) {
 	t.Setenv(ENV_MANAGEMENT_KEY, "test-management-key")
 	if _, err := NewRemoteClient(); CodeOf(err) != CODE_REMOTE_NOT_CONFIGURED {
 		t.Fatalf("code = %q (err=%v)", CodeOf(err), err)
+	}
+}
+
+// TestNewRemoteClientReportsTheSameCallerAsMCP: `key status --remote` used to send no
+// caller headers when the two name variables were unset, while `oh-my-cpa mcp` reported
+// its defaults. The two entry points must describe themselves the same way.
+func TestNewRemoteClientReportsTheSameCallerAsMCP(t *testing.T) {
+	clearRemoteEnvironment(t)
+	fake := newFakeCapability(t)
+	fake.answers[TOOL_STATUS] = statusAnswer("app-1", "approved", "issue", "sk-cpa-ab***wxyz", time.Time{})
+	t.Setenv(ENV_SERVER_URL, fake.server.URL)
+	t.Setenv(ENV_MANAGEMENT_KEY, "test-management-key")
+
+	read := func(t *testing.T) {
+		t.Helper()
+		client, err := NewRemoteClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.RepoKeyStatus(context.Background(), "app-1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	read(t)
+	wantDevice := DEFAULT_DEVICE_NAME
+	if hostname, err := os.Hostname(); err == nil && strings.TrimSpace(hostname) != "" {
+		wantDevice = strings.TrimSpace(hostname)
+	}
+	if fake.agent != DEFAULT_AGENT_NAME || fake.device != wantDevice {
+		t.Fatalf("default caller = %q/%q, want %q/%q", fake.agent, fake.device, DEFAULT_AGENT_NAME, wantDevice)
+	}
+	if fake.agent == "" || fake.device == "" {
+		t.Fatalf("the default caller must not be blank: %q/%q", fake.agent, fake.device)
+	}
+
+	t.Setenv(ENV_AGENT_NAME, "codex-session")
+	t.Setenv(ENV_DEVICE_NAME, "homan-looplay")
+	read(t)
+	if fake.agent != "codex-session" || fake.device != "homan-looplay" {
+		t.Fatalf("configured caller = %q/%q", fake.agent, fake.device)
 	}
 }

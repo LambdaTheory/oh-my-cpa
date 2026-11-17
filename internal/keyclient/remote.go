@@ -21,6 +21,12 @@ const (
 	ENV_AGENT_NAME     = "OMCPA_AGENT_NAME"
 	ENV_DEVICE_NAME    = "OMCPA_DEVICE_NAME"
 
+	// The identities `oh-my-cpa mcp` reports when the two name variables are unset. The
+	// status refresh sends the same caller headers so one entry point does not look
+	// anonymous in a log or audit row while the other is named.
+	DEFAULT_AGENT_NAME  = "oh-my-cpa-mcp"
+	DEFAULT_DEVICE_NAME = "unknown-device"
+
 	// TOOL_STATUS and TOOL_QUERY are the two read-only MCP capabilities this client calls.
 	TOOL_STATUS = "repo_key_status"
 	TOOL_QUERY  = "repo_key_query"
@@ -102,12 +108,32 @@ type bridgeRemote struct {
 // A missing URL or key is remote_not_configured, never a silent fallback to the local
 // view: a person who asked for the remote state must be told the request did not happen.
 func NewRemoteClient() (RemoteClient, error) {
+	agentName, deviceName := callerIdentity()
 	return newBridgeRemote(
 		strings.TrimSpace(os.Getenv(ENV_SERVER_URL)),
 		strings.TrimSpace(os.Getenv(ENV_MANAGEMENT_KEY)),
-		strings.TrimSpace(os.Getenv(ENV_AGENT_NAME)),
-		strings.TrimSpace(os.Getenv(ENV_DEVICE_NAME)),
+		agentName,
+		deviceName,
 	)
+}
+
+// callerIdentity mirrors `oh-my-cpa mcp`'s resolution: the environment value when it is
+// present and at most 128 characters, otherwise the stdio bridge's defaults. It lives here
+// rather than in the command layer so `key status --remote` and the bridge report the same
+// caller without the key client importing the main package.
+func callerIdentity() (agentName, deviceName string) {
+	agentName = strings.TrimSpace(os.Getenv(ENV_AGENT_NAME))
+	if agentName == "" || len(agentName) > 128 {
+		agentName = DEFAULT_AGENT_NAME
+	}
+	deviceName = strings.TrimSpace(os.Getenv(ENV_DEVICE_NAME))
+	if deviceName != "" && len(deviceName) <= 128 {
+		return agentName, deviceName
+	}
+	if hostname, err := os.Hostname(); err == nil && strings.TrimSpace(hostname) != "" {
+		return agentName, strings.TrimSpace(hostname)
+	}
+	return agentName, DEFAULT_DEVICE_NAME
 }
 
 // newBridgeRemote builds the client from explicit values, which is how a test points it

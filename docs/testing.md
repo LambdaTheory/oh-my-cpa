@@ -73,10 +73,18 @@ key is accepted by a gateway that checks the bearer credential; it does not prov
 routing or a real Claude Code, Codex or OpenCode run, which stay manual probes recorded
 with the runtime version.
 
-> TODO(实现确认): the package path and the concrete test functions. S2a–S4b land on separate
-> branches, so naming files here would make `check-docs` fail on a path that is not on disk
-> yet. This section owns the claims; the package's own names are theirs to fill in, and the
-> path should be backticked once it exists.
+The claims are owned by `internal/keyclient` and `cmd/oh-my-cpa`, at this granularity:
+
+| Claim | Packages and files | Representative cases |
+| --- | --- | --- |
+| home resolution, layout, file names, `home_insecure` | `internal/keyclient/home_test.go`, `home_unix_test.go`, `home_windows_test.go` | `TestResolveHomePrecedence`, `TestEnsureCreatesLayout`, `TestFileStemMapping`, `TestHomePermissionsAreOwnerOnly`, `TestHomeACLIsOwnerOnly` |
+| `key gen` stdout purity, reuse, repair | `internal/keyclient/keystore_test.go`, `cmd/oh-my-cpa/key_test.go` | `TestGenerateCreatesThenReuses`, `TestGenerateRepairsStateFromAnExistingKey`, `TestKeyGenStdoutIsOnlyThePublicKey`, `TestKeyGenSecondRunReusesAndSaysSo` |
+| `key accept` parse ladder, wrong-key refusal | `internal/keyclient/accept_test.go`, `cmd/oh-my-cpa/keyaccept_test.go` | `TestParseCiphertextResultAcceptsBothShapes`, `TestAcceptRefusesAnEnvelopeForAnotherKey`, `TestAcceptReplacesThePreviousEnvelope`, `TestKeyAcceptStoresTheEnvelopeAndPrintsOneLine` |
+| `key status` local report, orphans, `--remote` partial failure, caller identity | `internal/keyclient/status_test.go`, `remote_test.go`, `cmd/oh-my-cpa/keystatus_test.go` | `TestBuildReportTellsTheThreeStatesApart`, `TestBuildReportOnAMachineWithNoKeys`, `TestRefreshRemoteKeepsLocalStateWhenOneReadFails`, `TestKeyStatusRemoteNeedsConfiguration`, `TestNewRemoteClientReportsTheSameCallerAsMCP` |
+| `key exec` helper child, plaintext boundary, preflight | `internal/keyclient/exec_test.go`, `runtime_test.go`, `cmd/oh-my-cpa/keyexec_test.go` | `TestExecClaudeChildSeesTheKeyAndNothingElse`, `TestExecCodexChildSeesTheKeyAndTheProviderFlags`, `TestExecOpenCodeChildSeesTheMergedConfiguration`, `TestExecWritesNothing`, `TestExecMissingKeyNeverStartsTheChild` |
+| `key install` / `key purge` temporary configuration, backup, rollback, fingerprint | `internal/keyclient/install_test.go`, `jsondoc_test.go`, `tomlblock_test.go`, `purge_test.go`, `cmd/oh-my-cpa/keyinstall_test.go`, `keypurge_test.go` | `TestInstallClaudeRefusesAnExistingAPIKey`, `TestInstallBackupHoldsThePreviousFileExactly`, `TestInstallRequiresReplaceForAForeignSlot`, `TestPurgeDryRunChangesNothing`, `TestPurgeRefusesAValueItDoesNotOwn`, `TestKeyInstallConflictIsExitFive` |
+| dispatcher `--json` failure envelope | `cmd/oh-my-cpa/key_test.go` | `TestKeyJSONFailureEnvelope`, `TestKeyJSONFalseKeepsTheTextFailure`, `TestKeyJSONAfterTheTerminatorIsTheChildsArgument` |
+| seven-step e2e | `internal/keyclient/e2e/e2e_test.go` and its fixtures | `TestRepoKeyDeliveryLoop`; entry `scripts/key-e2e.mjs` / `test:key-e2e` |
 
 ## Prebuilt deployment verification
 

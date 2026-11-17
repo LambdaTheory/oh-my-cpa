@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -196,5 +197,99 @@ func TestKeyUsageIsSorted(t *testing.T) {
 	}
 	if !strings.Contains(usage, "Commands:") {
 		t.Fatalf("usage has no command heading:\n%s", usage)
+	}
+}
+
+// TestKeyJSONFailureEnvelope is R-04 at the dispatcher: with --json, every subcommand's
+// failure is one JSON object on stderr and nothing on stdout. status and accept define the
+// flag for their success documents; the other four accept it for the failure envelope only.
+func TestKeyJSONFailureEnvelope(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	t.Setenv(keyclient.ENV_SERVER_URL, "")
+	t.Setenv(keyclient.ENV_MANAGEMENT_KEY, "")
+	cases := []struct {
+		name     string
+		args     []string
+		wantCode string
+	}{
+		{"status", []string{"status", "--home", home, "--remote", "--json"}, keyclient.CODE_REMOTE_NOT_CONFIGURED},
+		{"accept", []string{"accept", "--home", home, "--json"}, keyclient.CODE_REPO_REQUIRED},
+		{"gen", []string{"gen", "--home", home, "--json"}, keyclient.CODE_REPO_REQUIRED},
+		{"exec", []string{"exec", "--home", home, "--runtime", "claude", "--repo", "org/repo", "--json", "--", "echo"}, keyclient.CODE_KEY_NOT_FOUND},
+		{"install", []string{"install", "--home", home, "--runtime", "claude", "--repo", "org/repo", "--json"}, keyclient.CODE_KEY_NOT_FOUND},
+		{"purge", []string{"purge", "--home", home, "--json"}, keyclient.CODE_REPO_REQUIRED},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			code, stdout, stderr := runKeyCommand(t, testCase.args...)
+			if code == keyclient.EXIT_OK {
+				t.Fatalf("the case was meant to fail; stdout=%q stderr=%q", stdout, stderr)
+			}
+			if stdout != "" {
+				t.Fatalf("a JSON failure wrote to stdout: %q", stdout)
+			}
+			if strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
+				t.Fatalf("stderr is not exactly one line: %q", stderr)
+			}
+			var envelope keyFailureJSON
+			if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+				t.Fatalf("stderr is not JSON: %v\n%s", err, stderr)
+			}
+			if envelope.Code != testCase.wantCode {
+				t.Fatalf("code = %q, want %q (stderr=%s)", envelope.Code, testCase.wantCode, stderr)
+			}
+			if strings.TrimSpace(envelope.Message) == "" {
+				t.Fatalf("the envelope has no message: %s", stderr)
+			}
+		})
+	}
+}
+
+// TestKeyJSONFalseKeepsTheTextFailure: only the requested form changes. An explicit false
+// must keep the familiar `code: message` line.
+func TestKeyJSONFalseKeepsTheTextFailure(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	code, stdout, stderr := runKeyCommand(t, "gen", "--home", home, "--json=false")
+	if code != keyclient.EXIT_USAGE {
+		t.Fatalf("exit = %d, want %d", code, keyclient.EXIT_USAGE)
+	}
+	if stdout != "" {
+		t.Fatalf("a failure wrote to stdout: %q", stdout)
+	}
+	if !strings.HasPrefix(stderr, keyclient.CODE_REPO_REQUIRED+": ") {
+		t.Fatalf("stderr = %q, want the text form", stderr)
+	}
+	if json.Valid([]byte(stderr)) {
+		t.Fatalf("--json=false produced JSON: %q", stderr)
+	}
+}
+
+// TestKeyJSONAfterTheTerminatorIsTheChildsArgument: `key exec ... -- echo --json` asks
+// echo for a flag, not this process for a format. The dispatcher must stop scanning at the
+// terminator.
+func TestKeyJSONAfterTheTerminatorIsTheChildsArgument(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	code, _, stderr := runKeyCommand(t, "exec", "--home", home, "--runtime", "claude", "--repo", "org/repo", "--", "echo", "--json")
+	if code != keyclient.EXIT_NOT_FOUND {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, keyclient.EXIT_NOT_FOUND, stderr)
+	}
+	if !strings.HasPrefix(stderr, keyclient.CODE_KEY_NOT_FOUND+": ") {
+		t.Fatalf("stderr = %q, want the text form", stderr)
+	}
+}
+
+// TestKeyJSONDoesNotChangeASuccessfulTextCommand: a command with no JSON success document
+// still accepts the flag; only its failures use the envelope.
+func TestKeyJSONDoesNotChangeASuccessfulTextCommand(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	code, stdout, stderr := runKeyCommand(t, "gen", "--home", home, "--repo", "org/repo", "--json")
+	if code != keyclient.EXIT_OK {
+		t.Fatalf("exit = %d (stderr=%s)", code, stderr)
+	}
+	if !strings.HasPrefix(stdout, "x25519:") {
+		t.Fatalf("stdout = %q, want the public key", stdout)
+	}
+	if !strings.Contains(stderr, "generated a key") {
+		t.Fatalf("stderr = %q, want the text progress line", stderr)
 	}
 }
