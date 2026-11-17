@@ -69,7 +69,7 @@ func RunChild(ctx context.Context, options ExecOptions) (int, error) {
 		return EXIT_USAGE, err
 	}
 	home := options.Home
-	if err := home.CheckReadableHome(); err != nil {
+	if err := checkExecHome(home, repoID); err != nil {
 		return ExitCode(err), err
 	}
 
@@ -174,6 +174,18 @@ func RunChild(ctx context.Context, options ExecOptions) (int, error) {
 		return EXIT_FAILED, nil
 	}
 	return EXIT_FAILED, Errorf(CODE_EXEC_FAILED, "cannot run %s: %v", injection.Argv[0], runErr)
+}
+
+// checkExecHome treats an absent home as "no key for this repository" rather than as a
+// broken installation. The home is created by `key gen`, so a machine that never ran it
+// has no key to run with, and key_not_found is the answer that names the next step. An
+// existing home that is open to other users is still refused: reading a private key from
+// a directory someone else could have replaced is the failure this check exists for.
+func checkExecHome(home Home, repoID string) error {
+	if _, err := os.Stat(home.Root); errors.Is(err, os.ErrNotExist) {
+		return Errorf(CODE_KEY_NOT_FOUND, "no private key for %s; run `oh-my-cpa key gen --repo %s`", repoID, repoID)
+	}
+	return home.CheckReadableHome()
 }
 
 // readEnvelope reads and size-checks a delivery envelope.

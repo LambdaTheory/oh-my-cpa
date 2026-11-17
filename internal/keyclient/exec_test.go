@@ -550,6 +550,33 @@ func TestExecMissingKeyNeverStartsTheChild(t *testing.T) {
 	}
 }
 
+// TestExecWithoutAHomeIsKeyNotFound covers the state a `key purge` on a fresh machine
+// leaves, and the state of a machine that never ran `key gen`: there is no home to read,
+// which is a missing key (exit 4) rather than a broken installation.
+func TestExecWithoutAHomeIsKeyNotFound(t *testing.T) {
+	home := Home{Root: filepath.Join(t.TempDir(), "never-created")}
+	status, stdout, _, err := runExec(t, ExecOptions{
+		Runtime: RuntimeClaude,
+		Repo:    "org/repo",
+		BaseURL: "http://127.0.0.1:8317",
+		Argv:    helperCommand(),
+		Env:     helperEnvironment(helperModeEnvReport),
+		Home:    home,
+	})
+	if CodeOf(err) != CODE_KEY_NOT_FOUND {
+		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_KEY_NOT_FOUND, err)
+	}
+	if status != EXIT_NOT_FOUND {
+		t.Fatalf("status = %d, want %d", status, EXIT_NOT_FOUND)
+	}
+	if stdout != "" {
+		t.Fatalf("a refusal wrote to stdout: %q", stdout)
+	}
+	if _, statErr := os.Stat(home.Root); !os.IsNotExist(statErr) {
+		t.Fatalf("the command created the home (err=%v)", statErr)
+	}
+}
+
 func TestExecMissingEnvelopeNeverStartsTheChild(t *testing.T) {
 	fixture := newExecFixture(t)
 	marker := filepath.Join(t.TempDir(), "child-ran")
