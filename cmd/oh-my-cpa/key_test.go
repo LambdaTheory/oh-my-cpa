@@ -152,6 +152,55 @@ func TestKeyGenRejectsAnUnknownFlag(t *testing.T) {
 	}
 }
 
+// TestKeyJSONUnknownFlagIsOneJSONLine: the --json contract is one object per line even
+// when flag parsing itself fails. The flag package's raw diagnostic must not precede it.
+func TestKeyJSONUnknownFlagIsOneJSONLine(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	code, stdout, stderr := runKeyCommand(t, "gen", "--home", home, "--json", "--bogus")
+	if code != keyclient.EXIT_USAGE {
+		t.Fatalf("exit = %d, want %d (stderr=%q)", code, keyclient.EXIT_USAGE, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("a JSON failure wrote to stdout: %q", stdout)
+	}
+	if strings.Count(stderr, "\n") != 1 || !strings.HasSuffix(stderr, "\n") {
+		t.Fatalf("stderr is not exactly one line: %q", stderr)
+	}
+	var envelope keyFailureJSON
+	if err := json.Unmarshal([]byte(stderr), &envelope); err != nil {
+		t.Fatalf("stderr is not JSON: %v\n%s", err, stderr)
+	}
+	if envelope.Code != keyclient.CODE_USAGE {
+		t.Fatalf("code = %q, want %q (stderr=%s)", envelope.Code, keyclient.CODE_USAGE, stderr)
+	}
+	if strings.TrimSpace(envelope.Message) == "" {
+		t.Fatalf("the envelope has no message: %s", stderr)
+	}
+}
+
+// TestKeyUnknownFlagWithoutJSONKeepsTheFlagDiagnostic: only the JSON form changes. A
+// caller that did not ask for JSON still gets the flag package's line and the text error.
+func TestKeyUnknownFlagWithoutJSONKeepsTheFlagDiagnostic(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	code, stdout, stderr := runKeyCommand(t, "gen", "--home", home, "--bogus")
+	if code != keyclient.EXIT_USAGE {
+		t.Fatalf("exit = %d, want %d (stderr=%q)", code, keyclient.EXIT_USAGE, stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("a failure wrote to stdout: %q", stdout)
+	}
+	lines := strings.Split(strings.TrimSuffix(stderr, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stderr is not two lines: %q", stderr)
+	}
+	if lines[0] != "flag provided but not defined: -bogus" {
+		t.Fatalf("first line = %q, want the flag package diagnostic", lines[0])
+	}
+	if !strings.HasPrefix(lines[1], keyclient.CODE_USAGE+": ") {
+		t.Fatalf("second line = %q, want the text failure", lines[1])
+	}
+}
+
 // TestKeyDispatchDoesNotLoadTheService is the boundary the plan asks for: a key command
 // runs before the environment file, configuration and database exist, so a machine that
 // has never hosted the console can still hold a key. A missing .env and an unusable

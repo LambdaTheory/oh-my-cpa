@@ -256,6 +256,13 @@ func parseKeyFlags(flags *flag.FlagSet, args []string) (rest []string, help bool
 			return rest, true, nil
 		}
 	}
+	// With --json the failure envelope is the only thing stderr may carry: the flag
+	// package's own "flag provided but not defined" line would make it two lines and
+	// break a caller that reads one JSON object per line. Without --json the raw line
+	// stays, followed by the text error.
+	if wantsKeyJSON(args) {
+		flags.SetOutput(io.Discard)
+	}
 	// A command without its own successful JSON document still accepts --json: it selects
 	// the failure envelope. Answering an explicit request for JSON with a usage error about
 	// the flag itself would invert the choice the caller made.

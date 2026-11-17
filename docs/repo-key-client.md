@@ -114,10 +114,12 @@ behind the operator's back.
 Only `http` and `https` URLs with a host are accepted, without userinfo, query or fragment.
 The value is stored as the gateway root: a trailing `/` and one trailing `/v1` are removed.
 A concrete endpoint such as `/v1/messages` or `/v1/responses` is refused with
-`base_url_invalid` instead of being trimmed. A non-loopback `http://` URL is accepted with
-an `insecure_base_url` warning on stderr, because a plaintext gateway on a private Docker
-network is a normal deployment; whether remote plaintext is acceptable is the operator's
-call, not this tool's.
+`base_url_invalid` instead of being trimmed. A non-loopback `http://` URL is accepted.
+`key exec` and `key install` each print a plain-language warning on stderr for it, because
+a plaintext gateway on a private Docker network is a normal deployment; their wording
+differs, and neither warning carries a stable code. `key gen` only records the address and
+does not warn. Whether remote plaintext is acceptable is the operator's call, not this
+tool's.
 
 Each runtime gets the address in the shape it expects: Claude Code the root, Codex and
 OpenCode the root plus `/v1`. Do not append `/v1` yourself.
