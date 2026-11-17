@@ -411,6 +411,7 @@ const (
 // which pair of readings actually fired.
 type predictionResetSignal struct {
 	Check                   string
+	TriggerAtMS             int64
 	PreviousStartMS         int64
 	CurrentStartMS          int64
 	PreviousLastUsedPercent float64
@@ -435,24 +436,41 @@ func (signal predictionResetSignal) resetDifferenceMS() int64 {
 // the bucket's last reading; the cross-bucket comparison catches a drop between
 // the previous bucket's end and this bucket's low point.
 func predictionBucketsResetSignal(buckets []repository.QuotaObservationBucket) *predictionResetSignal {
+	var selected *predictionResetSignal
+	selectSignal := func(signal *predictionResetSignal) {
+		if selected == nil || signal.TriggerAtMS > selected.TriggerAtMS {
+			selected = signal
+		}
+	}
+	triggerAt := func(bucket repository.QuotaObservationBucket) int64 {
+		if bucket.LastResetObservedAtMS != nil {
+			return *bucket.LastResetObservedAtMS
+		}
+		if bucket.LastObservedAtMS > 0 {
+			return bucket.LastObservedAtMS
+		}
+		return bucket.StartMS
+	}
 	for index := 1; index < len(buckets); index++ {
 		previous, current := buckets[index-1], buckets[index]
 		if previous.LastUsedPercent > current.MinUsedPercent+quotaPredictionResetTolerancePercent {
-			return &predictionResetSignal{
+			selectSignal(&predictionResetSignal{
 				Check:           predictionResetCheckBucketUsed,
+				TriggerAtMS:     triggerAt(current),
 				PreviousStartMS: previous.StartMS, CurrentStartMS: current.StartMS,
 				PreviousLastUsedPercent: previous.LastUsedPercent, CurrentMinUsedPercent: current.MinUsedPercent,
 				PreviousLastResetAtMS: previous.LastResetAtMS, CurrentMinResetAtMS: current.MinResetAtMS,
-			}
+			})
 		}
 		if previous.LastResetAtMS != nil && current.MinResetAtMS != nil &&
 			float64(*previous.LastResetAtMS)-float64(*current.MinResetAtMS) > float64(quotaPredictionResetToleranceMS) {
-			return &predictionResetSignal{
+			selectSignal(&predictionResetSignal{
 				Check:           predictionResetCheckBucketResetAt,
+				TriggerAtMS:     triggerAt(current),
 				PreviousStartMS: previous.StartMS, CurrentStartMS: current.StartMS,
 				PreviousLastUsedPercent: previous.LastUsedPercent, CurrentMinUsedPercent: current.MinUsedPercent,
 				PreviousLastResetAtMS: previous.LastResetAtMS, CurrentMinResetAtMS: current.MinResetAtMS,
-			}
+			})
 		}
 	}
 	for _, bucket := range buckets {
@@ -461,24 +479,26 @@ func predictionBucketsResetSignal(buckets []repository.QuotaObservationBucket) *
 			if previousResetAt == nil {
 				previousResetAt = bucket.MaxResetAtMS
 			}
-			return &predictionResetSignal{
+			selectSignal(&predictionResetSignal{
 				Check:           predictionResetCheckBucketFlag,
+				TriggerAtMS:     triggerAt(bucket),
 				PreviousStartMS: bucket.StartMS, CurrentStartMS: bucket.StartMS,
 				PreviousLastUsedPercent: bucket.LastUsedPercent, CurrentMinUsedPercent: bucket.MinUsedPercent,
 				PreviousLastResetAtMS: previousResetAt, CurrentMinResetAtMS: bucket.MinResetAtMS,
-			}
+			})
 		}
 		if bucket.MinResetAtMS != nil && bucket.MaxResetAtMS != nil &&
 			float64(*bucket.MaxResetAtMS)-float64(*bucket.MinResetAtMS) > float64(quotaPredictionResetToleranceMS) {
-			return &predictionResetSignal{
+			selectSignal(&predictionResetSignal{
 				Check:           predictionResetCheckBucketResetRange,
+				TriggerAtMS:     triggerAt(bucket),
 				PreviousStartMS: bucket.StartMS, CurrentStartMS: bucket.StartMS,
 				PreviousLastUsedPercent: bucket.LastUsedPercent, CurrentMinUsedPercent: bucket.MinUsedPercent,
 				PreviousLastResetAtMS: bucket.MaxResetAtMS, CurrentMinResetAtMS: bucket.MinResetAtMS,
-			}
+			})
 		}
 	}
-	return nil
+	return selected
 }
 
 // predictionCurrentReadingResetSignal checks the reading that replaces the
@@ -499,6 +519,7 @@ func predictionCurrentReadingResetSignal(buckets []repository.QuotaObservationBu
 	if last.LastUsedPercent > *window.UsedPercent+quotaPredictionResetTolerancePercent {
 		return &predictionResetSignal{
 			Check:           predictionResetCheckCurrentUsed,
+			TriggerAtMS:     observedAtMS,
 			PreviousStartMS: last.StartMS, CurrentStartMS: currentBucketStart,
 			PreviousLastUsedPercent: last.LastUsedPercent, CurrentMinUsedPercent: *window.UsedPercent,
 			PreviousLastResetAtMS: last.LastResetAtMS, CurrentMinResetAtMS: window.ResetAtMS,
@@ -508,6 +529,7 @@ func predictionCurrentReadingResetSignal(buckets []repository.QuotaObservationBu
 		float64(*last.LastResetAtMS)-float64(*window.ResetAtMS) > float64(quotaPredictionResetToleranceMS) {
 		return &predictionResetSignal{
 			Check:           predictionResetCheckCurrentResetAt,
+			TriggerAtMS:     observedAtMS,
 			PreviousStartMS: last.StartMS, CurrentStartMS: currentBucketStart,
 			PreviousLastUsedPercent: last.LastUsedPercent, CurrentMinUsedPercent: *window.UsedPercent,
 			PreviousLastResetAtMS: last.LastResetAtMS, CurrentMinResetAtMS: window.ResetAtMS,
@@ -533,6 +555,7 @@ func (s *Service) logPredictionReset(reading Quota, window quota.QuotaWindow, wi
 		"window_scope", window.Scope,
 		"window_model", window.Model,
 		"check", signal.Check,
+		"trigger_at_ms", signal.TriggerAtMS,
 		"previous_bucket_start_ms", signal.PreviousStartMS,
 		"current_bucket_start_ms", signal.CurrentStartMS,
 		"previous_last_used_percent", signal.PreviousLastUsedPercent,
@@ -578,12 +601,23 @@ func (s *Service) predictQuotaWindow(ctx context.Context, reading Quota, window 
 			}, quotaPredictionBucketLimit)
 			if err == nil && !hasMore {
 				predictionInput.Observations = predictionObservationsFromBuckets(buckets, observedAtMS)
-				if signal := predictionBucketsResetSignal(buckets); signal != nil {
+				var resetAtMS *int64
+				for _, signal := range []*predictionResetSignal{
+					predictionBucketsResetSignal(buckets),
+					predictionCurrentReadingResetSignal(buckets, window, observedAtMS),
+				} {
+					if signal == nil {
+						continue
+					}
 					s.logPredictionReset(reading, window, storedKind, *signal)
+					if resetAtMS == nil || signal.TriggerAtMS > *resetAtMS {
+						resetAt := signal.TriggerAtMS
+						resetAtMS = &resetAt
+					}
+				}
+				if resetAtMS != nil {
 					predictionInput.Window.HasMidCycleReset = true
-				} else if signal := predictionCurrentReadingResetSignal(buckets, window, observedAtMS); signal != nil {
-					s.logPredictionReset(reading, window, storedKind, *signal)
-					predictionInput.Window.HasMidCycleReset = true
+					predictionInput.BucketResetAtMS = resetAtMS
 				}
 			} else {
 				predictionInput.Window.HasIncompleteHistory = true

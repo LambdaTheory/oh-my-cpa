@@ -27,6 +27,19 @@ func HasIncompleteWindowHistory(window QuotaWindow, history []ObservedWindows, f
 // HasWindowCycleReset checks the whole retained sequence, not just the peak
 // against today's value: a reset remains a reset after consumption catches up.
 func HasWindowCycleReset(window QuotaWindow, history []ObservedWindows, fromMS, toMS int64) bool {
+	_, hasResetAt, hasResetFlag := lastWindowCycleReset(window, history, fromMS, toMS)
+	return hasResetAt || hasResetFlag
+}
+
+// LastWindowCycleResetAt returns the latest observation that proved a reset.
+// Snapshots written before MidCycleResetAtMS existed can still report the bool
+// flag, but have no instant to return here; callers keep that legacy fallback.
+func LastWindowCycleResetAt(window QuotaWindow, history []ObservedWindows, fromMS, toMS int64) (int64, bool) {
+	resetAtMS, hasResetAt, _ := lastWindowCycleReset(window, history, fromMS, toMS)
+	return resetAtMS, hasResetAt
+}
+
+func lastWindowCycleReset(window QuotaWindow, history []ObservedWindows, fromMS, toMS int64) (lastAtMS int64, hasAt, hasFlag bool) {
 	observations := slices.Clone(history)
 	slices.SortStableFunc(observations, func(first, second ObservedWindows) int {
 		if first.ObservedAtMS < second.ObservedAtMS {
@@ -37,6 +50,11 @@ func HasWindowCycleReset(window QuotaWindow, history []ObservedWindows, fromMS, 
 		}
 		return 0
 	})
+	record := func(atMS int64) {
+		if !hasAt || atMS > lastAtMS {
+			lastAtMS, hasAt = atMS, true
+		}
+	}
 	var previous *QuotaWindow
 	for _, observation := range observations {
 		if observation.ObservedAtMS > toMS {
@@ -57,27 +75,36 @@ func HasWindowCycleReset(window QuotaWindow, history []ObservedWindows, fromMS, 
 			if earlier.ID != window.ID {
 				continue
 			}
+			if earlier.MidCycleResetAtMS != nil && *earlier.MidCycleResetAtMS >= fromMS && *earlier.MidCycleResetAtMS <= toMS {
+				record(*earlier.MidCycleResetAtMS)
+			}
 			if earlier.HasMidCycleReset {
-				return true
+				hasFlag = true
 			}
 			if previous != nil && previous.UsedPercent != nil && earlier.UsedPercent != nil && *previous.UsedPercent > *earlier.UsedPercent+capacityResetTolerancePercent {
-				return true
+				record(observation.ObservedAtMS)
 			}
 			// An early reset may also replace the advertised boundary without a
 			// percentage decrease (for example when the next reading is already high).
 			if previous != nil && previous.ResetAtMS != nil && earlier.ResetAtMS != nil && *previous.ResetAtMS > observation.ObservedAtMS && math.Abs(float64(*previous.ResetAtMS-*earlier.ResetAtMS)) > 1000 {
-				return true
+				record(observation.ObservedAtMS)
 			}
 			previous = &earlier
 		}
 	}
 	if window.HasMidCycleReset {
-		return true
+		hasFlag = true
+	}
+	if window.MidCycleResetAtMS != nil && *window.MidCycleResetAtMS >= fromMS && *window.MidCycleResetAtMS <= toMS {
+		record(*window.MidCycleResetAtMS)
 	}
 	if previous != nil && previous.ResetAtMS != nil && window.ResetAtMS != nil && *previous.ResetAtMS > toMS && math.Abs(float64(*previous.ResetAtMS-*window.ResetAtMS)) > 1000 {
-		return true
+		record(toMS)
 	}
-	return previous != nil && previous.UsedPercent != nil && window.UsedPercent != nil && *previous.UsedPercent > *window.UsedPercent+capacityResetTolerancePercent
+	if previous != nil && previous.UsedPercent != nil && window.UsedPercent != nil && *previous.UsedPercent > *window.UsedPercent+capacityResetTolerancePercent {
+		record(toMS)
+	}
+	return lastAtMS, hasAt, hasFlag
 }
 
 func hasSameCapacityScope(first, second QuotaWindow) bool {

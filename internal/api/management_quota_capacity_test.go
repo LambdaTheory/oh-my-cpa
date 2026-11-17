@@ -311,7 +311,8 @@ func TestWindowCapacityResetEvidenceSurvivesSnapshotRetention(t *testing.T) {
 	if err := json.Unmarshal([]byte(latest["codex-1"].WindowsJSON), &windows); err != nil {
 		t.Fatal(err)
 	}
-	if !windows[0].HasMidCycleReset || windows[0].Usage != nil || windows[0].Capacity != nil || windows[0].CapacityUnavailable != "" {
+	if !windows[0].HasMidCycleReset || windows[0].MidCycleResetAtMS == nil || *windows[0].MidCycleResetAtMS != nowMS-119000 ||
+		windows[0].Usage != nil || windows[0].Capacity != nil || windows[0].CapacityUnavailable != "" {
 		t.Fatalf("snapshot join or evidence wrong: %+v", windows[0])
 	}
 }

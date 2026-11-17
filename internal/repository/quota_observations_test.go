@@ -296,6 +296,10 @@ func TestListQuotaObservationBucketsPreservesOrderedResetEvidence(t *testing.T) 
 	if buckets[0].MinUsedPercent != 10 || buckets[0].LastUsedPercent != 20 || buckets[0].RowCount != 3 {
 		t.Fatalf("recovering bucket summary = %+v", buckets[0])
 	}
+	if buckets[0].LastResetObservedAtMS == nil || *buckets[0].LastResetObservedAtMS != base+120_000 ||
+		buckets[1].LastResetObservedAtMS == nil || *buckets[1].LastResetObservedAtMS != base+360_000 {
+		t.Fatalf("exact reset instants = %+v / %+v", buckets[0], buckets[1])
+	}
 	if buckets[4].RowCount != 2 || buckets[4].LastUsedPercent != 20 {
 		t.Fatalf("same-instant tie bucket = %+v", buckets[4])
 	}

@@ -601,8 +601,9 @@ func TestQuotaPredictionDetectsCurrentSnapshotReset(t *testing.T) {
 	if !slices.Contains(item.Reasons, quota.PredictionReasonResetMidCycle) {
 		t.Fatalf("current snapshot reset was not detected: %+v", item)
 	}
-	if item.SampleCount != 5 {
-		t.Fatalf("current bucket replacement duplicated a sample: %+v", item)
+	if item.SampleCount != 1 || item.Accounting.UnavailableReason != quota.PredictionUnknownHistoryInsufficient ||
+		!slices.Contains(item.Reasons, quota.PredictionReasonFewerThanThreeBuckets) {
+		t.Fatalf("post-reset sample should restart at the current reading: %+v", item)
 	}
 }
 

@@ -69,7 +69,7 @@ func TestPredictionAccountingRemainingDoesNotRequireCycleBounds(t *testing.T) {
 
 func TestPredictionAccountingWithholdsUnavailableAndJustResetEstimates(t *testing.T) {
 	start := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
-	for _, mode := range []string{"no_reading", "error", "stale", "just_reset", "mid_cycle_reset", "incomplete", "expired"} {
+	for _, mode := range []string{"no_reading", "error", "stale", "just_reset", "incomplete", "expired"} {
 		t.Run(mode, func(t *testing.T) {
 			window, _ := predictionWindow(start, 30)
 			input := PredictionInput{Window: window, ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(), NowMS: start.Add(5 * time.Hour).UnixMilli()}
@@ -81,8 +81,6 @@ func TestPredictionAccountingWithholdsUnavailableAndJustResetEstimates(t *testin
 			case "just_reset":
 				input.ObservedAtMS = start.Add(time.Minute).UnixMilli()
 				input.NowMS = input.ObservedAtMS
-			case "mid_cycle_reset":
-				input.Window.HasMidCycleReset = true
 			case "incomplete":
 				input.Window.HasIncompleteHistory = true
 			case "expired":
@@ -96,6 +94,20 @@ func TestPredictionAccountingWithholdsUnavailableAndJustResetEstimates(t *testin
 				t.Fatalf("unavailable remaining quota = %+v", result.Accounting)
 			}
 		})
+	}
+
+	// Reset evidence no longer turns the accounting into a second veto. The
+	// prediction may still be unknown when no refit boundary exists, but the
+	// share-based estimate follows the ordinary cycle arithmetic.
+	window, _ := predictionWindow(start, 30)
+	input := PredictionInput{
+		Window: window, ObservedAtMS: start.Add(5 * time.Hour).UnixMilli(),
+		NowMS: start.Add(5 * time.Hour).UnixMilli(),
+	}
+	input.Window.HasMidCycleReset = true
+	result := PredictWindow(input)
+	if result.Accounting.UniformProjectedPercentAtReset == nil || *result.Accounting.UniformProjectedPercentAtReset != 60 {
+		t.Fatalf("mid-cycle reset accounting = %+v", result.Accounting)
 	}
 }
 
