@@ -127,11 +127,7 @@ func (h *Handler) QuotaScheduler(logger *slog.Logger) *quota.Scheduler {
 		if err != nil {
 			return nil, err
 		}
-		files, err := client.AuthFiles(ctx)
-		if err != nil {
-			return nil, err
-		}
-		return files.Files, nil
+		return h.quotaRosterFiles(ctx, client)
 	}
 	scheduler.RequestCounts = func(ctx context.Context, sinceMS int64) (map[string]int64, error) {
 		return h.repo.CountUsageEventsByAuthIndex(ctx, defaultInstanceID(), sinceMS)

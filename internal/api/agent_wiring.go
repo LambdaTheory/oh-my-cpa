@@ -333,11 +333,11 @@ func (h *Handler) operationsService() *operations.Service {
 		if err != nil {
 			return operations.Quota{}, err
 		}
-		files, err := client.AuthFiles(ctx)
+		files, err := h.quotaRosterFiles(ctx, client)
 		if err != nil {
 			return operations.Quota{}, err
 		}
-		for _, file := range files.Files {
+		for _, file := range files {
 			if file.AuthIndex == authIndex {
 				provider := quota.DetectProvider(file.Type, file.Provider)
 				if blocked, until := h.quotaBackoffBlocked(provider, authIndex); blocked {

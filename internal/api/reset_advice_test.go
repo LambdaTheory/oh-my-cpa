@@ -16,12 +16,22 @@ import (
 func TestQuotaConsoleResetAdviceBeforeAndAfterAnnouncement(t *testing.T) {
 	now := time.Date(2026, 10, 20, 8, 0, 0, 0, time.UTC)
 	client, base, repo := startDashboardTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/v8/management/credentials" {
+		if r.Method != http.MethodGet {
 			t.Errorf("unexpected CPA call: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 			return
 		}
-		writeJSON(w, 200, map[string]any{"files": []map[string]any{{"name": "synthetic.json", "auth_index": "synthetic-auth", "type": "codex", "provider": "codex", "disabled": false}}})
+		switch r.URL.Path {
+		case "/v8/management/credentials":
+			writeJSON(w, 200, map[string]any{"files": []map[string]any{{"name": "synthetic.json", "auth_index": "synthetic-auth", "type": "codex", "provider": "codex", "disabled": false}}})
+		case "/v0/management/openai-compatibility":
+			// The quota roster reads this entry for the opencode keys; this
+			// deployment has none.
+			writeJSON(w, 200, map[string]any{"openai-compatibility": []any{}})
+		default:
+			t.Errorf("unexpected CPA call: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+		}
 	}, func(h *Handler) { h.nowFn = func() time.Time { return now } })
 	ctx := context.Background()
 	if _, err := repo.UpsertDiscoveredResources(ctx, "default", []domain.DiscoveredResource{{ResourceKey: "synthetic", CPAResourceType: "auth-file", CPAAuthIndex: "synthetic-auth", CPAResourceName: "Synthetic", CPADriver: "codex", Status: domain.ResourceStatusUnclaimed}}, now, false); err != nil {
