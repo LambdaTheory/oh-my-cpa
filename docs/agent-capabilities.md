@@ -932,6 +932,18 @@ on the API keys page (`internal/api/management_repo_keys.go`,
 `web/src/components/keys/RepoKeysPanel.tsx`); a deployment may also forward those events to a
 company audit platform (ADR 0119).
 
+The caller side of that loop is `oh-my-cpa key`, six subcommands in the same binary
+(`status`, `gen`, `accept`, `exec`, `install`, `purge`). They are dispatched before OMC
+loads configuration or opens a data directory, so they neither need nor reach a console.
+`key gen` makes the X25519 pair and prints only the public key to hand to `repo_key_apply`;
+`key accept` is what stores a `repo_key_ciphertext` result — it validates the envelope
+against the local private key before writing it, rather than trusting a shell redirect; and
+`key exec` opens the envelope in memory for one child process, so the plaintext never
+reaches a file, a log line, or a command line. `key install` is the only command that leaves
+plaintext on disk, and it warns before doing so. The envelope is ciphertext, not a public
+artifact, and neither it nor the key is ever committed. The operating runbook, including the
+per-runtime wiring and the prohibition list, is `docs/repo-key-client.md`.
+
 ### Available model directory
 
 `models_list` is a low-risk read exposed to the Agent and MCP. It takes no parameters,
