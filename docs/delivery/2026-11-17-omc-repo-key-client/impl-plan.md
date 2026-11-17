@@ -531,10 +531,10 @@ envelope= "envelopes/" + slug + "-" + hash8 + ".json"
     }
   },
   "runtimes": {
-    "claude": {
+    "codex": {
       "repo": "org/repo",
       "installed_at": "2026-11-17T09:15:00Z",
-      "config_path": "/home/user/.claude/settings.json",
+      "config_path": "/home/user/.codex/config.toml",
       "backup_path": "/home/user/.omc/backups/20261117T091500Z-...",
       "value_fingerprint": "sha256:<base64url>",
       "backup_contains_key": false,
