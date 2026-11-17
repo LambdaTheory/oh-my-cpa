@@ -718,6 +718,42 @@ func TestExecWritesNothing(t *testing.T) {
 	}
 }
 
+// TestExecWarnsAboutCleartextToARemoteHost keeps the warning visible: a key sent over
+// plain http to another machine is readable on the network, and the operator is the one
+// who decides whether that is their private network.
+func TestExecWarnsAboutCleartextToARemoteHost(t *testing.T) {
+	fixture := newExecFixture(t)
+	for _, testCase := range []struct {
+		root     string
+		warns    bool
+		instance string
+	}{
+		{"http://127.0.0.1:8317", false, "loopback"},
+		{"http://localhost:8317", false, "localhost"},
+		{"http://cli-proxy-api:8317", true, "a private network name"},
+		{"https://cpa.example.com", false, "https"},
+	} {
+		status, _, stderr, err := runExec(t, ExecOptions{
+			Runtime: RuntimeClaude,
+			Repo:    fixture.Repo,
+			BaseURL: testCase.root,
+			Argv:    helperCommand(),
+			Env:     helperEnvironment(helperModeEnvReport),
+			Home:    fixture.Home,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", testCase.instance, err)
+		}
+		if status != EXIT_OK {
+			t.Fatalf("%s: status = %d", testCase.instance, status)
+		}
+		hasWarning := strings.Contains(stderr, "plain http")
+		if hasWarning != testCase.warns {
+			t.Fatalf("%s: warning present = %v, want %v (stderr=%q)", testCase.instance, hasWarning, testCase.warns, stderr)
+		}
+	}
+}
+
 // TestExecRunsInTheCallersDirectory keeps relative paths working for the child, which the
 // plan requires: the command runs where the operator ran it.
 func TestExecRunsInTheCallersDirectory(t *testing.T) {

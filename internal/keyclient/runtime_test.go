@@ -223,6 +223,12 @@ func TestOpenCodeInjectionMergesTheUsersConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	values := environmentOf(t, injection.Env)
+	// A second copy of the variable would leave the child's effective configuration
+	// dependent on which duplicate the platform returns last, so the inherited one must
+	// be gone, not merely overridden.
+	if occurrences := countEnvName(injection.Env, ENV_OPENCODE_CONTENT); occurrences != 1 {
+		t.Fatalf("%s appears %d times in the child environment, want once", ENV_OPENCODE_CONTENT, occurrences)
+	}
 	merged := values[ENV_OPENCODE_CONTENT]
 	if strings.Contains(merged, inheritedContent) && merged == inheritedContent {
 		t.Fatalf("%s was not merged with anything", ENV_OPENCODE_CONTENT)
@@ -388,4 +394,17 @@ func indexOf(values []string, value string) int {
 		}
 	}
 	return -1
+}
+
+// countEnvName counts how many entries define name. More than one means the child's
+// effective value depends on how the platform resolves duplicates.
+func countEnvName(env []string, name string) int {
+	count := 0
+	for _, entry := range env {
+		entryName, _, found := strings.Cut(entry, "=")
+		if found && entryName == name {
+			count++
+		}
+	}
+	return count
 }
