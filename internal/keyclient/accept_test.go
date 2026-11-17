@@ -73,7 +73,6 @@ func prepareAcceptedHome(t *testing.T, repoInput, applicationID, plaintext strin
 }
 
 func TestParseCiphertextResultAcceptsBothShapes(t *testing.T) {
-	repo := "org/repo"
 	inner := `{"v":1,"alg":"` + repokey.Algorithm + `","epk":"AAAA","nonce":"BBBB","ciphertext":"CCCC"}`
 	bare := map[string]any{"v": 1, "alg": repokey.Algorithm, "epk": "AAAA", "nonce": "BBBB", "ciphertext": "CCCC"}
 	data := map[string]any{
@@ -107,7 +106,6 @@ func TestParseCiphertextResultAcceptsBothShapes(t *testing.T) {
 		if decoded.Version != 1 || decoded.EphemeralPublicKey != "AAAA" {
 			t.Fatalf("%s: inner envelope = %+v", name, decoded)
 		}
-		_ = repo
 	}
 }
 
