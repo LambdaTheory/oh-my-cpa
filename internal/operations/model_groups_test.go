@@ -429,6 +429,7 @@ func TestModelGroupsModelsReturnsSummedBalances(t *testing.T) {
 		{name: "partial evidence", amounts: []string{"41.14", ""}, want: "41.14"},
 		{name: "zero", amounts: []string{"0", ""}, want: "0"},
 		{name: "all missing", amounts: []string{"", ""}},
+		{name: "credits are not currency", amounts: []string{"42.5 credits", ""}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			service, ctx, nowMS := modelGroupsFixture(t)

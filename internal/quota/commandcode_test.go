@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -36,7 +37,7 @@ func TestParseCommandCodeQuotaProjectsTheCreditsAndSubscriptionDocuments(t *test
 	if plan == nil || plan.PlanType != "individual-goat" || plan.PlanLabel != "GOAT" || plan.Tier != "standard" {
 		t.Fatalf("plan = %+v", plan)
 	}
-	if plan.Credits == nil || plan.Credits.Balance != "42.5" {
+	if plan.Credits == nil || plan.Credits.Balance != "42.5 credits" {
 		t.Fatalf("credits = %+v", plan.Credits)
 	}
 	if len(windows) != 3 {
@@ -66,6 +67,10 @@ func TestParseCommandCodeQuotaProjectsTheCreditsAndSubscriptionDocuments(t *test
 		monthly.Used == nil || *monthly.Used != 27.5 || monthly.Limit == nil || *monthly.Limit != 70 ||
 		monthly.ResetAtMS == nil || *monthly.ResetAtMS != wantReset || monthly.ResetAccuracy != "exact" {
 		t.Fatalf("monthly = %+v", monthly)
+	}
+	if !strings.Contains(monthly.Note, "厂商套餐表") || !strings.Contains(monthly.Note, "GOAT") ||
+		!strings.Contains(monthly.Note, "非上游 API 精确值") {
+		t.Fatalf("monthly note = %q, want the plan-table denominator source", monthly.Note)
 	}
 }
 
@@ -157,8 +162,48 @@ func TestParseCommandCodeQuotaSubscriptionIsBestEffort(t *testing.T) {
 			if monthly.ResetAtMS != nil || monthly.ResetAccuracy != "" {
 				t.Fatalf("monthly reset invented without a successful subscription: %+v", monthly)
 			}
-			if plan == nil || plan.Credits == nil || plan.Credits.Balance != "42.5" {
+			if plan == nil || plan.Credits == nil || plan.Credits.Balance != "42.5 credits" {
 				t.Fatalf("credits balance lost: %+v", plan)
+			}
+		})
+	}
+}
+
+// The plan table is a fixed vendor document: only these exact ids carry a
+// confirmed monthly allowance. A suffixed id is a different plan until the
+// vendor states otherwise, so it keeps its credits and loses the percentage.
+func TestCommandCodePlanTableMatchesExactIDs(t *testing.T) {
+	raw := `{"credits":{"monthlyCredits":12.5},"windowLimits":{"fiveHour":{"used":1,"cap":5,"resetAt":1794944016000}}}`
+	subscription := `{"success":true,"data":{"planId":"%s"}}`
+	for _, test := range []struct {
+		planID        string
+		wantLabel     string
+		wantAllowance float64
+	}{
+		{planID: "individual-pro-v1", wantLabel: "Pro", wantAllowance: 80},
+		{planID: "individual-pro-annual", wantLabel: "individual-pro-annual", wantAllowance: 0},
+	} {
+		t.Run(test.planID, func(t *testing.T) {
+			plan, windows, err := ParseCommandCodeQuota([]byte(raw), []byte(fmt.Sprintf(subscription, test.planID)), 1794900000000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan == nil || plan.PlanLabel != test.wantLabel {
+				t.Fatalf("plan = %+v, want label %q", plan, test.wantLabel)
+			}
+			if test.wantAllowance == 0 {
+				monthly := windows[len(windows)-1]
+				if monthly.ID != "monthly" || monthly.Limit != nil || monthly.UsedPercent != nil {
+					t.Fatalf("unknown plan got a denominator: %+v", monthly)
+				}
+				if !strings.Contains(monthly.Note, "不在厂商额度表内") {
+					t.Fatalf("monthly note = %q, want the out-of-table explanation", monthly.Note)
+				}
+				return
+			}
+			monthly := windows[len(windows)-1]
+			if monthly.Limit == nil || *monthly.Limit != test.wantAllowance || !percentIs(monthly.UsedPercent, (test.wantAllowance-12.5)/test.wantAllowance*100) {
+				t.Fatalf("monthly = %+v, want the %s allowance", monthly, test.planID)
 			}
 		})
 	}

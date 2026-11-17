@@ -241,6 +241,9 @@ func TestQuotaManualRefreshAndOverviewIncludeCompatibilityCredentials(t *testing
 	if quota.Provider != "commandcode" || len(quota.Windows) != 3 {
 		t.Fatalf("commandcode reading = %+v", quota)
 	}
+	if quota.Plan == nil || quota.Plan.Credits == nil || quota.Plan.Credits.Balance != "50 credits" {
+		t.Fatalf("commandcode plan = %+v, want the readable credit balance", quota.Plan)
+	}
 	if fixture.urlReadCount("credits") != 1 || fixture.urlReadCount("subscriptions") != 1 {
 		t.Fatalf("commandcode reads = credits %d, subscriptions %d, want 1 each",
 			fixture.urlReadCount("credits"), fixture.urlReadCount("subscriptions"))
@@ -293,6 +296,11 @@ func TestQuotaManualRefreshAndOverviewIncludeCompatibilityCredentials(t *testing
 type refreshedQuota struct {
 	Provider string                       `json:"provider"`
 	Windows  []map[string]json.RawMessage `json:"windows"`
+	Plan     *struct {
+		Credits *struct {
+			Balance string `json:"balance"`
+		} `json:"credits"`
+	} `json:"plan"`
 }
 
 // refreshQuotaFromBody performs one console refresh and returns the normalized

@@ -45,8 +45,10 @@ var commandCodePlanAllowances = map[string]struct {
 }
 
 // commandCodePlanFor resolves a planId to the vendor's display name and
-// allowance. The longest matching prefix wins, so "individual-goat" is not read
-// as a shorter key that happens to prefix it.
+// allowance. Only an exact table key matches: the vendor has not published a
+// suffix contract (an annual or revision suffix is a different plan), and a
+// prefix guess would give a new plan an unconfirmed denominator. An unknown
+// plan keeps its remaining credits but no percentage.
 func commandCodePlanFor(planID string) (string, float64) {
 	id := strings.ToLower(strings.TrimSpace(strings.ReplaceAll(planID, "_", "-")))
 	if id == "" {
@@ -55,17 +57,7 @@ func commandCodePlanFor(planID string) (string, float64) {
 	if plan, ok := commandCodePlanAllowances[id]; ok {
 		return plan.name, plan.credits
 	}
-	bestKey := ""
-	for key := range commandCodePlanAllowances {
-		if len(key) > len(bestKey) && strings.HasPrefix(id, key) {
-			bestKey = key
-		}
-	}
-	if bestKey == "" {
-		return "", 0
-	}
-	plan := commandCodePlanAllowances[bestKey]
-	return plan.name, plan.credits
+	return "", 0
 }
 
 type rawCommandCodeWindow struct {
@@ -133,7 +125,7 @@ func ParseCommandCodeQuota(creditsRaw, subscriptionRaw []byte, nowMS int64) (*Qu
 	}
 	planName, allowance := commandCodePlanFor(planID)
 	plan := commandCodeQuotaPlan(planID, planName, credits.Credits.MonthlyCredits)
-	if window := commandCodeMonthlyWindow(planID, allowance, credits.Credits.MonthlyCredits, credits.Credits.PurchasedCredits, subscription, nowMS); window != nil {
+	if window := commandCodeMonthlyWindow(planID, planName, allowance, credits.Credits.MonthlyCredits, credits.Credits.PurchasedCredits, subscription, nowMS); window != nil {
 		windows = append(windows, *window)
 	}
 	return plan, windows, nil
@@ -192,7 +184,7 @@ func commandCodeRateLimitWindow(id, label, kind string, periodHours float64, raw
 // max(allowance, remaining) + purchased, used = pool - (remaining + purchased).
 // A plan outside the vendor table has no denominator; its window states the
 // remaining credits in the note instead of inventing a percentage.
-func commandCodeMonthlyWindow(planID string, allowance float64, monthlyCredits, purchasedCredits *float64, subscription rawCommandCodeSubscription, nowMS int64) *QuotaWindow {
+func commandCodeMonthlyWindow(planID, planName string, allowance float64, monthlyCredits, purchasedCredits *float64, subscription rawCommandCodeSubscription, nowMS int64) *QuotaWindow {
 	if monthlyCredits == nil {
 		return nil
 	}
@@ -218,6 +210,10 @@ func commandCodeMonthlyWindow(planID string, allowance float64, monthlyCredits, 
 			window.UsedPercent = floatPointer(usedPercent)
 			window.RemainingPercent = floatPointer(100 - usedPercent)
 		}
+		// The vendor reports remaining credits, not the granted allowance; the
+		// denominator is mirrored from the vendor CLI's plan table. Say so, so
+		// the window is not read as an upstream-exact cap.
+		window.Note = fmt.Sprintf("分母来自厂商套餐表（%s），非上游 API 精确值", planName)
 	} else {
 		name := planID
 		if name == "" {
@@ -251,7 +247,10 @@ func commandCodeQuotaPlan(planID, planName string, monthlyCredits *float64) *Quo
 	}
 	plan := &QuotaPlan{PlanType: planType, PlanLabel: label, Tier: tier}
 	if monthlyCredits != nil {
-		plan.Credits = &QuotaCredits{Balance: formatCommandCodeCredits(*monthlyCredits)}
+		// Command Code credits are an allowance unit, not dollars. The unit
+		// keeps the balance out of monetary projections (model-group sums) and
+		// remains the text the quota page shows as "Credit balance".
+		plan.Credits = &QuotaCredits{Balance: fmt.Sprintf("%s credits", formatCommandCodeCredits(*monthlyCredits))}
 	}
 	return plan
 }

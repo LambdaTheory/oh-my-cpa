@@ -202,10 +202,19 @@ func CapabilitiesForProvider(provider string) QuotaCapabilities {
 			ClearCooldownSupported: true,
 			ResetCreditSupported:   true,
 		}
-	case "claude", "antigravity", "kimi", "xai", "devin", "meta", "commandcode", "opencode":
+	case "claude", "antigravity", "kimi", "xai", "devin", "meta", "commandcode":
 		return QuotaCapabilities{
 			RefreshSupported:       true,
 			ClearCooldownSupported: true,
+			ResetCreditSupported:   false,
+		}
+	case "opencode":
+		// The credential is an openai-compatibility key, not an AuthFile, so
+		// the clear-cooldown operation (which resolves through AuthFiles) has
+		// nothing to act on. Advertising it would offer a 404 action.
+		return QuotaCapabilities{
+			RefreshSupported:       true,
+			ClearCooldownSupported: false,
 			ResetCreditSupported:   false,
 		}
 	default:

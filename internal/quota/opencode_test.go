@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/oh-my-cpa/oh-my-cpa/internal/authfailure"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 )
 
@@ -242,6 +244,70 @@ func TestOpenCodeQuotaRateLimitRetainsTheTypedBackoff(t *testing.T) {
 	}
 	if result.Status != "stale" || len(result.Windows) != 1 {
 		t.Fatalf("prior windows not retained: %+v", result)
+	}
+}
+
+// An expired or revoked key is an authentication failure on the usage read,
+// exactly as it is on Command Code's credits read. Reading it as a generic
+// upstream error would invite the operator to retry a credential that must be
+// reconfigured instead.
+func TestQuotaAuthenticationRejectionAsksForReauth(t *testing.T) {
+	for _, provider := range []string{"commandcode", "opencode"} {
+		for _, status := range []int{401, 403} {
+			t.Run(fmt.Sprintf("%s/%d", provider, status), func(t *testing.T) {
+				response := management.ApiCallResponse{
+					StatusCode: status,
+					Body:       json.RawMessage(`{"error":{"code":"invalid_api_key","message":"synthetic-private"}}`),
+				}
+				var client CPAClient = &mockCPAClient{apiCallFunc: func(context.Context, management.ApiCallRequest) (management.ApiCallResponse, error) {
+					return response, nil
+				}}
+				file := management.AuthFile{AuthIndex: "auth", Type: provider, Provider: provider}
+				if provider == "opencode" {
+					compat := openCodeCompatibilityClient(management.OpenAICompatibility{
+						Name: "opencode", BaseURL: "https://opencode.ai/zen/go/v1",
+						APIKeyEntries: []management.APIKeyEntry{{AuthIndex: "auth"}},
+					})
+					compat.apiCallFunc = func(context.Context, management.ApiCallRequest) (management.ApiCallResponse, error) {
+						return response, nil
+					}
+					client = compat
+					file = management.AuthFile{AuthIndex: "auth", Type: "openai-compatibility", Provider: "opencode"}
+				}
+				result, err := NewService(client).RefreshCredentialQuota(context.Background(), file, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if result.Recommendation.Status != "needs_reauth" || result.Recommendation.Action != "reauth" {
+					t.Fatalf("recommendation = %+v, want needs_reauth/reauth", result.Recommendation)
+				}
+				if result.Failure == nil || result.Failure.Source != authfailure.UpstreamQuota {
+					t.Fatalf("failure = %+v, want upstream quota evidence", result.Failure)
+				}
+			})
+		}
+	}
+}
+
+// An unrelated 200 document must not count as a quota observation: the reader
+// recognizes this endpoint only by the usage key it publishes.
+func TestOpenCodePayloadRecognitionRequiresUsage(t *testing.T) {
+	if !isRecognizedQuotaPayload(OpenCodeUsageURL, []byte(`{"usage":{}}`)) {
+		t.Fatal("an empty usage document is a recognized publication")
+	}
+	if isRecognizedQuotaPayload(OpenCodeUsageURL, []byte(`{"windows":[]}`)) {
+		t.Fatal("an unrelated document was accepted as a quota reading")
+	}
+}
+
+// Clear-cooldown resolves a credential through AuthFiles, so it cannot act on
+// an openai-compatibility key. The opencode row must not advertise it.
+func TestOpenCodeCapabilitiesDoNotAdvertiseCooldownClearing(t *testing.T) {
+	if caps := CapabilitiesForProvider("opencode"); !caps.RefreshSupported || caps.ClearCooldownSupported || caps.ResetCreditSupported {
+		t.Fatalf("opencode capabilities = %+v, want refresh only", caps)
+	}
+	if caps := CapabilitiesForProvider("commandcode"); !caps.RefreshSupported || !caps.ClearCooldownSupported {
+		t.Fatalf("commandcode capabilities = %+v, want an AuthFile credential", caps)
 	}
 }
 
