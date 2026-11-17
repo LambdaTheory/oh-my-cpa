@@ -13,8 +13,8 @@ summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密�
 
 ## 评审入口
 
-- 先读 §2 的十个设计结论；要拍板的看 §12；要验收的看 §10。
-- 最容易被实现细节绑死、需要 PM 先确认的三处：`$OMC_HOME` 默认一份还是每 agent 一份（§2.1、§12 第 1 条）、Codex `exec` 只接受 `codex` 本身（§2.6、§12 第 3 条）、OpenCode 不自动写 `models`（§2.7、§12 第 4 条）。
+- 先读 §2 的十个设计结论；PM 已定的八条看 §12；要验收的看 §10。
+- 三处关键取舍已定（§12）：`$OMC_HOME` 默认一用户一份、不按 agent 推导；Codex `exec` 只接受 `codex` 本身；OpenCode 不自动写 `models`。
 - 本计划没有改任何产品代码；§7.2 的文件归属是给 S2a/S2b/S3/S4 并行开工用的，不是已经存在的文件。
 
 ## 0. 一页结论
@@ -73,7 +73,7 @@ $OMC_HOME/
 
 **备选**：用 `OMCPA_HOME` 跟服务端 `OMCPA_*` 前缀统一。代价是与需求原文不一致，且这个变量是客户端本地状态，不是部署配置；如果 PM 更看重前缀统一，必须在 S2 开工前改成一个常量，不能两个都读。
 
-**每个 agent 各一对密钥**：默认 home 是「每个操作系统用户一份」，同一用户下的两个 agent 会共用同一对密钥。需求说「每个 agent 各一对密钥（现有设计，不动）」，因此运行手册给出约定：需要独立密钥对的 agent 设置自己的 `OMC_HOME`，例如 `~/.omc/claude`、`~/.omc/codex`。不自动按 `OMCPA_AGENT_NAME` 推导 home，原因见 §12 第 1 条。
+**每个 agent 各一对密钥**：默认 home 是「每个操作系统用户一份」，同一用户下的两个 agent 会共用同一对密钥。需求说「每个 agent 各一对密钥（现有设计，不动）」，因此运行手册给出约定：需要独立密钥对的 agent 设置自己的 `OMC_HOME`，例如 `~/.omc/claude`、`~/.omc/codex`。PM 2026-11-17 已定：默认 `OMC_HOME=~/.omc`，不按 `OMCPA_AGENT_NAME` 推导（§12 第 1 条）。
 
 ### 2.2 base URL 从哪来
 
@@ -117,7 +117,7 @@ $OMC_HOME/
 
 **理由**：agent 用 shell 重定向写盘时，`0600` 取决于 shell 的 umask，Windows 上根本没有 `0600` 语义；把密文回显进命令也容易进 transcript。`key accept` 是一个地方做校验、权限、状态更新，还能顺手证明信封与私钥匹配。
 
-**备选**：让 agent 自己 `cat > $OMC_HOME/envelopes/...`。路径符合需求，但拿不到权限保证，也没有解密校验；不选。另一个备选是 `key accept --remote` 让 CLI 直接调 MCP 取密文，agent 完全不碰密文；这需要 CLI 持有管理密钥，见 §12 第 2 条，本轮不做。
+**备选**：让 agent 自己 `cat > $OMC_HOME/envelopes/...`。路径符合需求，但拿不到权限保证，也没有解密校验；不选。另一个备选是 `key accept --remote` 让 CLI 直接调 MCP 取密文，agent 完全不碰密文；这需要 CLI 持有管理密钥，PM 2026-11-17 已定本轮只做 stdin（§12 第 2 条），`--remote` 不做。
 
 ### 2.4 `key status` 的「最后一次审批状态」从哪读
 
@@ -1167,7 +1167,7 @@ pnpm test:fast
 pnpm verify
 ```
 
-所有测试命令带 `ASSISTANT_NO_SEND=1`。e2e 加 `package.json` 的 `test:key-e2e` 只是入口，不会进 `pnpm verify` 的默认门禁；是否进 CI 由 PM 决定（见 §12）。
+所有测试命令带 `ASSISTANT_NO_SEND=1`。e2e 加 `package.json` 的 `test:key-e2e` 只是本地入口，不会进 `pnpm verify` 的默认门禁；PM 2026-11-17 已定不进 `verify:full`/CI（§12 第 8 条）。
 
 ## 9. 文档清单
 
@@ -1180,7 +1180,7 @@ pnpm verify
 | `docs/install.md` | 「Native executable」/「From source」后补一句：二进制自带 `key`，用法见运行手册；安装不生成 key | S5 |
 | `docs/install-for-agents.md` | 同上，给 agent 的 runbook 加一段「装完后 agent 怎么用 key」 | S5 |
 | `docs/testing.md` | 在 claim map 加：internal/keyclient 单测、进程级注入测试、install 临时配置、e2e 的归属；Unix/Windows 权限断言的分层 | S5（等 S2a–S4 的测试名确定后补） |
-| `README.md` / `README.zh-CN.md` | 建议不改：这是 agent 使用端能力，不是新用户安装后第一眼要看的入口；若 PM 认为要提一句，加一条能力列表即可 | 待定 |
+| `README.md` / `README.zh-CN.md` | 不改：这是 agent 使用端能力，不是新用户安装后第一眼要看的入口；如后续要加，另开文档改动 | 不改（本轮） |
 
 运行手册大纲：
 
@@ -1214,11 +1214,11 @@ pnpm verify
    - Claude Code 的 OAuth 登录态是否优先于 `ANTHROPIC_AUTH_TOKEN` 未实测；S3 先跑探针，若 OAuth 优先，运行手册要求退出登录或使用 `--settings`。
    - Codex 的 `-c` 位置（必须在子命令前）和 `env_key` 读取已在 0.167.1 实测；其他版本可能不同。`exec` 只接受 `codex` 本身，包装脚本不支持。
    - OpenCode 1.19.5 的 `OPENCODE_CONFIG_CONTENT` 已实测生效；与文件配置的合并语义未定，所以我们发送完整合并 JSON。v2 schema 出现后本工具会写 v1，可能被忽略；运行手册要求核对 `opencode --version`。
-3. **Windows ACL**：代码用 `x/sys/windows` 构造 DACL，但本机没有 Windows Go 工具链，运行时断言没有本地证据；只能做 `GOOS=windows` 编译检查。需要在有 Windows Go runner 的环境跑 `home_windows_test.go`，或由 PM 接受「编译 + 代码审查」作为本轮证据。
+3. **Windows ACL**：代码用 `x/sys/windows` 构造 DACL，但本机没有 Windows Go 工具链，运行时断言没有本地证据；只能做 `GOOS=windows` 编译检查。PM 2026-11-17 已定：完整运行时 ACL 断言记为缺口，本轮最小证据是 `GOOS=windows` 编译 + 代码审查（§12 第 7 条）。
 4. **Windows 文件系统**：FAT32/exFAT/部分网络盘不支持 ACL，`home_insecure` 会拒绝写私钥；这是有意为之，但会让 `$OMC_HOME` 放在这类盘上的用户用不了。运行手册说明把 home 放在 NTFS 用户目录。
-5. **OpenCode `models` 与 `npm`**：`provider.oh-my-cpa` 没有 `models` 映射时，某些 OpenCode 版本可能不显示模型。本计划不自动生成模型列表（需要网关 `/v1/models` 和选择策略，超出范围）。如果 S8 证明必须写，PM 决定是否加 `--model`（范围变更）。`npm: "@ai-sdk/openai-compatible"` 是按自定义 provider 的常见写法；S4 用 `opencode debug config` 验证，若该版本不需要或包名不同，只调整 install 的常量，不改用户配置。
-6. **同一用户多 agent 共用 home**：默认 `~/.omc` 是一用户一份；两个 agent 不设各自的 `OMC_HOME` 时会共用一对密钥。需求说「每个 agent 各一对」，运行手册给出 per-agent home 约定，但工具不强制。见 §12 第 1 条。
-7. **`key status --remote` 持管理密钥**：这是 key 客户端唯一的网络路径，只读；如果把只读 MCP key 放进 `OMCPA_CPA_MANAGEMENT_KEY`，也能工作。若 PM 认为客户端不应接触任何管理密钥，砍掉 `--remote`，AC-3 退化为「本地最后一次已知状态」。
+5. **OpenCode `models` 与 `npm`**：`provider.oh-my-cpa` 没有 `models` 映射时，某些 OpenCode 版本可能不显示模型。PM 2026-11-17 已定不写 `models`（§12 第 4 条）；如果 S8 证明必须写，另开范围，不在本轮加 `--model`。`npm: "@ai-sdk/openai-compatible"` 是按自定义 provider 的常见写法；S4a 用 `opencode debug config` 验证，若该版本不需要或包名不同，只调整 install 的常量，不改用户配置。
+6. **同一用户多 agent 共用 home**：默认 `~/.omc` 是一用户一份；两个 agent 不设各自的 `OMC_HOME` 时会共用一对密钥。PM 2026-11-17 已定默认 `~/.omc`、不按 agent 推导（§12 第 1 条）；需要独立密钥对的 agent 显式设 `OMC_HOME`，工具不强制。
+7. **`key status --remote` 持管理密钥**：这是 key 客户端唯一的网络路径，只读。PM 2026-11-17 已定用 `OMCPA_CPA_MANAGEMENT_KEY`（§12 第 6 条）；把只读 MCP key 放进同一变量也可用。
 8. **信封进入 transcript**：`repo_key_ciphertext` 的密文会出现在 agent 的对话里，`key accept` 又要求把它通过 stdin 传入；密文本身不是明文，但没有私钥也能被转发。运行手册说明「信封不是明文，但也不要提交/分享」。
 9. **purge 不吊销服务端 key**：用户可能以为 purge 等于停用；命令输出和运行手册都明说，但这是产品语义风险，需要在验收时确认文案够清楚。
 10. **备份里的明文**：install 的备份可能含用户原有的其他密钥；purge 只删含本仓库明文的备份，其他保留。备份目录本身需要 0700/ACL，否则等于把用户的其他密钥暴露给同机其他用户。
@@ -1226,16 +1226,18 @@ pnpm verify
 12. **Windows 基线红项**：`internal/app` 的 retention 时区测试、`test:self` 的符号链接/zip、并行探针的 socket 缓冲等是既有问题，不计入本次；验收报告要单列。
 13. **项目级/配置层覆盖**：Claude Code 的项目本地/项目 settings 优先于用户级，Codex 的项目 `.codex/config.toml` 在受信任目录和 profile 层的 `model_provider` 也可能优先于用户级。`install` 只写用户级，运行手册要求检查项目级和 profile 同名配置；`exec` 的 `-c` 是 session 级，优先于这些层，所以 `exec` 不受这条影响。
 
-## 12. 待定（PM 拍板）
+## 12. PM 已定（2026-11-17）
 
-1. **per-agent home**：默认 `~/.omc` + 运行手册约定 `~/.omc/<agent>`，还是按 `OMCPA_AGENT_NAME` 自动推导？推荐前者（可预测、`key status` 在任何 shell 都能看到同一个 home）；自动推导会让没设环境变量的 shell 看到空状态。若选自动，必须在 S2a 定死。
-2. **`key accept --remote`**：本轮只做 stdin，还是也给 CLI 管理密钥直接取密文？推荐本轮 stdin（保持客户端默认离线；密文不是明文）；`--remote` 作为后续增强。若 PM 认为 stdin 对 agent 太别扭，可在 S2b 加，但要把管理密钥边界写进 AC。
-3. **Codex exec 的限制**：只接受 `codex` 本身（推荐，避免 argv 明文和临时 home），还是支持包装脚本？支持包装脚本需要 `CODEX_HOME` 临时目录或 argv token，两者都有明显代价；推荐保持限制，运行手册写明。
-4. **OpenCode `models`**：不写（推荐，本轮不猜模型），还是加 `--model`/自动拉 `/v1/models`？后者是范围变更，需要新的 AC。
-5. **备份保留策略**：保留到用户手动删（推荐，除 purge 命中本 key 的备份），还是限制最近 N 份？限制会删掉恢复点；推荐不自动限。
-6. **`key status --remote` 的凭据**：允许 `OMCPA_CPA_MANAGEMENT_KEY`（推荐，和 `mcp` 一致）还是只允许 `OMCPA_MCP_READONLY_KEY`？只允许只读 key 更安全，但用户可能没配。
-7. **Windows ACL 证据**：接受 `GOOS=windows` 编译 + 代码审查（本机没有 Windows Go），还是要求 Mac/CI 的 Windows runner 跑 `home_windows_test.go`？推荐后者作为 AC-8 的完整证据，前者作为本轮可交付的最小证据。
-8. **e2e 是否进 CI**：`test:key-e2e` 只作为本地入口（推荐，先不改变 CI 门禁），还是进 `verify:full`？进 CI 会增加构建/启动时间，且 fake CPA 需要维护。
+1. **per-agent home** — 结论：默认 `OMC_HOME=~/.omc`，不按 `OMCPA_AGENT_NAME` 推导。需要独立密钥对的 agent 显式设 `OMC_HOME=~/.omc/<agent>`；`key status` 在没有该环境变量的 shell 里仍看默认 home。
+2. **`key accept`** — 结论：本轮只做 stdin，不做 `--remote`。`repo_key_ciphertext` 的结果由 agent 通过 stdin 交给 `key accept`；CLI 不为这条命令持有管理密钥。
+3. **Codex exec** — 结论：只接受 `codex`（`codex.exe`）本身，不支持包装脚本。明文只经 `OMC_REPO_KEY` 环境变量加 `-c ... env_key`；包装脚本需要临时 `CODEX_HOME` 或 argv token，代价更大，不做。
+4. **OpenCode `models`** — 结论：不写 `models` 映射，不自动拉 `/v1/models`；install 只写 provider 的 `options`，模型由使用者的现有配置或网关选择。
+5. **备份保留策略** — 结论：不自动限份。install 保留备份，purge 只删含本仓库明文的备份（或 `backup_contains_key=true`），其余保留并列出。
+6. **`key status --remote` 的凭据** — 结论：用 `OMCPA_CPA_MANAGEMENT_KEY`，和 `mcp` 一致；只读 MCP key 放在同一变量也可用。`--remote` 仍是唯一网络路径、只读、可缺省。
+7. **Windows ACL 证据** — 结论：完整运行时 ACL 断言记为缺口；本轮最小证据是 `GOOS=windows` 编译加 `home_windows.go` 代码审查。AC-8 的 0600 主张由 Unix 测试承担，Windows 只声明 ACL 等价实现，不写成已验。
+8. **e2e 入口** — 结论：`test:key-e2e` 只作为本地入口，不进 `verify:full`/CI；e2e 仍需可复跑命令与证据，进 CI 另开决定。
+
+**拆分**：S2 拆 S2a/S2b、S4 拆 S4a/S4b 均采纳；S4b 依赖 S4a 的 JSON/TOML 编辑签名。
 
 ## 13. 工作量与关键路径
 
@@ -1289,4 +1291,4 @@ S1 75
 - [x] `pnpm test:fast --base ba9e2ee7` 已跑：本文件通过；全量 docs 的失败项全部在基线已有的 T18 交付文档（9 missing-path + 25 line-reference），不是本文件引入，也没有改那些文件。
 - [x] 本文件里的命令面与 `--help` 草案一致；S2a/S2b/S3/S4 的文件归属无重叠。
 - [x] AC-1～9 每条都能在 §10 找到切片、测试/证据和缺口。
-- [ ] §12 的待定项已由 PM 给出选择，或明确保留为「按推荐执行」。
+- [x] §12 的 8 条 PM 决定已写入（2026-11-17），后续按结论执行。
