@@ -600,7 +600,12 @@ reset cannot last; a non-increasing trend, or an ETA at or after the reset,
 lasts; insufficient evidence is null with one of four reason classes - reading
 failed, insufficient history, unknown window boundary (which includes windows
 with no fixed period) and abnormal usage. A window with neither a reset nor a
-period stays in the result and reports the no-cycle reason.
+period stays in the result and reports the no-cycle reason. A rolling window is
+not an undecided risk row: its reset moves with the observation, so the console
+marks it with console-only `is_rolling_window` and shows only the current share
+and next reset. The capability/MCP contract is unchanged; on the wire that row
+keeps `lasts_until_reset: null` and the deprecated `rolling_window` reason, and
+no console-only field is sent.
 
 The deprecated prediction vocabulary remains for one release, computed from
 the same result so it cannot disagree: `verdict` is derived from
@@ -631,11 +636,16 @@ provider, and adds prediction-call duration `duration_ms` plus nullable cycle ac
 (`window_start_ms`, `remaining_percent`, `uniform_projected_percent_at_reset`,
 `remaining_window_hours`, `window_error_hours`, `remaining_tokens`,
 `capacity_error_percent` and optional `capacity_unavailable`), plus the
-console-only `unavailable_reason` and `reading_stale` flags. `unavailable_reason`
-names the console's four-category vocabulary for an undecided row and
-`reading_stale` marks a reading past its freshness bound; both are excluded from
-capability JSON, MCP results and Feishu. These
-console fields are excluded from capability JSON and schemas. Dashboard-only unknown
+console-only `unavailable_reason`, `reading_stale`, `is_rolling_window` and
+`usage_requests` fields. `unavailable_reason` names the console's four-category
+vocabulary for an undecided risk row; `reading_stale` marks a reading past its
+freshness bound; `is_rolling_window` marks a window with no fixed cycle; and
+`usage_requests` is the recorded request count for the cycle that was read (nil
+when usage was not read, zero when the read found no traffic). The panel keeps
+rolling rows to the current share and reset, collapses zero-share/zero-traffic
+rows into one expandable idle line, folds stale rows into an expandable expired
+section, and counts only risk rows in the cannot/unknown summary. These console
+fields are excluded from capability JSON, schemas, MCP results and Feishu. Dashboard-only unknown
 placeholders do not enter quota_prediction or digest results and cannot displace their
 actual windows. Providers without refresh support or stored window evidence are omitted.
 Matching passive observations can establish missing standard windows without a snapshot;

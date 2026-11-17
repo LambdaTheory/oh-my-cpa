@@ -51,24 +51,50 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
   const sample = PREDICTION_RESPONSE.providers[0].items[0];
   const predictions = { ...PREDICTION_RESPONSE, providers: [
     ...PREDICTION_RESPONSE.providers,
-    { provider: 'claude', items: [{
-      ...sample, provider: 'claude', credential_label: 'stale@example.com',
-      expected_used_percent: null, lasts_until_reset: null, reading_stale: true,
-      unavailable_reason: 'reading_failed', verdict: 'unknown', reasons: ['stale_reading'],
-      observed_at_ms: PREDICTION_RESPONSE.generated_at_ms - 90_000_000, data_age_seconds: 90000,
-      exhaustion_eta_ms: null, projected_percent_at_reset: null,
-      uniform_projected_percent_at_reset: null, remaining_percent: null,
+    { provider: 'claude', items: [
+      {
+        ...sample, provider: 'claude', auth_index: 'claude-risk', credential_label: 'claude@example.com',
+        used_percent: 50, expected_used_percent: 55, lasts_until_reset: null,
+        unavailable_reason: 'history_insufficient', verdict: 'unknown',
+        exhaustion_eta_ms: null, reasons: ['fewer_than_three_buckets'],
+      },
+      {
+        ...sample, provider: 'claude', auth_index: 'claude-stale', credential_label: 'stale@example.com',
+        window_id: 'stale', expected_used_percent: null, lasts_until_reset: null, reading_stale: true,
+        unavailable_reason: 'reading_failed', verdict: 'unknown', reasons: ['stale_reading'],
+        observed_at_ms: PREDICTION_RESPONSE.generated_at_ms - 90_000_000, data_age_seconds: 90000,
+        exhaustion_eta_ms: null, projected_percent_at_reset: null,
+        uniform_projected_percent_at_reset: null, remaining_percent: null,
+      },
+    ] },
+    { provider: 'antigravity', items: [{
+      ...sample, provider: 'antigravity', auth_index: 'antigravity-rolling', credential_label: 'gravity@example.com',
+      is_rolling_window: true, used_percent: 40, expected_used_percent: null,
+      lasts_until_reset: null, exhaustion_eta_ms: null, projected_percent_at_reset: null,
+      uniform_projected_percent_at_reset: null, remaining_percent: 60,
+      unavailable_reason: 'rolling_window', verdict: 'unknown', reasons: ['rolling_window'],
     }] },
-    { provider: 'antigravity', items: [{ ...sample, provider: 'antigravity', credential_label: 'gravity@example.com' }] },
-    { provider: 'ollama', items: [{
-      ...sample, provider: 'ollama', credential_label: 'ollama@example.test',
-      expected_used_percent: null, lasts_until_reset: null, unavailable_reason: 'window_boundary_unknown',
-      verdict: 'unknown', used_percent: 95, reset_at_ms: null,
-      exhaustion_eta_ms: null, reasons: ['boundary_unknown'], remaining_tokens: null,
-    }] },
+    { provider: 'ollama', items: [
+      {
+        ...sample, provider: 'ollama', auth_index: 'ollama-boundary', credential_label: 'ollama@example.test',
+        expected_used_percent: null, lasts_until_reset: null, unavailable_reason: 'window_boundary_unknown',
+        verdict: 'unknown', used_percent: 95, reset_at_ms: null,
+        exhaustion_eta_ms: null, reasons: ['boundary_unknown'], remaining_tokens: null,
+      },
+      {
+        ...sample, provider: 'ollama', auth_index: 'ollama-idle', credential_label: 'idle@example.test',
+        window_id: 'daily', used_percent: 0, usage_requests: 0, expected_used_percent: null,
+        lasts_until_reset: true, verdict: 'on_track', exhaustion_eta_ms: null, reasons: [],
+      },
+    ] },
     { provider: 'step', items: [{
-      ...sample, provider: 'step', credential_label: 'step@example.test',
+      ...sample, provider: 'step', auth_index: 'step-main', credential_label: 'step@example.test',
       lasts_until_reset: true, verdict: 'on_track', used_percent: 25, exhaustion_eta_ms: null, reasons: [],
+    }] },
+    { provider: 'openrouter', items: [{
+      ...sample, provider: 'openrouter', auth_index: 'openrouter-idle', credential_label: 'openrouter@example.test',
+      window_id: 'daily', used_percent: 0, usage_requests: 0, expected_used_percent: null,
+      lasts_until_reset: true, verdict: 'on_track', exhaustion_eta_ms: null, reasons: [],
     }] },
   ] };
   await page.route('**/omc/api/**/preferences', (route) => route.fulfill({
@@ -94,6 +120,7 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
     await providerSummaries.count() === 5
       && await codexSummary.count() === 1
       && await panel.locator('details[open]').count() === 0
+      && await panel.getByRole('region', { name: 'OpenRouter', exact: true }).count() === 0
       && await panel.getByText('operator@example.com').isHidden());
   await codexSummary.focus();
   await page.keyboard.press('Enter');
@@ -109,16 +136,17 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
     return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   }, sample.exhaustion_eta_ms);
   check('the dashboard groups and renders the four-field operator prediction row',
-    await panel.locator('li[data-lasts="no"]').count() === 2
+    await panel.locator('li[data-lasts="no"]').count() === 1
       && await panel.locator('li[data-lasts="yes"]').count() === 1
       && await panel.locator('li[data-lasts="unknown"]').count() === 2
+      && await panel.locator('li[data-kind="rolling"]').count() === 1
       && (await codexRow.locator('b').allTextContents()).join('|') === '65.0%|85.7%|20.7 pts under'
       && await codexRow.getByText('Actual', { exact: true }).isVisible()
       && await codexRow.getByText('Expected', { exact: true }).isVisible()
       && await codexRow.getByText('Deviation', { exact: true }).isVisible()
       && await codexRow.getByText(expectedETA, { exact: true }).isVisible()
       && await codexRow.getByText('Cannot last', { exact: true }).isVisible()
-      && await panel.getByTestId('prediction-summary').innerText() === '2 windows cannot last until reset · 2 undecidable'
+      && await panel.getByTestId('prediction-summary').innerText() === '1 windows cannot last until reset · 2 undecidable'
       && (await codexSummary.innerText()).includes('1 credentials · 1 cannot last')
       && await panel.getByText('Computed in 7 ms', { exact: true }).isVisible());
   const stepRow = panel.getByRole('region', { name: 'Step', exact: true }).locator('li');
@@ -128,11 +156,37 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
       && await stepRow.getByText('Will not exhaust', { exact: true }).isVisible());
   const groups = await panel.locator('section').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('aria-label')));
   check('provider headings follow dashboard order', groups.join(',') === 'Antigravity,Claude,Codex,Ollama,Step', groups.join(','));
-  const staleRow = panel.getByRole('region', { name: 'Claude', exact: true }).locator('li');
-  const boundaryRow = panel.getByRole('region', { name: 'Ollama', exact: true }).locator('li');
+  const rollingRow = panel.getByRole('region', { name: 'Antigravity', exact: true }).locator('ul > li');
+  check('a rolling window shows only the current share and next reset, without an ETA or risk conclusion',
+    (await rollingRow.locator('b').allTextContents()).join('|') === '40.0%'
+      && await rollingRow.getByText('Rolling window', { exact: true }).isVisible()
+      && (await rollingRow.locator(':scope > p').allTextContents()).some((text) => text.includes('Rolling window (no fixed period)'))
+      && await rollingRow.getByText('A rolling window has no fixed period; only the current usage and next reset are shown.', { exact: true }).isVisible()
+      && await rollingRow.getByText('Expected', { exact: true }).count() === 0
+      && await rollingRow.getByText('Exhausts', { exact: true }).count() === 0
+      && await rollingRow.getByText('Cannot be estimated', { exact: true }).count() === 0);
+  const idle = panel.getByTestId('prediction-idle');
+  check('zero-traffic windows collapse into one idle line and an idle-only provider group is not rendered',
+    await idle.locator('summary').innerText() === 'Idle windows hidden: 2 (zero traffic and zero usage this cycle)'
+      && await idle.evaluate((node) => !node.open)
+      && await idle.getByText('idle@example.test').isHidden());
+  await idle.locator('summary').click();
+  check('the idle line expands to the windows it covers',
+    await idle.getByText('idle@example.test').isVisible()
+      && await idle.getByText('openrouter@example.test').isVisible());
+  await idle.locator('summary').click();
+  const claudeGroup = panel.getByRole('region', { name: 'Claude', exact: true });
+  const expired = claudeGroup.locator('details').filter({ hasText: 'Expired / unavailable (1)' }).last();
+  const staleRow = expired.locator('li');
+  check('a stale reading is folded out of the main list until its expired section opens',
+    await expired.evaluate((node) => !node.open)
+      && await staleRow.isHidden()
+      && await claudeGroup.getByText('claude@example.com').isVisible());
+  await expired.locator(':scope > summary').click();
+  const boundaryRow = panel.getByRole('region', { name: 'Ollama', exact: true }).locator('ul > li');
   const readingFailure = 'The latest quota read failed; check credential auth and upstream status, then retry.';
   const boundaryUnknown = 'The window boundaries are unknown, so progress cannot be calculated; check whether upstream returns a reset time. Quotas without a fixed period belong here.';
-  check('unknown evidence retains distinct stale-reading and boundary guidance without fabricated values',
+  check('the expired section discloses the stale row and boundary guidance stays distinct',
     (await staleRow.locator('b').allTextContents()).join('|') === '65.0%|Cannot be calculated|—'
       && await staleRow.getByText('Undecidable', { exact: true }).isVisible()
       && await staleRow.getByText('Stale', { exact: true }).isVisible()
@@ -144,7 +198,13 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
       && await boundaryRow.getByText('Cannot be estimated', { exact: true }).isVisible());
   const diagnostics = panel.locator('li > details');
   check('diagnostics initially remain collapsed independently of provider groups',
-    await diagnostics.count() === 5 && await panel.locator('li > details[open]').count() === 0);
+    await diagnostics.count() === 6 && await panel.locator('li > details[open]').count() === 0);
+  fs.mkdirSync('tmp/issue-78', { recursive: true });
+  await panel.evaluate((node) => node.scrollIntoView({ block: 'start' }));
+  await page.screenshot({ path: 'tmp/issue-78/collapsed-classes.png' });
+  await idle.locator('summary').click();
+  await page.screenshot({ path: 'tmp/issue-78/idle-expanded.png' });
+  await idle.locator('summary').click();
   await settleLayout(page);
   const staleDiagnostics = staleRow.locator('details');
   const reasonTrigger = staleDiagnostics.locator('summary');
@@ -189,7 +249,7 @@ export async function dashboardQuotaPrediction({ base, page, check }) {
     check(`${label} fits its container and preserves actual, expected, deviation and reset values`,
       !geometry.overflow && !geometry.documentOverflow && geometry.rowsInside
         && geometry.facts >= 5 && geometry.fullValues
-        && geometry.readings === 15 && geometry.fullReadings, JSON.stringify(geometry));
+        && geometry.readings === 16 && geometry.fullReadings, JSON.stringify(geometry));
   }
   await checkGeometry('desktop span 2');
   fs.mkdirSync('tmp/issue-78', { recursive: true });
