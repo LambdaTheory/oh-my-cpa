@@ -2940,6 +2940,7 @@ export const MS: Readonly<Record<string, string>> = {
   "quota.capacity_reason_low_usage": "Penggunaan terlalu sedikit untuk anggaran yang boleh dipercayai",
   "quota.capacity_reason_no_traffic": "Tiada permintaan direkodkan melalui get laluan dalam kitaran ini",
   "quota.capacity_reason_reset_mid_cycle": "Kuota ditetapkan semula dalam kitaran ini, tiada anggaran",
+  "quota.capacity_reason_rolling_window": "Tetingkap bergulir tiada tempoh tetap, tiada anggaran",
   "quota.btn_reset_quota": "Tetapkan semula kuota",
   "quota.btn_refresh_quota": "Muat semula kuota",
   "quota.in_minutes": "{n}m lagi",

@@ -112,3 +112,10 @@ test('scope and data failures explain why no estimate is shown', () => {
     assert.equal(reading?.estimate, null);
   }
 });
+
+test('a rolling window says it has no fixed period instead of dropping the line', () => {
+  const reading = describeQuotaCapacity({ capacity_unavailable: 'rolling_window' }, 'en-compact', t);
+  assert.notEqual(reading, null);
+  assert.equal(reading?.note, 'quota.capacity_reason_rolling_window');
+  assert.equal(reading?.estimate, null);
+});

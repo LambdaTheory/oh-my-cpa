@@ -2940,6 +2940,7 @@ export const ZH_HANT: Readonly<Record<string, string>> = {
   "quota.capacity_reason_low_usage": "已用比例過低，估算不可靠",
   "quota.capacity_reason_no_traffic": "本週期沒有經閘道記錄到請求",
   "quota.capacity_reason_reset_mid_cycle": "週期內額度被重置過，暫不估算",
+  "quota.capacity_reason_rolling_window": "滾動視窗沒有固定週期，暫不估算",
   "quota.btn_reset_quota": "重置額度",
   "quota.btn_refresh_quota": "重新整理額度",
   "quota.in_minutes": "{n}分鐘後",

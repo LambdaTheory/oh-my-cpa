@@ -3609,6 +3609,7 @@ const DICT: Record<string, [string, string]> = {
   'quota.capacity_reason_low_usage': ['已用比例过低，估算不可靠', 'Too little used for a reliable estimate'],
   'quota.capacity_reason_no_traffic': ['本周期没有经网关记录到请求', 'No requests recorded through the gateway this cycle'],
   'quota.capacity_reason_reset_mid_cycle': ['周期内额度被重置过，暂不估算', 'Quota was reset during this cycle, so no estimate'],
+  'quota.capacity_reason_rolling_window': ['滚动窗口没有固定周期，暂不估算', 'Rolling window has no fixed period, so no estimate'],
   'quota.btn_reset_quota': ['重置额度', 'Reset quota'],
   'quota.btn_refresh_quota': ['刷新额度', 'Refresh quota'],
   'quota.in_minutes': ['{n}分钟后', '{n}m left'],
