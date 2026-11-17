@@ -77,7 +77,7 @@ summary: "26 条用例（P0 14 / P1 12），覆盖第一期 A1-A4/C1/C3/C4 与�
   1. 跑预测。
   2. 读 `verdict`、`reasons`、`sample_count`、`coverage_seconds`、`expected_used_percent`、`burn_rate_per_hour`。
 - 预期：
-  - `verdict` 为 `on_track` 或 `will_exhaust`（有结论），`reasons` 不含 `mid_cycle_reset`。
+  - `verdict` 为 `on_track` 或 `will_exhaust`（有结论）；`mid_cycle_reset` 可作为诊断保留在 `reasons`，但不得作为唯一最终原因；重拟合后证据足够时必须给出 `lasts_until_reset` 结论。**预期调整（2026-11-17 PM 决定）**
   - `sample_count` / `coverage_seconds` 只反映触发点之后的样本，明显小于全部历史。
   - expected / burn rate / ETA 用触发后样本拟合；触发前的旧点不参与。
 
