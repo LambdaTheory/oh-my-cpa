@@ -130,3 +130,7 @@ func (h Handler) WithAttrs(attrs []slog.Attr) slog.Handler {
 func (h Handler) WithGroup(name string) slog.Handler {
 	return Handler{h.Handler.WithGroup(name), h.Location}
 }
+
+// Unwrap exposes the wrapped handler so callers can reach what is underneath -
+// applog.BufferOf walks through this to find the service-log tee.
+func (h Handler) Unwrap() slog.Handler { return h.Handler }

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -470,5 +471,224 @@ func TestUsageClientKeyFingerprintMatchesIngestionPurpose(t *testing.T) {
 	}
 	if !strings.HasPrefix(first, "hmac:") {
 		t.Fatalf("fingerprint %q lacks the hmac prefix the storage path recognises", first)
+	}
+}
+
+func TestClientKeyMasksForPicksNewestNonEmptyMaskPerKey(t *testing.T) {
+	repo := fingerprintTestRepository(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
+
+	fpA, err := repo.UsageClientKeyFingerprint("sk-alpha-secret-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fpB, err := repo.UsageClientKeyFingerprint("sk-bravo-secret-0002")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldMask := security.MaskSecret("sk-alpha-secret-old1")
+	newMask := security.MaskSecret("sk-alpha-secret-new2")
+	bMask := security.MaskSecret("sk-bravo-secret-0002")
+	rows := []usage.Event{
+		{InstanceID: "default", EventKey: "a-old", APIGroupKey: fpA, APIGroupLabel: "api_key", APIKeyMask: oldMask, TimestampMS: base.UnixMilli()},
+		{InstanceID: "default", EventKey: "a-new", APIGroupKey: fpA, APIGroupLabel: "api_key", APIKeyMask: newMask, TimestampMS: base.Add(2 * time.Minute).UnixMilli()},
+		// A newer row with an empty mask must not erase the last non-empty mask.
+		{InstanceID: "default", EventKey: "a-empty", APIGroupKey: fpA, APIGroupLabel: "api_key", APIKeyMask: "", TimestampMS: base.Add(3 * time.Minute).UnixMilli()},
+		{InstanceID: "default", EventKey: "b-only", APIGroupKey: fpB, APIGroupLabel: "api_key", APIKeyMask: bMask, TimestampMS: base.Add(time.Minute).UnixMilli()},
+	}
+	if _, err := repo.InsertUsageEvents(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	// Duplicates, unknown fingerprints and blanks should be handled cleanly.
+	masks, err := repo.ClientKeyMasksFor(ctx, "default", []string{fpA, fpA, fpB, "hmac:never-seen", ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masks[fpA] != newMask || masks[fpB] != bMask {
+		t.Fatalf("unexpected masks: %+v (want %q, %q)", masks, newMask, bMask)
+	}
+	if _, exists := masks["hmac:never-seen"]; exists {
+		t.Fatalf("unexpected entry for unseen fingerprint: %+v", masks)
+	}
+
+	// More than 64 distinct fingerprints span multiple UNION ALL batches.
+	const bulkCount = 70
+	bulkFingerprints := make([]string, 0, bulkCount)
+	bulkEvents := make([]usage.Event, 0, bulkCount)
+	wantLastMask := ""
+	for i := 0; i < bulkCount; i++ {
+		rawSecret := fmt.Sprintf("sk-bulk-secrets-%04d", i)
+		fp, err := repo.UsageClientKeyFingerprint(rawSecret)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mask := security.MaskSecret(rawSecret)
+		if i == bulkCount-1 {
+			wantLastMask = mask
+		}
+		bulkFingerprints = append(bulkFingerprints, fp)
+		bulkEvents = append(bulkEvents, usage.Event{
+			InstanceID: "default", EventKey: fmt.Sprintf("bulk-%03d", i),
+			APIGroupKey: fp, APIGroupLabel: "api_key", APIKeyMask: mask,
+			TimestampMS: base.Add(time.Duration(i) * time.Second).UnixMilli(),
+		})
+	}
+	if _, err := repo.InsertUsageEvents(ctx, bulkEvents); err != nil {
+		t.Fatal(err)
+	}
+	bulkMasks, err := repo.ClientKeyMasksFor(ctx, "default", bulkFingerprints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bulkMasks) != bulkCount || wantLastMask == "" || bulkMasks[bulkFingerprints[bulkCount-1]] != wantLastMask {
+		t.Fatalf("bulk masks len=%d last=%q want %q",
+			len(bulkMasks), bulkMasks[bulkFingerprints[bulkCount-1]], wantLastMask)
+	}
+}
+
+// TestClientKeyMasksForOrdersByRequestTimeNotInsertOrder pins the semantic
+// change the rewrite carries: the old GROUP BY + MAX(id) answered with whatever
+// row was stored last, while the index probe answers with the request that
+// happened last. CPA's records can arrive out of order, so the two differ.
+func TestClientKeyMasksForOrdersByRequestTimeNotInsertOrder(t *testing.T) {
+	repo := fingerprintTestRepository(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 12, 11, 0, 0, 0, time.UTC)
+
+	fingerprint, err := repo.UsageClientKeyFingerprint("sk-out-of-order-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleMask := security.MaskSecret("sk-out-of-order-stale")
+	latestMask := security.MaskSecret("sk-out-of-order-latest")
+	// The newer request is inserted first; the older one is stored second and
+	// therefore carries the larger row id.
+	if _, err := repo.InsertUsageEvents(ctx, []usage.Event{
+		{InstanceID: "default", EventKey: "requested-later", APIGroupKey: fingerprint, APIGroupLabel: "api_key",
+			APIKeyMask: latestMask, TimestampMS: base.Add(10 * time.Minute).UnixMilli()},
+		{InstanceID: "default", EventKey: "requested-earlier", APIGroupKey: fingerprint, APIGroupLabel: "api_key",
+			APIKeyMask: staleMask, TimestampMS: base.UnixMilli()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	masks, err := repo.ClientKeyMasksFor(ctx, "default", []string{fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masks[fingerprint] != latestMask {
+		t.Fatalf("mask = %q, want the newest request's mask %q", masks[fingerprint], latestMask)
+	}
+}
+
+// TestClientKeyMasksForScope covers the early-exit paths the rewrite adds: no
+// fingerprints, a blank instance, and a repository without a database each
+// answer an empty map instead of running SQL.
+func TestClientKeyMasksForScope(t *testing.T) {
+	repo := fingerprintTestRepository(t)
+	ctx := context.Background()
+	cases := []struct {
+		name         string
+		instanceID   string
+		fingerprints []string
+	}{
+		{name: "no fingerprints", instanceID: "default"},
+		{name: "blank instance", instanceID: "  ", fingerprints: []string{"hmac:any"}},
+		{name: "only blanks", instanceID: "default", fingerprints: []string{"", "   "}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			masks, err := repo.ClientKeyMasksFor(ctx, tc.instanceID, tc.fingerprints)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(masks) != 0 {
+				t.Fatalf("masks = %+v, want none", masks)
+			}
+		})
+	}
+	t.Run("uninitialized repository", func(t *testing.T) {
+		var zero Repository
+		if _, err := zero.ClientKeyMasksFor(ctx, "default", []string{"hmac:any"}); err == nil {
+			t.Fatal("an uninitialized repository must report an error")
+		}
+	})
+}
+
+// TestClientKeyMasksForIgnoresOtherInstances keeps the instance predicate in
+// the probe subquery: masks belong to one instance's request log.
+func TestClientKeyMasksForIgnoresOtherInstances(t *testing.T) {
+	repo := fingerprintTestRepository(t)
+	ctx := context.Background()
+	base := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	if _, err := repo.SQL().Exec(`INSERT INTO cpa_instances (id, name, base_url, usage_addr,
+		management_key_ciphertext, management_key_nonce, status, created_at, updated_at)
+		VALUES ('other', 'Other', 'http://127.0.0.1:8318', '127.0.0.1:8318', x'00', x'00', 'unknown', 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := repo.UsageClientKeyFingerprint("sk-shared-across-instances")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownMask := security.MaskSecret("sk-instance-owned")
+	if _, err := repo.InsertUsageEvents(ctx, []usage.Event{
+		{InstanceID: "default", EventKey: "own", APIGroupKey: fingerprint, APIGroupLabel: "api_key",
+			APIKeyMask: ownMask, TimestampMS: base.UnixMilli()},
+		{InstanceID: "other", EventKey: "foreign", APIGroupKey: fingerprint, APIGroupLabel: "api_key",
+			APIKeyMask: security.MaskSecret("sk-instance-foreign"), TimestampMS: base.Add(time.Minute).UnixMilli()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	masks, err := repo.ClientKeyMasksFor(ctx, "default", []string{fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if masks[fingerprint] != ownMask {
+		t.Fatalf("mask = %q, want this instance's newest mask %q", masks[fingerprint], ownMask)
+	}
+}
+
+// TestClientKeyMasksForUsesTheGroupTimeIndex is the regression guard for the
+// production timeout: the rewrite only holds while SQLite probes the newest row
+// of the key on idx_usage_events_group_time. Without the INDEXED BY hint it
+// reads idx_usage_events_instance_time instead and walks back from the newest
+// row of the *instance*, which turns into the original full-history scan as soon
+// as a newer key takes over the traffic. This test fails if the hint or the
+// index a migration creates stops matching.
+func TestClientKeyMasksForUsesTheGroupTimeIndex(t *testing.T) {
+	repo := performanceRepository(t, 100)
+	rows, err := repo.SQL().Query(`
+		EXPLAIN QUERY PLAN
+		SELECT ?, COALESCE((
+			SELECT api_key_mask FROM usage_events INDEXED BY idx_usage_events_group_time
+			WHERE api_group_key = ? AND instance_id = ? AND api_key_mask <> ''
+			ORDER BY timestamp_ms DESC, id DESC LIMIT 1
+		), '')`, "hmac:key-0", "hmac:key-0", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(plan, " | ")
+	if !strings.Contains(joined, "idx_usage_events_group_time") {
+		t.Fatalf("plan does not use idx_usage_events_group_time: %s", joined)
+	}
+	for _, detail := range plan {
+		// "SCAN usage_events" with no index name is the whole-table scan the
+		// production timeout came from; "SEARCH ... USING INDEX" is the probe.
+		if strings.HasPrefix(detail, "SCAN usage_events") {
+			t.Fatalf("plan still scans the whole table: %s", joined)
+		}
 	}
 }
