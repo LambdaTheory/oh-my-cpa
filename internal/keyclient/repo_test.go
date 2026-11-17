@@ -107,6 +107,24 @@ func TestResolveRepoUsesTheFlagVerbatim(t *testing.T) {
 	}
 }
 
+// TestResolveRepoRefusesAPath: --repo names a repository identity. A path-shaped value
+// must fail with repo_invalid instead of being reduced to its last segment, which would
+// silently select a different key.
+func TestResolveRepoRefusesAPath(t *testing.T) {
+	for _, value := range []string{
+		"../../../etc/passwd",
+		"a/../../b",
+		"/etc/passwd",
+		`E:\works\repo`,
+		"./repo",
+		`..\repo`,
+	} {
+		if _, _, err := ResolveRepo(value, t.TempDir()); CodeOf(err) != CODE_REPO_INVALID {
+			t.Fatalf("ResolveRepo(%q) error = %v, want %s", value, err, CODE_REPO_INVALID)
+		}
+	}
+}
+
 func TestResolveRepoInfersWhenTheFlagIsEmpty(t *testing.T) {
 	directory := initGitRepo(t, map[string]string{"origin": "https://github.com/org/repo"})
 	repoID, _, err := ResolveRepo("", directory)

@@ -339,7 +339,16 @@ func truncateBytes(value string, limit int) string {
 }
 
 // DeriveRepoID normalizes a repository identity the way the server does.
+//
+// A path-shaped value is refused rather than reduced to its last segment: `--repo` names
+// an identity, and silently turning "../../../etc/passwd" into "passwd" or "a/../../b"
+// into an identity that still carries the traversal segments would select a key the
+// person did not name. Inference from a working directory goes through the directory's
+// base name instead.
 func DeriveRepoID(value string) (string, string, error) {
+	if looksLikePath(value) {
+		return "", "", Errorf(CODE_REPO_INVALID, "repository %q is a path, not an identity; pass org/repo, a clone URL, or a bare directory name", value)
+	}
 	repoID, _, err := repokey.NormalizeRepo(value)
 	if err != nil {
 		if strings.Contains(err.Error(), "repo_required") {
@@ -352,4 +361,32 @@ func DeriveRepoID(value string) (string, string, error) {
 		display = repoID
 	}
 	return repoID, display, nil
+}
+
+// looksLikePath reports whether a repository value is a filesystem path rather than an
+// identity. A bare directory name is still a valid local identity; what is refused is a
+// spelling that only makes sense as a path — an absolute or drive-qualified one, or one
+// with ".." segments.
+func looksLikePath(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	for _, prefix := range []string{"/", "\\", "./", ".\\", "../", "..\\"} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return true
+		}
+	}
+	if len(trimmed) >= 2 && trimmed[1] == ':' {
+		drive := trimmed[0]
+		if (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z') {
+			return true
+		}
+	}
+	for _, segment := range strings.FieldsFunc(trimmed, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
 }

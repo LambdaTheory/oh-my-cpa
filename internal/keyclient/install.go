@@ -21,16 +21,13 @@ const (
 	// with. It is a declaration, not an install: OpenCode resolves it itself.
 	OPENCODE_NPM = "@ai-sdk/openai-compatible"
 
-	// OPENCODE_PROVIDER_ID is the provider name in opencode.json. It matches the Codex
-	// provider so one purge reason reads the same in both files.
-	OPENCODE_PROVIDER_ID = "oh-my-cpa"
-
-	// ENV_CLAUDE_CONFIG_DIR, ENV_CODEX_HOME and ENV_OPENCODE_CONFIG are the variables
-	// the three runtimes themselves use to relocate their configuration. Honouring them
-	// is what keeps install writing the file the runtime will actually read.
+	// OPENCODE_PROVIDER_ID and ENV_OPENCODE_CONFIG are declared in runtime.go, beside
+	// the other OpenCode variables exec reads, so install and exec cannot disagree about
+	// the provider name or the configuration path. ENV_CLAUDE_CONFIG_DIR and
+	// ENV_CODEX_HOME are the same kind of variable for the other two runtimes: honouring
+	// them is what keeps install writing the file the runtime will actually read.
 	ENV_CLAUDE_CONFIG_DIR = "CLAUDE_CONFIG_DIR"
 	ENV_CODEX_HOME        = "CODEX_HOME"
-	ENV_OPENCODE_CONFIG   = "OPENCODE_CONFIG"
 )
 
 // The members install writes, by runtime. They are also what purge removes, and the

@@ -67,6 +67,21 @@ func Purge(options PurgeOptions) (PurgeResult, error) {
 	}
 	home := options.Home
 
+	// A home that does not exist has nothing to clean. Creating it would be a side effect
+	// of asking the question, and the empty subdirectories it left behind would look like
+	// a half-finished installation. An explicit --runtime is a question about one install,
+	// so it keeps its "no record" answer.
+	if !options.DryRun {
+		if _, statErr := os.Stat(home.Root); errors.Is(statErr, os.ErrNotExist) {
+			if options.Runtime != "" {
+				return PurgeResult{}, Errorf(CODE_NOT_INSTALLED, "there is no install record for %s in %s; nothing to remove there", repoID, options.Runtime)
+			}
+			return PurgeResult{}, nil
+		} else if statErr != nil {
+			return PurgeResult{}, Wrapf(statErr, CODE_HOME_UNAVAILABLE, "cannot read %s: %v", home.Root, statErr)
+		}
+	}
+
 	var store *Store
 	if options.DryRun {
 		// A dry run reads state the way a read-only command does: asking about a change
@@ -94,7 +109,7 @@ func Purge(options PurgeOptions) (PurgeResult, error) {
 	// Step 2: open the envelope once if the private key is still here. The plaintext
 	// stays in this call's memory only, and is what lets the later steps recognise this
 	// repository's values and backups instead of guessing from a filename.
-	plaintext, err := purgeKeyMaterial(home, repoID, &result)
+	plaintext, err := purgeKeyMaterial(home, repoID, hasRecord, &result)
 	if err != nil {
 		return PurgeResult{}, err
 	}
@@ -231,13 +246,18 @@ func Purge(options PurgeOptions) (PurgeResult, error) {
 // A key with no envelope is a half-finished setup: the key still has to go, so a missing
 // envelope is not an error. With the key already gone, backups can only be recognised
 // from the record.
-func purgeKeyMaterial(home Home, repoID string, result *PurgeResult) (string, error) {
+func purgeKeyMaterial(home Home, repoID string, hadRecord bool, result *PurgeResult) (string, error) {
 	hasKey, err := HasPrivateKey(home, repoID)
 	if err != nil {
 		return "", err
 	}
 	if !hasKey {
-		result.BackupScanUnavailable = true
+		// Only a repository that state still records can have had a key an earlier run
+		// removed. Without a record, "already gone" would describe a key that never
+		// existed.
+		if hadRecord {
+			result.BackupScanUnavailable = true
+		}
 		return "", nil
 	}
 	plaintext, openErr := InstallKeyMaterial(home, repoID)

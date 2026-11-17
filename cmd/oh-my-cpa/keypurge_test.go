@@ -160,7 +160,14 @@ func TestKeyPurgeSingleRuntimeKeepsTheKey(t *testing.T) {
 	if hasEnvelope, _ := keyclient.HasEnvelope(resolved, "org/repo"); !hasEnvelope {
 		t.Fatal("the envelope was removed")
 	}
-	_ = stdout
+	// The closing line must not claim the local material is gone when the key is still
+	// here; that sentence belongs to a full purge.
+	if strings.Contains(stdout, "local material cleared") {
+		t.Fatalf("a --runtime run claims the local material was cleared:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "removed claude's installed value") || !strings.Contains(stdout, "private key and envelope are still on this machine") {
+		t.Fatalf("stdout does not say what a --runtime run left behind:\n%s", stdout)
+	}
 }
 
 // TestKeyPurgeRefusesABorrowedValue is the install_not_owned exit: 1, and the value stays.

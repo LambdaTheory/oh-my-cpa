@@ -30,8 +30,8 @@ const KEY_USAGE_EPILOGUE = "\n" +
 	"  OMC_HOME                  where keys, envelopes and state live; default\n" +
 	"                            ~/.omc, created with owner-only permissions\n" +
 	"  " + keyclient.ENV_CPA_BASE_URL + "        the CPA gateway this key is used against; also\n" +
-	"                            accepted as --base-url and remembered in\n" +
-	"                            $OMC_HOME/config.json\n" +
+	"                            accepted as --base-url; `key gen` and `key install`\n" +
+	"                            remember it in $OMC_HOME/config.json\n" +
 	"  OMCPA_SERVER_URL          OMC console URL, for `status --remote`\n" +
 	"  OMCPA_CPA_MANAGEMENT_KEY  the management key, for `status --remote`\n" +
 	"  OMCPA_AGENT_NAME          the agent name reported by `status --remote`\n" +

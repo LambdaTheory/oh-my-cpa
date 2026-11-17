@@ -13,12 +13,10 @@ const (
 	CODEX_BLOCK_START = "# >>> oh-my-cpa key (managed; `oh-my-cpa key purge --repo <repo>` removes this) >>>"
 	CODEX_BLOCK_END   = "# <<< oh-my-cpa key <<<"
 
-	// CODEX_PROVIDER_ID is the provider name in both the managed table and the
-	// top-level model_provider line.
-	CODEX_PROVIDER_ID = "oh-my-cpa"
-
 	// CODEX_WIRE_API is the only API shape a Codex provider accepts for a gateway that
-	// speaks the OpenAI Responses protocol.
+	// speaks the OpenAI Responses protocol. CODEX_PROVIDER_ID is declared in runtime.go,
+	// where exec builds the same provider reference, so installing and running cannot
+	// name different providers.
 	CODEX_WIRE_API = "responses"
 )
 
