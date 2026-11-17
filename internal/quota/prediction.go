@@ -102,8 +102,11 @@ type PredictionInput struct {
 	Status       string
 	NowMS        int64
 	Observations []PredictionObservation
-	Usage        *WindowUsage
-	UsageReason  string
+	// BucketResetAtMS is a reset detected while reading the current bucket
+	// range. It outranks the instant carried by a stored snapshot.
+	BucketResetAtMS *int64
+	Usage           *WindowUsage
+	UsageReason     string
 }
 
 type WindowPrediction struct {
@@ -276,16 +279,30 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
+	resetAtMS, hasReset := predictionHasReset(observations)
+	if input.BucketResetAtMS != nil && (!hasReset || *input.BucketResetAtMS > resetAtMS) {
+		resetAtMS, hasReset = *input.BucketResetAtMS, true
+	}
+	if !hasReset && input.Window.MidCycleResetAtMS != nil {
+		resetAtMS, hasReset = *input.Window.MidCycleResetAtMS, true
+	}
+	if !hasReset && input.Window.HasMidCycleReset {
+		// A snapshot written before the instant was retained cannot invent a
+		// refit boundary. Keep the old conservative verdict until a bucket read
+		// supplies the missing trigger.
+		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
+		result.UnknownReason = PredictionUnknownHistoryInsufficient
+		return result
+	}
 	points := predictionPoints(observations, input.Window.ResetAtMS)
+	if hasReset {
+		appendPredictionReason(&result, PredictionReasonResetMidCycle)
+		points = predictionPointsAfterReset(observations, input.Window.ResetAtMS, resetAtMS, input.ObservedAtMS)
+	}
 	coverageMS, maxGapMS, evidenceSafe := applyPredictionEvidence(&result, points)
 	if !evidenceSafe {
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
 		result.UnknownReason = PredictionUnknownUsageAbnormal
-		return result
-	}
-	if input.Window.HasMidCycleReset || predictionHasReset(observations) {
-		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
-		result.UnknownReason = PredictionUnknownHistoryInsufficient
 		return result
 	}
 	if reason, failed := predictionMinimumEvidence(input.Window, len(points), coverageMS, maxGapMS); failed {
@@ -412,12 +429,12 @@ func calculatePredictionAccounting(input PredictionInput, prediction WindowPredi
 	result.RemainingWindowHours = floatPointer(*input.Window.PeriodHours * *result.RemainingPercent / 100)
 	result.WindowErrorHours = floatPointer(*input.Window.PeriodHours * usedPercentHalfStep / 100)
 	for _, reason := range prediction.Reasons {
-		if reason == PredictionReasonResetMidCycle || reason == PredictionReasonInvalidObservation || reason == PredictionReasonArithmeticUnsafe {
+		if reason == PredictionReasonInvalidObservation || reason == PredictionReasonArithmeticUnsafe {
 			result.CapacityUnavailable = reason
 			return result
 		}
 	}
-	if input.Window.HasIncompleteHistory || input.Window.HasMidCycleReset ||
+	if input.Window.HasIncompleteHistory ||
 		input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS ||
 		input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
 		return result
@@ -491,21 +508,39 @@ func predictionPoints(observations []PredictionObservation, resetAtMS *int64) []
 	return points
 }
 
-func predictionHasReset(points []PredictionObservation) bool {
+// predictionHasReset returns the latest observation that proved a reset.
+func predictionHasReset(points []PredictionObservation) (int64, bool) {
 	var previous *PredictionObservation
+	var lastAtMS int64
+	hasReset := false
 	for index := range points {
 		point := &points[index]
 		if previous != nil {
 			if previous.UsedPercent > point.UsedPercent+capacityResetTolerancePercent {
-				return true
+				lastAtMS, hasReset = point.ObservedAtMS, true
 			}
 			if previous.ResetAtMS != nil && point.ResetAtMS != nil && *previous.ResetAtMS > point.ObservedAtMS && resetDifferenceExceeds(*previous.ResetAtMS, *point.ResetAtMS, 1000) {
-				return true
+				lastAtMS, hasReset = point.ObservedAtMS, true
 			}
 		}
 		previous = point
 	}
-	return false
+	return lastAtMS, hasReset
+}
+
+// predictionPointsAfterReset keeps only readings after the latest reset. The
+// current reading is the first point of the new cycle, so it stays even when it
+// is also the observation that proved the reset.
+func predictionPointsAfterReset(observations []PredictionObservation, resetAtMS *int64, resetObservedAtMS, currentObservedAtMS int64) []PredictionObservation {
+	points := predictionPoints(observations, resetAtMS)
+	filtered := make([]PredictionObservation, 0, len(points))
+	for _, point := range points {
+		if point.ObservedAtMS > resetObservedAtMS ||
+			point.ObservedAtMS == currentObservedAtMS && point.Source == "current" {
+			filtered = append(filtered, point)
+		}
+	}
+	return filtered
 }
 
 // applyPredictionEvidence records the span and largest silence of the fitted

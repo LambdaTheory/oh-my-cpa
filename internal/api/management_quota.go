@@ -414,6 +414,10 @@ func (h *Handler) persistNormalizedQuotaSnapshot(ctx context.Context, q *quota.N
 		if reason == "" && quota.SupportsWindowCapacity(q.Provider, *window) {
 			window.HasIncompleteHistory = hasIncompleteHistory || quota.HasIncompleteWindowHistory(*window, history, fromMS, toMS)
 			window.HasMidCycleReset = quota.HasWindowCycleReset(*window, history, fromMS, toMS)
+			window.MidCycleResetAtMS = nil
+			if resetAtMS, hasReset := quota.LastWindowCycleResetAt(*window, history, fromMS, toMS); hasReset {
+				window.MidCycleResetAtMS = &resetAtMS
+			}
 		}
 	}
 	q.Windows = windows
