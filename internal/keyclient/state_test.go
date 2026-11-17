@@ -151,7 +151,7 @@ func TestStateUsesSnakeCaseWithoutZeroTimes(t *testing.T) {
 		"repo": true, "repo_display": true, "private_key_file": true, "public_key": true,
 		"public_key_fingerprint": true, "created_at": true, "application_id": true,
 		"application_kind": true, "approval_status": true, "status_source": true,
-		"status_updated_at": true, "key_mask": true, "repo_state": true,
+		"status_updated_at": true, "decided_at": true, "key_mask": true, "value_fingerprint": true, "repo_state": true,
 		"repo_state_updated_at": true, "envelope_file": true, "envelope_received_at": true,
 		"envelope_algorithm": true,
 	}

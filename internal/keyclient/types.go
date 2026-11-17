@@ -104,6 +104,16 @@ type RepoState struct {
 	StatusUpdatedAt time.Time `json:"status_updated_at,omitzero"`
 	KeyMask         string    `json:"key_mask,omitempty"`
 
+	// DecidedAt is when the operator decided the recorded application, as OMC reported
+	// it. It is the decision's own time, not when this machine heard about it, which is
+	// StatusUpdatedAt.
+	DecidedAt time.Time `json:"decided_at,omitzero"`
+
+	// ValueFingerprint identifies the plaintext gateway key without holding it: it is
+	// what lets a later purge decide whether a configured value or a backup is this
+	// repository's key after the private key is gone.
+	ValueFingerprint string `json:"value_fingerprint,omitempty"`
+
 	RepoState          string    `json:"repo_state,omitempty"`
 	RepoStateUpdatedAt time.Time `json:"repo_state_updated_at,omitzero"`
 
