@@ -155,4 +155,3 @@ func TestKeyAcceptRejectsAStrayArgument(t *testing.T) {
 		t.Fatalf("exit = %d, stderr = %q", code, stderr)
 	}
 }
-
