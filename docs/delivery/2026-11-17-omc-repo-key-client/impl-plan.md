@@ -27,7 +27,7 @@ summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密�
 - **三家 install**：Claude Code 写用户级 `~/.claude/settings.json` 的 `env`；Codex 写 `~/.codex/config.toml` 的受管 `[model_providers.oh-my-cpa]` 加顶层 `model_provider`；OpenCode 写 `~/.config/opencode/opencode.json` 的 `provider.oh-my-cpa.options`（v1 单数）。不新增 Go 依赖。
 - **purge**：默认清私钥、信封、该仓库的全部 install 值和 state 记录；`--runtime` 只清一个运行时。备份默认保留，但删除包含本仓库明文的备份。purge 只清本机，不停用 CPA 里的 key，输出会明说。
 - **测试**：Go 单测覆盖 status / purge / 权限 / 三家注入 / 三家 install；e2e 用 fake CPA + 真实 OMC 二进制 + MCP apply/审批/ciphertext + 掩码 helper + 用 key 打 fake CPA + purge 后失败。Unix 0600 在 Docker/Linux 断言；Windows 用 ACL 断言，不做 `Mode().Perm()==0600` 的必红断言。
-- **切片**：S2 拆成 S2a（home/store/gen）与 S2b（accept/status），S3/S4 从 S2a 起可并行；S4 若不超过 90 分钟就保持一块，否则拆 S4a（install）/S4b（purge）。S5 文档、S7 e2e 夹具、S8 全链路。
+- **切片**：S2 拆成 S2a（home/store/gen）与 S2b（accept/status/remote），S3/S4 从 S2a 起可并行；S4 估 110 分钟，建议拆 S4a（install）/S4b（purge）。S5 文档、S7 e2e 夹具、S8 全链路。
 
 ## 1. 目标与范围
 
@@ -126,7 +126,7 @@ $OMC_HOME/
 - 默认**完全离线**：读 `state.json` 和文件存在性，不持管理密钥，不发网络请求。
 - state 由这些命令维护：
   - `key gen`：登记仓库、私钥、公钥、指纹、`approval_status=not_applied`。
-  - `key status --application-id <id>`：只把申请 id 关联到仓库，状态记为 `unknown`（给「MCP 已经申请、还没批」用）。
+  - `key status --repo <repo> --application-id <id>`：只把申请 id 关联到仓库，状态记为 `unknown`（给「MCP 已经申请、还没批」用）。`--application-id` 需要 `--repo`，除非 state 里已经有这个 id 的记录。
   - `key accept`：记 `approval_status=approved`、`key_mask`、`kind`。
   - `key status --remote`：用 MCP 的读能力刷新已登记的 application 和仓库状态。
 - `--remote` 是可选路径：
@@ -345,7 +345,8 @@ installed. Without --remote this reads only $OMC_HOME/state.json.
 
 --application-id associates an application id with the repository. It is
 useful between `repo_key_apply` and the decision; without it, status can only
-report what a previous `accept` or `--remote` recorded.
+report what a previous `accept` or `--remote` recorded. It needs --repo unless
+the id is already recorded in state.
 
 --remote asks OMC for the current state of recorded applications and the
 repository's key state. It needs OMCPA_SERVER_URL and
@@ -1197,13 +1198,13 @@ pnpm verify
 | AC | 要求 | 切片 | 测试/证据 | 缺口 |
 |---|---|---|---|---|
 | AC-1 | 七步闭环可执行：`status` / `gen` / `exec` / `install` / `purge` 都在，行为与需求第 1～7 步一致 | S2a、S2b、S3、S4、S5、S8 | `key --help` 六命令测试；各命令单测；e2e 七步；运行手册 | 无（真实运行时探针见 AC-7 缺口） |
-| AC-2 | `key gen --repo` 生成 X25519，私钥落 `$OMC_HOME/keys/<repo>.key` 且 0600，stdout 只有 `x25519:<base64>` | S2a | `keystore_test.go`；`home_unix_test.go` 0600；`key_test.go` stdout 纯度；e2e | Windows 0600 用 ACL 等价断言，运行时 ACL 测试见 §11 |
+| AC-2 | `key gen --repo` 生成 X25519，私钥落 `$OMC_HOME/keys/` 下（文件名规则见 §4.2）且 0600，stdout 只有 `x25519:<base64>` | S2a | `keystore_test.go`；`home_unix_test.go` 0600；`key_test.go` stdout 纯度；e2e | Windows 0600 用 ACL 等价断言，运行时 ACL 测试见 §11 |
 | AC-3 | `key status` 看得见本机私钥、绑过的仓库、最后一次审批状态 | S2b | `status_test.go` 本地/`--remote`；e2e 的 pending/approved；`key status --json` schema | 拒绝/停用状态的远端刷新只测 mock + e2e 的 pending/approved；真实拒绝需手工 |
 | AC-4 | `key exec --runtime ... -- <命令>` 内存解密，只给子进程注入该运行时变量，不打印明文、不落盘 | S3 | `runtime_test.go`；`exec_test.go` helper 进程；e2e 掩码 helper；stdout/stderr 不含明文；exec 前后文件快照 | 真实 Claude/Codex/OpenCode 是否按注入生效是手工探针，见 §11 |
 | AC-5 | `key install --runtime` 显式写对应配置，写前备份并打警告 | S4 | `install_test.go` 三家；`jsondoc_test.go` / `tomlblock_test.go`；备份/警告/`--replace`/回滚；e2e 临时配置 | Windows ACL 对备份文件的运行时断言同 AC-2 |
-| AC-6 | `key purge --repo` 清私钥和写过的配置项；purge 后同一 `exec` 失败并给可读错误 | S3、S4b、S8 | `purge_test.go` 全清/单运行时/dry-run/指纹不匹配/幂等；e2e 步骤 7～8 | 真实 CPA 里 key 仍在是预期；输出会明说 |
+| AC-6 | `key purge --repo` 清私钥和写过的配置项；purge 后同一 `exec` 失败并给可读错误 | S3、S4、S8 | `purge_test.go` 全清/单运行时/dry-run/指纹不匹配/幂等；e2e 步骤 7～8 | 真实 CPA 里 key 仍在是预期；输出会明说 |
 | AC-7 | 端到端：keygen → apply → 审批 → ciphertext → exec 掩码脚本 → 用该 key 打一次 CPA 网关成功 → purge 后 exec 失败 | S7、S8 | `go test -tags e2e ./internal/keyclient/e2e`；fake CPA + 真实 OMC 二进制 + capability HTTP + 审批链接 + helper | 「真实 CPA 网关」只做到 fake CPA 的 bearer 校验；真实 CPA 的一次请求是人工验收，见 §11 |
-| AC-8 | 单测：`key status`、`key purge`；私钥权限 0600 断言 | S2a、S2b、S4b | `status_test.go`、`purge_test.go`、`home_unix_test.go`、`home_windows_test.go` | Windows ACL 运行时断言依赖 Windows Go runner；见 §11 |
+| AC-8 | 单测：`key status`、`key purge`；私钥权限 0600 断言 | S2a、S2b、S4 | `status_test.go`、`purge_test.go`、`home_unix_test.go`、`home_windows_test.go` | Windows ACL 运行时断言依赖 Windows Go runner；见 §11 |
 | AC-9 | 文档：agent 可直接照做的使用说明，含禁止事项（不进日志、不进对话、不进 git、不提交配置） | S5 | docs/repo-key-client.md 逐条 review；`node scripts/check-docs.mjs`；S9/S11 按清单核对 | 文档可读性是人工 review，不是自动化断言 |
 
 ## 11. 未验证缺口与风险
@@ -1258,13 +1259,13 @@ pnpm verify
 ```text
 S1 75
  → S2a 80
- → S3 90
- → S8 60（等 S2b 70 / S4 110 / S7 100 也完成；S4 是关键路径上最长的一支）
+ → S4 110（S8 还等 S2b 70 / S3 90 / S7 100；S4 是最长的一支）
+ → S8 60
  → S11 60
  → S12 20
 ```
 
-约 75 + 80 + 110 + 60 + 60 + 20 = 405 分钟；S9/S10 在 S2a–S5 之后并行插入，约 +105 分钟，总计约 510 分钟。峰值并发：S2a + S5 + S7（3 条），S2a 完成后 S2b + S3 + S4（3 条），加上 S5 同步/ S9 准备最多 4 条。比原估算的关键路径（S1→S2→S3→S9→S10→S11→S12 ≈ 440）长，是因为把 install/purge 和 e2e 的真实成本算进来了；并行度更高，S3/S4 不必等 status。
+关键路径是 S1→S2a→S4→S8→S11→S12，约 75 + 80 + 110 + 60 + 60 + 20 = 405 分钟；S9/S10 在 S2a–S5 之后并行插入，约 +105 分钟，总计约 510 分钟。峰值并发：S2a + S5 + S7（3 条），S2a 完成后 S2b + S3 + S4（3 条），加上 S5 同步/ S9 准备最多 4 条。比原估算的关键路径（S1→S2→S3→S9→S10→S11→S12 ≈ 440）长，是因为把 install/purge 和 e2e 的真实成本算进来了；并行度更高，S3/S4 不必等 status。
 
 ## 14. 方案自检（对应派发说明的 10 个问题）
 
