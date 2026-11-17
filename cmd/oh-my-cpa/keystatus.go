@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -24,7 +25,8 @@ unless the repository already holds this id.
 each repository's key. It needs ` + keyclient.ENV_SERVER_URL + ` and
 ` + keyclient.ENV_MANAGEMENT_KEY + `, the same pair the mcp command uses; without
 them it reports remote_not_configured and changes nothing. It is the only
-option that uses the network and the only one that writes state.
+option that uses the network. --remote and --application-id both update the
+local state file; --application-id does so without any network access.
 `
 
 func init() {
@@ -84,7 +86,7 @@ func runKeyStatus(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return err
 	}
-	baseURL, err := keyclient.ResolveBaseURL("", "", config)
+	baseURL, err := keyclient.ResolveBaseURL("", os.Getenv(keyclient.ENV_CPA_BASE_URL), config)
 	if err != nil {
 		if keyclient.CodeOf(err) != keyclient.CODE_BASE_URL_REQUIRED {
 			return err

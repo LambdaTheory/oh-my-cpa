@@ -50,9 +50,11 @@ func InferRepo(dir string) (repoID, repoDisplay string, err error) {
 		}
 		return repoID, display, nil
 	}
-	// Local identity: the directory's own name, which NormalizeRepo also reduces a path
-	// to. A checkout with no remote is still a place a key can be kept.
-	return DeriveRepoID(absolute)
+	// Local identity: the directory's own name. DeriveRepoID refuses path-shaped values,
+	// because an explicit --repo must name an identity; the checkout's base name is what
+	// the user would have written by hand. A checkout with no remote is still a place a
+	// key can be kept.
+	return DeriveRepoID(filepath.Base(absolute))
 }
 
 // ResolveRepo applies the precedence `--repo` > inferred from dir. The flag is taken

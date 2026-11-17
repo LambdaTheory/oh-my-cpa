@@ -81,10 +81,17 @@ func runKeyPurge(ctx context.Context, args []string, stdout, stderr io.Writer) e
 	}
 	// The hint that matters most: purge cleaned this machine, not the gateway. Saying it
 	// on success is what keeps purge from being mistaken for a revocation; a dry run says
-	// the same thing in the conditional, because nothing has been cleared yet.
-	if *dryRun {
+	// the same thing in the conditional, because nothing has been cleared yet. A
+	// --runtime run keeps the key and envelope, so it must not claim the local material
+	// is gone.
+	switch {
+	case *dryRun && runtime != "":
+		fmt.Fprintf(stdout, "nothing was changed; a real purge would remove %s's installed value and keep the private key and envelope on this machine\n", runtime)
+	case *dryRun:
 		fmt.Fprintln(stdout, "nothing was changed; a real purge clears the local material only, and the key in CPA stays valid")
-	} else {
+	case runtime != "":
+		fmt.Fprintf(stdout, "removed %s's installed value; the private key and envelope are still on this machine, and the key in CPA stays valid\n", runtime)
+	default:
 		fmt.Fprintln(stdout, "local material cleared; the key in CPA is still valid — stop or reissue it in the console to revoke it")
 	}
 	return nil

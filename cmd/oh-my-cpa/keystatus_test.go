@@ -106,6 +106,40 @@ func TestKeyStatusJSONIsParseable(t *testing.T) {
 	}
 }
 
+// TestKeyStatusReadsTheGatewayFromTheEnvironment: exec and install resolve the address
+// from OMCPA_CPA_BASE_URL, so status must report the same one. Reporting "not set" while
+// the other commands work is what made the environment variable look ignored.
+func TestKeyStatusReadsTheGatewayFromTheEnvironment(t *testing.T) {
+	home := t.TempDir() + "/home"
+	if code, _, stderr := runKeyCommand(t, "gen", "--home", home, "--repo", "org/repo"); code != keyclient.EXIT_OK {
+		t.Fatalf("gen: %s", stderr)
+	}
+	t.Setenv(keyclient.ENV_CPA_BASE_URL, "http://127.0.0.1:8317")
+
+	code, stdout, stderr := runKeyCommand(t, "status", "--home", home)
+	if code != keyclient.EXIT_OK {
+		t.Fatalf("exit = %d (stderr=%s)", code, stderr)
+	}
+	if !strings.Contains(stdout, "gateway: http://127.0.0.1:8317 (env)") {
+		t.Fatalf("the human report does not show the environment address:\n%s", stdout)
+	}
+
+	code, stdout, stderr = runKeyCommand(t, "status", "--home", home, "--json")
+	if code != keyclient.EXIT_OK {
+		t.Fatalf("--json exit = %d (stderr=%s)", code, stderr)
+	}
+	var decoded struct {
+		BaseURL       string `json:"base_url"`
+		BaseURLSource string `json:"base_url_source"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("status --json is not JSON: %v\n%s", err, stdout)
+	}
+	if decoded.BaseURL != "http://127.0.0.1:8317" || decoded.BaseURLSource != "env" {
+		t.Fatalf("base URL = %q from %q, want the environment value", decoded.BaseURL, decoded.BaseURLSource)
+	}
+}
+
 func TestKeyStatusApplicationIDRecordsTheApplication(t *testing.T) {
 	home := t.TempDir() + "/home"
 	if code, _, stderr := runKeyCommand(t, "gen", "--home", home, "--repo", "org/repo"); code != keyclient.EXIT_OK {

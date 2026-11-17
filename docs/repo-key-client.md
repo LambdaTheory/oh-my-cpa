@@ -97,9 +97,10 @@ The key is used against one gateway. The address is resolved in this order:
 3. `base_url` in `$OMC_HOME/config.json`
 4. none of them: `base_url_required`, exit code 3
 
-`key gen` is the recommended place to set it once. A successful command given `--base-url`
-remembers the value in `config.json`; the environment variable and the file are never
-rewritten behind the operator's back.
+`key gen` is the recommended place to set it once. A successful `key gen` or `key install`
+given `--base-url` remembers the value in `config.json`; `key exec` uses the address for
+that one run and writes nothing. The environment variable and the file are never rewritten
+behind the operator's back.
 
 Only `http` and `https` URLs with a host are accepted, without userinfo, query or fragment.
 The value is stored as the gateway root: a trailing `/` and one trailing `/v1` are removed.
@@ -482,7 +483,7 @@ Error codes are stable and are written at the front of the message, and as `code
 | `home_unavailable` | `$OMC_HOME` cannot be created or written. Fix the path or its ownership. |
 | `home_insecure` | The directory cannot be restricted to this user, or it already lets group/other write. Move it to an NTFS user directory or fix permissions. Nothing was written. |
 | `repo_required` | No `--repo`, and the current directory does not identify a repository. Run from the repository root or pass `--repo org/repo`. |
-| `repo_invalid` | The repository identity is not usable. `org/repo` is the expected shape; a local directory name works only for a directory that is not a repository. |
+| `repo_invalid` | The repository identity is not usable. `org/repo` is the expected shape; a bare directory name works for a checkout with no remote. An absolute path or one with `..` segments is refused: run the command from the directory, or pass its name. |
 | `key_not_found` | This repository has no private key here. `key gen --repo <repo>`. |
 | `key_unreadable` | The private key file cannot be read or is not 32 bytes. Do not "fix" it by generating another one over it; `key purge` first. |
 | `envelope_missing` | The application was approved but the envelope was never stored. Run `repo_key_ciphertext` and pipe it into `key accept`. |

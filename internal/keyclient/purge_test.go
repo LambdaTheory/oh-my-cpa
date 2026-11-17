@@ -2,6 +2,7 @@ package keyclient
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -450,6 +451,39 @@ func TestPurgeIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestPurgeOnAMissingHomeCreatesNothing: asking to clean a machine that never held a key
+// is a no-op, not a reason to create $OMC_HOME and its empty subdirectories.
+func TestPurgeOnAMissingHomeCreatesNothing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "never-created")
+	home := Home{Root: root}
+	result, err := Purge(PurgeOptions{Repo: "org/repo", Home: home, Now: purgeAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Removed) != 0 || len(result.Pending) != 0 {
+		t.Fatalf("an empty home produced work: removed=%v pending=%v", result.Removed, result.Pending)
+	}
+	if result.BackupScanUnavailable {
+		t.Fatal("purge says the private key is already gone when it never existed")
+	}
+	if _, statErr := os.Stat(root); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("purge created the home: %v", statErr)
+	}
+}
+
+// TestPurgeDoesNotWarnAboutAKeyThatNeverExisted covers an existing empty home: the
+// backup warning only makes sense when state records a repository whose key is gone.
+func TestPurgeDoesNotWarnAboutAKeyThatNeverExisted(t *testing.T) {
+	home := newTestHome(t)
+	result, err := Purge(PurgeOptions{Repo: "org/repo", Home: home, Now: purgeAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BackupScanUnavailable {
+		t.Fatal("purge warns that the private key is gone for a repository that never had one")
+	}
+}
+
 // TestPurgeRefusesAnInvalidRepoBeforeTouchingFiles is C-35's path-safety claim.
 func TestPurgeRefusesAnInvalidRepoBeforeTouchingFiles(t *testing.T) {
 	home := newTestHome(t)
@@ -460,22 +494,21 @@ func TestPurgeRefusesAnInvalidRepoBeforeTouchingFiles(t *testing.T) {
 			t.Fatalf("%q was accepted", value)
 		}
 	}
-	// A traversal-looking value normalizes to a local directory identity rather than an
-	// escape: every path is Home.Root plus a hashed filename, which the slug cannot leave.
-	// A dry run proves where the resolved paths land without deleting anything.
-	if _, err := Purge(PurgeOptions{Repo: "../../../etc/passwd", DryRun: true, Home: home, Now: purgeAt}); err != nil {
-		t.Logf("the traversal-shaped identity was refused: %v", err)
+	// A traversal-looking value is refused as an identity instead of being folded into a
+	// local directory name. An explicit --repo names the key to delete; a path-shaped
+	// value is a typo that must not select a different one.
+	if _, err := Purge(PurgeOptions{Repo: "../../../etc/passwd", DryRun: true, Home: home, Now: purgeAt}); CodeOf(err) != CODE_REPO_INVALID {
+		t.Fatalf("a traversal-shaped identity was not refused: %v", err)
 	}
-	traversalID, _, err := DeriveRepoID("../../../etc/passwd")
+	// Even if such a spelling ever reached the filename layer, it stays inside the home:
+	// every path is Home.Root plus a percent-encoded, hashed filename.
+	stem, err := fileStem("../../../etc/passwd")
 	if err != nil {
 		t.Fatal(err)
 	}
-	keyPath, err := home.KeyPath(traversalID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyPath := filepath.Join(home.KeysDir(), stem+".key")
 	if relative, relErr := filepath.Rel(home.Root, keyPath); relErr != nil || strings.HasPrefix(relative, "..") {
-		t.Fatalf("the key path for %q escapes the home: %q", traversalID, keyPath)
+		t.Fatalf("the key path for a traversal-shaped name escapes the home: %q", keyPath)
 	}
 	after := snapshot(t, home)
 	if diff := diffSnapshots(before, after); diff != "" {
