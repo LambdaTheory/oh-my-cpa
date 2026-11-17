@@ -1,7 +1,0 @@
-removed: /tmp/t5s14-case03b.5utlVm/userhome/.claude/settings.json (env.ANTHROPIC_BASE_URL, env.ANTHROPIC_AUTH_TOKEN)
-removed: /tmp/t5s14-case03b.5utlVm/userhome/.codex/config.toml ([model_providers.oh-my-cpa] and its model_provider line)
-removed: /tmp/t5s14-case03b.5utlVm/userhome/.config/opencode/opencode.json (provider.oh-my-cpa)
-removed: /tmp/t5s14-case03b.5utlVm/omc-home/keys/org%2Ffixture-repo-518f9b0e.key
-removed: /tmp/t5s14-case03b.5utlVm/omc-home/envelopes/org%2Ffixture-repo-518f9b0e.json
-removed: /tmp/t5s14-case03b.5utlVm/omc-home/state.json (record for org/fixture-repo)
-local material cleared; the key in CPA is still valid — stop or reissue it in the console to revoke it

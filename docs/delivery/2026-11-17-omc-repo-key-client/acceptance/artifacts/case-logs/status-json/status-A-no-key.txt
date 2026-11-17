@@ -1,4 +1,0 @@
-home: /tmp/t5s14-case02.pX0d2L/empty-home
-gateway: not set; pass --base-url or set OMCPA_CPA_BASE_URL
-
-this machine holds no keys yet. Next: `oh-my-cpa key gen --repo <org/repo>`, then apply for the key and store it with `oh-my-cpa key accept --repo <org/repo>`

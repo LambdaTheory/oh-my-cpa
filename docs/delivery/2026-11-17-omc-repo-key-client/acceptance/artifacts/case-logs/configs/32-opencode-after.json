@@ -1,8 +1,0 @@
-{
-  "theme": "dark",
-  "provider": {
-    "cpa": {
-      "npm": "x"
-    }
-  }
-}

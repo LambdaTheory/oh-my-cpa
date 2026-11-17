@@ -1,8 +1,0 @@
-home: /tmp/t5s14-case02.pX0d2L/home-b
-gateway: not set; pass --base-url or set OMCPA_CPA_BASE_URL
-
-org/fixture-repo
-  private key: keys/org%2Ffixture-repo-518f9b0e.key
-  envelope:    missing; run `oh-my-cpa key accept --repo org/fixture-repo` with the repo_key_ciphertext result on stdin
-  approval:    not_applied (gen)
-  installed:   no runtime holds this key

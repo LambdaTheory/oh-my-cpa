@@ -1,5 +1,0 @@
-warning: this writes the plaintext gateway key into /tmp/t5s14-case03.aphFRA/userhome/.claude/settings.json
-warning: that file keeps it after this process exits and after a restart; anything that reads or copies /tmp/t5s14-case03.aphFRA/userhome/.claude/settings.json can use the key
-warning: keep that file out of git, logs, chat and backups you share
-warning: remove it again with `oh-my-cpa key purge --repo org/fixture-repo`, or `--runtime claude` to remove only this one
-oh-my-cpa: backup of the previous file: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132110Z-tmp-t5s14-case03.aphFRA-userhome-.claude-settings.json

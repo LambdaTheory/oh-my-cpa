@@ -1,5 +1,0 @@
-purge exit=1 stdout= stderr=install_not_owned: /tmp/t5s14-case09.xt6IuC/uh/.claude/settings.json no longer holds the key this tool installed for org/repo; it was changed by something else, so it is left alone — remove it by hand if that is what you want 
-ASSERT P2-6 changed value is reported as install_not_owned PASS
-ASSERT P2-6 the changed value is left in place PASS
-ASSERT P2-6 the private key survives an aborted purge PASS
-RESULT case-09 done

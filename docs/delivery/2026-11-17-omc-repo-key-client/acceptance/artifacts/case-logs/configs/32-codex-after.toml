@@ -1,4 +1,0 @@
-model_provider = "other"
-
-[model_providers.other]
-name = "Other"

@@ -1,1 +1,0 @@
-key_not_found: no private key for org/fixture-repo; run `oh-my-cpa key gen --repo org/fixture-repo`

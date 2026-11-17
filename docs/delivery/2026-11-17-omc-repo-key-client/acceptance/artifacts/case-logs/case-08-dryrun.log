@@ -1,9 +1,0 @@
-dry-run exit=0 stdout:
-would remove: /tmp/t5s14-case08.6chJzz/uh/.claude/settings.json (env.ANTHROPIC_BASE_URL, env.ANTHROPIC_AUTH_TOKEN)
-would remove: /tmp/t5s14-case08.6chJzz/h/keys/org%2Frepo-57b681c5.key
-would remove: /tmp/t5s14-case08.6chJzz/h/envelopes/org%2Frepo-57b681c5.json
-would remove: /tmp/t5s14-case08.6chJzz/h/state.json (record for org/repo)
-nothing was changed; a real purge clears the local material only, and the key in CPA stays valid
-ASSERT dry-run leaves every file and mtime unchanged PASS
-ASSERT dry-run lists what a real purge would remove PASS
-RESULT case-08 FAILS=0

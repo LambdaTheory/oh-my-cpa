@@ -1,5 +1,0 @@
-warning: this writes the plaintext gateway key into /tmp/t5s14-case03b.5utlVm/userhome/.config/opencode/opencode.json
-warning: that file keeps it after this process exits and after a restart; anything that reads or copies /tmp/t5s14-case03b.5utlVm/userhome/.config/opencode/opencode.json can use the key
-warning: keep that file out of git, logs, chat and backups you share
-warning: remove it again with `oh-my-cpa key purge --repo org/fixture-repo`, or `--runtime opencode` to remove only this one
-oh-my-cpa: backup of the previous file: /tmp/t5s14-case03b.5utlVm/omc-home/backups/20261117T132158Z-tmp-t5s14-case03b.5utlVm-userhome-.config-opencode-opencode.json
