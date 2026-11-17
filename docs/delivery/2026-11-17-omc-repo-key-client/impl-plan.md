@@ -135,6 +135,7 @@ $OMC_HOME/
   - 每个仓库独立刷新；某个失败时标 `remote_error:<code>`，其余照常显示，命令退出码 1。
 - `key status` 显示每条记录的 `status_source`（`gen` / `local` / `remote` / `accept`），让读者知道这个状态是本地记的还是刚从 OMC 读的。
 - `repo_key_query` 的 `state`（`active` / `stopped` / none）单独显示为 `repo_state`，和「这次申请的状态」分开；这样「申请被拒但仓库已有别人的 active key」不会看成同一件事。
+- state 丢失时 `key status` 仍按确定性文件名扫描 `keys/` 和 `envelopes/`，报告孤儿文件数量并提示用 `key gen --repo` 重建记录；孤儿不冒充已绑定仓库。
 
 **理由**：AC-3 要「最后一次审批状态」，只靠本地文件在「申请被拒、agent 没走到 accept」时会永远显示未知。`repo_key_status` 是只读能力，调用成本低；把它做成显式 `--remote`，默认路径仍然可以离线工作。
 
@@ -162,6 +163,7 @@ $OMC_HOME/
 - 签名：`key exec --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] -- <command> [args...]`。
 - 仓库解析：`--repo` > 当前目录的 `git remote get-url origin`（没有 origin 取第一个 remote）> 当前目录名；都过 `repokey.NormalizeRepo`。找不到本地 key 时 `key_not_found`（退出码 4），错误里给出推断出的 repo display 和一行可直接复制的 `key gen` 命令。
 - 检查顺序：state/repo → 私钥存在 → 信封存在 → base URL 可解析 → 解密 → 注入 → 启动子进程。任一步失败都不启动子进程，也不留下临时文件。
+- `exec` 不要求 state 里有记录：私钥和信封按确定性文件名就能找到；state 只用于显示、申请状态和 install 归属。
 - 解密：`repokey.Decrypt(privateKey, envelopeJSON)`，明文只保存在一个局部 `string` 和子进程环境里；不写临时文件，不 `fmt` 明文，不放进 argv（Codex 的 token 走 env，见下）。
 - 子进程：`exec.CommandContext(ctx, argv[0], argv[1:]...)`；`cmd.Env` 由 `os.Environ()` 过滤后追加；`Stdin/Stdout/Stderr` 继承；`cmd.Dir` 保持当前目录；`cmd.Run()` 的退出码原样返回。子进程起不来报 `exec_failed`（退出码 1）。
 - 信号：`key exec` 不安装自己的信号处理器。Unix 上父子在同一进程组，Windows 上共享控制台，Ctrl-C 会同时到达两者；如果父进程被单独 SIGTERM，子进程可能继续，运行手册说明这一点。不要为了「优雅」加一个会吞掉 Ctrl-C 的 handler。
@@ -551,6 +553,8 @@ envelope= "envelopes/" + slug + "-" + hash8 + ".json"
 - `backup_contains_key`：install 时判断目标文件里是否已经是本仓库的 key（重装）；true 时 purge 即使私钥已不在也能删掉这份备份。
 - `previous_model_provider`：只给 Codex 用；install 替换顶层 `model_provider` 前的原值，没有则为 `null`。
 - 不存私钥、明文、信封正文、管理密钥、approval token。
+
+state 是索引，不是唯一真相：key/envelope 的路径是确定性的。state 丢失时，`key gen` / `key accept` 能从私钥重建记录，`key exec` 仍可按路径工作；`key install` 把无法确认归属的槽位当外部值，要求 `--replace`；`key purge` 先清能确定的私钥/信封，安装值按 `--runtime` + 配置路径 + 指纹比对处理，不能确定就保留并报 `purge_pending`。
 
 ### 5.2 `config.json`
 
@@ -1219,7 +1223,7 @@ pnpm verify
 10. **备份里的明文**：install 的备份可能含用户原有的其他密钥；purge 只删含本仓库明文的备份，其他保留。备份目录本身需要 0700/ACL，否则等于把用户的其他密钥暴露给同机其他用户。
 11. **`internal/web/dist` 只有 `.gitkeep`**：e2e 的 `go build` 能编译，但二进制只提供 placeholder 页面；e2e 不测浏览器。如果 S7 需要真实 SPA，必须先 `pnpm build`，但那会把 e2e 变成构建依赖，当前不需要。
 12. **Windows 基线红项**：`internal/app` 的 retention 时区测试、`test:self` 的符号链接/zip、并行探针的 socket 缓冲等是既有问题，不计入本次；验收报告要单列。
-13. **项目级配置覆盖**：Claude Code 的项目本地/项目 settings 优先于用户级，Codex 的项目 `.codex/config.toml` 在受信任目录也优先于用户级。`install` 只写用户级，运行手册要求检查项目级同名配置；`exec` 的 `-c` 是 session 级，优先于项目级，所以 `exec` 不受这条影响。
+13. **项目级/配置层覆盖**：Claude Code 的项目本地/项目 settings 优先于用户级，Codex 的项目 `.codex/config.toml` 在受信任目录和 profile 层的 `model_provider` 也可能优先于用户级。`install` 只写用户级，运行手册要求检查项目级和 profile 同名配置；`exec` 的 `-c` 是 session 级，优先于这些层，所以 `exec` 不受这条影响。
 
 ## 12. 待定（PM 拍板）
 
