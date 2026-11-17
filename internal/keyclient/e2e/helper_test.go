@@ -25,6 +25,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +36,40 @@ const (
 	helperModeEnv     = "OMC_E2E_HELPER"
 	helperModeMask    = "mask"
 	helperModeDecrypt = "decrypt"
+
+	// markerEnv names a file the helper creates when it starts. A run that expects the
+	// child never to start sets it and asserts the file is absent.
+	markerEnv = "OMC_E2E_MARKER"
 )
+
+// codexOverrides holds the `-c` assignments `key exec --runtime codex` inserts. They
+// arrive as ordinary arguments, so the child takes them out before the testing package
+// parses its own flags; keeping them lets the report say what the runtime was handed.
+var codexOverrides []string
+
+// TestMain lets the helper binary accept the flags Codex would receive. The stripping is
+// confined to child mode, so an ordinary `go test` run is unaffected.
+func TestMain(m *testing.M) {
+	if os.Getenv(helperModeEnv) != "" {
+		os.Args, codexOverrides = stripCodexOverrides(os.Args)
+	}
+	os.Exit(m.Run())
+}
+
+// stripCodexOverrides removes `-c <assignment>` pairs from the child's arguments.
+func stripCodexOverrides(arguments []string) ([]string, []string) {
+	kept := make([]string, 0, len(arguments))
+	overrides := make([]string, 0, 8)
+	for index := 0; index < len(arguments); index++ {
+		if arguments[index] == "-c" && index+1 < len(arguments) {
+			overrides = append(overrides, arguments[index+1])
+			index++
+			continue
+		}
+		kept = append(kept, arguments[index])
+	}
+	return kept, overrides
+}
 
 // injectedNames lists the variables each runtime's injection is expected to
 // set. Anything else the helper finds set is reported too, so an accidental
@@ -65,9 +100,24 @@ func TestE2EChildProcess(t *testing.T) {
 type maskingReport struct {
 	Runtime   string            `json:"runtime"`
 	Present   map[string]bool   `json:"present"`
+	EnvCounts map[string]int    `json:"env_counts"`
 	Masked    []string          `json:"masked"`
 	Inference *maskingInference `json:"inference,omitempty"`
 	Version   string            `json:"version"`
+
+	// These are the non-value facts the CLI slice has to prove: the child's own
+	// arguments do not carry the key, the process that started it does not carry the
+	// key either, and the helper actually ran.
+	ArgvCarriesKey   bool `json:"argv_carries_key"`
+	ParentChecked    bool `json:"parent_checked"`
+	ParentCarriesKey bool `json:"parent_carries_key"`
+	MarkerWritten    bool `json:"marker_written"`
+
+	// Codex receives provider overrides in argv and a key in the environment; OpenCode
+	// receives one merged document. Reporting the shape lets the caller assert both.
+	Overrides         []string `json:"overrides,omitempty"`
+	OpenCodeProviders []string `json:"opencode_providers,omitempty"`
+	OpenCodeTheme     string   `json:"opencode_theme,omitempty"`
 }
 
 type maskingInference struct {
@@ -79,43 +129,122 @@ type maskingInference struct {
 func runMaskHelper(t *testing.T) {
 	runtimeName := os.Getenv("OMC_E2E_RUNTIME")
 	report := maskingReport{
-		Runtime: runtimeName,
-		Present: map[string]bool{},
-		Masked:  []string{},
-		Version: os.Getenv("OMC_E2E_VERSION"),
+		Runtime:   runtimeName,
+		Present:   map[string]bool{},
+		EnvCounts: map[string]int{},
+		Masked:    []string{},
+		Version:   os.Getenv("OMC_E2E_VERSION"),
 	}
+
+	if marker := strings.TrimSpace(os.Getenv(markerEnv)); marker != "" {
+		if err := os.WriteFile(marker, []byte(runtimeName), 0o600); err != nil {
+			t.Fatalf("write the child marker: %v", err)
+		}
+		report.MarkerWritten = true
+	}
+
 	names := []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "OMC_REPO_KEY", "OPENCODE_CONFIG_CONTENT"}
 	for _, name := range names {
 		value, exists := os.LookupEnv(name)
 		report.Present[name] = exists
+		for _, entry := range os.Environ() {
+			entryName, _, found := strings.Cut(entry, "=")
+			if found && sameEnvName(entryName, name) {
+				report.EnvCounts[name]++
+			}
+		}
 		if exists && value != "" {
 			report.Masked = append(report.Masked, name+"="+maskValue(value))
 		}
 	}
 
+	secret := ""
 	switch runtimeName {
 	case "claude":
-		status, content := callAnthropicShape(os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("ANTHROPIC_AUTH_TOKEN"))
+		secret = os.Getenv("ANTHROPIC_AUTH_TOKEN")
+		status, content := callAnthropicShape(os.Getenv("ANTHROPIC_BASE_URL"), secret)
 		report.Inference = &maskingInference{Status: status, Content: content, Base: os.Getenv("ANTHROPIC_BASE_URL")}
 	case "codex":
-		status, content := callOpenAIShape(os.Getenv("OMC_E2E_GATEWAY"), os.Getenv("OMC_REPO_KEY"))
-		report.Inference = &maskingInference{Status: status, Content: content, Base: os.Getenv("OMC_E2E_GATEWAY")}
+		secret = os.Getenv("OMC_REPO_KEY")
+		report.Overrides = append([]string(nil), codexOverrides...)
+		gateway := codexGatewayFromOverrides(codexOverrides)
+		if gateway == "" {
+			// The direct-helper path in the earlier harness passes the gateway
+			// separately; `key exec` is expected to put it in the override.
+			gateway = os.Getenv("OMC_E2E_GATEWAY")
+		}
+		status, content := callOpenAIShape(gateway, secret)
+		report.Inference = &maskingInference{Status: status, Content: content, Base: gateway}
 	case "opencode":
-		baseURL, apiKey, err := openCodeProvider(os.Getenv("OPENCODE_CONFIG_CONTENT"))
+		observation, err := readOpenCodeObservation(os.Getenv("OPENCODE_CONFIG_CONTENT"))
 		if err != nil {
 			t.Fatalf("read the injected opencode configuration: %v", err)
 		}
-		status, content := callOpenAIShape(baseURL, apiKey)
-		report.Inference = &maskingInference{Status: status, Content: content, Base: baseURL}
+		secret = observation.APIKey
+		report.OpenCodeProviders = observation.Providers
+		report.OpenCodeTheme = observation.Theme
+		status, content := callOpenAIShape(observation.BaseURL, secret)
+		report.Inference = &maskingInference{Status: status, Content: content, Base: observation.BaseURL}
 	default:
 		t.Fatalf("unknown runtime %q", runtimeName)
 	}
+
+	report.ArgvCarriesKey = argumentsCarry(os.Args, secret) || argumentsCarry(codexOverrides, secret)
+	report.ParentChecked, report.ParentCarriesKey = parentEnvironmentCarries(secret)
 
 	encoded, err := json.Marshal(report)
 	if err != nil {
 		t.Fatalf("encode report: %v", err)
 	}
 	fmt.Fprintln(os.Stdout, string(encoded))
+}
+
+// sameEnvName compares variable names the way the platform does.
+func sameEnvName(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
+}
+
+// argumentsCarry reports whether any argument contains the key.
+func argumentsCarry(arguments []string, secret string) bool {
+	if secret == "" {
+		return false
+	}
+	for _, argument := range arguments {
+		if strings.Contains(argument, secret) {
+			return true
+		}
+	}
+	return false
+}
+
+// parentEnvironmentCarries reads the starting environment of the process that started
+// this helper. On Linux that is the `key exec` process; /proc is the only portable way
+// to observe it from the child. Elsewhere the check is reported as unavailable rather
+// than guessed at.
+func parentEnvironmentCarries(secret string) (checked, carries bool) {
+	if secret == "" || runtime.GOOS != "linux" {
+		return false, false
+	}
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", os.Getppid()))
+	if err != nil {
+		return false, false
+	}
+	return true, bytes.Contains(raw, []byte(secret))
+}
+
+// codexGatewayFromOverrides reads the provider base URL `key exec` inserted, so the
+// helper reaches the same gateway the runtime was configured for.
+func codexGatewayFromOverrides(overrides []string) string {
+	const prefix = `model_providers.oh-my-cpa.base_url="`
+	for _, override := range overrides {
+		if strings.HasPrefix(override, prefix) && strings.HasSuffix(override, `"`) {
+			return strings.TrimSuffix(strings.TrimPrefix(override, prefix), `"`)
+		}
+	}
+	return ""
 }
 
 // maskValue names the variable's length and first two characters. Enough for a
@@ -194,10 +323,21 @@ func postJSON(endpoint, bearer string, body, output any) (int, error) {
 	return response.StatusCode, nil
 }
 
-// openCodeProvider reads back the entry Oh My CPA is specified to write: the
-// provider's baseURL and apiKey, beside whatever else the document holds.
-func openCodeProvider(raw string) (baseURL, apiKey string, err error) {
+// openCodeObservation is what the child can see in the merged OpenCode document: the
+// entry Oh My CPA wrote, and enough of the rest to prove it was merged rather than
+// replaced.
+type openCodeObservation struct {
+	BaseURL   string
+	APIKey    string
+	Providers []string
+	Theme     string
+}
+
+// readOpenCodeObservation reads back the entry Oh My CPA is specified to write, beside
+// whatever else the document holds.
+func readOpenCodeObservation(raw string) (openCodeObservation, error) {
 	var document struct {
+		Theme    string `json:"theme"`
 		Provider map[string]struct {
 			Options struct {
 				BaseURL string `json:"baseURL"`
@@ -206,16 +346,26 @@ func openCodeProvider(raw string) (baseURL, apiKey string, err error) {
 		} `json:"provider"`
 	}
 	if err := json.Unmarshal([]byte(raw), &document); err != nil {
-		return "", "", err
+		return openCodeObservation{}, err
 	}
 	entry, ok := document.Provider["oh-my-cpa"]
 	if !ok {
-		return "", "", fmt.Errorf("no oh-my-cpa provider in the injected configuration")
+		return openCodeObservation{}, fmt.Errorf("no oh-my-cpa provider in the injected configuration")
 	}
 	if entry.Options.BaseURL == "" || entry.Options.APIKey == "" {
-		return "", "", fmt.Errorf("the oh-my-cpa provider has no baseURL or apiKey")
+		return openCodeObservation{}, fmt.Errorf("the oh-my-cpa provider has no baseURL or apiKey")
 	}
-	return entry.Options.BaseURL, entry.Options.APIKey, nil
+	providers := make([]string, 0, len(document.Provider))
+	for name := range document.Provider {
+		providers = append(providers, name)
+	}
+	sort.Strings(providers)
+	return openCodeObservation{
+		BaseURL:   entry.Options.BaseURL,
+		APIKey:    entry.Options.APIKey,
+		Providers: providers,
+		Theme:     document.Theme,
+	}, nil
 }
 
 // envelope is the delivery format the server writes and this helper opens.

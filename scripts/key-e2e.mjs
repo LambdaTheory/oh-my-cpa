@@ -23,7 +23,14 @@ const evidenceDir = process.env.OMC_E2E_EVIDENCE_DIR || path.join(os.tmpdir(), '
 // The evidence directory is the one writable mount, so it has to exist before
 // Docker creates the mount point itself.
 mkdirSync(evidenceDir, { recursive: true });
-const env = { ...process.env, ASSISTANT_NO_SEND: '1', OMC_E2E_EVIDENCE_DIR: evidenceDir };
+// Windows runs need the same timezone the container path sets; the state and
+// evidence timestamps are asserted against a fixed zone.
+const env = {
+  ...process.env,
+  ASSISTANT_NO_SEND: '1',
+  TZ: process.env.TZ || 'Asia/Shanghai',
+  OMC_E2E_EVIDENCE_DIR: evidenceDir,
+};
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
