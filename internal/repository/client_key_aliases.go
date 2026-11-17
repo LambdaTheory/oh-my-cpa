@@ -314,6 +314,12 @@ func (r *Repository) SetClientKeyAlias(ctx context.Context, instanceID, keyFinge
 // ClientKeyMasksFor returns the display mask each fingerprint was last recorded
 // with, for keys whose requests are still retained.
 //
+// "Last recorded" is the request-time newest record, not the newest row: CPA's
+// records can arrive out of order, so `timestamp_ms` decides and `id` only breaks
+// ties within one millisecond. The earlier implementation grouped by key and took
+// MAX(id), which answered with whatever was stored last, and scanned the whole
+// history of every key to do it.
+//
 // A key removed from CPA has no mask in the current configuration, and its usage
 // facts outlive its request records, so this is best effort: a key whose last
 // record has rolled out of retention resolves to nothing and the caller falls
@@ -323,31 +329,67 @@ func (r *Repository) ClientKeyMasksFor(ctx context.Context, instanceID string, k
 	if r == nil || r.SQL() == nil {
 		return resolved, errors.New("repository is not initialized")
 	}
-	for start := 0; start < len(keyFingerprints); start += maxSQLiteParameters {
-		chunk := keyFingerprints[start:min(start+maxSQLiteParameters, len(keyFingerprints))]
-		args := make([]any, 0, len(chunk)+1)
-		args = append(args, instanceID)
-		for _, fingerprint := range chunk {
-			args = append(args, fingerprint)
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return resolved, nil
+	}
+	unique := make([]string, 0, len(keyFingerprints))
+	seen := make(map[string]struct{}, len(keyFingerprints))
+	for _, fingerprint := range keyFingerprints {
+		trimmed := strings.TrimSpace(fingerprint)
+		if trimmed == "" {
+			continue
 		}
-		// SQLite takes the bare column from the row MAX() picked: the newest mask.
-		rows, err := r.SQL().QueryContext(ctx, `
-			SELECT api_group_key, api_key_mask, MAX(id)
-			FROM usage_events
-			WHERE instance_id = ? AND api_key_mask <> '' AND api_group_key IN (`+
-			strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")+`)
-			GROUP BY api_group_key`, args...)
+		if _, duplicate := seen[trimmed]; duplicate {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		unique = append(unique, trimmed)
+	}
+	if len(unique) == 0 {
+		return resolved, nil
+	}
+	// One round trip per batch of 64 keys; three parameters per key keeps the
+	// whole statement inside SQLite's variable limit.
+	const maskChunk = 64
+	args := make([]any, 0, maskChunk*3)
+	var sqlBuf strings.Builder
+	for start := 0; start < len(unique); start += maskChunk {
+		chunk := unique[start:min(start+maskChunk, len(unique))]
+		args = args[:0]
+		sqlBuf.Reset()
+		for idx, fingerprint := range chunk {
+			if idx > 0 {
+				sqlBuf.WriteString(" UNION ALL ")
+			}
+			// INDEXED BY is deliberate. Given the choice SQLite reads this
+			// subquery off idx_usage_events_instance_time and walks backwards
+			// from the newest row of the instance until it reaches this key:
+			// fast while the key is the only one writing, the original
+			// full-history walk again as soon as a newer key takes the traffic
+			// over (335 ms per call at 600k rows, against 135 us on the group
+			// index). A migration that renames the index must update this line;
+			// TestClientKeyMasksForUsesTheGroupTimeIndex fails if it drifts.
+			sqlBuf.WriteString(`SELECT ?, COALESCE((
+				SELECT api_key_mask FROM usage_events INDEXED BY idx_usage_events_group_time
+				WHERE api_group_key = ? AND instance_id = ? AND api_key_mask <> ''
+				ORDER BY timestamp_ms DESC, id DESC LIMIT 1
+			), '')`)
+			args = append(args, fingerprint, fingerprint, instanceID)
+		}
+		rows, err := r.SQL().QueryContext(ctx, sqlBuf.String(), args...)
 		if err != nil {
 			return nil, fmt.Errorf("resolve client key masks: %w", err)
 		}
 		for rows.Next() {
 			var fingerprint, mask string
-			var id int64
-			if errScan := rows.Scan(&fingerprint, &mask, &id); errScan != nil {
+			if errScan := rows.Scan(&fingerprint, &mask); errScan != nil {
 				rows.Close()
 				return nil, fmt.Errorf("scan client key mask: %w", errScan)
 			}
-			resolved[fingerprint] = mask
+			if mask != "" {
+				resolved[fingerprint] = mask
+			}
 		}
 		errRows := rows.Err()
 		rows.Close()

@@ -43,7 +43,7 @@ func (r *PlainReportRenderer) card(msg Message, isFull bool) map[string]any {
 	if len(risks) > count {
 		meta += fmt.Sprintf(" · 另有 %d 项，请在控制台查看", len(risks)-count)
 	}
-	if diagnostic := r.diagnosticText(msg, risks[:count]); diagnostic != "" {
+	if diagnostic := r.diagnosticText(msg); diagnostic != "" {
 		meta += "\n" + diagnostic
 	}
 	elements = append(elements, markdown(meta))
