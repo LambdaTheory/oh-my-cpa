@@ -918,7 +918,7 @@ func registerKeyCommand(command keyCommand) { keyCommands[command.Name] = comman
 7. 所有属于本仓库的项都清掉后删 state 记录；否则保留并报 `purge_pending`。
 8. 打印「本地已清；CPA 里的 key 仍有效」的提示。
 
-`--dry-run` 只做 1、2、3、5、6 的检查并打印，不写不删。
+`--dry-run` 只做 1～5、7 的检查并打印，不写不删。
 
 ## 7. 切片、文件归属与依赖
 
@@ -1287,6 +1287,6 @@ S1 75
 - [x] `node scripts/check-docs.mjs --file docs/delivery/2026-11-17-omc-repo-key-client/impl-plan.md` 通过（missing-path=0、retired-reference=0、line-reference=0）。
 - [x] `node --test scripts/check-docs.test.mjs` 通过（13 pass / 0 fail）。
 - [x] `pnpm test:fast --base ba9e2ee7` 已跑：本文件通过；全量 docs 的失败项全部在基线已有的 T18 交付文档（9 missing-path + 25 line-reference），不是本文件引入，也没有改那些文件。
-- [ ] 本文件里的命令面与 `--help` 草案一致；S2a/S2b/S3/S4 的文件归属无重叠。
-- [ ] AC-1～9 每条都能在 §10 找到切片、测试/证据和缺口。
+- [x] 本文件里的命令面与 `--help` 草案一致；S2a/S2b/S3/S4 的文件归属无重叠。
+- [x] AC-1～9 每条都能在 §10 找到切片、测试/证据和缺口。
 - [ ] §12 的待定项已由 PM 给出选择，或明确保留为「按推荐执行」。
