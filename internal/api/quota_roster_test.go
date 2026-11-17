@@ -179,6 +179,32 @@ func TestQuotaAutoRefreshReadsTheOpenCodeEntryOnce(t *testing.T) {
 	}
 }
 
+// A gateway that cannot answer the compatibility listing must still serve every
+// auth-file credential: the opencode roster is additive.
+func TestQuotaRosterToleratesAnUnavailableCompatibilityListing(t *testing.T) {
+	ctx := context.Background()
+	fixture := newCompatibilityQuotaFixture()
+	handler := newCompatibilityQuotaHandler(t, fixture)
+	nowMS := time.Now().UnixMilli()
+	saveAutoRefreshSnapshot(t, handler, "cmc-1", "commandcode", nowMS-5*time.Hour.Milliseconds(), nowMS-2*time.Minute.Milliseconds())
+	setAutoRefreshPolicy(t, handler, `{"interval_minutes":0,"refresh_on_reset":true}`)
+
+	round, err := handler.runQuotaAutoRefreshRound(ctx)
+	if err != nil || round.Refreshed != 1 || round.Failed != 0 {
+		t.Fatalf("round = %+v err=%v, want the auth file read despite the missing listing", round, err)
+	}
+	if fixture.urlReadCount("credits") != 1 || fixture.urlReadCount("subscriptions") != 1 {
+		t.Fatalf("commandcode reads = credits %d, subscriptions %d", fixture.urlReadCount("credits"), fixture.urlReadCount("subscriptions"))
+	}
+	snapshots, err := handler.repo.GetLatestQuotaSnapshots(ctx, []string{"cmc-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshots["cmc-1"].Provider != "commandcode" {
+		t.Fatalf("stored reading = %+v", snapshots["cmc-1"])
+	}
+}
+
 func TestQuotaManualRefreshAndOverviewIncludeCompatibilityCredentials(t *testing.T) {
 	fixture := newCompatibilityQuotaFixture()
 	fixture.discoveryUp = true
