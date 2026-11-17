@@ -1,0 +1,266 @@
+{
+  "repo": "LambdaTheory/oh-my-cpa",
+  "steps": [
+    {
+      "name": "start",
+      "detail": {
+        "agent": "e2e-codex",
+        "device": "e2e-device"
+      }
+    },
+    {
+      "name": "gen",
+      "detail": {
+        "checks": {
+          "exit_zero": true,
+          "stderr_names_the_key_file": true,
+          "stdout_is_one_public_key": true
+        },
+        "exit_code": 0,
+        "public_key_prefix": "x25519:"
+      }
+    },
+    {
+      "name": "apply",
+      "detail": {
+        "application_id": "9ebe7920-71f3-4d0d-8942-de2ac9ed8ddf",
+        "approval_link_path": "/repo-key-apply/{token}",
+        "checks": {
+          "agent_recorded": true,
+          "capability_ok": true,
+          "data_decodes": true,
+          "device_recorded": true,
+          "has_application": true,
+          "has_approval": true,
+          "http_200": true,
+          "kind_issue": true,
+          "status_pending": true
+        },
+        "http_status": 200
+      }
+    },
+    {
+      "name": "approve",
+      "detail": {
+        "checks": {
+          "body_decodes": true,
+          "body_no_key": true,
+          "gateway_key_count": true,
+          "gateway_key_found": true,
+          "http_200": true,
+          "key_mask_present": true,
+          "status_approved": true
+        },
+        "gateway_keys": 1,
+        "http_status": 200,
+        "key_mask": "sk-cpa-f••••••••b24b"
+      }
+    },
+    {
+      "name": "ciphertext",
+      "detail": {
+        "checks": {
+          "algorithm": true,
+          "application_matches": true,
+          "body_no_key": true,
+          "capability_ok": true,
+          "ciphertext_not_key": true,
+          "ciphertext_present": true,
+          "data_decodes": true,
+          "http_200": true,
+          "mask_matches": true
+        },
+        "envelope_sha256": "dd3db3cb637b0f5b39ff11431ee102e6bc190bd09ec5ff5d421da2330b5b2334",
+        "http_status": 200
+      }
+    },
+    {
+      "name": "accept",
+      "detail": {
+        "checks": {
+          "approval_recorded": true,
+          "envelope_present": true,
+          "exit_zero": true,
+          "mask_recorded": true,
+          "private_key_present": true,
+          "state_record_present": true,
+          "stderr_no_key": true,
+          "stdout_names_key_mask": true,
+          "stdout_no_key": true
+        },
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "exec-claude",
+      "detail": {
+        "checks": {
+          "api_key_removed": true,
+          "argv_no_key": true,
+          "auth_token_present": true,
+          "base_url_present": true,
+          "exit_zero": true,
+          "gateway_200": true,
+          "gateway_content": true,
+          "helper_ran": true,
+          "one_auth_token": true,
+          "parent_env_checked": true,
+          "parent_no_key": true,
+          "runtime_is_claude": true,
+          "stderr_no_key": true,
+          "stdout_no_key": true
+        },
+        "exit_code": 0,
+        "masked": [
+          "ANTHROPIC_BASE_URL=ht••••••••(22 chars)",
+          "ANTHROPIC_AUTH_TOKEN=sk••••••••(39 chars)"
+        ],
+        "parent_checked": true
+      }
+    },
+    {
+      "name": "exec-codex",
+      "detail": {
+        "checks": {
+          "argv_no_key": true,
+          "exit_zero": true,
+          "gateway_200": true,
+          "gateway_content": true,
+          "helper_ran": true,
+          "key_present": true,
+          "one_key": true,
+          "override_a": true,
+          "override_b": true,
+          "override_c": true,
+          "override_d": true,
+          "override_e": true,
+          "overrides_present": true,
+          "parent_env_checked": true,
+          "parent_no_key": true,
+          "runtime_is_codex": true,
+          "stderr_no_key": true,
+          "stdout_no_key": true
+        },
+        "exit_code": 0,
+        "overrides": [
+          "model_provider=\"oh-my-cpa\"",
+          "model_providers.oh-my-cpa.name=\"Oh My CPA\"",
+          "model_providers.oh-my-cpa.base_url=\"http://127.0.0.1:33019/v1\"",
+          "model_providers.oh-my-cpa.env_key=\"OMC_REPO_KEY\"",
+          "model_providers.oh-my-cpa.wire_api=\"responses\""
+        ],
+        "parent_checked": true
+      }
+    },
+    {
+      "name": "exec-opencode",
+      "detail": {
+        "checks": {
+          "argv_no_key": true,
+          "base_url_v1": true,
+          "content_present": true,
+          "exit_zero": true,
+          "gateway_200": true,
+          "gateway_content": true,
+          "helper_ran": true,
+          "one_content": true,
+          "parent_env_checked": true,
+          "parent_no_key": true,
+          "provider_other_kept": true,
+          "provider_written": true,
+          "runtime_is_opencode": true,
+          "stderr_no_key": true,
+          "stdout_no_key": true,
+          "theme_kept": true
+        },
+        "exit_code": 0,
+        "parent_checked": true,
+        "providers": [
+          "oh-my-cpa",
+          "other"
+        ]
+      }
+    },
+    {
+      "name": "install",
+      "detail": {
+        "backup_present": true,
+        "checks": {
+          "backup_is_original_file": true,
+          "backup_present": true,
+          "base_url_is_gateway": true,
+          "exit_zero": true,
+          "other_value_kept": true,
+          "settings_decode": true,
+          "settings_readable": true,
+          "stderr_no_key": true,
+          "stdout_no_key": true,
+          "token_is_gateway_key": true,
+          "warning_says_plaintext": true
+        },
+        "config_path": "/tmp/TestKeyCLIFullLoop194869817/002/user-home/.claude/settings.json",
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "purge",
+      "detail": {
+        "checks": {
+          "config_base_url_gone": true,
+          "config_other_kept": true,
+          "config_token_gone": true,
+          "envelope_gone": true,
+          "exit_zero": true,
+          "private_key_gone": true,
+          "runtime_slots_cleared": true,
+          "settings_still_readable": true,
+          "state_record_gone": true,
+          "stderr_no_key": true,
+          "stdout_no_key": true
+        },
+        "exit_code": 0
+      }
+    },
+    {
+      "name": "exec-after-purge",
+      "detail": {
+        "checks": {
+          "exit_code_4": true,
+          "helper_did_not_run": true,
+          "no_panic": true,
+          "stderr_is_readable": true,
+          "stderr_names_key_not_found": true,
+          "stderr_no_key": true,
+          "stdout_no_key": true
+        },
+        "exit_code": 4
+      }
+    },
+    {
+      "name": "no-plaintext",
+      "detail": {
+        "checks": {
+          "no_plaintext_in_streams": true
+        },
+        "leaked": []
+      }
+    },
+    {
+      "name": "complete",
+      "detail": {
+        "evidence": "/evidence/key-cli-loop.json",
+        "key_mask": "sk-cpa-f••••••••b24b",
+        "steps": 13
+      }
+    }
+  ],
+  "conclusion": "pass",
+  "services": {
+    "binary": "/tmp/omc-key-e2e-bin-3387708568/oh-my-cpa",
+    "cli_home": "/tmp/TestKeyCLIFullLoop194869817/002/omc-home",
+    "console": "http://127.0.0.1:33213/omc",
+    "gateway": "http://127.0.0.1:33019",
+    "log": "/evidence/omc.log",
+    "user_home": "/tmp/TestKeyCLIFullLoop194869817/002/user-home"
+  }
+}

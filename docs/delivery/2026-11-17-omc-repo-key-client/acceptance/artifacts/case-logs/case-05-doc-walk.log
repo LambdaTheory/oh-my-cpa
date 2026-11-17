@@ -1,0 +1,64 @@
+Followed page: docs/repo-key-client.md; OMC_HOME=/tmp/t5s14-case05.685UjI/omc-home
+
+===== Step 1: oh-my-cpa key --help =====
+exit=0 subcommands=accept exec gen install purge status 
+ASSERT page says six subcommands, help lists six PASS
+
+===== Step 1: see what is already here (empty OMC_HOME) =====
+status exit=0
+home: /tmp/t5s14-case05.685UjI/omc-home
+gateway: not set; pass --base-url or set OMCPA_CPA_BASE_URL
+
+this machine holds no keys yet. Next: `oh-my-cpa key gen --repo <org/repo>`, then apply for the key and store it with `oh-my-cpa key accept --repo <org/repo>`
+ASSERT the page's empty-home answer matches PASS
+
+===== Step 2: oh-my-cpa key gen --repo org/repo --base-url ... =====
+exit=0 stdout_lines=1 fn=/tmp/t5s14-case05.685UjI/omc-home/keys/org%2Frepo-57b681c5.key
+generated a key for org/repo at keys/org%2Frepo-57b681c5.key
+saved the gateway address in /tmp/t5s14-case05.685UjI/omc-home/config.json
+ASSERT stdout is the documented one public-key line PASS
+ASSERT gen remembers the gateway on stderr as documented PASS
+
+===== Step 4: associate the application id =====
+exit=0
+home: /tmp/t5s14-case05.685UjI/omc-home
+gateway: http://127.0.0.1:8317 (config)
+
+org/repo
+  private key: keys/org%2Frepo-57b681c5.key
+  envelope:    missing; run `oh-my-cpa key accept --repo org/repo` with the repo_key_ciphertext result on stdin
+  application: app-doc-1 (unspecified)
+  approval:    unknown (local, 2026-11-17T13:26:11Z)
+  installed:   no runtime holds this key
+ASSERT the id is recorded as unknown, as the page says PASS
+
+===== Step 5: hand the ciphertext result to key accept on stdin (heredoc shape) =====
+exit=0 stdout=accepted org/repo: key sk-cpa-01***cdef at envelopes/org%2Frepo-57b681c5.json
+ASSERT accept prints the documented line PASS
+ASSERT the envelope lands under envelopes/ at 0600 PASS
+
+===== Step 6: key exec with the documented variable shapes =====
+exit=0
+ENV_NAMES=ANTHROPIC_AUTH_TOKEN,ANTHROPIC_BASE_URL
+ANTHROPIC_BASE_URL=http://127.0.0.1:8317
+ASSERT claude child sees the documented root URL PASS
+ASSERT claude child sees the documented token PASS
+ASSERT opencode child sees root+/v1 as the page promises PASS
+ASSERT codex child sees root+/v1 as the page promises PASS
+
+===== Step 7: install (codex) then purge/dry-run/purge --runtime =====
+install exit=0
+warning: this writes the plaintext gateway key into /tmp/t5s14-case05.685UjI/home/.codex/config.toml
+warning: that file keeps it after this process exits and after a restart; anything that reads or copies /tmp/t5s14-case05.685UjI/home/.codex/config.toml can use the key
+warning: keep that file out of git, logs, chat and backups you share
+warning: remove it again with `oh-my-cpa key purge --repo org/repo`, or `--runtime codex` to remove only this one
+oh-my-cpa: backup of the previous file: /tmp/t5s14-case05.685UjI/omc-home/backups/20261117T132612Z-tmp-t5s14-case05.685UjI-home-.codex-config.toml
+ASSERT install writes the managed Codex table PASS
+ASSERT install warns about plaintext as the page says PASS
+ASSERT dry-run changes nothing and says so PASS
+purge --runtime exit=0 stdout=removed: /tmp/t5s14-case05.685UjI/home/.codex/config.toml ([model_providers.oh-my-cpa] and its model_provider line) removed codex's installed value; the private key and envelope are still on this machine, and the key in CPA stays valid 
+ASSERT purge --runtime keeps the key and envelope, as documented PASS
+ASSERT full purge prints the documented local-only line PASS
+ASSERT the documented proof after purge (exec exits 4) PASS
+
+RESULT case-05 FAILS=0

@@ -1,0 +1,127 @@
+WORK=/tmp/t5s14-case03.aphFRA
+
+===== C-26 first claude install: backup, warning, precise edit =====
+install claude exit=0
+stdout:
+installed claude for org/fixture-repo into /tmp/t5s14-case03.aphFRA/userhome/.claude/settings.json
+previous file backed up to /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132110Z-tmp-t5s14-case03.aphFRA-userhome-.claude-settings.json
+remove it with `oh-my-cpa key purge --repo org/fixture-repo --runtime claude`
+stderr:
+warning: this writes the plaintext gateway key into /tmp/t5s14-case03.aphFRA/userhome/.claude/settings.json
+warning: that file keeps it after this process exits and after a restart; anything that reads or copies /tmp/t5s14-case03.aphFRA/userhome/.claude/settings.json can use the key
+warning: keep that file out of git, logs, chat and backups you share
+warning: remove it again with `oh-my-cpa key purge --repo org/fixture-repo`, or `--runtime claude` to remove only this one
+oh-my-cpa: backup of the previous file: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132110Z-tmp-t5s14-case03.aphFRA-userhome-.claude-settings.json
+ASSERT C-26 install exits zero PASS
+ASSERT C-26 warning says plaintext goes to disk PASS
+ASSERT C-26 warning names purge PASS
+ASSERT C-26 a backup exists PASS
+ASSERT C-26 backup is the original file byte for byte PASS
+ASSERT C-26 backup is 0600 PASS
+ASSERT C-26 target config is 0600 PASS
+ASSERT C-26 the two env keys are written FAIL
+ASSERT C-26 base URL is the gateway root FAIL
+ASSERT C-26 the pre-existing env value is kept FAIL
+ASSERT C-26 the other top-level keys are kept PASS
+
+===== C-27 repeated install is idempotent =====
+second install exit=0 file_same=yes token_keys=1 backups=1
+ASSERT C-27 second install exits zero PASS
+ASSERT C-27 config content unchanged PASS
+ASSERT C-27 no duplicate key in the JSON PASS
+ASSERT C-27 backups are kept (plan: no automatic cap) PASS
+
+===== C-28 one slot per runtime, other configuration preserved =====
+install codex exit=0
+installed codex for org/fixture-repo into /tmp/t5s14-case03.aphFRA/userhome/.codex/config.toml
+previous file backed up to /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132111Z-tmp-t5s14-case03.aphFRA-userhome-.codex-config.toml
+codex model_provider was "other" and is saved for `key purge` to restore
+remove it with `oh-my-cpa key purge --repo org/fixture-repo --runtime codex`
+warning: this writes the plaintext gateway key into /tmp/t5s14-case03.aphFRA/userhome/.codex/config.toml
+warning: that file keeps it after this process exits and after a restart; anything that reads or copies /tmp/t5s14-case03.aphFRA/userhome/.codex/config.toml can use the key
+warning: keep that file out of git, logs, chat and backups you share
+warning: remove it again with `oh-my-cpa key purge --repo org/fixture-repo`, or `--runtime codex` to remove only this one
+oh-my-cpa: backup of the previous file: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132111Z-tmp-t5s14-case03.aphFRA-userhome-.codex-config.toml
+ASSERT C-28 codex install exits zero PASS
+ASSERT C-28 codex managed table is present PASS
+ASSERT C-28 codex keeps the other provider PASS
+ASSERT C-28 codex points model_provider at ours PASS
+ASSERT C-28 codex persists the key in the managed table PASS
+install opencode exit=0
+installed opencode for org/fixture-repo into /tmp/t5s14-case03.aphFRA/userhome/.config/opencode/opencode.json
+previous file backed up to /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132112Z-tmp-t5s14-case03.aphFRA-userhome-.config-opencode-opencode.json
+remove it with `oh-my-cpa key purge --repo org/fixture-repo --runtime opencode`
+warning: this writes the plaintext gateway key into /tmp/t5s14-case03.aphFRA/userhome/.config/opencode/opencode.json
+warning: that file keeps it after this process exits and after a restart; anything that reads or copies /tmp/t5s14-case03.aphFRA/userhome/.config/opencode/opencode.json can use the key
+warning: keep that file out of git, logs, chat and backups you share
+warning: remove it again with `oh-my-cpa key purge --repo org/fixture-repo`, or `--runtime opencode` to remove only this one
+oh-my-cpa: backup of the previous file: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132112Z-tmp-t5s14-case03.aphFRA-userhome-.config-opencode-opencode.json
+ASSERT C-28 opencode install exits zero PASS
+ASSERT C-28 opencode provider.oh-my-cpa is present PASS
+ASSERT C-28 opencode keeps provider.cpa PASS
+ASSERT C-28 opencode keeps the theme FAIL
+ASSERT C-28 opencode writes no models map PASS
+ASSERT C-28 opencode persists the apiKey FAIL
+ASSERT C-28 project-level .claude/settings.json untouched PASS
+
+===== C-29 missing and damaged target files =====
+missing claude settings exit=1 stderr=warning: this writes the plaintext gateway key into /tmp/t5s14-case03.aphFRA/uhome2/.claude/settings.json
+ASSERT C-29 a missing target file is created FAIL
+corrupt codex toml exit=0 err=warning: this writes the plaintext gateway key into /tmp/t5s14-case03.aphFRA/uhome2/.codex/config.toml
+ASSERT C-29 a corrupt TOML is refused and left byte-identical FAIL
+corrupt opencode json exit=1 err=config_not_json: the file is not plain JSON (invalid character 'o' in literal null (expecting 'u')); it may be JSONC, so it is left untouched — remove comments and retry, or edit it by hand
+ASSERT C-29 corrupt JSON is refused and left byte-identical PASS
+ASSERT C-29 a missing config directory is created FAIL
+
+===== C-31 purge clears this repository only =====
+purge exit=0
+removed: /tmp/t5s14-case03.aphFRA/home-second/keys/org%2Ffixture-repo-518f9b0e.key
+removed: /tmp/t5s14-case03.aphFRA/home-second/envelopes/org%2Ffixture-repo-518f9b0e.json
+removed: /tmp/t5s14-case03.aphFRA/home-second/state.json (record for org/fixture-repo)
+local material cleared; the key in CPA is still valid — stop or reissue it in the console to revoke it
+ASSERT C-31 purge exits zero PASS
+ASSERT C-31 private key and envelope are gone PASS
+ASSERT C-31 state record is gone PASS
+ASSERT C-31 another repository's key is untouched PASS
+ASSERT C-31 says the CPA key is still valid PASS
+
+===== C-32 purge removes the installed values from all three runtimes =====
+purge installed exit=0
+removed: /tmp/t5s14-case03.aphFRA/userhome/.claude/settings.json (env.ANTHROPIC_BASE_URL, env.ANTHROPIC_AUTH_TOKEN)
+removed: /tmp/t5s14-case03.aphFRA/uhome2/.codex/config.toml ([model_providers.oh-my-cpa] and its model_provider line)
+removed: /tmp/t5s14-case03.aphFRA/userhome/.config/opencode/opencode.json (provider.oh-my-cpa)
+removed: /tmp/t5s14-case03.aphFRA/omc-home/keys/org%2Ffixture-repo-518f9b0e.key
+removed: /tmp/t5s14-case03.aphFRA/omc-home/envelopes/org%2Ffixture-repo-518f9b0e.json
+removed: /tmp/t5s14-case03.aphFRA/omc-home/state.json (record for org/fixture-repo)
+local material cleared; the key in CPA is still valid — stop or reissue it in the console to revoke it
+kept: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132110Z-tmp-t5s14-case03.aphFRA-userhome-.claude-settings.json
+kept: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132111Z-tmp-t5s14-case03.aphFRA-userhome-.codex-config.toml
+kept: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132112Z-tmp-t5s14-case03.aphFRA-userhome-.config-opencode-opencode.json
+kept: /tmp/t5s14-case03.aphFRA/omc-home/backups/20261117T132114Z-tmp-t5s14-case03.aphFRA-uhome2-.codex-config.toml
+ASSERT C-32 purge exits zero PASS
+ASSERT C-32 the key is gone from all three configs FAIL
+ASSERT C-32 claude keeps the other settings FAIL
+ASSERT C-32 codex keeps the other provider PASS
+ASSERT C-32 codex managed table is gone FAIL
+ASSERT C-32 opencode keeps provider.cpa PASS
+ASSERT C-32 opencode provider is gone PASS
+ASSERT C-32 private key and envelope are gone PASS
+backups still holding the key: 0 (plan removes those containing this key)
+ASSERT C-32 no backup still holds the plaintext PASS
+
+===== C-33 exec after purge fails readably; purge is idempotent =====
+exec after purge exit=4 err=key_not_found: no private key for org/fixture-repo; run `oh-my-cpa key gen --repo org/fixture-repo`
+ASSERT C-33 exec after purge exits 4 with key_not_found PASS
+repeat purge exit=0 out=nothing to remove; the repository was already clean local material cleared; the key in CPA is still valid — stop or reissue it in the console to revoke it 
+ASSERT C-33 repeated purge is idempotent PASS
+
+===== C-35 purge path safety and an unwritable target =====
+purge ../ exit=2 err=repo_invalid: repository "../../../etc/passwd" is a path, not an identity; pass org/repo, a clone URL, or a bare directory name
+ASSERT C-35 a traversal repo is refused and deletes nothing PASS
+ASSERT C-35 an empty repo is a usage error PASS
+ASSERT C-35 the kept key survives both rejected purges PASS
+purge with an unwritable keys dir exit=1 err=still installed: /tmp/t5s14-case03.aphFRA/nb/home/keys/org%2Flocked-a67a8d16.key still installed: state record for org/locked 
+ASSERT C-35 an unwritable target fails readably FAIL
+ASSERT C-35 nothing outside OMC_HOME was removed PASS
+
+RESULT case-03 FAILS=12

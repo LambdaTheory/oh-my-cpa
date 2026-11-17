@@ -1,0 +1,5 @@
+model_provider = "other"
+
+[model_providers.other]
+name = "Other"
+base_url = "http://127.0.0.1:19999/v1"

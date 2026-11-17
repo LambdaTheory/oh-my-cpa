@@ -1,0 +1,192 @@
+WORK=/tmp/t5s14-case02.pX0d2L secret_len=39
+fixture accept exit=0 stdout=accepted org/fixture-repo: key sk-cpa-01***cdef at envelopes/org%2Ffixture-repo-518f9b0e.json stderr=
+
+===== C-11 three readable states =====
+A (no key) exit=0:
+home: /tmp/t5s14-case02.pX0d2L/empty-home
+gateway: not set; pass --base-url or set OMCPA_CPA_BASE_URL
+
+this machine holds no keys yet. Next: `oh-my-cpa key gen --repo <org/repo>`, then apply for the key and store it with `oh-my-cpa key accept --repo <org/repo>`
+ASSERT C-11 A says there is no key PASS
+ASSERT C-11 A points at key gen PASS
+B (key without envelope) exit=0:
+home: /tmp/t5s14-case02.pX0d2L/home-b
+gateway: not set; pass --base-url or set OMCPA_CPA_BASE_URL
+
+org/fixture-repo
+  private key: keys/org%2Ffixture-repo-518f9b0e.key
+  envelope:    missing; run `oh-my-cpa key accept --repo org/fixture-repo` with the repo_key_ciphertext result on stdin
+  approval:    not_applied (gen)
+  installed:   no runtime holds this key
+ASSERT C-11 B mentions the envelope PASS
+ASSERT C-11 B says how to get one PASS
+ASSERT C-11 B does not claim ready PASS
+C (key+envelope) exit=0:
+home: /tmp/t5s14-case02.pX0d2L/omc-home
+gateway: http://127.0.0.1:18317 (config)
+
+org/fixture-repo
+  private key: keys/org%2Ffixture-repo-518f9b0e.key
+  envelope:    envelopes/org%2Ffixture-repo-518f9b0e.json, received 2026-11-17T13:17:16Z
+  application: app-review-1 (issue)
+  approval:    approved (accept, 2026-11-17T13:17:16Z)
+  key mask:    sk-cpa-01***cdef
+  installed:   no runtime holds this key
+ASSERT C-11 C shows approved PASS
+ASSERT C-11 C shows no plaintext PASS
+ASSERT C-11 C shows the mask PASS
+ASSERT C-11 C shows no private key PASS
+
+===== C-12 machine-readable status =====
+A exit=0
+B exit=0
+C exit=0
+C2 exit=0
+ASSERT C-12 no plaintext in JSON PASS
+
+===== C-14 the approval source works offline; --remote is explicit =====
+offline status exit=0 elapsed_ms=153
+ASSERT C-14 offline status still shows approved PASS
+remote without config exit=3 err=remote_not_configured: --remote needs OMCPA_SERVER_URL and OMCPA_CPA_MANAGEMENT_KEY; nothing was changed 
+ASSERT C-14 --remote without config exits 3 PASS
+ASSERT C-14 --remote names remote_not_configured PASS
+remote to a closed port exit=1 elapsed_ms=154 err=remote_unavailable: some repositories could not be refreshed and still show their last local state: org/fixture-repo (remote_error:remote_unavailable), org/fixture-repo (remote_error:remote_unavailable) 
+ASSERT C-14 unreachable remote fails nonzero PASS
+ASSERT C-14 unreachable remote error is readable PASS
+ASSERT C-14 local view survives an unreachable remote PASS
+
+===== C-15 damaged files are named, not panicked on =====
+corrupt envelope status exit=0:
+home: /tmp/t5s14-case02.pX0d2L/home-corrupt
+gateway: http://127.0.0.1:18317 (config)
+
+org/fixture-repo
+  private key: keys/org%2Ffixture-repo-518f9b0e.key
+  envelope:    envelopes/org%2Ffixture-repo-518f9b0e.json, received 2026-11-17T13:17:16Z
+  application: app-review-1 (issue)
+  approval:    approved (accept, 2026-11-17T13:17:16Z)
+  key mask:    sk-cpa-01***cdef
+  installed:   no runtime holds this key
+ASSERT C-15 no panic on a corrupt envelope PASS
+ASSERT C-15 corrupt envelope is distinguished PASS
+empty private key status exit=0:
+home: /tmp/t5s14-case02.pX0d2L/home-badkey
+gateway: http://127.0.0.1:18317 (config)
+
+org/fixture-repo
+  private key: keys/org%2Ffixture-repo-518f9b0e.key
+  envelope:    envelopes/org%2Ffixture-repo-518f9b0e.json, received 2026-11-17T13:17:16Z
+  application: app-review-1 (issue)
+  approval:    approved (accept, 2026-11-17T13:17:16Z)
+  key mask:    sk-cpa-01***cdef
+  installed:   no runtime holds this key
+ASSERT C-15 no panic on an empty key PASS
+ASSERT C-15 empty key is distinguished FAIL
+
+===== C-16 only the child sees the variables =====
+ASSERT C-16 parent environment is unchanged PASS
+ASSERT C-16 child sees the configured base URL PASS
+ASSERT C-16 token decrypts to the exact plaintext PASS
+ASSERT C-16 token length matches PASS
+ASSERT C-16 inherited decoy key is gone PASS
+
+===== C-17 stdout/stderr/disk/proc carry no plaintext =====
+ASSERT C-17 no plaintext on the exec streams PASS
+files containing the plaintext: secret.txt (none else)
+ASSERT C-17 no file other than the test's own secret.txt has it PASS
+ASSERT C-17 no process argv carries the plaintext PASS
+
+===== C-18 child status passes through; own failures are distinct =====
+ASSERT C-18 child exit 42 passes through PASS
+ASSERT C-18 child exit 0 passes through PASS
+ASSERT C-18 SIGTERM child reports 143 (got 1) FAIL
+ASSERT C-18 own failure uses exit 4, not the child's PASS
+
+===== C-19 each runtime gets its own variables =====
+ANTHROPIC_AUTH_TOKEN,ANTHROPIC_BASE_URL
+ASSERT C-19 claude child has no OPENCODE_* PASS
+ASSERT C-19 claude child has no OMC_REPO_KEY PASS
+codex exec exit=0
+ARGV=-c model_provider="oh-my-cpa" -c model_providers.oh-my-cpa.name="Oh My CPA" -c model_providers.oh-my-cpa.base_url="http://127.0.0.1:18317/v1" -c model_providers.oh-my-cpa.env_key="OMC_REPO_KEY" -c model_providers.oh-my-cpa.wire_api="responses" arg1
+ENV_NAMES=OMC_REPO_KEY
+OMC_REPO_KEY_LEN=39
+OMC_REPO_KEY_SHA256=ee5408dfecc9e866798697123fd792f90e9f87757aa2adb6f11aae194dae1b57
+ASSERT C-19 codex override model_provider="oh-my-cpa" PASS
+ASSERT C-19 codex override model_providers.oh-my-cpa.name="Oh My CPA" PASS
+ASSERT C-19 codex override model_providers.oh-my-cpa.base_url="http://127.0.0.1:18317/v1" PASS
+ASSERT C-19 codex override model_providers.oh-my-cpa.env_key="OMC_REPO_KEY" PASS
+ASSERT C-19 codex override model_providers.oh-my-cpa.wire_api="responses" PASS
+ASSERT C-19 codex key arrives through OMC_REPO_KEY PASS
+ASSERT C-19 codex argv has no plaintext PASS
+ASSERT C-19 codex child has no ANTHROPIC_* PASS
+opencode exec exit=0
+ARGV=
+ENV_NAMES=OPENCODE_CONFIG,OPENCODE_CONFIG_CONTENT
+OPENCODE_CONFIG_CONTENT_LEN=230
+OPENCODE_CONFIG_DECODES=1
+OPENCODE_PROVIDER_OH_MY_CPA=1
+OPENCODE_PROVIDER_OTHER=1
+OPENCODE_OH_MY_CPA_BASE_URL=http://127.0.0.1:18317/v1
+OPENCODE_OH_MY_CPA_APIKEY_LEN=39
+OPENCODE_OH_MY_CPA_APIKEY_SHA256=ee5408dfecc9e866798697123fd792f90e9f87757aa2adb6f11aae194dae1b57
+OPENCODE_THEME=dark
+ASSERT C-19 opencode content is injected PASS
+ASSERT C-19 opencode content is valid JSON PASS
+ASSERT C-19 opencode provider.oh-my-cpa is present PASS
+ASSERT C-19 opencode keeps the other provider PASS
+ASSERT C-19 opencode keeps the theme PASS
+ASSERT C-19 opencode base URL gets /v1 PASS
+ASSERT C-19 opencode apiKey is the exact plaintext PASS
+ASSERT C-19 opencode child has no ANTHROPIC_* PASS
+ASSERT C-19 unknown runtime exits 2 PASS
+ASSERT C-19 unknown runtime lists the choices PASS
+
+===== C-20 exec writes nothing =====
+ASSERT C-20 exec leaves the filesystem untouched PASS
+
+===== C-21 error paths are readable and distinct =====
+no envelope exit=4 err=envelope_missing: no delivery envelope for org/fixture-repo; run `oh-my-cpa key accept --repo org/fixture-repo` with the repo_key_ciphertext result
+ASSERT C-21 missing envelope is envelope_missing/4 PASS
+unknown repo exit=4 err=key_not_found: no private key for org/other-repo; run `oh-my-cpa key gen --repo org/other-repo`
+ASSERT C-21 unknown repo names key_not_found and the next step PASS
+envelope for the wrong key exit=3 err=base_url_required: no gateway address; pass --base-url <url>, set OMCPA_CPA_BASE_URL, or save one with `oh-my-cpa key gen --base-url <url>`
+ASSERT C-21 wrong-key envelope is refused readably FAIL
+ASSERT C-21 wrong-key error has no plaintext PASS
+invalid envelope JSON exit=1 err=envelope_invalid: the envelope for org/fixture-repo is not a valid version 1 x25519-hkdf-sha256-aes256gcm envelope
+ASSERT C-21 invalid envelope JSON is envelope_* PASS
+altered alg exit=1 err=envelope_invalid: the envelope for org/fixture-repo is not a valid version 1 x25519-hkdf-sha256-aes256gcm envelope
+ASSERT C-21 altered alg is refused PASS
+altered version exit=1 err=envelope_invalid: the envelope for org/fixture-repo is not a valid version 1 x25519-hkdf-sha256-aes256gcm envelope
+ASSERT C-21 altered version is refused PASS
+31-byte private key exit=1 err=key_unreadable: /tmp/t5s14-case02.pX0d2L/h-shortkey/keys/org%2Ffixture-repo-518f9b0e.key holds 31 bytes, not 32; it is not an X25519 private key
+ASSERT C-21 31-byte key is key_unreadable PASS
+ASSERT C-21 'no envelope' and 'cannot open' use different exits PASS
+
+===== C-22 -- passes arguments through unchanged =====
+ASSERT C-22 spaces and --flag survive FAIL
+argv=%s a b --flag
+missing -- exit=2 err=usage: unexpected argument "echo"; the command to run goes after --
+ASSERT C-22 a command without -- is a usage error PASS
+
+===== C-23 permissions of state, key, envelope; over-wide envelope =====
+org%2Ffixture-repo-518f9b0e.key mode=600
+ASSERT C-23 org%2Ffixture-repo-518f9b0e.key is 600 PASS
+org%2Ffixture-repo-518f9b0e.json mode=600
+ASSERT C-23 org%2Ffixture-repo-518f9b0e.json is 600 PASS
+state.json mode=600
+ASSERT C-23 state.json is 600 PASS
+config.json mode=600
+ASSERT C-23 config.json is 600 PASS
+wide envelope exit=0 warn=
+ASSERT C-23 a world-readable envelope is warned about FAIL
+
+===== C-24 concurrent execs =====
+concurrent exit codes: 0 0 0 0 0 
+ASSERT C-24 five concurrent execs all succeed PASS
+ASSERT C-24 no half-read envelope PASS
+
+===== C-25 log-surface scan =====
+plaintext hits outside secret.txt: none
+ASSERT C-25 no plaintext anywhere in the run directory PASS
+
+RESULT case-02 FAILS=5

@@ -1,0 +1,4 @@
+installed codex for org/fixture-repo into /tmp/t5s14-case03b.5utlVm/userhome/.codex/config.toml
+previous file backed up to /tmp/t5s14-case03b.5utlVm/omc-home/backups/20261117T132157Z-tmp-t5s14-case03b.5utlVm-userhome-.codex-config.toml
+codex model_provider was "other" and is saved for `key purge` to restore
+remove it with `oh-my-cpa key purge --repo org/fixture-repo --runtime codex`

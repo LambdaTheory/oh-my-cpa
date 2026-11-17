@@ -1,0 +1,58 @@
+
+===== C-21b envelope sealed to another key, with a gateway address present =====
+wrong-key envelope exit=1 err=decrypt_failed: the envelope for org/repo-b does not open with this machine's private key; its key may have been replaced. Re-apply for a key, then `key accept` the new envelope
+ASSERT C-21b wrong-key envelope is refused readably PASS
+ASSERT C-21b error has no plaintext PASS
+
+===== C-22b -- argument boundaries (JSON argv) =====
+argv_json=["%s","a b","--flag"]
+ASSERT C-22b the spaced argument stayed one argument PASS
+ASSERT C-22b the --flag argument survived PASS
+ASSERT C-22b the format argument survived PASS
+
+===== C-15b clean captures: damaged files in status =====
+corrupt envelope status exit=0
+stdout:
+home: /tmp/t5s14-case02b.WiYveA/h-corrupt
+gateway: http://127.0.0.1:18317 (config)
+
+org/fixture-repo
+  private key: keys/org%2Ffixture-repo-518f9b0e.key
+  envelope:    envelopes/org%2Ffixture-repo-518f9b0e.json, received 2026-11-17T13:18:23Z
+  application: app-review-1 (issue)
+  approval:    approved (accept, 2026-11-17T13:18:23Z)
+  key mask:    sk-cpa-01***cdef
+  installed:   no runtime holds this key
+stderr:
+ASSERT C-15b no panic on a corrupt envelope PASS
+ASSERT C-15b status marks the corrupt envelope PASS
+empty key status exit=0
+stdout:
+home: /tmp/t5s14-case02b.WiYveA/home-badkey
+gateway: http://127.0.0.1:18317 (config)
+
+org/fixture-repo
+  private key: keys/org%2Ffixture-repo-518f9b0e.key
+  envelope:    envelopes/org%2Ffixture-repo-518f9b0e.json, received 2026-11-17T13:18:23Z
+  application: app-review-1 (issue)
+  approval:    approved (accept, 2026-11-17T13:18:23Z)
+  key mask:    sk-cpa-01***cdef
+  installed:   no runtime holds this key
+stderr:
+ASSERT C-15b no panic on an empty key PASS
+ASSERT C-15b status marks the empty key (it does not; plan does not require it) FAIL
+exec with an empty key exit=1 err=key_unreadable: /tmp/t5s14-case02b.WiYveA/home-badkey/keys/org%2Ffixture-repo-518f9b0e.key holds 0 bytes, not 32; it is not an X25519 private key
+ASSERT C-15b exec still refuses an empty key readably PASS
+
+===== C-18b signal-terminated child =====
+SIGTERM child exit=1 stderr=oh-my-cpa: sh was terminated by a signal
+ASSERT C-18b signal child reports 1 (Go ExitCode -1 -> 1; plan says no translation) PASS
+
+===== C-23b over-wide envelope permissions =====
+wide envelope exit=0 stderr=
+implementation permission checks mentioning envelope:
+/src/internal/keyclient/keystore.go:101:	return info.Mode().IsRegular(), nil
+/src/internal/keyclient/keystore.go:117:	return info.Mode().IsRegular(), nil
+/src/internal/keyclient/keystore.go:126:// create and chmod.
+
+RESULT case-02b FAILS=1

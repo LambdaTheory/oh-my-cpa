@@ -1,0 +1,3 @@
+installed claude for org/fixture-repo into /tmp/t5s14-case03b.5utlVm/userhome/.claude/settings.json
+previous file backed up to /tmp/t5s14-case03b.5utlVm/omc-home/backups/20261117T132156Z-tmp-t5s14-case03b.5utlVm-userhome-.claude-settings.json
+remove it with `oh-my-cpa key purge --repo org/fixture-repo --runtime claude`

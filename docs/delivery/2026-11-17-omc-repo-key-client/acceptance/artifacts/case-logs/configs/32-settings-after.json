@@ -1,0 +1,11 @@
+{
+  "env": {
+    "OTHER": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash"
+    ]
+  },
+  "model": "opus"
+}

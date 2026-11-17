@@ -1,0 +1,25 @@
+{
+  "home": "/tmp/t5s14-case02.pX0d2L/home-b",
+  "base_url": "",
+  "base_url_source": "absent",
+  "repos": [
+    {
+      "repo": "org/fixture-repo",
+      "repo_display": "org/fixture-repo",
+      "public_key": "x25519:rIa3jF4JKWsz/rZ5gXCDPYiqyFnvCcwL5Ni4Ynt4MA8=",
+      "public_key_fingerprint": "x25519:sha256:8CmzVI15D2loAvnyuDeE4sfSASknLHSC9b_7hHjJRJ0",
+      "private_key_file": "keys/org%2Ffixture-repo-518f9b0e.key",
+      "private_key_present": true,
+      "envelope_file": "envelopes/org%2Ffixture-repo-518f9b0e.json",
+      "envelope_present": false,
+      "approval_status": "not_applied",
+      "status_source": "gen",
+      "installed": {}
+    }
+  ],
+  "runtimes": {},
+  "orphan_files": {
+    "keys": 0,
+    "envelopes": 0
+  }
+}

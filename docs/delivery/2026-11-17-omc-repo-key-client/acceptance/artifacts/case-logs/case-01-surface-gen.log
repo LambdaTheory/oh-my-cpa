@@ -1,0 +1,408 @@
+WORK=/tmp/t5s14-case01.B7uMOL
+
+===== C-01 command surface =====
+--- key --help
+CMD: /evidence/oh-my-cpa key --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key <command> [options]
+
+Manage the repository keys this machine holds for Oh My CPA. The key stays
+local: `exec` opens the delivery envelope in memory and gives one child
+process the variables its runtime needs; `install` writes it to a runtime's
+own configuration file only when asked.
+
+Commands:
+  accept   read a repo_key_ciphertext result on stdin and store its envelope
+  exec     run a command with the repository key in its environment
+  gen      generate an X25519 key pair for a repository; print only the public key
+  install  write the key into a runtime's configuration file, after backing it up
+  purge    remove a repository's private key, envelope and installed values
+  status   show local keys, their approval state and installed runtimes
+
+Run `oh-my-cpa key <command> --help` for one command's options.
+
+Environment:
+  OMC_HOME                  where keys, envelopes and state live; default
+                            ~/.omc, created with owner-only permissions
+  OMCPA_CPA_BASE_URL        the CPA gateway this key is used against; also
+                            accepted as --base-url; `key gen` and `key install`
+                            remember it in $OMC_HOME/config.json
+  OMCPA_SERVER_URL          OMC console URL, for `status --remote`
+  OMCPA_CPA_MANAGEMENT_KEY  the management key, for `status --remote`
+  OMCPA_AGENT_NAME          the agent name reported by `status --remote`
+  OMCPA_DEVICE_NAME         the device name reported by `status --remote`
+
+Output:
+  --json                    on a failure, write {"code":...,"message":...} to
+                            stderr as one line; `status` and `accept` also use it
+                            for their success output
+
+Exit codes:
+  0  success
+  1  operation failed
+  2  usage error
+  3  configuration missing or invalid
+  4  key, envelope, application or installed value not found
+  5  conflict: a different key or value already occupies the place
+STDERR:
+ASSERT C-01 key-help exit=0 PASS
+--- key gen --help
+CMD: /evidence/oh-my-cpa key gen --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key gen --repo <repo> [--base-url <url>] [--home <dir>]
+
+Generates an X25519 key pair for the repository and writes the private key
+under $OMC_HOME/keys/ with owner-only permissions; the exact filename is
+printed on stderr. The public key is the only thing written to stdout:
+  x25519:<base64>
+
+If a key already exists for the repository it is reused and its public key
+printed again. gen never replaces a key, because that would make every
+envelope already delivered for the repository unreadable. Replace one with
+`key purge --repo <repo>` followed by gen.
+
+--base-url is remembered in $OMC_HOME/config.json for later commands.
+STDERR:
+ASSERT C-01 gen-help exit=0 PASS
+ASSERT C-01 top-help lists gen PASS
+--- key status --help
+CMD: /evidence/oh-my-cpa key status --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key status [--repo <repo>] [--application-id <id>] [--remote] [--json] [--home <dir>]
+
+Shows the local keys, the repository each belongs to, whether its envelope is
+present, the last known application state, and which runtime has that key
+installed. Without --remote this reads only $OMC_HOME and needs no network.
+
+--application-id records which application belongs to the repository, which is
+what you know between applying for a key and receiving it. It needs --repo
+unless the repository already holds this id.
+
+--remote asks OMC for the current state of the recorded applications and of
+each repository's key. It needs OMCPA_SERVER_URL and
+OMCPA_CPA_MANAGEMENT_KEY, the same pair the mcp command uses; without
+them it reports remote_not_configured and changes nothing. It is the only
+option that uses the network. --remote and --application-id both update the
+local state file; --application-id does so without any network access.
+STDERR:
+ASSERT C-01 status-help exit=0 PASS
+ASSERT C-01 top-help lists status PASS
+--- key exec --help
+CMD: /evidence/oh-my-cpa key exec --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key exec --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] [--home <dir>] -- <command> [args...]
+
+Opens the repository's envelope in memory and runs <command> with only the
+variables that runtime needs. The plaintext is never written to disk, never
+printed and never put in this process's command line. The child inherits
+stdin, stdout, stderr and the rest of the environment.
+
+claude    sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN; removes
+          ANTHROPIC_API_KEY for the child because it may take precedence
+codex     requires <command> to be codex itself; inserts -c provider
+          overrides and passes the key through OMC_REPO_KEY (Codex is not
+          known to select a provider from the environment alone)
+opencode  sets OPENCODE_CONFIG_CONTENT to the user's configuration merged
+          with provider.oh-my-cpa; the key is in that variable only
+
+--repo defaults to the repository of the current directory (its git origin,
+or the directory name when there is no remote).
+
+Everything after -- is the command and its arguments, passed through
+unchanged: this command runs no shell and expands nothing.
+
+The command's exit code becomes this command's exit code once the command
+has started.
+STDERR:
+ASSERT C-01 exec-help exit=0 PASS
+ASSERT C-01 top-help lists exec PASS
+--- key install --help
+CMD: /evidence/oh-my-cpa key install --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key install --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] [--config <path>] [--replace] [--home <dir>]
+
+Writes the repository key into the runtime's own configuration file. This is
+the only command that leaves the plaintext key on disk, and it says so on
+stderr before it writes. The previous file is copied into $OMC_HOME/backups/
+first when it exists.
+
+  claude    ~/.claude/settings.json, env.ANTHROPIC_BASE_URL and
+            env.ANTHROPIC_AUTH_TOKEN (or $CLAUDE_CONFIG_DIR/settings.json)
+  codex     $CODEX_HOME/config.toml or ~/.codex/config.toml, a managed
+            [model_providers.oh-my-cpa] table plus model_provider
+  opencode  ~/.config/opencode/opencode.json, provider.oh-my-cpa.options
+            (or $OPENCODE_CONFIG)
+
+Only the user-level file of each runtime is written: a project-level
+.claude/settings.json belongs to a repository and would end up committed with
+the key in it.
+
+One installed slot per runtime per machine. Installing another repository
+replaces the slot only with --replace (or after purging the other repository);
+without it the install stops with config_owned_by_another_repo. The previous
+values survive only in the backup. --replace is also required when the slot
+holds a value this tool did not write.
+
+--repo defaults to the repository of the current directory. --config names
+the configuration file instead of the runtime's default.
+STDERR:
+ASSERT C-01 install-help exit=0 PASS
+ASSERT C-01 top-help lists install PASS
+--- key purge --help
+CMD: /evidence/oh-my-cpa key purge --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key purge --repo <repo> [--runtime <runtime>] [--dry-run] [--home <dir>]
+
+Removes the repository's private key, envelope, installed values and state
+record. With --runtime, removes only that runtime's installed value and leaves
+the key and envelope in place.
+
+A value in a runtime's configuration is removed only when it is this
+repository's key; a value something else changed is left alone and reported.
+Backups are kept unless they contain this repository's plaintext key, and those
+go with the key. --dry-run prints what would be removed and changes nothing.
+
+Purge is local. The key in CPA remains valid; stop or reissue it in the console
+to revoke it.
+STDERR:
+ASSERT C-01 purge-help exit=0 PASS
+ASSERT C-01 top-help lists purge PASS
+--- key accept --help
+CMD: /evidence/oh-my-cpa key accept --help
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa key accept --repo <repo> [--application-id <id>] [--json] [--home <dir>]
+
+Reads the JSON returned by the MCP tool `repo_key_ciphertext` from stdin and
+stores its envelope under $OMC_HOME/envelopes/. Both the whole MCP answer
+({"status":"success","data":{...}}) and the bare data object are accepted.
+
+The envelope is opened once in memory with the repository's private key before
+it is stored, so an envelope sealed to another key is refused instead of
+saved. Nothing from the input is echoed: neither the ciphertext nor the
+plaintext appears in the output.
+
+The private key must already exist; run `key gen --repo <repo>` first. Accepting
+a new envelope for the same repository replaces the previous one.
+STDERR:
+ASSERT C-01 accept-help exit=0 PASS
+ASSERT C-01 top-help lists accept PASS
+ASSERT C-01 help has no private-key print claim PASS
+--- key nope
+CMD: /evidence/oh-my-cpa key nope
+EXIT: 2
+STDOUT:
+STDERR:
+unknown command "nope"
+
+Usage: oh-my-cpa key <command> [options]
+
+Manage the repository keys this machine holds for Oh My CPA. The key stays
+local: `exec` opens the delivery envelope in memory and gives one child
+process the variables its runtime needs; `install` writes it to a runtime's
+own configuration file only when asked.
+
+Commands:
+  accept   read a repo_key_ciphertext result on stdin and store its envelope
+  exec     run a command with the repository key in its environment
+  gen      generate an X25519 key pair for a repository; print only the public key
+  install  write the key into a runtime's configuration file, after backing it up
+  purge    remove a repository's private key, envelope and installed values
+  status   show local keys, their approval state and installed runtimes
+
+Run `oh-my-cpa key <command> --help` for one command's options.
+
+Environment:
+  OMC_HOME                  where keys, envelopes and state live; default
+                            ~/.omc, created with owner-only permissions
+  OMCPA_CPA_BASE_URL        the CPA gateway this key is used against; also
+                            accepted as --base-url; `key gen` and `key install`
+                            remember it in $OMC_HOME/config.json
+  OMCPA_SERVER_URL          OMC console URL, for `status --remote`
+  OMCPA_CPA_MANAGEMENT_KEY  the management key, for `status --remote`
+  OMCPA_AGENT_NAME          the agent name reported by `status --remote`
+  OMCPA_DEVICE_NAME         the device name reported by `status --remote`
+
+Output:
+  --json                    on a failure, write {"code":...,"message":...} to
+                            stderr as one line; `status` and `accept` also use it
+                            for their success output
+
+Exit codes:
+  0  success
+  1  operation failed
+  2  usage error
+  3  configuration missing or invalid
+ASSERT C-01 unknown-command exit=2 PASS
+ASSERT C-01 unknown command names itself PASS
+ASSERT C-01 unknown command shows usage on stderr PASS
+ASSERT C-01 unknown command writes nothing to stdout PASS
+
+===== C-02 the seven steps have entry points (no approved key yet) =====
+--- status on an empty home
+CMD: /evidence/oh-my-cpa key status --home /tmp/t5s14-case01.B7uMOL/omc-home
+EXIT: 0
+STDOUT:
+home: /tmp/t5s14-case01.B7uMOL/omc-home
+gateway: not set; pass --base-url or set OMCPA_CPA_BASE_URL
+
+this machine holds no keys yet. Next: `oh-my-cpa key gen --repo <org/repo>`, then apply for the key and store it with `oh-my-cpa key accept --repo <org/repo>`
+STDERR:
+ASSERT C-02 empty status exit=0 PASS
+ASSERT C-02 empty status names next step PASS
+--- gen example/fixture-repo
+CMD: /evidence/oh-my-cpa key gen --repo example/fixture-repo --home /tmp/t5s14-case01.B7uMOL/omc-home --base-url http://127.0.0.1:18317
+EXIT: 0
+STDOUT:
+x25519:2K4F+txKHcJ0VZFLlr2zZefliuRFXyKmbexnkx8NOVA=
+STDERR:
+generated a key for example/fixture-repo at keys/example%2Ffixture-repo-d16cc29e.key
+saved the gateway address in /tmp/t5s14-case01.B7uMOL/omc-home/config.json
+ASSERT C-02 gen exit=0 PASS
+--- status with a corrupted envelope
+CMD: /evidence/oh-my-cpa key status --home /tmp/t5s14-case01.B7uMOL/omc-home
+EXIT: 0
+STDOUT:
+home: /tmp/t5s14-case01.B7uMOL/omc-home
+gateway: http://127.0.0.1:18317 (config)
+
+example/fixture-repo
+  private key: keys/example%2Ffixture-repo-d16cc29e.key
+  envelope:    envelopes/example%2Ffixture-repo-d16cc29e.json, received never
+  approval:    not_applied (gen)
+  installed:   no runtime holds this key
+
+0 key file(s) and 1 envelope(s) are not named by /tmp/t5s14-case01.B7uMOL/omc-home/state.json; rebuild their records with `oh-my-cpa key gen --repo <repo>` and `oh-my-cpa key accept --repo <repo>`
+STDERR:
+ASSERT C-02 status corrupt envelope exit=0 PASS
+home: /tmp/t5s14-case01.B7uMOL/omc-home
+gateway: http://127.0.0.1:18317 (config)
+
+example/fixture-repo
+  private key: keys/example%2Ffixture-repo-d16cc29e.key
+  envelope:    envelopes/example%2Ffixture-repo-d16cc29e.json, received never
+  approval:    not_applied (gen)
+  installed:   no runtime holds this key
+
+0 key file(s) and 1 envelope(s) are not named by /tmp/t5s14-case01.B7uMOL/omc-home/state.json; rebuild their records with `oh-my-cpa key gen --repo <repo>` and `oh-my-cpa key accept --repo <repo>`
+--- exec with a corrupted envelope
+CMD: /evidence/oh-my-cpa key exec --runtime claude --repo example/fixture-repo --home /tmp/t5s14-case01.B7uMOL/omc-home -- true
+EXIT: 1
+STDOUT:
+STDERR:
+envelope_invalid: the envelope for example/fixture-repo is not a valid version 1 x25519-hkdf-sha256-aes256gcm envelope
+ASSERT C-02 exec fails readably on a bad envelope (exit=1) PASS
+ASSERT C-02 exec error names the envelope PASS
+ASSERT C-02 no panic PASS
+
+===== C-03 existing subcommands do not regress =====
+--- mcp -h
+CMD: /evidence/oh-my-cpa mcp -h
+EXIT: 0
+STDOUT:
+STDERR:
+Usage: oh-my-cpa mcp
+
+Serves Oh My CPA's capabilities to an MCP client over standard input and output.
+A client that speaks Streamable HTTP does not need this process: it connects to
+<console URL>/api/mcp with "Authorization: Bearer <CPA management key>".
+
+Environment:
+  OMCPA_SERVER_URL          console URL including its base path, for example
+                            https://omc.example.com/omc (plain HTTP is accepted
+                            for loopback addresses only)
+  OMCPA_CPA_MANAGEMENT_KEY  the CPA management key that signs in to the console
+  OMCPA_AGENT_NAME          the agent name this connection reports when it applies
+                            for a repository key; defaults to oh-my-cpa-mcp
+  OMCPA_DEVICE_NAME         the device name it reports; defaults to the hostname
+ASSERT C-03 mcp -h is a usage exit PASS
+ASSERT C-03 mcp usage goes to stderr PASS
+ASSERT C-03 mcp stdout stays protocol-only PASS
+--- updater -h
+CMD: /evidence/oh-my-cpa updater -h
+EXIT: 0
+STDOUT:
+Usage: oh-my-cpa updater <command>
+
+Applies updates the console asks for by replacing this deployment's containers.
+It needs the Docker socket, which the console itself never has.
+
+Commands:
+  serve        run the updater; the console reaches it at http://oh-my-cpa-updater:8090
+  install      add the updater to a deployment that is already running:
+                 docker run --rm --pull always -u 0 \
+                   -v /var/run/docker.sock:/var/run/docker.sock \
+                   wiziscool/oh-my-cpa:latest updater install
+               --container <name>      the console container, when it cannot be told apart
+               --cpa-container <name>  the CLIProxyAPI container, when it is not found
+  healthcheck  exit 0 when a running updater answers
+STDERR:
+ASSERT C-03 updater -h is a usage exit PASS
+--- no subcommand starts the server path
+CMD: timeout 2 /evidence/oh-my-cpa --help
+EXIT: 1
+STDOUT:
+STDERR:
+{"time":"2026-11-17T13:14:45.59152302Z","level":"ERROR","msg":"failed to initialize Oh My CPA","error":"OMCPA_MASTER_KEY is required"}
+ASSERT C-03 bare binary still has its own path (exit=1) PASS
+
+===== C-04 gen: private key on disk, stdout is only the public key =====
+ASSERT C-04 gen exit=0 PASS
+stdout_lines=1
+ASSERT C-04 stdout is one line PASS
+ASSERT C-04 stdout is the public key text PASS
+ASSERT C-04 public key is 32 bytes PASS
+ASSERT C-04 stderr names the key file PASS
+ASSERT C-04 private key exists PASS
+ASSERT C-04 private key is 32 raw bytes PASS
+
+===== C-05 private key permissions 0600 (Unix) =====
+ASSERT C-05 key mode is 600 (got 600) PASS
+nobody_read_exit=1
+cat: /tmp/t5s14-case01.B7uMOL/h2/keys/lambdatheory%2Ffixture-repo-ddcda338.key: Permission denied
+ASSERT C-05 another user cannot read the key PASS
+
+===== C-06 repository identity normalization and path safety =====
+ASSERT C-06 three spellings reuse one key PASS
+ASSERT C-06 one key file for three spellings PASS
+lambdatheory%2Ffixture-repo-ddcda338.key
+repo=../../etc/passwd exit=2 err=repo_invalid: repository "../../../etc/passwd" is a path, not an identity; pass org/repo, a clone URL, or a bare directory name
+ASSERT C-06 ../../etc/passwd rejected PASS
+repo=a/../../b exit=2 err=repo_invalid: repository "a/../../b" is a path, not an identity; pass org/repo, a clone URL, or a bare directory name
+ASSERT C-06 a/../../b rejected PASS
+repo=<empty> exit=2 err=repo_required: no repository; pass --repo <org/repo>
+ASSERT C-06 empty repo rejected PASS
+repo=<tab> exit=2 err=repo_invalid: repository "a/\tb" is not a valid identity; use org/repo
+ASSERT C-06 control character rejected PASS
+repo=<300 chars> exit=2 err=repo_invalid: repository "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" is not a valid identity; use org/repo
+ASSERT C-06 overlong repo rejected PASS
+files outside omc-home: 
+ASSERT C-06 nothing written outside OMC_HOME PASS
+
+===== C-07 repeated gen reuses instead of rotating =====
+ASSERT C-07 second gen exits zero PASS
+ASSERT C-07 private key unchanged PASS
+ASSERT C-07 same public key printed PASS
+ASSERT C-07 second run says reused PASS
+
+===== C-08 unwritable target and OMC_HOME as a file (as nobody) =====
+readonly-dir exit=1 err=home_unavailable: cannot read /tmp/t5s14-case01.B7uMOL/nb/home: stat /tmp/t5s14-case01.B7uMOL/nb/home: permission denied
+readonly-key exit=1 err=home_unavailable: cannot read /tmp/t5s14-case01.B7uMOL/nb/home: stat /tmp/t5s14-case01.B7uMOL/nb/home: permission denied
+home-is-file exit=1 err=home_unavailable: cannot read /tmp/t5s14-case01.B7uMOL/nb/notadir: stat /tmp/t5s14-case01.B7uMOL/nb/notadir: permission denied
+recovered exit=1
+ASSERT C-08 read-only keys dir fails readably PASS
+ASSERT C-08 OMC_HOME as a regular file fails PASS
+ASSERT C-08 generation recovers on a writable home FAIL
+
+===== C-09 only the public key on stdout/stderr; scan every written file =====
+ASSERT C-09 private key hex not in gen streams PASS
+ASSERT C-09 private key base64 not in gen streams PASS
+ASSERT C-09 private key only in the key file itself PASS
+
+RESULT case-01 FAILS=1

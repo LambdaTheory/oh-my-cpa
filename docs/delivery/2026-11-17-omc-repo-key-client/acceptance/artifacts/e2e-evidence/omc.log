@@ -1,0 +1,5 @@
+{"time":"2026-11-17T21:29:11.477953303+08:00","level":"INFO","msg":"usage ingestion disabled","mode":"off","enabled":true}
+{"time":"2026-11-17T21:29:11.479067012+08:00","level":"INFO","msg":"feishu module inactive","reason":"forced off by environment","source":"env_disabled","degraded":false}
+{"time":"2026-11-17T21:29:11.479106292+08:00","level":"INFO","msg":"usage maintenance started","default_request_record_days":90,"default_payload_days":7}
+{"time":"2026-11-17T21:29:11.479155732+08:00","level":"INFO","msg":"HTTP server listening","addr":"127.0.0.1:39309","base_path":"/omc"}
+{"time":"2026-11-17T21:29:11.633905328+08:00","level":"WARN","msg":"pricing sync failed","error":"incomplete CPA model catalog: openai-compatibility: CPA returned HTTP 404: {\"error\":\"not found\",\"path\":\"/v0/management/openai-compatibility\"}"}

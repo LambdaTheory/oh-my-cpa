@@ -1,0 +1,4 @@
+ARGV=-c model_provider="oh-my-cpa" -c model_providers.oh-my-cpa.name="Oh My CPA" -c model_providers.oh-my-cpa.base_url="http://127.0.0.1:18317/v1" -c model_providers.oh-my-cpa.env_key="OMC_REPO_KEY" -c model_providers.oh-my-cpa.wire_api="responses" arg1
+ENV_NAMES=OMC_REPO_KEY
+OMC_REPO_KEY_LEN=39
+OMC_REPO_KEY_SHA256=ee5408dfecc9e866798697123fd792f90e9f87757aa2adb6f11aae194dae1b57

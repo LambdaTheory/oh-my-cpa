@@ -1,0 +1,124 @@
+{
+  "repo": "LambdaTheory/oh-my-cpa",
+  "steps": [
+    {
+      "name": "start",
+      "detail": {
+        "agent": "e2e-codex",
+        "device": "e2e-device",
+        "public_key_len": 51
+      }
+    },
+    {
+      "name": "apply",
+      "detail": {
+        "application_id": "b88d081d-c627-4464-b082-53046915fa4b",
+        "approval_link_path": "/repo-key-apply/{token}",
+        "kind": "issue",
+        "status": "pending"
+      }
+    },
+    {
+      "name": "undecided-ciphertext",
+      "detail": {
+        "capability_code": "operation_failed",
+        "capability_status": "error",
+        "console_error": "{\"error\":\"application_not_approved\"}",
+        "console_status": 400
+      }
+    },
+    {
+      "name": "status-pending",
+      "detail": {
+        "ciphertext_ready": false,
+        "status": "pending"
+      }
+    },
+    {
+      "name": "approve",
+      "detail": {
+        "gateway_keys": 1,
+        "key_mask": "sk-cpa-3••••••••04f7",
+        "status": "approved"
+      }
+    },
+    {
+      "name": "deliver",
+      "detail": {
+        "envelope_sha256": "178cd740aeb1022b7bd1ec4859541abce0cbe5f9ced8a2bc3aab475a00763a09",
+        "key_mask": "sk-cpa-3••••••••04f7",
+        "opens_to_gateway_key": true
+      }
+    },
+    {
+      "name": "mask-claude",
+      "detail": {
+        "gateway_status": 200,
+        "masked": [
+          "ANTHROPIC_BASE_URL=ht••••••••(22 chars)",
+          "ANTHROPIC_AUTH_TOKEN=sk••••••••(39 chars)"
+        ],
+        "present": {
+          "ANTHROPIC_API_KEY": false,
+          "ANTHROPIC_AUTH_TOKEN": true,
+          "ANTHROPIC_BASE_URL": true,
+          "OMC_REPO_KEY": false,
+          "OPENCODE_CONFIG_CONTENT": false
+        }
+      }
+    },
+    {
+      "name": "mask-codex",
+      "detail": {
+        "gateway_status": 200,
+        "masked": [
+          "OMC_REPO_KEY=sk••••••••(39 chars)"
+        ],
+        "present": {
+          "ANTHROPIC_API_KEY": false,
+          "ANTHROPIC_AUTH_TOKEN": false,
+          "ANTHROPIC_BASE_URL": false,
+          "OMC_REPO_KEY": true,
+          "OPENCODE_CONFIG_CONTENT": false
+        }
+      }
+    },
+    {
+      "name": "mask-opencode",
+      "detail": {
+        "gateway_status": 200,
+        "masked": [
+          "OPENCODE_CONFIG_CONTENT={\"••••••••(230 chars)"
+        ],
+        "present": {
+          "ANTHROPIC_API_KEY": false,
+          "ANTHROPIC_AUTH_TOKEN": false,
+          "ANTHROPIC_BASE_URL": false,
+          "OMC_REPO_KEY": false,
+          "OPENCODE_CONFIG_CONTENT": true
+        }
+      }
+    },
+    {
+      "name": "reject",
+      "detail": {
+        "ciphertext_status": 400,
+        "gateway_keys": 1,
+        "reject_reason": "e2e: this caller is not the one asking",
+        "status": "rejected"
+      }
+    },
+    {
+      "name": "complete",
+      "detail": {
+        "evidence": "/evidence/key-loop.json"
+      }
+    }
+  ],
+  "conclusion": "pass",
+  "services": {
+    "console": "http://127.0.0.1:45067/omc",
+    "gateway": "http://127.0.0.1:34723",
+    "log": "/evidence/omc.log"
+  }
+}

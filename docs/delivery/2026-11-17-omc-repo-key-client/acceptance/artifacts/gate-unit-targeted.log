@@ -1,0 +1,259 @@
+=== RUN   TestParseCiphertextResultAcceptsBothShapes
+--- PASS: TestParseCiphertextResultAcceptsBothShapes (0.00s)
+=== RUN   TestAcceptStoresEnvelopeAndRecordsTheApplication
+--- PASS: TestAcceptStoresEnvelopeAndRecordsTheApplication (0.69s)
+=== RUN   TestAcceptRefusesAnEnvelopeForAnotherKey
+--- PASS: TestAcceptRefusesAnEnvelopeForAnotherKey (0.44s)
+=== RUN   TestAcceptWithoutAPrivateKeyIsKeyNotFound
+--- PASS: TestAcceptWithoutAPrivateKeyIsKeyNotFound (0.01s)
+=== RUN   TestAcceptReplacesThePreviousEnvelope
+--- PASS: TestAcceptReplacesThePreviousEnvelope (2.12s)
+=== RUN   TestAcceptExplicitApplicationIDWins
+--- PASS: TestAcceptExplicitApplicationIDWins (1.36s)
+=== RUN   TestAcceptRebuildsALostStateRecord
+--- PASS: TestAcceptRebuildsALostStateRecord (1.26s)
+=== RUN   TestAcceptedEnvelopeFileIsOwnerOnlyAndAtomic
+--- PASS: TestAcceptedEnvelopeFileIsOwnerOnlyAndAtomic (1.17s)
+=== RUN   TestExecClaudeChildSeesTheKeyAndNothingElse
+--- PASS: TestExecClaudeChildSeesTheKeyAndNothingElse (0.61s)
+=== RUN   TestExecCodexChildSeesTheKeyAndTheProviderFlags
+--- PASS: TestExecCodexChildSeesTheKeyAndTheProviderFlags (0.90s)
+=== RUN   TestExecOpenCodeChildSeesTheMergedConfiguration
+--- PASS: TestExecOpenCodeChildSeesTheMergedConfiguration (0.63s)
+=== RUN   TestExecPassesTheChildsExitCode
+--- PASS: TestExecPassesTheChildsExitCode (0.54s)
+=== RUN   TestExecRefusesAMissingCommand
+--- PASS: TestExecRefusesAMissingCommand (0.60s)
+=== RUN   TestExecMissingKeyNeverStartsTheChild
+--- PASS: TestExecMissingKeyNeverStartsTheChild (0.66s)
+=== RUN   TestExecWithoutAHomeIsKeyNotFound
+--- PASS: TestExecWithoutAHomeIsKeyNotFound (0.00s)
+=== RUN   TestExecMissingEnvelopeNeverStartsTheChild
+--- PASS: TestExecMissingEnvelopeNeverStartsTheChild (0.92s)
+=== RUN   TestExecEnvelopeForAnotherKeyIsRefused
+--- PASS: TestExecEnvelopeForAnotherKeyIsRefused (1.19s)
+=== RUN   TestExecMalformedEnvelopeIsRefused
+--- PASS: TestExecMalformedEnvelopeIsRefused (1.00s)
+=== RUN   TestExecRequiresABaseURL
+--- PASS: TestExecRequiresABaseURL (0.78s)
+=== RUN   TestExecReadsTheBaseURLFromTheEnvironmentThenTheConfig
+--- PASS: TestExecReadsTheBaseURLFromTheEnvironmentThenTheConfig (1.19s)
+=== RUN   TestExecWritesNothing
+--- PASS: TestExecWritesNothing (0.71s)
+=== RUN   TestExecWarnsAboutCleartextToARemoteHost
+--- PASS: TestExecWarnsAboutCleartextToARemoteHost (0.79s)
+=== RUN   TestExecRunsInTheCallersDirectory
+--- PASS: TestExecRunsInTheCallersDirectory (0.73s)
+=== RUN   TestExecUnknownRuntimeIsAUsageError
+--- PASS: TestExecUnknownRuntimeIsAUsageError (0.86s)
+=== RUN   TestExecCannotStartTheCommand
+--- PASS: TestExecCannotStartTheCommand (0.72s)
+=== RUN   TestExecRefusesAnUnreadablePrivateKey
+--- PASS: TestExecRefusesAnUnreadablePrivateKey (0.76s)
+=== RUN   TestExecInfersTheRepositoryFromTheDirectory
+--- PASS: TestExecInfersTheRepositoryFromTheDirectory (0.94s)
+=== RUN   TestExecFallsBackToTheDirectoryName
+--- PASS: TestExecFallsBackToTheDirectoryName (0.37s)
+=== RUN   TestHomePermissionsAreOwnerOnly
+--- PASS: TestHomePermissionsAreOwnerOnly (1.13s)
+=== RUN   TestPrivateKeyKeepsItsModeUnderAPermissiveUmask
+--- PASS: TestPrivateKeyKeepsItsModeUnderAPermissiveUmask (0.41s)
+=== RUN   TestInstallClaudeWritesTheTwoEnvMembers
+--- PASS: TestInstallClaudeWritesTheTwoEnvMembers (1.92s)
+=== RUN   TestInstallClaudeRefusesAnExistingAPIKey
+--- PASS: TestInstallClaudeRefusesAnExistingAPIKey (0.68s)
+=== RUN   TestInstallClaudeRejectsJSONC
+--- PASS: TestInstallClaudeRejectsJSONC (0.85s)
+=== RUN   TestInstallIsIdempotent
+--- PASS: TestInstallIsIdempotent (2.56s)
+=== RUN   TestInstallBackupHoldsThePreviousFileExactly
+--- PASS: TestInstallBackupHoldsThePreviousFileExactly (1.84s)
+=== RUN   TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape
+--- PASS: TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape (1.66s)
+=== RUN   TestInstallCodexWritesAManagedBlockAndProvider
+--- PASS: TestInstallCodexWritesAManagedBlockAndProvider (1.80s)
+=== RUN   TestInstallCodexRefusesAnUnmanagedProviderTable
+--- PASS: TestInstallCodexRefusesAnUnmanagedProviderTable (0.74s)
+=== RUN   TestInstallCodexRefusesAHalfBlock
+--- PASS: TestInstallCodexRefusesAHalfBlock (0.66s)
+=== RUN   TestInstallCodexRefusesMultiLineStrings
+--- PASS: TestInstallCodexRefusesMultiLineStrings (0.65s)
+=== RUN   TestInstallRequiresReplaceForAForeignSlot
+--- PASS: TestInstallRequiresReplaceForAForeignSlot (3.87s)
+=== RUN   TestInstallRefusesToReplaceAValueItDidNotWrite
+--- PASS: TestInstallRefusesToReplaceAValueItDidNotWrite (0.78s)
+=== RUN   TestInstallNeedsKeyAndEnvelope
+--- PASS: TestInstallNeedsKeyAndEnvelope (1.99s)
+=== RUN   TestInstallRecordsTheSlot
+--- PASS: TestInstallRecordsTheSlot (1.88s)
+=== RUN   TestInstallRefusesASymlinkedConfig
+--- PASS: TestInstallRefusesASymlinkedConfig (0.79s)
+=== RUN   TestInstallVerificationRepairsAFileThatLostContent
+--- PASS: TestInstallVerificationRepairsAFileThatLostContent (0.38s)
+=== RUN   TestInstallVerificationReportsAnotherRepositorysValue
+--- PASS: TestInstallVerificationReportsAnotherRepositorysValue (0.00s)
+=== RUN   TestInstallFilePermissionsAreOwnerOnly
+--- PASS: TestInstallFilePermissionsAreOwnerOnly (1.93s)
+=== RUN   TestInstallCreatesAMissingConfigWithOwnerOnlyMode
+--- PASS: TestInstallCreatesAMissingConfigWithOwnerOnlyMode (1.55s)
+=== RUN   TestPurgeLeavesTheRemainingFilesOwnerOnly
+--- PASS: TestPurgeLeavesTheRemainingFilesOwnerOnly (1.32s)
+=== RUN   TestGenerateKeyPairProducesAUsableIdentity
+--- PASS: TestGenerateKeyPairProducesAUsableIdentity (0.00s)
+=== RUN   TestWriteAndReadPrivateKey
+--- PASS: TestWriteAndReadPrivateKey (0.14s)
+=== RUN   TestWritePrivateKeyNeverOverwrites
+--- PASS: TestWritePrivateKeyNeverOverwrites (0.21s)
+=== RUN   TestReadPrivateKeyReportsMissingAndMalformed
+--- PASS: TestReadPrivateKeyReportsMissingAndMalformed (0.00s)
+=== RUN   TestGenerateCreatesThenReuses
+--- PASS: TestGenerateCreatesThenReuses (0.45s)
+=== RUN   TestGenerateRepairsStateFromAnExistingKey
+--- PASS: TestGenerateRepairsStateFromAnExistingKey (0.46s)
+=== RUN   TestGenerateWritesTheBaseURL
+--- PASS: TestGenerateWritesTheBaseURL (0.46s)
+=== RUN   TestGenerateRejectsAnInvalidBaseURL
+--- PASS: TestGenerateRejectsAnInvalidBaseURL (0.14s)
+=== RUN   TestGenerateRequiresARepo
+--- PASS: TestGenerateRequiresARepo (0.00s)
+=== RUN   TestGenerateRegistersTheNormalizedIdentity
+--- PASS: TestGenerateRegistersTheNormalizedIdentity (0.60s)
+=== RUN   TestPurgeRemovesEverythingOfOneRepository
+--- PASS: TestPurgeRemovesEverythingOfOneRepository (1.46s)
+=== RUN   TestPurgeLeavesOtherEnvEntriesAndProviders
+--- PASS: TestPurgeLeavesOtherEnvEntriesAndProviders (2.88s)
+=== RUN   TestPurgeRestoresThePreviousModelProvider
+--- PASS: TestPurgeRestoresThePreviousModelProvider (1.10s)
+=== RUN   TestPurgeRemovesTheProviderLineWhenThereWasNone
+--- PASS: TestPurgeRemovesTheProviderLineWhenThereWasNone (1.16s)
+=== RUN   TestPurgeSingleRuntimeWithoutAnInstallReportsIt
+--- PASS: TestPurgeSingleRuntimeWithoutAnInstallReportsIt (0.32s)
+=== RUN   TestPurgeSingleRuntimeKeepsTheKey
+--- PASS: TestPurgeSingleRuntimeKeepsTheKey (1.84s)
+=== RUN   TestPurgeDryRunChangesNothing
+--- PASS: TestPurgeDryRunChangesNothing (0.92s)
+=== RUN   TestPurgeDryRunReportsWithoutAHome
+--- PASS: TestPurgeDryRunReportsWithoutAHome (0.00s)
+=== RUN   TestPurgeRefusesAValueItDoesNotOwn
+--- PASS: TestPurgeRefusesAValueItDoesNotOwn (0.73s)
+=== RUN   TestPurgeKeepsEverythingWhenARuntimeCannotBeRead
+--- PASS: TestPurgeKeepsEverythingWhenARuntimeCannotBeRead (0.98s)
+=== RUN   TestPurgeIsIdempotent
+--- PASS: TestPurgeIsIdempotent (1.55s)
+=== RUN   TestPurgeOnAMissingHomeCreatesNothing
+--- PASS: TestPurgeOnAMissingHomeCreatesNothing (0.00s)
+=== RUN   TestPurgeDoesNotWarnAboutAKeyThatNeverExisted
+--- PASS: TestPurgeDoesNotWarnAboutAKeyThatNeverExisted (0.20s)
+=== RUN   TestPurgeRefusesAnInvalidRepoBeforeTouchingFiles
+--- PASS: TestPurgeRefusesAnInvalidRepoBeforeTouchingFiles (0.34s)
+=== RUN   TestPurgeRemovesOnlyBackupsThatHoldTheKey
+--- PASS: TestPurgeRemovesOnlyBackupsThatHoldTheKey (1.10s)
+=== RUN   TestPurgeWithoutTheKeyKeepsUnprovableBackups
+--- PASS: TestPurgeWithoutTheKeyKeepsUnprovableBackups (1.11s)
+=== RUN   TestPurgeRemovesTheRecordButKeepsThePendingOne
+--- PASS: TestPurgeRemovesTheRecordButKeepsThePendingOne (0.62s)
+=== RUN   TestPurgeRemovesTheProviderLineWhenTheBlockWasDeletedByHand
+--- PASS: TestPurgeRemovesTheProviderLineWhenTheBlockWasDeletedByHand (1.17s)
+=== RUN   TestCodexInjectionAcceptsTheExecutableWithExtension
+--- PASS: TestCodexInjectionAcceptsTheExecutableWithExtension (0.00s)
+PASS
+ok  	github.com/oh-my-cpa/oh-my-cpa/internal/keyclient	71.322s
+=== RUN   TestKeyAcceptHelp
+--- PASS: TestKeyAcceptHelp (0.00s)
+=== RUN   TestKeyAcceptStoresTheEnvelopeAndPrintsOneLine
+--- PASS: TestKeyAcceptStoresTheEnvelopeAndPrintsOneLine (1.45s)
+=== RUN   TestKeyAcceptJSONIsMachineReadable
+--- PASS: TestKeyAcceptJSONIsMachineReadable (1.44s)
+=== RUN   TestKeyAcceptRefusesAKeyMismatch
+--- PASS: TestKeyAcceptRefusesAKeyMismatch (1.29s)
+=== RUN   TestKeyAcceptWithoutStdinIsAnEnvelopeError
+--- PASS: TestKeyAcceptWithoutStdinIsAnEnvelopeError (0.61s)
+=== RUN   TestKeyAcceptRequiresARepo
+--- PASS: TestKeyAcceptRequiresARepo (0.00s)
+=== RUN   TestKeyAcceptRejectsAStrayArgument
+--- PASS: TestKeyAcceptRejectsAStrayArgument (0.00s)
+=== RUN   TestKeyExecHelp
+--- PASS: TestKeyExecHelp (0.00s)
+=== RUN   TestKeyExecTopLevelHelpListsExec
+--- PASS: TestKeyExecTopLevelHelpListsExec (0.00s)
+=== RUN   TestKeyExecPassesEverythingAfterTheTerminator
+--- PASS: TestKeyExecPassesEverythingAfterTheTerminator (0.70s)
+=== RUN   TestKeyExecPassesTheChildExitCode
+--- PASS: TestKeyExecPassesTheChildExitCode (0.71s)
+=== RUN   TestKeyExecHelperProcess
+    keyexec_test.go:195: child-process entry point
+--- SKIP: TestKeyExecHelperProcess (0.00s)
+=== RUN   TestKeyExecMissingRuntimeIsAUsageError
+--- PASS: TestKeyExecMissingRuntimeIsAUsageError (0.78s)
+=== RUN   TestKeyExecUnknownRuntimeIsAUsageError
+--- PASS: TestKeyExecUnknownRuntimeIsAUsageError (0.85s)
+=== RUN   TestKeyExecMissingCommandIsAUsageError
+--- PASS: TestKeyExecMissingCommandIsAUsageError (0.62s)
+=== RUN   TestKeyExecRejectsACommandBeforeTheTerminator
+--- PASS: TestKeyExecRejectsACommandBeforeTheTerminator (0.69s)
+=== RUN   TestKeyExecMissingKeyIsNotFound
+--- PASS: TestKeyExecMissingKeyIsNotFound (0.00s)
+=== RUN   TestKeyExecMissingBaseURLIsAConfigurationError
+--- PASS: TestKeyExecMissingBaseURLIsAConfigurationError (0.64s)
+=== RUN   TestKeyExecCodexRefusesAWrapper
+--- PASS: TestKeyExecCodexRefusesAWrapper (0.86s)
+=== RUN   TestKeyInstallHelp
+--- PASS: TestKeyInstallHelp (0.00s)
+=== RUN   TestKeyInstallWarnsAndWrites
+--- PASS: TestKeyInstallWarnsAndWrites (2.98s)
+=== RUN   TestKeyInstallRequiresRuntime
+--- PASS: TestKeyInstallRequiresRuntime (0.76s)
+=== RUN   TestKeyInstallRejectsAnUnknownRuntime
+--- PASS: TestKeyInstallRejectsAnUnknownRuntime (0.00s)
+=== RUN   TestKeyInstallWithoutAKeyIsNotFound
+--- PASS: TestKeyInstallWithoutAKeyIsNotFound (0.00s)
+=== RUN   TestKeyInstallWithoutAnEnvelopeIsNotFound
+--- PASS: TestKeyInstallWithoutAnEnvelopeIsNotFound (0.76s)
+=== RUN   TestKeyInstallConflictIsExitFive
+--- PASS: TestKeyInstallConflictIsExitFive (0.74s)
+=== RUN   TestKeyInstallJSONCIsAnOperationalFailure
+--- PASS: TestKeyInstallJSONCIsAnOperationalFailure (0.74s)
+=== RUN   TestKeyInstallRemembersTheBaseURL
+--- PASS: TestKeyInstallRemembersTheBaseURL (2.03s)
+=== RUN   TestKeyInstallSecondRunSaysNothingChanged
+--- PASS: TestKeyInstallSecondRunSaysNothingChanged (2.62s)
+=== RUN   TestKeyInstallReportsTheReplacedCodexProvider
+--- PASS: TestKeyInstallReportsTheReplacedCodexProvider (2.35s)
+=== RUN   TestKeyPurgeHelp
+--- PASS: TestKeyPurgeHelp (0.00s)
+=== RUN   TestKeyPurgeClearsLocalMaterial
+--- PASS: TestKeyPurgeClearsLocalMaterial (3.32s)
+=== RUN   TestKeyPurgeRequiresRepo
+--- PASS: TestKeyPurgeRequiresRepo (0.00s)
+=== RUN   TestKeyPurgeDryRunChangesNothing
+--- PASS: TestKeyPurgeDryRunChangesNothing (2.18s)
+=== RUN   TestKeyPurgeSingleRuntimeKeepsTheKey
+--- PASS: TestKeyPurgeSingleRuntimeKeepsTheKey (2.78s)
+=== RUN   TestKeyPurgeRefusesABorrowedValue
+--- PASS: TestKeyPurgeRefusesABorrowedValue (2.23s)
+=== RUN   TestKeyPurgeFailureDoesNotClaimItWasClean
+--- PASS: TestKeyPurgeFailureDoesNotClaimItWasClean (0.66s)
+=== RUN   TestKeyPurgeRepeatIsNotAFailure
+--- PASS: TestKeyPurgeRepeatIsNotAFailure (3.28s)
+=== RUN   TestKeyPurgeAcceptsTheSpellingAnInstallUsed
+--- PASS: TestKeyPurgeAcceptsTheSpellingAnInstallUsed (3.37s)
+=== RUN   TestKeyStatusHelp
+--- PASS: TestKeyStatusHelp (0.00s)
+=== RUN   TestKeyHelpListsAcceptAndStatus
+--- PASS: TestKeyHelpListsAcceptAndStatus (0.00s)
+=== RUN   TestKeyStatusWithoutAHomeSaysWhatToDo
+--- PASS: TestKeyStatusWithoutAHomeSaysWhatToDo (0.00s)
+=== RUN   TestKeyStatusListsTheThreeStates
+--- PASS: TestKeyStatusListsTheThreeStates (2.82s)
+=== RUN   TestKeyStatusJSONIsParseable
+--- PASS: TestKeyStatusJSONIsParseable (0.79s)
+=== RUN   TestKeyStatusReadsTheGatewayFromTheEnvironment
+--- PASS: TestKeyStatusReadsTheGatewayFromTheEnvironment (0.81s)
+=== RUN   TestKeyStatusApplicationIDRecordsTheApplication
+--- PASS: TestKeyStatusApplicationIDRecordsTheApplication (1.53s)
+=== RUN   TestKeyStatusRemoteNeedsConfiguration
+--- PASS: TestKeyStatusRemoteNeedsConfiguration (0.80s)
+=== RUN   TestKeyStatusRemoteFailureIsReported
+--- PASS: TestKeyStatusRemoteFailureIsReported (0.73s)
+PASS
+ok  	github.com/oh-my-cpa/oh-my-cpa/cmd/oh-my-cpa	48.975s
