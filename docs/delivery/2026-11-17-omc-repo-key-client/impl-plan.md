@@ -165,8 +165,8 @@ $OMC_HOME/
 - 检查顺序：state/repo → 私钥存在 → 信封存在 → base URL 可解析 → 解密 → 注入 → 启动子进程。任一步失败都不启动子进程，也不留下临时文件。
 - `exec` 不要求 state 里有记录：私钥和信封按确定性文件名就能找到；state 只用于显示、申请状态和 install 归属。
 - 解密：`repokey.Decrypt(privateKey, envelopeJSON)`，明文只保存在一个局部 `string` 和子进程环境里；不写临时文件，不 `fmt` 明文，不放进 argv（Codex 的 token 走 env，见下）。
-- 子进程：`exec.CommandContext(ctx, argv[0], argv[1:]...)`；`cmd.Env` 由 `os.Environ()` 过滤后追加；`Stdin/Stdout/Stderr` 继承；`cmd.Dir` 保持当前目录；`cmd.Run()` 的退出码原样返回。子进程起不来报 `exec_failed`（退出码 1）。
-- 信号：`key exec` 不安装自己的信号处理器。Unix 上父子在同一进程组，Windows 上共享控制台，Ctrl-C 会同时到达两者；如果父进程被单独 SIGTERM，子进程可能继续，运行手册说明这一点。不要为了「优雅」加一个会吞掉 Ctrl-C 的 handler。
+- 子进程：`exec.Command(argv[0], argv[1:]...)`（不是 `CommandContext`）；`cmd.Env` 由 `os.Environ()` 过滤后追加；`Stdin/Stdout/Stderr` 继承；`cmd.Dir` 保持当前目录；`cmd.Run()` 的退出码原样返回。子进程起不来报 `exec_failed`（退出码 1）。
+- 信号：`key exec` 不安装自己的信号处理器，`main.go` 的 `key` 分发也不套 `signal.NotifyContext`。Unix 上父子在同一进程组，Windows 上共享控制台，Ctrl-C 会同时到达两者；如果父进程被单独 SIGTERM，子进程可能继续，运行手册说明这一点。不要用 `CommandContext` 或一个会吞掉 Ctrl-C 的 handler，否则父进程收到 Ctrl-C 后 cancel 会把子进程 SIGKILL。
 - 环境构造：先过滤掉运行时的冲突变量，再追加本运行时的变量。过滤不是「顺手清理」，是为了保证子进程真的用仓库 key：
   - `claude`：删除 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`ANTHROPIC_BASE_URL`，再设 `ANTHROPIC_BASE_URL=<根>`、`ANTHROPIC_AUTH_TOKEN=<明文>`。如果父环境里本来有 `ANTHROPIC_API_KEY`，stderr 打一句「removed ANTHROPIC_API_KEY for this child」，不打印值。
   - `codex`：要求 `argv[0]` 的 basename 是 `codex` 或 `codex.exe`（大小写不敏感）；设 `OMC_REPO_KEY=<明文>`；在 `codex` 后、用户参数前插入：
@@ -205,7 +205,7 @@ experimental_bearer_token = "sk-cpa-..."
 # <<< oh-my-cpa key <<<
 ```
 
-  顶部再维护一行 `model_provider = "oh-my-cpa"`（必须在第一个表头之前）。写前先删旧的完整受管块；有开始标记没有结束标记、或存在非受管的 `[model_providers.oh-my-cpa]` 表，都报 `config_conflict` 并停止。替换 `model_provider` 时把原值记进 state，purge 时如果当前值仍是我们的，就恢复原值；如果原值不存在就删掉这一行。
+  顶部再维护一行 `model_provider = "oh-my-cpa"`（必须在第一个表头之前）。写前先删旧的完整受管块；有开始标记没有结束标记、或存在非受管的 `[model_providers.oh-my-cpa]` 表，都报 `config_conflict` 并停止。扫描遇到多行字符串（`'''` / `"""`）或无法确定顶层边界时同样拒绝，不猜。替换 `model_provider` 时把原值记进 state，purge 时如果当前值仍是我们的，就恢复原值；如果原值不存在就删掉这一行。
 - **OpenCode**：`~/.config/opencode/opencode.json`（尊重 `$OPENCODE_CONFIG`，`--config` 可覆盖）。结构化 JSON 编辑：`provider["oh-my-cpa"] = {npm:"@ai-sdk/openai-compatible", name:"Oh My CPA (org/repo)", options:{baseURL:"<根>/v1", apiKey:"<明文>"}}`，保留其他 provider 和未知键。用 v1 单数 `provider`，不猜 v2 的 `providers`。不自动写 `models` 映射（见 §11）。
 - **所有 install**：写前把目标文件复制到 `$OMC_HOME/backups/<UTC 时间戳>-<路径压平>.json|toml`，0600/当前用户 ACL；备份失败就不写。写前在 stderr 打印警告：目标路径、明文会留在磁盘、备份路径、如何 purge。写用同目录临时文件 + fsync + 权限收紧 + rename，失败保留原文件。
 - install 也需要私钥和信封：缺私钥报 `key_not_found`，缺信封报 `envelope_missing`，解不开报 `decrypt_failed`；任一失败都不写配置、不建备份。
@@ -437,7 +437,7 @@ console to revoke it.
 | 4 | 未找到 | 没有私钥、没有信封、没有申请、没有 install |
 | 5 | 冲突 | key 已存在且不是复用、配置槽位被别人占用、state 损坏 |
 
-`key exec` 一旦成功启动子进程，退出码就是子进程的退出码；上面 0–5 只适用于「还没启动子进程」的阶段。运行手册明确这一点，避免把子进程的 3 误读成配置错误。
+`key exec` 正常结束时退出码就是子进程的退出码；上面 0–5 只适用于「还没启动子进程」的阶段。被 Ctrl-C 中断时以控制台/进程组行为为准，工具不额外转换。运行手册明确这一点，避免把子进程的 3 误读成配置错误。
 
 ## 4. 目录与文件
 
@@ -932,7 +932,7 @@ func registerKeyCommand(command keyCommand) { keyCommands[command.Name] = comman
 | S2b | `key accept` + `key status`（本地 + `--remote`） | S2a | cmd/oh-my-cpa/keyaccept.go、cmd/oh-my-cpa/keystatus.go、internal/keyclient/{accept,status,remote}.go 及测试 | 70 | AC-1、AC-3、AC-8 |
 | S3 | `key exec`：内存解密、三家注入、子进程、退出码、错误脱敏 | S2a | cmd/oh-my-cpa/keyexec.go、internal/keyclient/{runtime,exec}.go 及测试 | 90 | AC-4、AC-6 |
 | S4 | `key install` + `key purge`：JSON/TOML 受管编辑、备份、所有权、精确清理 | S2a | cmd/oh-my-cpa/keyinstall.go、cmd/oh-my-cpa/keypurge.go、internal/keyclient/{install,purge,jsondoc,tomlblock}.go 及测试 | 110（可拆 S4a 70 / S4b 40） | AC-5、AC-6、AC-8 |
-| S5 | 文档：agent 运行手册 + capability/architecture/operations/install/testing 同步 | S1；完整同步在 S2a–S4 后 | docs/（见 §9） | 50 | AC-9 |
+| S5 | 文档：agent 运行手册 + capability/architecture/operations/install/testing 同步 | S1；完整同步在 S2a–S4 后 | docs/（见 §9） | 60 | AC-9 |
 | S7 | e2e 夹具：fake CPA + 真实 OMC 二进制 + MCP apply/审批/ciphertext 助手 + 掩码 helper；先跑通不经过 key 命令的链路 | S1 | internal/keyclient/e2e/、package.json（test:key-e2e） | 100 | AC-7 |
 | S8 | 全链路：CLI 七步串起来，出可复跑命令与证据（含 purge 后失败） | S2a、S2b、S3、S4、S7 | internal/keyclient/e2e/ | 60 | AC-7 |
 
@@ -942,7 +942,7 @@ func registerKeyCommand(command keyCommand) { keyCommands[command.Name] = comman
 
 ```text
 S2a
-  cmd/oh-my-cpa/main.go                  (edit: dispatch `key` before config load)
+  cmd/oh-my-cpa/main.go                  (edit: dispatch `key` before config load; no signal.NotifyContext)
   cmd/oh-my-cpa/key.go                   (new: runKey, registry, top-level help)
   cmd/oh-my-cpa/keygen.go                (new: gen command)
   internal/keyclient/types.go            (new: Runtime, RepoState, RuntimeSlot, State)
@@ -1246,7 +1246,7 @@ pnpm verify
 | S2b | —（含在原 S2） | 70 | accept/status/remote；可与 S3/S4 并行 |
 | S3 | 90 | 90 | 三家注入 + 进程级测试 |
 | S4 | 75 | 110 | 两家 JSON + 一家 TOML + 备份 + 三套 purge + 测试；建议拆 S4a/S4b |
-| S5 | 40 | 50 | 运行手册 + 五份文档同步 |
+| S5 | 40 | 60 | 运行手册 + 六份现有文档同步 |
 | S7 | 80 | 100 | fake CPA + 真实 OMC + 审批链接 + helper |
 | S8 | 60 | 60 | 七步串联 + 证据 |
 | S9 | 45 | 45 | 审查 |
