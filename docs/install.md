@@ -480,6 +480,13 @@ it from the original working directory. Preserve the master key and state. Verif
 health and the new running version. Migrations are forward-only; returning to an
 older executable requires restoring the corresponding data backup.
 
+Installing OMC generates no repository key and writes nothing under the home directory.
+The binary does carry the `oh-my-cpa key` subcommands for the machines that use a
+repository-owned key against the gateway: they run without the console, its `.env` or its
+data directory, and keep their own state under `$OMC_HOME` (default `~/.omc`). See
+`docs/repo-key-client.md` when a machine has to use a repository key, and
+`docs/agent-capabilities.md` for the capabilities that issue it.
+
 ## From source
 
 Needs Go 1.25+, Node.js 22+, pnpm 11+ and a running CPA.
@@ -508,6 +515,10 @@ such as systemd keeps it running. Variables in the environment win over `.env`, 
 `OMCPA_ENV_FILE` points at a different file. A build from an untagged checkout reports
 itself as `v0.1.0-dev`. For hot reload while developing, see
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+The `oh-my-cpa key` subcommands work the same here: no key is generated at build time, and
+their state is separate from the console's `.env` and data directory. See
+`docs/repo-key-client.md`.
 
 ## Dokploy fork source builds
 

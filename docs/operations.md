@@ -397,6 +397,24 @@ The MCP stdio bridge (`oh-my-cpa mcp`) reads `OMCPA_SERVER_URL`,
 endpoint accepts `OMCPA_CPA_MANAGEMENT_KEY` and, when configured,
 `OMCPA_MCP_READONLY_KEY` as bearer tokens. See [Agent and MCP](#agent-and-mcp).
 
+### Repository key client
+
+`oh-my-cpa key` runs on the machines that use a repository key, not on the console host as
+a server role, and the server never reads any of these. Listing them here keeps the one
+place that documents settings from also being the place that stops at the server's own.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `OMC_HOME` | `~/.omc` (`%USERPROFILE%\.omc` on Windows) | Where this machine's repository private keys, delivery envelopes, configuration backups and local state live. Created owner-only (`0700` on Unix, a DACL naming only the current user on Windows); a directory that cannot be restricted stops the command with `home_insecure` instead of accepting a private key other accounts can read. `--home` overrides it per command. One directory is one key pair, so agents that need separate keys set their own |
+| `OMCPA_CPA_BASE_URL` | unset | Also the first environment source for the gateway the key is used against, after `--base-url` and before `$OMC_HOME/config.json`. Claude Code gets the root, Codex and OpenCode the root plus `/v1` |
+
+`key status --remote` is the only networked path in the client. It reads `OMCPA_SERVER_URL`
+and `OMCPA_CPA_MANAGEMENT_KEY` — the same pair the `mcp` bridge uses, and a read-only MCP key
+in that variable works too — and it is optional: without them, `key status` answers entirely
+from local state. That pair is administrator-equivalent for the `mcp` transport, so keep it
+out of any file the agent can read back into a transcript. The operating runbook is
+`docs/repo-key-client.md`.
+
 ## Deployment constraints
 
 - **Single collector**: The CPA usage queue is destructive. Only one collector may read
