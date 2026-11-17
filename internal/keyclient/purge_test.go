@@ -226,6 +226,30 @@ func TestPurgeRemovesTheProviderLineWhenThereWasNone(t *testing.T) {
 	}
 }
 
+// TestPurgeSingleRuntimeWithoutAnInstallReportsIt is the explicit-request case: naming a
+// runtime this machine has no install of is an answer ("not installed"), not a silent
+// success, and it reads no default file to find out.
+func TestPurgeSingleRuntimeWithoutAnInstallReportsIt(t *testing.T) {
+	home := newTestHome(t)
+	repo := seedRepo(t, home, "org/repo", TEST_GATEWAY_KEY)
+	_, err := Purge(PurgeOptions{Repo: repo.Record.Repo, Runtime: RuntimeCodex, Home: home, Now: purgeAt})
+	if CodeOf(err) != CODE_NOT_INSTALLED {
+		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_NOT_INSTALLED, err)
+	}
+	// Nothing was touched on the way to that answer.
+	if hasKey, _ := HasPrivateKey(home, repo.Record.Repo); !hasKey {
+		t.Fatal("the key was removed by a run that had nothing to do")
+	}
+	store, openErr := OpenStore(home)
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	defer store.Close()
+	if _, ok := store.Repo(repo.Record.Repo); !ok {
+		t.Fatal("the record was removed")
+	}
+}
+
 // TestPurgeSingleRuntimeKeepsTheKey is the --runtime contract: only the named runtime's
 // value goes, and the material stays because the repository is still installed
 // elsewhere.

@@ -104,6 +104,13 @@ func Purge(options PurgeOptions) (PurgeResult, error) {
 	}
 
 	// Steps 3 and 4: every runtime this run covers.
+	//
+	// A runtime is covered when state records this repository's slot there. That record is
+	// the only thing that names a file this tool wrote, and it is also what a lost state
+	// file takes away — so purge clears what it can still prove (the key and the envelope)
+	// and never goes looking through a runtime's default file on a guess. An explicit
+	// --runtime with no record says so instead, because the person asked about a runtime
+	// this machine has no install of.
 	runtimes := Runtimes()
 	if options.Runtime != "" {
 		runtimes = []Runtime{options.Runtime}
@@ -114,20 +121,18 @@ func Purge(options PurgeOptions) (PurgeResult, error) {
 			result.Kept = append(result.Kept, fmt.Sprintf("%s: holds %s, not %s", runtime, slot.Repo, repoID))
 			continue
 		}
-		if !hasSlot && options.Runtime != "" {
-			result.Kept = append(result.Kept, fmt.Sprintf("%s: no install record for %s", runtime, repoID))
+		if !hasSlot {
+			if options.Runtime != "" {
+				return PurgeResult{}, Errorf(CODE_NOT_INSTALLED, "there is no install record for %s in %s; nothing to remove there", repoID, runtime)
+			}
 			continue
 		}
 		configPath := slot.ConfigPath
 		if configPath == "" {
-			located, pathErr := RuntimeConfigPath(runtime, "")
-			if pathErr != nil {
-				result.Kept = append(result.Kept, fmt.Sprintf("%s: cannot locate its configuration (%s)", runtime, MessageOf(pathErr)))
-				continue
-			}
-			configPath = located
+			result.Kept = append(result.Kept, fmt.Sprintf("%s: its record names no configuration file, so it was not edited", runtime))
+			continue
 		}
-		outcome, err := purgeRuntime(runtime, configPath, repoID, slot, plaintext, fingerprint, options)
+		outcome, err := purgeRuntime(runtime, configPath, repoID, slot, hasSlot, plaintext, fingerprint, options)
 		if err != nil {
 			return PurgeResult{}, err
 		}
@@ -256,10 +261,17 @@ type purgeOutcome struct {
 // purgeRuntime removes this repository's value from one runtime.
 //
 // The value goes only when it is provably this repository's: the file holds the
-// plaintext the envelope opened, or the fingerprint state recorded. A file that holds
-// something else was changed after the install, and removing it would undo a choice the
-// person made on purpose — so it is reported, not deleted.
-func purgeRuntime(runtime Runtime, configPath, repoID string, slot RuntimeSlot, plaintext, fingerprint string, options PurgeOptions) (purgeOutcome, error) {
+// plaintext the envelope opened, or the fingerprint state recorded. Anything else was
+// changed after the install, and removing it would undo a choice the person made on
+// purpose — so it is reported, not deleted.
+//
+// The report differs with what is known. When state records this slot, a mismatch is
+// install_not_owned: this tool installed a value here and something replaced it, which is
+// worth stopping for. With no record at all — a lost state file, or a directory that was
+// never installed — there is nothing to prove ownership against, so the value is left
+// alone and named as kept, which is the "cannot be certain, so keep it" rule state.json
+// follows.
+func purgeRuntime(runtime Runtime, configPath, repoID string, slot RuntimeSlot, ownsSlot bool, plaintext, fingerprint string, options PurgeOptions) (purgeOutcome, error) {
 	outcome := purgeOutcome{}
 	content, existed, err := readExistingConfig(configPath)
 	if err != nil {
@@ -293,6 +305,10 @@ func purgeRuntime(runtime Runtime, configPath, repoID string, slot RuntimeSlot, 
 	matches := (plaintext != "" && current == plaintext) ||
 		(fingerprint != "" && KeyValueFingerprint(current) == fingerprint)
 	if !matches {
+		if !ownsSlot {
+			outcome.Kept = append(outcome.Kept, fmt.Sprintf("%s: %s holds a value this tool cannot prove it installed, so it was left alone", runtime, configPath))
+			return outcome, nil
+		}
 		return outcome, Errorf(CODE_NOT_OWNED, "%s no longer holds the key this tool installed for %s; it was changed by something else, so it is left alone — remove it by hand if that is what you want", configPath, repoID)
 	}
 	if options.DryRun {
