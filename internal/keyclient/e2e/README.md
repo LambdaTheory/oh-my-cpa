@@ -1,14 +1,20 @@
 # Repository-key delivery harness (`//go:build e2e`)
 
 Cross-process acceptance for the loop that hands a repository-owned key to a
-caller: **apply -> approve -> ciphertext -> local open -> the gateway accepts the
-key**. It runs the real Oh My CPA binary against a loopback gateway stand-in and
+caller. It runs the real Oh My CPA binary against a loopback gateway stand-in and
 decides the application over the console's HTTP surface, so nothing here depends
 on a browser.
 
-This slice builds the harness and the non-CLI half of the loop. Everything the
-`oh-my-cpa key` command will own is a marked stand-in; see "What the CLI slice
-replaces" below.
+Two tests share the fixture:
+
+- `TestRepoKeyDeliveryLoop` covers the non-CLI half: **apply -> approve ->
+  ciphertext -> local open -> the gateway accepts the key**. The local keypair,
+  envelope opening and runtime injection are marked stand-ins.
+- `TestKeyCLIFullLoop` runs the same loop through the real CLI: **gen -> apply ->
+  approve -> ciphertext -> accept -> exec (claude, codex, opencode) -> install ->
+  purge -> exec after purge**. It proves the CLI's outputs and state carry no
+  plaintext, injects each runtime's variables, writes and removes a runtime
+  configuration with a backup, and refuses a purged key with exit code 4.
 
 ## Run it
 
@@ -16,6 +22,12 @@ One command, from the repository root:
 
 ```bash
 pnpm test:key-e2e
+```
+
+The command runs both tests. To run only the CLI loop:
+
+```bash
+go test -tags e2e -count=1 -v -run '^TestKeyCLIFullLoop$' ./internal/keyclient/e2e
 ```
 
 It needs a Go toolchain. When `go` is not on `PATH` and Docker is available, the
@@ -26,7 +38,7 @@ that Docker path is the one that works; there is no local Go.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `OMC_E2E_EVIDENCE_DIR` | `$TMPDIR/omc-key-e2e-evidence` | Where `key-loop.json` and `omc.log` are written |
+| `OMC_E2E_EVIDENCE_DIR` | `$TMPDIR/omc-key-e2e-evidence` | Where `key-loop.json`, `key-cli-loop.json` and `omc.log` are written |
 
 The command exits 0 on a pass and non-zero on a failure, and prints one passing
 line with the key's mask (never the key) plus the evidence path.
@@ -61,6 +73,29 @@ line with the key's mask (never the key) plus the evidence path.
 The fixture's gateway starts with an empty access list, so no request carrying a
 key can succeed before the approval writes one.
 
+`TestKeyCLIFullLoop` adds the CLI claims on the same fixture:
+
+1. `key gen` prints only `x25519:<base64>` on stdout and remembers the gateway.
+2. `repo_key_apply`, the console approval route and `repo_key_ciphertext` hand out
+   an envelope; `key accept` reads that result on stdin and stores it.
+3. `key exec` for Claude sets `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`,
+   removes an inherited `ANTHROPIC_API_KEY`, and the child reaches the gateway
+   with a 200.
+4. `key exec` for Codex hands the child `OMC_REPO_KEY` and the five provider
+   overrides; the key is in neither argv nor the parent's observable environment
+   (checked through `/proc` on Linux).
+5. `key exec` for OpenCode sets `OPENCODE_CONFIG_CONTENT`, keeping the user's
+   other provider and theme and adding `provider.oh-my-cpa`.
+6. `key install` writes Claude's settings, backs up the previous file, and warns
+   that the key is plaintext.
+7. `key purge` removes the private key, envelope, state record and configured
+   values but keeps the user's other settings.
+8. The same `key exec` after purge exits 4 with `key_not_found` before the child
+   starts; a marker file proves the child did not run.
+9. Every CLI stream, the HTTP step bodies and the service log are scanned for the
+   plaintext key, and each step's exit code plus assertion results are written to
+   `key-cli-loop.json`.
+
 ## Isolation
 
 - `HOME`, `TMPDIR`, `OMCPA_DATA_DIR` and `OMCPA_ENV_FILE` point into a
@@ -76,27 +111,14 @@ key can succeed before the approval writes one.
 condition (the health endpoint, a capability's answer, a child process exiting)
 and fails with the last thing it observed. There is no fixed sleep.
 
-## What the CLI slice replaces
+## The non-CLI stand-ins
 
-The harness marks its stand-ins in `e2e_test.go`. The follow-up slice (the `key`
-command) replaces them and should leave the rest of the loop intact:
-
-1. **Key generation and storage** - `newCaller` keeps the pair in memory. Replace
-   with `oh-my-cpa key gen --home <dir> --repo <repo> --base-url <gateway>` and
-   read the public key from its stdout.
-2. **Envelope intake** - `openDelivery` / `runDecryptHelper` open the envelope in
-   a child process. Replace with `oh-my-cpa key accept --home <dir> --repo <repo>`
-   reading the capability's `data` object on stdin.
-3. **Runtime injection** - `claudeInjection` / `codexInjection` /
-   `openCodeInjection` build each runtime's environment. Replace with
-   `oh-my-cpa key exec --home <dir> --runtime <name> --repo <repo> -- <child>`,
-   where the child is this harness's masking helper. The assertions that the
-   child saw the injected variables, that the removed variable is gone, and that
-   the key was accepted by the gateway stay as they are.
-
-Two later steps belong to the follow-up slice as well: `key status --json`, and
-`key purge` followed by `key exec` exiting 4 with `key_not_found` without running
-the child.
+`TestRepoKeyDeliveryLoop` marks its stand-ins in `e2e_test.go`. `TestKeyCLIFullLoop`
+is the CLI replacement: it covers key generation and storage, envelope intake,
+runtime injection, install and purge through separate `oh-my-cpa key` processes.
+The older test stays because it also opens the envelope with an independent
+implementation and proves the delivery construction itself, which the CLI cannot
+check against itself.
 
 ## What it does not prove
 
