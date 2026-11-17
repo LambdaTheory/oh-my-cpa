@@ -4,7 +4,7 @@ slug: 2026-11-17-omc-repo-key-client
 status: draft
 updated: 2026-11-17
 prd: 无独立 prd.md；需求原文见 E:/works/Homan-context/runs/msgs/2026-11-17-2026-11-17-T5-0.md，AC-1～9 见 T5 运行记录「拆分」节末
-summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密钥与信封、内存解密注入三家运行时、显式 install 与精确 purge；拆 S2a/S2b/S3/S4/S5/S7/S8，AC-1～9 逐条落到测试；Codex 用 -c+env_key 避开 argv 明文，OpenCode 用合并后的 OPENCODE_CONFIG_CONTENT"
+summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密钥与信封、内存解密注入三家运行时、显式 install 与精确 purge；拆 S2a/S2b/S3/S4a/S4b/S5/S7/S8，AC-1～9 逐条落到测试；Codex 用 -c+env_key 避开 argv 明文，OpenCode 用合并后的 OPENCODE_CONFIG_CONTENT"
 ---
 
 # 实现计划：分 key 使用端闭环（oh-my-cpa key）
@@ -15,7 +15,7 @@ summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密�
 
 - 先读 §2 的十个设计结论；PM 已定的八条看 §12；要验收的看 §10。
 - 三处关键取舍已定（§12）：`$OMC_HOME` 默认一用户一份、不按 agent 推导；Codex `exec` 只接受 `codex` 本身；OpenCode 不自动写 `models`。
-- 本计划没有改任何产品代码；§7.2 的文件归属是给 S2a/S2b/S3/S4 并行开工用的，不是已经存在的文件。
+- 本计划没有改任何产品代码；§7.2 的文件归属是给 S2a/S2b/S3/S4a/S4b 开工用的，不是已经存在的文件。
 
 ## 0. 一页结论
 
@@ -27,7 +27,7 @@ summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密�
 - **三家 install**：Claude Code 写用户级 `~/.claude/settings.json` 的 `env`；Codex 写 `~/.codex/config.toml` 的受管 `[model_providers.oh-my-cpa]` 加顶层 `model_provider`；OpenCode 写 `~/.config/opencode/opencode.json` 的 `provider.oh-my-cpa.options`（v1 单数）。不新增 Go 依赖。
 - **purge**：默认清私钥、信封、该仓库的全部 install 值和 state 记录；`--runtime` 只清一个运行时。备份默认保留，但删除包含本仓库明文的备份。purge 只清本机，不停用 CPA 里的 key，输出会明说。
 - **测试**：Go 单测覆盖 status / purge / 权限 / 三家注入 / 三家 install；e2e 用 fake CPA + 真实 OMC 二进制 + MCP apply/审批/ciphertext + 掩码 helper + 用 key 打 fake CPA + purge 后失败。Unix 0600 在 Docker/Linux 断言；Windows 用 ACL 断言，不做 `Mode().Perm()==0600` 的必红断言。
-- **切片**：S2 拆成 S2a（home/store/gen）与 S2b（accept/status/remote），S3/S4 从 S2a 起可并行；S4 估 110 分钟，建议拆 S4a（install）/S4b（purge）。S5 文档、S7 e2e 夹具、S8 全链路。
+- **切片**：S2 拆成 S2a（home/store/gen）与 S2b（accept/status/remote），S4 拆成 S4a（install）/S4b（purge），均已采纳；S3 与 S4a 从 S2a 起可并行，S4b 依赖 S4a。S5 文档、S7 e2e 夹具、S8 全链路。
 
 ## 1. 目标与范围
 
@@ -35,7 +35,7 @@ summary: "以 oh-my-cpa key 子命令族补齐使用端七步：本地 0600 密�
 
 1. 让一个 agent 只靠 OMC 自己的二进制，从「本机没有私钥」走到「用仓库 key 跑起目标运行时」，再能干净地清掉本地材料。
 2. 把「私钥放哪、信封谁写、base URL 从哪来、三家运行时怎么注入、install 写哪个文件、purge 删什么」这些今天只存在于调研里的约定，定成可执行的命令和文件契约。
-3. 每个切片能独立验收；S2a 完成后 S3/S4 可以并行，S2b 与它们无文件冲突。
+3. 每个切片能独立验收；S2a 完成后 S3/S4a 可以并行，S2b 与它们无文件冲突，S4b 跟 S4a。
 4. 不改变 OMC 现有的申请、审批、交付协议，不动控制台页面，不做按 agent 拆 key、自动过期、飞书审批。
 
 ### 1.2 非目标
@@ -764,7 +764,7 @@ type PurgeResult struct {
 func Purge(opts PurgeOptions) (PurgeResult, error)
 ```
 
-命令层（`cmd/oh-my-cpa`）用一个注册表，避免 S2/S3/S4 改同一个 switch：
+命令层（`cmd/oh-my-cpa`）用一个注册表，避免各切片改同一个 switch：
 
 ```go
 type keyCommand struct {
@@ -779,7 +779,7 @@ var keyCommands = map[string]keyCommand{}
 func registerKeyCommand(command keyCommand) { keyCommands[command.Name] = command }
 ```
 
-`key.go` 的 `runKey` 只负责 `--help`、查找注册表、调用 `Run`；`keygen.go` 在 `init()` 注册 `gen`，S2b 的 `keyaccept.go` / `keystatus.go` 注册 `accept` / `status`，S3 的 `keyexec.go` 注册 `exec`，S4 的 `keyinstall.go` / `keypurge.go` 注册 `install` / `purge`。这样并行分支不会在 `key.go` 的 switch 上冲突；合并后 `key --help` 自动列出全部命令。
+`key.go` 的 `runKey` 只负责 `--help`、查找注册表、调用 `Run`；`keygen.go` 在 `init()` 注册 `gen`，S2b 的 `keyaccept.go` / `keystatus.go` 注册 `accept` / `status`，S3 的 `keyexec.go` 注册 `exec`，S4a 的 `keyinstall.go` 注册 `install`，S4b 的 `keypurge.go` 注册 `purge`。这样并行分支不会在 `key.go` 的 switch 上冲突；合并后 `key --help` 自动列出全部命令。
 
 ### 5.6 错误码
 
@@ -924,21 +924,22 @@ func registerKeyCommand(command keyCommand) { keyCommands[command.Name] = comman
 
 ### 7.1 切片表
 
-在 PM 原拆分的基础上，把 S2 拆成 S2a/S2b，让 S3/S4 不必等 status/accept 完成；S4 建议按 install/purge 再拆成 S4a/S4b（见 §13）。S6/S9/S10/S11/S12 沿用 PM 原表，不在本计划重复展开。
+在 PM 原拆分的基础上，S2 拆成 S2a/S2b，让 S3/S4a 不必等 status/accept 完成；S4 按 install/purge 拆成 S4a/S4b（PM 2026-11-17 已定，见 §12）。S6/S9/S10/S11/S12 沿用 PM 原表，不在本计划重复展开。
 
 | 切片 | 做什么 | 依赖 | 改哪里（计划） | 估时（分钟） | 验收点 |
 |---|---|---|---|---|---|
 | S2a | 命令骨架 + `key` 分发 + 注册表 + home/store/锁 + 私钥格式 + `key gen` + 仓库推断 + Unix/Windows 权限 | S1 | cmd/oh-my-cpa/main.go、cmd/oh-my-cpa/key.go、cmd/oh-my-cpa/keygen.go、internal/keyclient/{types,errors,home,home_unix,home_windows,lock,state,keystore,repo}.go 及测试 | 80 | AC-1、AC-2、AC-8 |
 | S2b | `key accept` + `key status`（本地 + `--remote`） | S2a | cmd/oh-my-cpa/keyaccept.go、cmd/oh-my-cpa/keystatus.go、internal/keyclient/{accept,status,remote}.go 及测试 | 70 | AC-1、AC-3、AC-8 |
 | S3 | `key exec`：内存解密、三家注入、子进程、退出码、错误脱敏 | S2a | cmd/oh-my-cpa/keyexec.go、internal/keyclient/{runtime,exec}.go 及测试 | 90 | AC-4、AC-6 |
-| S4 | `key install` + `key purge`：JSON/TOML 受管编辑、备份、所有权、精确清理 | S2a | cmd/oh-my-cpa/keyinstall.go、cmd/oh-my-cpa/keypurge.go、internal/keyclient/{install,purge,jsondoc,tomlblock}.go 及测试 | 110（可拆 S4a 70 / S4b 40） | AC-5、AC-6、AC-8 |
-| S5 | 文档：agent 运行手册 + capability/architecture/operations/install/testing 同步 | S1；完整同步在 S2a–S4 后 | docs/（见 §9） | 60 | AC-9 |
+| S4a | `key install`：JSON/TOML 受管编辑、备份、所有权、三份文档的安装字段 | S2a | cmd/oh-my-cpa/keyinstall.go、internal/keyclient/{install,jsondoc,tomlblock}.go 及测试 | 70 | AC-5、AC-8 |
+| S4b | `key purge`：全清/单运行时/dry-run、指纹所有权、备份清理 | S4a | cmd/oh-my-cpa/keypurge.go、internal/keyclient/purge.go 及测试 | 40 | AC-6、AC-8 |
+| S5 | 文档：agent 运行手册 + capability/architecture/operations/install/testing 同步 | S1；完整同步在 S2a–S4b 后 | docs/（见 §9） | 60 | AC-9 |
 | S7 | e2e 夹具：fake CPA + 真实 OMC 二进制 + MCP apply/审批/ciphertext 助手 + 掩码 helper；先跑通不经过 key 命令的链路 | S1 | internal/keyclient/e2e/、package.json（test:key-e2e） | 100 | AC-7 |
-| S8 | 全链路：CLI 七步串起来，出可复跑命令与证据（含 purge 后失败） | S2a、S2b、S3、S4、S7 | internal/keyclient/e2e/ | 60 | AC-7 |
+| S8 | 全链路：CLI 七步串起来，出可复跑命令与证据（含 purge 后失败） | S2a、S2b、S3、S4a、S4b、S7 | internal/keyclient/e2e/ | 60 | AC-7 |
 
 ### 7.2 文件归属
 
-并行分支的文件互不重叠。`cmd/oh-my-cpa/main.go` 只由 S2a 改一次（加 `key` 分发）；`key.go` 只由 S2a 写（注册表 + 总 help）；S2b/S3/S4 只新增自己的命令文件和 internal/keyclient 文件，通过 `init()` 注册，不改 `key.go` 的 switch。
+并行分支的文件互不重叠。`cmd/oh-my-cpa/main.go` 只由 S2a 改一次（加 `key` 分发）；`key.go` 只由 S2a 写（注册表 + 总 help）；S2b/S3/S4a/S4b 只新增自己的命令文件和 internal/keyclient 文件，通过 `init()` 注册，不改 `key.go` 的 switch。
 
 ```text
 S2a
@@ -971,13 +972,16 @@ S3
   internal/keyclient/exec.go             (new: child process/exit code)
   internal/keyclient/*_test.go
 
-S4
+S4a
   cmd/oh-my-cpa/keyinstall.go            (new: install command)
-  cmd/oh-my-cpa/keypurge.go              (new: purge command)
   internal/keyclient/install.go          (new: install orchestration/backups)
-  internal/keyclient/purge.go            (new: purge orchestration)
   internal/keyclient/jsondoc.go          (new: JSON structured edit)
   internal/keyclient/tomlblock.go        (new: TOML managed block)
+  internal/keyclient/*_test.go
+
+S4b
+  cmd/oh-my-cpa/keypurge.go              (new: purge command)
+  internal/keyclient/purge.go            (new: purge orchestration)
   internal/keyclient/*_test.go
 
 S5
@@ -999,31 +1003,29 @@ S7/S8
 ### 7.3 并行与关键路径
 
 ```text
-t0        S2a ─────────────┐
-          S5 (usage doc)   │
-          S7 (harness)     │
-                           ├─ S2b ─┐
-                           ├─ S3  ─┼─ S8 ─ S11 ─ S12
-                           └─ S4  ─┘
- S5 (sync docs) ─────────────────────┘
- S9 ─ S10 ─────────────────────────────┘
+t0:                   S2a, S5（运行手册）, S7（e2e 夹具）
+S2a 完成:             S2b, S3, S4a
+S4a 完成:             S4b
+S2b+S3+S4b+S7 完成:   S8
+S2a–S4b+S5 完成:      S9 → S10
+S8+S10 完成:          S11 → S12
 ```
 
-- S2a 是唯一阻塞 S2b/S3/S4 的切片；它先定 `types.go` / `state.go` / `keystore.go` 的签名。
-- S2b、S3、S4 只新增文件，可同时开工；三方都不改 `key.go` 和 `main.go`。
-- S7 的 fake CPA + 真实 OMC + apply/审批/ciphertext 不依赖 key 命令，可与 S2a 同时起；S8 等 CLI 四块齐。
-- S5 先写运行手册（依赖需求与 S1），等 S2a–S4 合并后再补 architecture/operations/install/testing 的准确路径和测试名。
-- S9 等 S2a/S2b/S3/S4/S5；S10 跟 S9；S11 等 S8/S10；S12 收口。
+- S2a 是唯一阻塞 S2b/S3/S4a 的切片；它先定 `types.go` / `state.go` / `keystore.go` 的签名。
+- S2b、S3、S4a 只新增文件，可同时开工；三方都不改 `key.go` 和 `main.go`。S4b 只新增 purge 文件，依赖 S4a 的 `jsondoc` / `tomlblock` 编辑签名。
+- S7 的 fake CPA + 真实 OMC + apply/审批/ciphertext 不依赖 key 命令，可与 S2a 同时起；S8 等 CLI 五块齐（S2a/S2b/S3/S4a/S4b）。
+- S5 先写运行手册（依赖需求与 S1），等 S2a–S4b 合并后再补 architecture/operations/install/testing 的准确路径和测试名。
+- S9 等 S2a/S2b/S3/S4a/S4b/S5；S10 跟 S9；S11 等 S8/S10；S12 收口。
 
 ### 7.4 与 PM 原拆分的差异
 
 | 原切片 | 本计划 | 原因 |
 |---|---|---|
-| S2（90 分钟） | S2a（80）+ S2b（70） | 原 S2 同时含 home/store/gen/status/权限/accept；拆开后 S3/S4 只等 S2a，关键路径少约 60 分钟 |
-| S4（75 分钟） | S4（110），建议 S4a（install 70）+ S4b（purge 40） | 两家 JSON + 一家 TOML + 备份 + 三套 purge + 测试，75 分钟不够；拆开后 install 与 purge 可并行（共享 `jsondoc`/`tomlblock` 的签名由 S4a 先定） |
+| S2（90 分钟） | S2a（80）+ S2b（70） | 原 S2 同时含 home/store/gen/status/权限/accept；拆开后 S3/S4a 只等 S2a，关键路径少约 60 分钟 |
+| S4（75 分钟） | S4a（install 70）+ S4b（purge 40） | 两家 JSON + 一家 TOML + 备份 + 三套 purge + 测试，75 分钟不够；S4b 依赖 S4a 的编辑签名，总时 110 与单块相同，但验收边界更清楚 |
 | S7（80 分钟） | S7（100） | 真实 OMC 二进制的启动、capability HTTP、审批链接、fake CPA 的 v8 门禁比原估多 |
 
-这些只是估时调整，不改 AC、不改范围；PM 的 `follow.py --plan` 若把超过 90 分钟的切片标粗，按上表拆行即可。
+这些拆分和估时调整不改 AC、不改范围；PM 2026-11-17 已采纳 S2 与 S4 的拆分。PM 的 `follow.py --plan` 若把超过 90 分钟的切片标粗，按上表拆行即可。
 
 ## 8. 测试与 e2e 方案
 
@@ -1197,14 +1199,14 @@ pnpm verify
 
 | AC | 要求 | 切片 | 测试/证据 | 缺口 |
 |---|---|---|---|---|
-| AC-1 | 七步闭环可执行：`status` / `gen` / `exec` / `install` / `purge` 都在，行为与需求第 1～7 步一致 | S2a、S2b、S3、S4、S5、S8 | `key --help` 六命令测试；各命令单测；e2e 七步；运行手册 | 无（真实运行时探针见 AC-7 缺口） |
+| AC-1 | 七步闭环可执行：`status` / `gen` / `exec` / `install` / `purge` 都在，行为与需求第 1～7 步一致 | S2a、S2b、S3、S4a、S4b、S5、S8 | `key --help` 六命令测试；各命令单测；e2e 七步；运行手册 | 无（真实运行时探针见 AC-7 缺口） |
 | AC-2 | `key gen --repo` 生成 X25519，私钥落 `$OMC_HOME/keys/` 下（文件名规则见 §4.2）且 0600，stdout 只有 `x25519:<base64>` | S2a | `keystore_test.go`；`home_unix_test.go` 0600；`key_test.go` stdout 纯度；e2e | Windows 0600 用 ACL 等价断言，运行时 ACL 测试见 §11 |
 | AC-3 | `key status` 看得见本机私钥、绑过的仓库、最后一次审批状态 | S2b | `status_test.go` 本地/`--remote`；e2e 的 pending/approved；`key status --json` schema | 拒绝/停用状态的远端刷新只测 mock + e2e 的 pending/approved；真实拒绝需手工 |
 | AC-4 | `key exec --runtime ... -- <命令>` 内存解密，只给子进程注入该运行时变量，不打印明文、不落盘 | S3 | `runtime_test.go`；`exec_test.go` helper 进程；e2e 掩码 helper；stdout/stderr 不含明文；exec 前后文件快照 | 真实 Claude/Codex/OpenCode 是否按注入生效是手工探针，见 §11 |
-| AC-5 | `key install --runtime` 显式写对应配置，写前备份并打警告 | S4 | `install_test.go` 三家；`jsondoc_test.go` / `tomlblock_test.go`；备份/警告/`--replace`/回滚；e2e 临时配置 | Windows ACL 对备份文件的运行时断言同 AC-2 |
-| AC-6 | `key purge --repo` 清私钥和写过的配置项；purge 后同一 `exec` 失败并给可读错误 | S3、S4、S8 | `purge_test.go` 全清/单运行时/dry-run/指纹不匹配/幂等；e2e 步骤 7～8 | 真实 CPA 里 key 仍在是预期；输出会明说 |
+| AC-5 | `key install --runtime` 显式写对应配置，写前备份并打警告 | S4a | `install_test.go` 三家；`jsondoc_test.go` / `tomlblock_test.go`；备份/警告/`--replace`/回滚；e2e 临时配置 | Windows ACL 对备份文件的运行时断言同 AC-2 |
+| AC-6 | `key purge --repo` 清私钥和写过的配置项；purge 后同一 `exec` 失败并给可读错误 | S3、S4b、S8 | `purge_test.go` 全清/单运行时/dry-run/指纹不匹配/幂等；e2e 步骤 7～8 | 真实 CPA 里 key 仍在是预期；输出会明说 |
 | AC-7 | 端到端：keygen → apply → 审批 → ciphertext → exec 掩码脚本 → 用该 key 打一次 CPA 网关成功 → purge 后 exec 失败 | S7、S8 | `go test -tags e2e ./internal/keyclient/e2e`；fake CPA + 真实 OMC 二进制 + capability HTTP + 审批链接 + helper | 「真实 CPA 网关」只做到 fake CPA 的 bearer 校验；真实 CPA 的一次请求是人工验收，见 §11 |
-| AC-8 | 单测：`key status`、`key purge`；私钥权限 0600 断言 | S2a、S2b、S4 | `status_test.go`、`purge_test.go`、`home_unix_test.go`、`home_windows_test.go` | Windows ACL 运行时断言依赖 Windows Go runner；见 §11 |
+| AC-8 | 单测：`key status`、`key purge`；私钥权限 0600 断言 | S2a、S2b、S4a、S4b | `status_test.go`、`purge_test.go`、`home_unix_test.go`、`home_windows_test.go` | Windows ACL 运行时断言依赖 Windows Go runner；见 §11 |
 | AC-9 | 文档：agent 可直接照做的使用说明，含禁止事项（不进日志、不进对话、不进 git、不提交配置） | S5 | docs/repo-key-client.md 逐条 review；`node scripts/check-docs.mjs`；S9/S11 按清单核对 | 文档可读性是人工 review，不是自动化断言 |
 
 ## 11. 未验证缺口与风险
@@ -1245,9 +1247,10 @@ pnpm verify
 |---|---|---|---|
 | S1 | 75 | 75 | 本稿 |
 | S2a | —（原 S2 90） | 80 | home/ACL/store/gen/registry/main.go；ACL 和锁是新增量 |
-| S2b | —（含在原 S2） | 70 | accept/status/remote；可与 S3/S4 并行 |
+| S2b | —（含在原 S2） | 70 | accept/status/remote；可与 S3/S4a 并行 |
 | S3 | 90 | 90 | 三家注入 + 进程级测试 |
-| S4 | 75 | 110 | 两家 JSON + 一家 TOML + 备份 + 三套 purge + 测试；建议拆 S4a/S4b |
+| S4a | —（原 S4 75） | 70 | install：两家 JSON + 一家 TOML + 备份 + 测试 |
+| S4b | —（含在原 S4） | 40 | purge：全清/单运行时/dry-run/指纹所有权/备份清理 |
 | S5 | 40 | 60 | 运行手册 + 六份现有文档同步 |
 | S7 | 80 | 100 | fake CPA + 真实 OMC + 审批链接 + helper |
 | S8 | 60 | 60 | 七步串联 + 证据 |
@@ -1261,13 +1264,14 @@ pnpm verify
 ```text
 S1 75
  → S2a 80
- → S4 110（S8 还等 S2b 70 / S3 90 / S7 100；S4 是最长的一支）
+ → S4a 70
+ → S4b 40（S8 还等 S2b 70 / S3 90 / S7 100；S4a+S4b 的 110 是最长的一支）
  → S8 60
  → S11 60
  → S12 20
 ```
 
-关键路径是 S1→S2a→S4→S8→S11→S12，约 75 + 80 + 110 + 60 + 60 + 20 = 405 分钟；S9/S10 在 S2a–S5 之后并行插入，约 +105 分钟，总计约 510 分钟。峰值并发：S2a + S5 + S7（3 条），S2a 完成后 S2b + S3 + S4（3 条），加上 S5 同步/ S9 准备最多 4 条。比原估算的关键路径（S1→S2→S3→S9→S10→S11→S12 ≈ 440）长，是因为把 install/purge 和 e2e 的真实成本算进来了；并行度更高，S3/S4 不必等 status。
+关键路径是 S1→S2a→S4a→S4b→S8→S11→S12，约 75 + 80 + 70 + 40 + 60 + 60 + 20 = 405 分钟；S9/S10 在 S2a–S5 之后并行插入，约 +105 分钟，总计约 510 分钟。峰值并发：S2a + S5 + S7（3 条），S2a 完成后 S2b + S3 + S4a（3 条），加上 S5 同步/ S9 准备最多 4 条。比原估算的关键路径（S1→S2→S3→S9→S10→S11→S12 ≈ 440）长，是因为把 install/purge 和 e2e 的真实成本算进来了；并行度更高，S3/S4a 不必等 status。
 
 ## 14. 方案自检（对应派发说明的 10 个问题）
 
@@ -1289,6 +1293,6 @@ S1 75
 - [x] `node scripts/check-docs.mjs --file docs/delivery/2026-11-17-omc-repo-key-client/impl-plan.md` 通过（missing-path=0、retired-reference=0、line-reference=0）。
 - [x] `node --test scripts/check-docs.test.mjs` 通过（13 pass / 0 fail）。
 - [x] `pnpm test:fast --base ba9e2ee7` 已跑：本文件通过；全量 docs 的失败项全部在基线已有的 T18 交付文档（9 missing-path + 25 line-reference），不是本文件引入，也没有改那些文件。
-- [x] 本文件里的命令面与 `--help` 草案一致；S2a/S2b/S3/S4 的文件归属无重叠。
+- [x] 本文件里的命令面与 `--help` 草案一致；S2a/S2b/S3/S4a/S4b 的文件归属无重叠。
 - [x] AC-1～9 每条都能在 §10 找到切片、测试/证据和缺口。
 - [x] §12 的 8 条 PM 决定已写入（2026-11-17），后续按结论执行。
