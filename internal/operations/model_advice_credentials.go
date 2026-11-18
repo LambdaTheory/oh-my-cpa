@@ -3,6 +3,7 @@ package operations
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/oh-my-cpa/oh-my-cpa/internal/cpa/management"
 	"github.com/oh-my-cpa/oh-my-cpa/internal/quota"
@@ -59,9 +60,25 @@ func (s *Service) ListAdviceCredentials(ctx context.Context) ([]AdviceCredential
 					keys = append(keys, management.APIKeyEntry{})
 				}
 			}
-			for _, key := range keys {
+			// The opencode entry is read by its own built-in reader, which stores
+			// the reading under provider "opencode". The credential must carry the
+			// same key or advice cannot pair the model with its window. The
+			// provider id stays the entry's position, which is what the directory's
+			// routes use. A legacy key has no auth index in the v0 listing, so it
+			// is resolved the same way the refresh roster resolves it.
+			provider := "openai-compatibility"
+			var resolvedIndexes []string
+			if strings.EqualFold(strings.TrimSpace(entry.Name), quota.OpenCodeCompatibilityName) {
+				provider = quota.OpenCodeCompatibilityName
+				resolvedIndexes, _ = quota.OpenCodeEntryKeyIndexes(ctx, client, entry)
+			}
+			for position, key := range keys {
+				authIndex := strings.TrimSpace(key.AuthIndex)
+				if authIndex == "" && position < len(resolvedIndexes) {
+					authIndex = resolvedIndexes[position]
+				}
 				addConfigured(AdviceCredential{
-					AuthIndex: key.AuthIndex, Provider: "openai-compatibility",
+					AuthIndex: authIndex, Provider: provider,
 					ProviderID: fmt.Sprintf("openai-compat-%d", index), IsDisabled: entry.Disabled,
 					Models: modelNames(entry.Models),
 				})

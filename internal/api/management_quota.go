@@ -35,6 +35,47 @@ type QuotaItemDTO struct {
 	NextRetryAfterMS *int64                                `json:"next_retry_after_ms,omitempty"`
 }
 
+// quotaRosterFiles returns the credentials a quota read may target: CPA's auth
+// files plus the keys of the opencode openai-compatibility entry, which CPA
+// lists only under openai-compatibility.
+//
+// The compatibility read is additive by design. An older gateway, a renamed
+// entry or an unreadable document leaves the auth files as the roster and is
+// reported once per call; it never fails a read the auth files could serve. An
+// index CPA already lists as an auth file wins, so the same credential is never
+// counted twice.
+func (h *Handler) quotaRosterFiles(ctx context.Context, client *management.Client) ([]management.AuthFile, error) {
+	filesResp, err := client.AuthFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	files := filesResp.Files
+	openCodeFiles, err := quota.OpenCodeAuthFiles(ctx, client)
+	if err != nil {
+		if h.logger != nil && !management.IsMissingCapability(err) {
+			h.logger.Warn("quota roster: opencode credentials unavailable", "error", err)
+		}
+		return files, nil
+	}
+	if len(openCodeFiles) == 0 {
+		return files, nil
+	}
+	claimed := make(map[string]bool, len(files))
+	for _, file := range files {
+		claimed[strings.TrimSpace(file.AuthIndex)] = true
+	}
+	combined := files
+	for _, file := range openCodeFiles {
+		authIndex := strings.TrimSpace(file.AuthIndex)
+		if authIndex == "" || claimed[authIndex] {
+			continue
+		}
+		claimed[authIndex] = true
+		combined = append(combined, file)
+	}
+	return combined, nil
+}
+
 func (h *Handler) getQuotaOverview(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "no-store")
 	client, ok := h.managementClientOrError(writer, request)
@@ -114,7 +155,7 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 	}
 
 	ctx := request.Context()
-	filesResp, err := client.AuthFiles(ctx)
+	files, err := h.quotaRosterFiles(ctx, client)
 	if err != nil {
 		writeCPAFacadeError(writer, err)
 		return
@@ -130,7 +171,7 @@ func (h *Handler) refreshCredentialQuota(writer http.ResponseWriter, request *ht
 	}
 
 	fileMap := make(map[string]management.AuthFile)
-	for _, f := range filesResp.Files {
+	for _, f := range files {
 		idx := strings.TrimSpace(f.AuthIndex)
 		if idx != "" {
 			fileMap[idx] = f
@@ -660,14 +701,14 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 	}
 
 	ctx := request.Context()
-	filesResp, err := client.AuthFiles(ctx)
+	files, err := h.quotaRosterFiles(ctx, client)
 	if err != nil {
 		writeCPAFacadeError(writer, err)
 		return
 	}
 
 	var targetFile *management.AuthFile
-	for _, f := range filesResp.Files {
+	for _, f := range files {
 		if strings.TrimSpace(f.AuthIndex) == authIndex {
 			targetFile = &f
 			break
@@ -804,14 +845,14 @@ type quotaOverviewData struct {
 }
 
 func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Client) (quotaOverviewData, error) {
-	filesResp, err := client.AuthFiles(ctx)
+	files, err := h.quotaRosterFiles(ctx, client)
 	if err != nil {
 		return quotaOverviewData{}, err
 	}
 
-	authIndexes := make([]string, 0, len(filesResp.Files))
+	authIndexes := make([]string, 0, len(files))
 	fileMap := make(map[string]management.AuthFile)
-	for _, file := range filesResp.Files {
+	for _, file := range files {
 		authIndex := strings.TrimSpace(file.AuthIndex)
 		if authIndex == "" {
 			continue

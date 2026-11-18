@@ -302,7 +302,7 @@ func inferAdviceWindowKind(window quota.QuotaWindow) string {
 func tightestAdviceWindow(windows []quota.QuotaWindow) *AdviceWindow {
 	labels := map[string]string{
 		"five_hour": "Five-hour", "weekly": "Weekly", "daily": "Daily",
-		"monthly": "Monthly", "model_scoped": "Model-scoped",
+		"monthly": "Monthly", "rolling": "Rolling", "model_scoped": "Model-scoped",
 		"credit_usage": "Credit usage", "custom": "Custom window",
 	}
 	var selected *AdviceWindow

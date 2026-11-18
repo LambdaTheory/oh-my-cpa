@@ -937,10 +937,13 @@ func TestRefreshCredentialQuotaPluginStaleKeepsReadingTime(t *testing.T) {
 	}}
 
 	result, err := NewServiceWithClock(client, func() time.Time { return now }).RefreshCredentialQuota(context.Background(), management.AuthFile{
-		AuthIndex:     "auth-plugin-stale",
-		Type:          "commandcode",
+		AuthIndex: "auth-plugin-stale",
+		// A provider with no built-in reader: commandcode and opencode now have
+		// their own readers, so a built-in name would bypass the plugin branch
+		// under test.
+		Type:          "fixture-meter",
 		SupportsQuota: true,
-		QuotaProvider: "commandcode",
+		QuotaProvider: "fixture-meter",
 		QuotaPluginID: "fixture-meter",
 	}, nil)
 	if err != nil {

@@ -1738,6 +1738,7 @@ const DICT: Record<string, [string, string]> = {
   'dash.prediction.window.daily': ['每日', 'Daily'],
   'dash.prediction.window.weekly': ['每周', 'Weekly'],
   'dash.prediction.window.monthly': ['每月', 'Monthly'],
+  'dash.prediction.window.rolling': ['滚动', 'Rolling'],
   'dash.prediction.window.model_scoped': ['模型窗口', 'Model window'],
   'dash.prediction.window.unknown': ['未知窗口', 'Unknown window'],
   'dash.prediction.verdict.will_exhaust': ['将耗尽', 'Will exhaust'],

@@ -19,6 +19,12 @@ import (
 var builtInQuotaProviders = map[string]bool{
 	"codex": true, "claude": true, "antigravity": true, "kimi": true,
 	"xai": true, "meta": true, "devin": true,
+	// commandcode and opencode have dedicated readers here (their upstream
+	// usage documents are projected onto the shared windows). Resolving them
+	// through a plugin card would send the read to a plugin that does not
+	// implement quota.fetch, because both providers are installed as plugins
+	// for routing as well.
+	"commandcode": true, "opencode": true,
 }
 
 // pluginQuotaCapabilities is what a plugin-provided credential supports: live

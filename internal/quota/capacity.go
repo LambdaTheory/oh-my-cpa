@@ -2,6 +2,7 @@ package quota
 
 import (
 	"math"
+	"strings"
 	"time"
 )
 
@@ -126,6 +127,13 @@ func SupportsWindowCapacity(provider string, window QuotaWindow) bool {
 // "now": requests made after the reading are not part of the share it reports,
 // and counting them would inflate the estimate until the next refresh.
 func WindowCycleRange(window QuotaWindow, observedAtMS, nowMS int64) (fromMS, toMS int64, reason string) {
+	// A window upstream itself names rolling has no fixed cycle even when it
+	// publishes no period; the phase-1 tolerance only recognises the shape. A
+	// kind-based skip matters for readers whose rolling window states no period
+	// (OpenCode): the alternative is reporting a boundary that never exists.
+	if strings.EqualFold(strings.TrimSpace(window.Kind), "rolling") {
+		return 0, 0, CapacityReasonRollingWindow
+	}
 	if window.ResetAtMS == nil || window.PeriodHours == nil || *window.PeriodHours <= 0 || math.IsNaN(*window.PeriodHours) || math.IsInf(*window.PeriodHours, 0) {
 		return 0, 0, CapacityReasonBoundaryUnknown
 	}

@@ -3920,6 +3920,7 @@ export const MS: Readonly<Record<string, string>> = {
   "dash.prediction.window.daily": "Harian",
   "dash.prediction.window.weekly": "Mingguan",
   "dash.prediction.window.monthly": "Bulanan",
+  "dash.prediction.window.rolling": "Bergulir",
   "dash.prediction.window.model_scoped": "Tetingkap model",
   "dash.prediction.window.unknown": "Tetingkap tidak diketahui",
   "dash.prediction.verdict.will_exhaust": "Akan habis",

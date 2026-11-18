@@ -209,8 +209,12 @@ func (s *Service) predictQuotas(ctx context.Context, input QuotaPredictionInput,
 // reported quota window - are left out entirely: the prediction panel, Feishu
 // and the external contract all count only windows that can be judged, and the
 // credential quota page is where a missing window is explained.
+//
+// The roster also reads the discovered openai-compatibility rows, because the
+// opencode keys are not auth files. Only the entry named opencode qualifies;
+// every other compatibility provider keeps its own source.
 func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
-	metadata, err := s.Repo.ListFeishuCredentialMetadata(ctx)
+	metadata, err := s.Repo.ListCredentialMetadataForTypes(ctx, []string{"auth-file", "openai-compatibility"})
 	if err != nil {
 		return nil, err
 	}
@@ -228,6 +232,13 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 	}
 	result := make([]Quota, 0, len(metadata))
 	for _, entry := range metadata {
+		isCompatibility := entry.ResourceType == "openai-compatibility"
+		// The discovery rows also cover every OpenAI-compatible provider; only the
+		// opencode entry publishes its own usage, and only that one has a reader.
+		// The others stay with whichever source their plugin maintains.
+		if isCompatibility && !strings.EqualFold(strings.TrimSpace(entry.Name), quota.OpenCodeCompatibilityName) {
+			continue
+		}
 		// A credential the operator disabled is not expected to answer. Keeping it
 		// in the roster would report its silence as a reading failure and can push
 		// a shortage warning for an account that is deliberately off.
@@ -237,7 +248,11 @@ func (s *Service) storedPredictionQuotas(ctx context.Context) ([]Quota, error) {
 		snapshot, ok := snapshots[entry.AuthIndex]
 		provider := strings.TrimSpace(snapshot.Provider)
 		if provider == "" {
-			provider = quota.DetectProvider("", entry.Driver)
+			if isCompatibility {
+				provider = quota.OpenCodeCompatibilityName
+			} else {
+				provider = quota.DetectProvider("", entry.Driver)
+			}
 		}
 		if provider == "" {
 			continue

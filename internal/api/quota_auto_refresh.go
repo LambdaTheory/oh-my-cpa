@@ -101,16 +101,16 @@ func (h *Handler) runQuotaAutoRefreshRound(ctx context.Context) (quotaAutoRefres
 	if err != nil {
 		return quotaAutoRefreshRound{}, err
 	}
-	filesResp, err := client.AuthFiles(ctx)
+	files, err := h.quotaRosterFiles(ctx, client)
 	if err != nil {
 		return quotaAutoRefreshRound{}, err
 	}
 
 	// An index two credentials claim is the workspace's ambiguity diagnostic, not a
 	// credential: reading it would store an observation that belongs to neither.
-	filesByIndex := make(map[string]management.AuthFile, len(filesResp.Files))
-	claims := make(map[string]int, len(filesResp.Files))
-	for _, file := range filesResp.Files {
+	filesByIndex := make(map[string]management.AuthFile, len(files))
+	claims := make(map[string]int, len(files))
+	for _, file := range files {
 		authIndex := strings.TrimSpace(file.AuthIndex)
 		if authIndex == "" {
 			continue
