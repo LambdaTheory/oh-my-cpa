@@ -27,6 +27,10 @@ type ExecOptions struct {
 	Dir string
 	// BaseURL is the --base-url value. The environment and config.json are its alternatives.
 	BaseURL string
+	// Models is the --models value for the OpenCode runtime. Empty means RunChild reads
+	// the gateway's GET /v1/models before it starts the child; a non-empty list keeps the
+	// run offline because an explicit list is a deliberate answer.
+	Models []string
 	// Env is the environment this command inherited. Nil means os.Environ().
 	Env []string
 	// Argv is the command and its arguments, exactly as they followed `--`.
@@ -127,6 +131,20 @@ func RunChild(ctx context.Context, options ExecOptions) (int, error) {
 			return ExitCode(readErr), readErr
 		}
 		injectOptions.OpenCodeDocument = document
+		// OpenCode refuses a custom provider that declares no models, so the list is read
+		// before the child starts, while the plaintext is still in hand: a gateway that
+		// cannot answer is this command's error, not a ProviderModelNotFoundError from a
+		// child that was allowed to start with a config that could never work. An explicit
+		// --models list is used as given and keeps the run offline.
+		models := options.Models
+		if len(models) == 0 {
+			fetched, fetchErr := FetchModelIDs(context.Background(), resolved.Root, plaintext)
+			if fetchErr != nil {
+				return ExitCode(fetchErr), fetchErr
+			}
+			models = fetched
+		}
+		injectOptions.Models = models
 	}
 
 	injection, err := options.Runtime.Inject(injectOptions)

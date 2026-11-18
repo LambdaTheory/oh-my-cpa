@@ -457,10 +457,21 @@ oh-my-cpa key exec --runtime opencode --repo org/repo -- opencode --version
 | --- | --- |
 | Gateway address | `provider.oh-my-cpa.options.baseURL=<root>/v1` |
 | Credential | `provider.oh-my-cpa.options.apiKey=<plaintext>` |
+| Models | `provider.oh-my-cpa.models`, one member per model id |
 | Transport | `OPENCODE_CONFIG_CONTENT`, holding the user's configuration merged with ours |
 
 Any OpenCode invocation works in place of the smoke check above, because the provider
 arrives through the environment rather than through the command line.
+
+**The model table is required.** OpenCode refuses a custom provider that declares no models
+(`ProviderModelNotFoundError: Model not found: oh-my-cpa/<model>`), so both `exec` and
+`install` name the models explicitly. By default they ask the gateway: `GET <root>/v1/models`
+with this repository's key as a bearer token, and every id the gateway advertises becomes a
+member. A gateway that cannot be reached, answers with a non-200 status, or answers
+something that is not a model list stops the command with `models_unavailable` (exit 1)
+before a child starts or a file is written: a provider OpenCode would refuse is never
+produced. `--models a,b,c` (OpenCode only) names the list by hand, skips the request, and
+keeps the run offline. Either path writes the same sorted, deduplicated ids.
 
 There is no file to write for the duration of the run: the configuration travels in the
 process environment. `key exec` reads `$OPENCODE_CONFIG` or
@@ -472,17 +483,17 @@ Configuration that is not pure JSON — a JSONC file with comments, for instance
 with `config_not_json` rather than rewritten.
 
 `install` writes `~/.config/opencode/opencode.json` (or `$OPENCODE_CONFIG`):
-`provider.oh-my-cpa` with `npm`, `name`, `options.baseURL` and `options.apiKey`. Other
-providers and keys are preserved.
+`provider.oh-my-cpa` with `npm`, `name`, `models`, `options.baseURL` and `options.apiKey`.
+Other providers and keys are preserved. Each install replaces this tool's model table with
+the list it just read or was given, so a model the gateway dropped does not linger; other
+members under `provider.oh-my-cpa` and every other provider are left alone. A repeated
+install over the same list changes nothing and takes no second backup.
 
-Two limits are decisions, not gaps:
+One limit is a decision, not a gap:
 
 - The **singular v1 `provider` key** is written. Some releases document a plural `providers`
   schema; the installed version may ignore it, so check `opencode --version` when a provider
   does not appear. A future schema change means an OMC change, not a hand edit here.
-- **No `models` map is written and no `--model` is offered.** The provider shows whatever
-  the gateway advertises or the operator's existing configuration defines; this tool does
-  not fetch a model list or pick a model for the user.
 
 ## 4. Never do these
 
@@ -546,6 +557,8 @@ common codes:
 | `config_owned_by_another_repo` | The slot belongs to another repository. `key purge --repo <that repo>`, or `--replace`. |
 | `config_not_json` | The runtime configuration is not pure JSON — likely JSONC. Nothing was rewritten. Edit it by hand or point `--config` elsewhere. |
 | `config_too_large` | The OpenCode configuration merged for `exec` exceeds 24 KiB. Use `key install`. |
+| `models_required` | The OpenCode provider has no model ids. Pass `--models a,b,c`; OpenCode refuses a provider that declares no models, so nothing was written or started. |
+| `models_unavailable` | `GET <root>/v1/models` could not be read with this key — the gateway was unreachable, answered non-200, or did not return a model list. Nothing was written or started; pass `--models a,b,c` to work offline. |
 | `backup_failed` | The backup could not be written, so the target file was not touched. |
 | `install_not_owned` | The configured value no longer matches this repository's key; it was left alone. Reinstall it if it should be this repository's. |
 | `purge_pending` | Something belonging to this repository could not be removed; it is listed. Rerun after fixing it. |

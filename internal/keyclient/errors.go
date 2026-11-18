@@ -50,6 +50,14 @@ const (
 	CODE_PURGE_PENDING         = "purge_pending"
 	CODE_EXEC_FAILED           = "exec_failed"
 	CODE_USAGE                 = "usage"
+
+	// CODE_MODELS_REQUIRED covers a missing or unusable OpenCode model list. OpenCode
+	// refuses a custom provider that declares no models, so this command does not write
+	// one: the gateway's answer or an explicit --models has to name at least one.
+	CODE_MODELS_REQUIRED = "models_required"
+	// CODE_MODELS_UNAVAILABLE is the gateway not answering GET /v1/models, or answering
+	// something that is not a model list.
+	CODE_MODELS_UNAVAILABLE = "models_unavailable"
 )
 
 // Exit codes, one per kind of failure. `key exec` reports the child's own exit code
@@ -90,6 +98,8 @@ var exitCodes = map[string]int{
 	CODE_CONFIG_NOT_JSON:       EXIT_FAILED,
 	CODE_CONFIG_TOO_LARGE:      EXIT_CONFIG,
 	CODE_CONFIG_CONFLICT:       EXIT_CONFLICT,
+	CODE_MODELS_REQUIRED:       EXIT_CONFIG,
+	CODE_MODELS_UNAVAILABLE:    EXIT_FAILED,
 	CODE_OWNED_BY_ANOTHER:      EXIT_CONFLICT,
 	CODE_BACKUP_FAILED:         EXIT_FAILED,
 	CODE_INSTALL_FAILED:        EXIT_FAILED,

@@ -11,7 +11,7 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/keyclient"
 )
 
-const KEY_INSTALL_USAGE = `Usage: oh-my-cpa key install --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] [--config <path>] [--replace] [--home <dir>]
+const KEY_INSTALL_USAGE = `Usage: oh-my-cpa key install --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] [--config <path>] [--models <ids>] [--replace] [--home <dir>]
 
 Writes the repository key into the runtime's own configuration file. This is
 the only command that leaves the plaintext key on disk, and it says so on
@@ -22,8 +22,8 @@ first when it exists.
             env.ANTHROPIC_AUTH_TOKEN (or $CLAUDE_CONFIG_DIR/settings.json)
   codex     $CODEX_HOME/config.toml or ~/.codex/config.toml, a managed
             [model_providers.oh-my-cpa] table plus model_provider
-  opencode  ~/.config/opencode/opencode.json, provider.oh-my-cpa.options
-            (or $OPENCODE_CONFIG)
+  opencode  ~/.config/opencode/opencode.json, provider.oh-my-cpa with
+            npm, name, models and options (or $OPENCODE_CONFIG)
 
 Only the user-level file of each runtime is written: a project-level
 .claude/settings.json belongs to a repository and would end up committed with
@@ -37,6 +37,13 @@ holds a value this tool did not write.
 
 --repo defaults to the repository of the current directory. --config names
 the configuration file instead of the runtime's default.
+
+--models takes a comma-separated list of model ids for the OpenCode provider
+and is only valid with --runtime opencode. Without it, install asks the
+gateway for GET <base-url>/v1/models and writes every id it advertises; a
+gateway that does not answer is an error instead of a provider OpenCode would
+refuse at the first request. Pass --models when the gateway cannot be reached
+from this machine.
 `
 
 func init() {
@@ -53,6 +60,7 @@ func runKeyInstall(ctx context.Context, args []string, stdout, stderr io.Writer)
 	repoFlag := flags.String("repo", "", "repository identity; defaults to the current directory's")
 	baseURLFlag := flags.String("base-url", "", "the CPA gateway root")
 	configFlag := flags.String("config", "", "the runtime's configuration file")
+	modelsFlag := flags.String("models", "", "comma-separated OpenCode model ids; default: read the gateway's /v1/models")
 	replace := flags.Bool("replace", false, "overwrite a slot this tool did not install")
 	homeFlag := flags.String("home", "", "where keys, envelopes and state live (default $OMC_HOME or ~/.omc)")
 	rest, help, err := parseKeyFlags(flags, args)
@@ -72,6 +80,13 @@ func runKeyInstall(ctx context.Context, args []string, stdout, stderr io.Writer)
 	runtime, err := keyclient.ParseRuntime(strings.TrimSpace(*runtimeFlag))
 	if err != nil {
 		return err
+	}
+	models, err := keyclient.ParseModelList(*modelsFlag)
+	if err != nil {
+		return err
+	}
+	if len(models) > 0 && runtime != keyclient.RuntimeOpenCode {
+		return keyclient.Errorf(keyclient.CODE_USAGE, "--models applies only to --runtime opencode")
 	}
 	home, err := keyclient.ResolveHome(*homeFlag)
 	if err != nil {
@@ -95,6 +110,15 @@ func runKeyInstall(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return err
 	}
 
+	if runtime == keyclient.RuntimeOpenCode && len(models) == 0 {
+		// OpenCode refuses a provider without a model list, so the list is read before
+		// anything is written. A failure here leaves no backup and no edited file.
+		models, err = keyclient.FetchModelIDs(ctx, baseURL.Root, key)
+		if err != nil {
+			return err
+		}
+	}
+
 	result, err := keyclient.Install(keyclient.InstallOptions{
 		Home:       home,
 		Runtime:    runtime,
@@ -103,6 +127,7 @@ func runKeyInstall(ctx context.Context, args []string, stdout, stderr io.Writer)
 		BaseURL:    baseURL.Root,
 		ConfigPath: *configFlag,
 		Replace:    *replace,
+		Models:     models,
 		Now:        time.Now(),
 		Warn:       stderr,
 	})
