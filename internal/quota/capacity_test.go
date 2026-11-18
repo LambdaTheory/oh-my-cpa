@@ -89,6 +89,54 @@ func TestWindowCycleRange(t *testing.T) {
 	}
 }
 
+func TestWindowCycleRangeRecognisesRollingBoundary(t *testing.T) {
+	observed := 7 * hourMS
+	base := capacityWindow(0)
+	base.ResetAtMS = int64Ptr(observed + 5*hourMS)
+
+	for _, test := range []struct {
+		name       string
+		skewMS     int64
+		wantReason string
+		wantFromMS int64
+		wantToMS   int64
+	}{
+		{"exact rolling reset", 0, CapacityReasonRollingWindow, 0, 0},
+		{"production skew", 253, CapacityReasonRollingWindow, 0, 0},
+		{"tolerance edge", capacityRollingBoundaryToleranceMS, CapacityReasonRollingWindow, 0, 0},
+		{"beyond tolerance", capacityRollingBoundaryToleranceMS + 1, CapacityReasonBoundaryUnknown, 0, 0},
+		// A start just before the observation is an ordinary cycle that has
+		// barely begun, not a rolling window: the fixed-boundary path stays.
+		{"start before observation", -253, "", observed - 253, observed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			window := base
+			reset := observed + 5*hourMS + test.skewMS
+			window.ResetAtMS = &reset
+			fromMS, toMS, reason := WindowCycleRange(window, observed, observed)
+			if reason != test.wantReason || fromMS != test.wantFromMS || toMS != test.wantToMS {
+				t.Fatalf("range = [%d, %d) reason %q, want [%d, %d) reason %q", fromMS, toMS, reason, test.wantFromMS, test.wantToMS, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestWindowTrailingUsageRangeUsesThePeriodBeforeTheReading(t *testing.T) {
+	observed := 7 * hourMS
+	window := capacityWindow(0)
+	window.ResetAtMS = int64Ptr(observed + 5*hourMS + 253)
+	fromMS, toMS, ok := WindowTrailingUsageRange(window, observed)
+	if !ok || fromMS != 2*hourMS || toMS != observed {
+		t.Fatalf("rolling usage range = [%d, %d) ok=%v, want [2h, 7h)", fromMS, toMS, ok)
+	}
+
+	noPeriod := window
+	noPeriod.PeriodHours = nil
+	if _, _, ok := WindowTrailingUsageRange(noPeriod, observed); ok {
+		t.Fatal("a window without a period produced a rolling usage range")
+	}
+}
+
 func TestEstimateWindowCapacity(t *testing.T) {
 	usage := WindowUsage{Requests: 40, PricedRequests: 40, Tokens: 2_000_000, CostNanos: 3_000_000_000}
 

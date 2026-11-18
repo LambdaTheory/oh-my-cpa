@@ -30,8 +30,11 @@ type QuotaWindow struct {
 
 	ModelFamilies []string `json:"model_families,omitempty"`
 	// Reset evidence survives snapshot retention until this scheduled cycle ends.
-	HasMidCycleReset     bool `json:"has_mid_cycle_reset,omitempty"`
-	HasIncompleteHistory bool `json:"has_incomplete_history,omitempty"`
+	// MidCycleResetAtMS is the observation that first showed the latest reset;
+	// HasMidCycleReset remains for snapshots written before the instant was kept.
+	HasMidCycleReset     bool   `json:"has_mid_cycle_reset,omitempty"`
+	MidCycleResetAtMS    *int64 `json:"mid_cycle_reset_at_ms,omitempty"`
+	HasIncompleteHistory bool   `json:"has_incomplete_history,omitempty"`
 
 	// ObservedAtMS and Source are set only when a fresher passive observation
 	// replaced the stored reading at read time: they name when that reading was

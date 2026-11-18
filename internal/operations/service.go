@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -17,6 +18,9 @@ import (
 )
 
 type Service struct {
+	// Logger carries the process logger injected by the HTTP adapter. Prediction
+	// diagnostics use it to locate a reset comparison in production.
+	Logger               *slog.Logger
 	WarmupSettings       func(context.Context) (warmup.Settings, error)
 	WarmupCredential     func(context.Context, string) (warmup.Credential, error)
 	SaveWarmupSettings   func(context.Context, warmup.PolicyWrite) (warmup.Settings, error)

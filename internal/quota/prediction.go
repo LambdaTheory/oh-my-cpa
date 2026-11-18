@@ -40,6 +40,10 @@ const (
 	PredictionReasonReadingError      = "reading_error"
 	PredictionReasonIncompleteHistory = "incomplete_history"
 	PredictionReasonResetMidCycle     = "mid_cycle_reset"
+	// PredictionReasonRollingWindow marks a window whose reset moves with the
+	// clock. Its current used share is real, but there is no fixed cycle start
+	// to fit a trend against, so no ETA or lasts-until-reset projection applies.
+	PredictionReasonRollingWindow = "rolling_window"
 	// PredictionReasonInsufficientObservations is retained for consumers that
 	// stored the old reason code; the current path emits the bucket-specific
 	// codes below instead.
@@ -59,9 +63,9 @@ const (
 	PredictionReasonArithmeticUnsafe         = "arithmetic_unsafe"
 )
 
-// The four reasons a window's "lasts until reset" conclusion is unknown. They
-// are the operator-facing vocabulary; the older PredictionReason* codes stay
-// for the diagnostic details behind the same row.
+// The reasons a window's "lasts until reset" conclusion is unknown. They are
+// the operator-facing vocabulary; the older PredictionReason* codes stay for
+// the diagnostic details behind the same row.
 const (
 	// PredictionUnknownReadingFailed covers a failed read and a reading too old
 	// to reason from. Both mean "the newest reading cannot be trusted".
@@ -79,6 +83,10 @@ const (
 	// period. It belongs to the boundary category but carries its own copy,
 	// because no reading can ever supply a cycle to progress against.
 	PredictionUnknownNoCycle = "no_cycle"
+	// PredictionUnknownRollingWindow is a window whose reset keeps moving one
+	// period ahead of the clock. It has no fixed cycle to progress against, so
+	// the console shows the current share and the next reset only.
+	PredictionUnknownRollingWindow = "rolling_window"
 )
 
 type PredictionObservation struct {
@@ -94,8 +102,11 @@ type PredictionInput struct {
 	Status       string
 	NowMS        int64
 	Observations []PredictionObservation
-	Usage        *WindowUsage
-	UsageReason  string
+	// BucketResetAtMS is a reset detected while reading the current bucket
+	// range. It outranks the instant carried by a stored snapshot.
+	BucketResetAtMS *int64
+	Usage           *WindowUsage
+	UsageReason     string
 }
 
 type WindowPrediction struct {
@@ -140,14 +151,22 @@ type PredictionAccounting struct {
 	RemainingTokens                *int64   `json:"remaining_tokens"`
 	CapacityErrorPercent           *float64 `json:"capacity_error_percent"`
 	CapacityUnavailable            string   `json:"capacity_unavailable,omitempty"`
-	// UnavailableReason is the console's four-category vocabulary for an
-	// undecided row. It is never sent to MCP callers or Feishu; the copy that
-	// reaches the operator is the console's to choose.
+	// UnavailableReason is the console's own vocabulary for an undecided row. It
+	// is never sent to MCP callers or Feishu; the copy that reaches the operator
+	// is the console's to choose.
 	UnavailableReason string `json:"unavailable_reason,omitempty"`
 	// ReadingStale marks a row whose newest reading is too old to reason from.
 	// The console keeps showing that reading, marked as expired, instead of
 	// pretending the row has no data.
 	ReadingStale bool `json:"reading_stale,omitempty"`
+	// IsRollingWindow marks a window that has no fixed cycle. The console uses
+	// it to keep the row to the current share and next reset instead of reading
+	// the unknown boundary as a failed prediction.
+	IsRollingWindow bool `json:"is_rolling_window,omitempty"`
+	// UsageRequests is the recorded request count for the cycle that was looked
+	// up, or nil when usage was not read. A zero value therefore says "read and
+	// empty", which a plain number in this struct could not distinguish.
+	UsageRequests *int64 `json:"usage_requests,omitempty"`
 }
 
 func PredictWindow(input PredictionInput) (result WindowPrediction) {
@@ -209,6 +228,14 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.UnknownReason = PredictionUnknownReadingFailed
 		return result
 	}
+	// Nothing was spent in the cycle and nothing was recorded: the window cannot
+	// run out before its reset, so the answer is a fact rather than a projection
+	// over boundaries or fitted samples.
+	if usedPercent == 0 && predictionHasUsablePeriod(input.Window) && predictionUsageWasRead(input) && input.Usage.Requests == 0 {
+		result.LastsUntilReset = boolPointer(true)
+		result.Evidence = PredictionEvidenceFact
+		return result
+	}
 	// A reading at the ceiling is already spent, whatever the reset instant says:
 	// the quota cannot become available without a reset, and a reset would have
 	// produced a new reading.
@@ -216,6 +243,13 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.LastsUntilReset = boolPointer(false)
 		result.ExhaustionETAMS = &result.ObservedAtMS
 		result.Evidence = PredictionEvidenceFact
+		return result
+	}
+	// A rolling window has no fixed start to measure progress from. Its reading
+	// is still shown, but a fitted trend would be an invented cycle.
+	if reason == CapacityReasonRollingWindow {
+		result.Reasons = append(result.Reasons, PredictionReasonRollingWindow)
+		result.UnknownReason = PredictionUnknownRollingWindow
 		return result
 	}
 	if !boundaryKnown {
@@ -245,16 +279,30 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 		result.UnknownReason = PredictionUnknownUsageAbnormal
 		return result
 	}
+	resetAtMS, hasReset := predictionHasReset(observations)
+	if input.BucketResetAtMS != nil && (!hasReset || *input.BucketResetAtMS > resetAtMS) {
+		resetAtMS, hasReset = *input.BucketResetAtMS, true
+	}
+	if !hasReset && input.Window.MidCycleResetAtMS != nil {
+		resetAtMS, hasReset = *input.Window.MidCycleResetAtMS, true
+	}
+	if !hasReset && input.Window.HasMidCycleReset {
+		// A snapshot written before the instant was retained cannot invent a
+		// refit boundary. Keep the old conservative verdict until a bucket read
+		// supplies the missing trigger.
+		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
+		result.UnknownReason = PredictionUnknownHistoryInsufficient
+		return result
+	}
 	points := predictionPoints(observations, input.Window.ResetAtMS)
+	if hasReset {
+		appendPredictionReason(&result, PredictionReasonResetMidCycle)
+		points = predictionPointsAfterReset(observations, input.Window.ResetAtMS, resetAtMS, input.ObservedAtMS)
+	}
 	coverageMS, maxGapMS, evidenceSafe := applyPredictionEvidence(&result, points)
 	if !evidenceSafe {
 		result.Reasons = append(result.Reasons, PredictionReasonArithmeticUnsafe)
 		result.UnknownReason = PredictionUnknownUsageAbnormal
-		return result
-	}
-	if input.Window.HasMidCycleReset || predictionHasReset(observations) {
-		result.Reasons = append(result.Reasons, PredictionReasonResetMidCycle)
-		result.UnknownReason = PredictionUnknownHistoryInsufficient
 		return result
 	}
 	if reason, failed := predictionMinimumEvidence(input.Window, len(points), coverageMS, maxGapMS); failed {
@@ -345,6 +393,10 @@ func PredictWindow(input PredictionInput) (result WindowPrediction) {
 
 func calculatePredictionAccounting(input PredictionInput, prediction WindowPrediction) PredictionAccounting {
 	result := PredictionAccounting{UnavailableReason: prediction.UnknownReason}
+	if predictionUsageWasRead(input) {
+		requests := input.Usage.Requests
+		result.UsageRequests = &requests
+	}
 	// Only a row that still shows a reading can be marked expired; a row with no
 	// reading at all is reported as a failed read instead.
 	if prediction.UsedPercent != nil {
@@ -356,6 +408,7 @@ func calculatePredictionAccounting(input PredictionInput, prediction WindowPredi
 		}
 	}
 	fromMS, _, reason := WindowCycleRange(input.Window, input.ObservedAtMS, input.NowMS)
+	result.IsRollingWindow = reason == CapacityReasonRollingWindow
 	if reason == "" && input.ObservedAtMS >= fromMS {
 		result.WindowStartMS = &fromMS
 	}
@@ -376,12 +429,12 @@ func calculatePredictionAccounting(input PredictionInput, prediction WindowPredi
 	result.RemainingWindowHours = floatPointer(*input.Window.PeriodHours * *result.RemainingPercent / 100)
 	result.WindowErrorHours = floatPointer(*input.Window.PeriodHours * usedPercentHalfStep / 100)
 	for _, reason := range prediction.Reasons {
-		if reason == PredictionReasonResetMidCycle || reason == PredictionReasonInvalidObservation || reason == PredictionReasonArithmeticUnsafe {
+		if reason == PredictionReasonInvalidObservation || reason == PredictionReasonArithmeticUnsafe {
 			result.CapacityUnavailable = reason
 			return result
 		}
 	}
-	if input.Window.HasIncompleteHistory || input.Window.HasMidCycleReset ||
+	if input.Window.HasIncompleteHistory ||
 		input.ObservedAtMS <= 0 || input.NowMS < input.ObservedAtMS ||
 		input.NowMS-input.ObservedAtMS > predictionFreshWindow(input.Window).Milliseconds() {
 		return result
@@ -455,21 +508,39 @@ func predictionPoints(observations []PredictionObservation, resetAtMS *int64) []
 	return points
 }
 
-func predictionHasReset(points []PredictionObservation) bool {
+// predictionHasReset returns the latest observation that proved a reset.
+func predictionHasReset(points []PredictionObservation) (int64, bool) {
 	var previous *PredictionObservation
+	var lastAtMS int64
+	hasReset := false
 	for index := range points {
 		point := &points[index]
 		if previous != nil {
 			if previous.UsedPercent > point.UsedPercent+capacityResetTolerancePercent {
-				return true
+				lastAtMS, hasReset = point.ObservedAtMS, true
 			}
 			if previous.ResetAtMS != nil && point.ResetAtMS != nil && *previous.ResetAtMS > point.ObservedAtMS && resetDifferenceExceeds(*previous.ResetAtMS, *point.ResetAtMS, 1000) {
-				return true
+				lastAtMS, hasReset = point.ObservedAtMS, true
 			}
 		}
 		previous = point
 	}
-	return false
+	return lastAtMS, hasReset
+}
+
+// predictionPointsAfterReset keeps only readings after the latest reset. The
+// current reading is the first point of the new cycle, so it stays even when it
+// is also the observation that proved the reset.
+func predictionPointsAfterReset(observations []PredictionObservation, resetAtMS *int64, resetObservedAtMS, currentObservedAtMS int64) []PredictionObservation {
+	points := predictionPoints(observations, resetAtMS)
+	filtered := make([]PredictionObservation, 0, len(points))
+	for _, point := range points {
+		if point.ObservedAtMS > resetObservedAtMS ||
+			point.ObservedAtMS == currentObservedAtMS && point.Source == "current" {
+			filtered = append(filtered, point)
+		}
+	}
+	return filtered
 }
 
 // applyPredictionEvidence records the span and largest silence of the fitted
@@ -555,6 +626,12 @@ func predictionSlope(points []PredictionObservation) (float64, bool) {
 }
 
 func appendPredictionUsage(result *WindowPrediction, input PredictionInput) {
+	// The zero-usage fact is already decided; a low-usage diagnostic on top of
+	// it would describe a shortcut the row never entered.
+	if result.Evidence == PredictionEvidenceFact && result.LastsUntilReset != nil && *result.LastsUntilReset &&
+		input.Window.UsedPercent != nil && *input.Window.UsedPercent == 0 {
+		return
+	}
 	if input.Window.UsedPercent == nil || !validPredictionPercent(*input.Window.UsedPercent) {
 		return
 	}
@@ -597,6 +674,14 @@ func appendPredictionUsage(result *WindowPrediction, input PredictionInput) {
 	}
 	result.ProjectedTokensAtReset = &tokens
 	result.ProjectedCostNanosAtReset = &cost
+}
+
+func predictionUsageWasRead(input PredictionInput) bool {
+	return input.UsageReason == "" && input.Usage != nil
+}
+
+func predictionHasUsablePeriod(window QuotaWindow) bool {
+	return window.PeriodHours != nil && isFinite(*window.PeriodHours) && *window.PeriodHours > 0
 }
 
 func appendPredictionReason(result *WindowPrediction, reason string) {

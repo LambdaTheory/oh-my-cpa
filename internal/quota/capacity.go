@@ -22,6 +22,14 @@ const capacityMinPricedShare = 0.95
 // reading of the same cycle is compared with the current one.
 const capacityResetTolerancePercent = 1.0
 
+// capacityRollingBoundaryToleranceMS absorbs the sub-second skew between a
+// rolling window's advertised reset and the observation that read it. Upstream
+// sets reset = observation + period, so the derived start lands a few hundred
+// milliseconds after the observation (253ms observed in production). Only a
+// small positive overshoot is treated as rolling: a larger gap is a genuinely
+// unknown boundary, and a start before the observation stays an ordinary cycle.
+const capacityRollingBoundaryToleranceMS int64 = 2000
+
 // usedPercentHalfStep is half of the one-point granularity upstream reports.
 const usedPercentHalfStep = 0.5
 
@@ -34,6 +42,11 @@ const (
 	// CapacityReasonBoundaryUnknown: the cycle start cannot be derived, because
 	// the reset instant or the period is missing or only approximate.
 	CapacityReasonBoundaryUnknown = "boundary_unknown"
+	// CapacityReasonRollingWindow: reset is one period after the observation, so
+	// the window rolls forward with the clock instead of starting a fixed cycle.
+	// It has no cycle start to derive, but the last period is still a meaningful
+	// recorded-usage interval.
+	CapacityReasonRollingWindow = "rolling_window"
 	// CapacityReasonExpired: the cycle the reading describes has already ended.
 	CapacityReasonExpired = "expired"
 	// CapacityReasonStale: the windows were kept from an earlier observation
@@ -134,9 +147,35 @@ func WindowCycleRange(window QuotaWindow, observedAtMS, nowMS int64) (fromMS, to
 	fromMS = resetAtMS - periodMS
 	toMS = min(observedAtMS, resetAtMS)
 	if toMS <= fromMS {
+		// A rolling window advertises its reset exactly one period ahead, which
+		// puts the derived start at (or up to a few hundred milliseconds after)
+		// the observation. That is a known rolling shape, not an unknown cycle.
+		if fromMS <= toMS+capacityRollingBoundaryToleranceMS {
+			return 0, 0, CapacityReasonRollingWindow
+		}
 		return 0, 0, CapacityReasonBoundaryUnknown
 	}
 	return fromMS, toMS, ""
+}
+
+// WindowTrailingUsageRange returns the period immediately before the observation.
+// A rolling window accounts for exactly that interval, and a window whose reset
+// is unknown but whose period is known can use the same interval for the
+// zero-traffic shortcut. It never supplies a cycle start to prediction: callers
+// keep the boundary unknown and read usage only.
+func WindowTrailingUsageRange(window QuotaWindow, observedAtMS int64) (fromMS, toMS int64, ok bool) {
+	if window.PeriodHours == nil || *window.PeriodHours <= 0 || math.IsNaN(*window.PeriodHours) || math.IsInf(*window.PeriodHours, 0) {
+		return 0, 0, false
+	}
+	periodMSFloat := *window.PeriodHours * float64(time.Hour/time.Millisecond)
+	if math.IsNaN(periodMSFloat) || math.IsInf(periodMSFloat, 0) || periodMSFloat <= 0 || periodMSFloat >= float64(math.MaxInt64) {
+		return 0, 0, false
+	}
+	periodMS := int64(periodMSFloat)
+	if observedAtMS < math.MinInt64+periodMS {
+		return 0, 0, false
+	}
+	return observedAtMS - periodMS, observedAtMS, true
 }
 
 // PeakUsedPercent returns the highest used share earlier observations reported

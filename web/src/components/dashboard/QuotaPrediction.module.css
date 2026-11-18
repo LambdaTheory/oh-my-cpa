@@ -150,6 +150,10 @@
   gap: 16px;
 }
 
+.single-reading {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .combined-reading div {
   display: grid;
   gap: 4px;
@@ -193,6 +197,42 @@
 .diagnostics p {
   margin: 4px 0 0;
   overflow-wrap: anywhere;
+}
+
+.folded {
+  margin-top: 8px;
+}
+
+.folded > summary {
+  min-height: 32px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.folded > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.folded-list {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.folded-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.folded-list strong {
+  color: var(--fg-2);
 }
 
 .context,

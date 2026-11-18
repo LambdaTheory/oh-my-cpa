@@ -103,3 +103,28 @@ func TestWindowCycleResetDetectsBoundaryMovedPastPriorReading(t *testing.T) {
 		t.Fatal("completed scheduled cycle tainted its successor")
 	}
 }
+
+func TestLastWindowCycleResetAtReturnsLatestTrigger(t *testing.T) {
+	window := capacityWindow(40)
+	window.ResetAtMS = int64Ptr(10 * hourMS)
+	history := []ObservedWindows{
+		{ObservedAtMS: hourMS, Windows: []QuotaWindow{capacityHistoryWindow(window, 10)}},
+		{ObservedAtMS: 2 * hourMS, Windows: []QuotaWindow{capacityHistoryWindow(window, 30)}},
+		{ObservedAtMS: 3 * hourMS, Windows: []QuotaWindow{capacityHistoryWindow(window, 5)}},
+		{ObservedAtMS: 4 * hourMS, Windows: []QuotaWindow{capacityHistoryWindow(window, 60)}},
+		{ObservedAtMS: 5 * hourMS, Windows: []QuotaWindow{capacityHistoryWindow(window, 10)}},
+	}
+	resetAtMS, ok := LastWindowCycleResetAt(window, history, 0, 6*hourMS)
+	if !ok || resetAtMS != 5*hourMS {
+		t.Fatalf("last reset = %d ok=%v", resetAtMS, ok)
+	}
+
+	legacy := window
+	legacy.HasMidCycleReset = true
+	if !HasWindowCycleReset(legacy, nil, 0, 6*hourMS) {
+		t.Fatal("legacy reset flag was lost")
+	}
+	if _, ok := LastWindowCycleResetAt(legacy, nil, 0, 6*hourMS); ok {
+		t.Fatal("legacy reset flag invented a trigger instant")
+	}
+}

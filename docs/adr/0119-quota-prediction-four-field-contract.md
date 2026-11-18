@@ -51,7 +51,8 @@ computation:
   percentage against its expectation no longer needs a label for it.
 - `reasons` keeps its previous codes for stored consumers, but the console's
   four-category copy is a console-only `unavailable_reason` and is not sent to
-  MCP callers or Feishu.
+  MCP callers or Feishu. Console-only `is_rolling_window` and `usage_requests`
+  were added by the 2026-11-17 amendment below.
 - `burn_rate_per_hour`, `projected_percent_at_reset`,
   `projected_tokens_at_reset`, `projected_cost_nanos_at_reset`, `evidence`,
   `sample_count`, `coverage_seconds` and `max_gap_seconds` keep their shape so
@@ -90,3 +91,22 @@ Callers that read `verdict == "under_used"` must switch to comparing the two
 percentages, and callers that read `projected_*` estimates must switch to the
 ETA or the quota page's capacity reading. Old fields remain readable for one
 release so this can happen per caller.
+
+## Amendment 2026-11-17: rolling windows and console-only reading states
+
+A rolling window's reset moves with the observation, so it has no fixed cycle to
+fit a trend against. It is not an undecided risk row: the dashboard marks it with
+the console-only `is_rolling_window` flag, shows only its current share and next
+reset, and leaves it out of the ETA, lasts-until-reset conclusion and the
+cannot/unknown counts. The same accounting carries `usage_requests`, the recorded
+request count for the cycle that was read; nil means usage was not read, while
+zero means a successful read that found no traffic. A zero share together with a
+zero request count is collapsed into one expandable idle line, and `reading_stale`
+rows are folded into an expandable expired/unavailable section; neither enters
+the cannot/unknown summary. The credential quota page keeps its original
+explanation. These fields are console-only and the MCP/capability contract is
+unchanged: a rolling window still reports `lasts_until_reset: null` and no
+console-only field is sent to callers.
+
+Prediction accounting marks an expired reading with `reading_stale: true`;
+`stale` remains a credential-capacity reason and is not a prediction field.

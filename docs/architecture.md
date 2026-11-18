@@ -3935,7 +3935,10 @@ missing numbers remain null reasoned evidence. The pure layer still runs its
 `predictionHasReset` cross-point check. Undecided rows carry one of four reason classes -
 reading failed, insufficient history, unknown window boundary (including no fixed period)
 or abnormal usage - and the old verdict/evidence/reason/estimate group is derived from the
-same result for one release (ADR 0119).
+same result for one release (ADR 0119). A rolling window whose reset moves with the
+observation is not an undecided risk row: it has no fixed cycle to fit, so the console marks
+it with the console-only `is_rolling_window` flag and keeps it out of ETA and
+lasts-until-reset conclusions.
 
 `internal/operations/quota_prediction.go` owns capability validation, filters, identity
 projection and the 100-row/32-KiB bounds. It assembles inputs only from persisted safe
@@ -3977,7 +3980,15 @@ remaining quota-hours and their absolute rounding error, and optional inferred r
 tokens with relative rounding error. These values are computed beside the same prediction
 from its observation, period and current-cycle usage, and are displayed only in the
 collapsed diagnostics. The dashboard also carries the console-only `unavailable_reason`
-and `reading_stale` flags. The operations item's accounting
+and `reading_stale` flags, plus `is_rolling_window` and `usage_requests`. `is_rolling_window`
+marks a window with no fixed cycle; the panel shows only its current share and next reset,
+without an ETA or a lasts-until-reset tag, and excludes it from the cannot/unknown counts.
+`usage_requests` is the recorded request count for the cycle that was read; nil means usage
+was not read, while zero is a successful read that found no traffic. The panel collapses a
+window with a zero share and a zero cycle request count into one expandable idle line, drops
+a provider group left with no other rows, and folds `reading_stale` rows into a provider's
+expandable expired/unavailable section. Collapsed rows do not enter the cannot/unknown
+summary; the credential quota page keeps its original explanation. The operations item's accounting
 field is excluded from JSON and capability schema generation. The quota_prediction wire
 contract, evidence thresholds, 100-row / 32-KiB limits and read-only masking stay intact.
 The dashboard reads the complete roster before grouping, so a later provider cannot be

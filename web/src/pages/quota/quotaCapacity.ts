@@ -37,6 +37,7 @@ const REASON_KEYS: Record<QuotaCapacityUnavailableReason, string | null> = {
   low_usage: 'quota.capacity_reason_low_usage',
   no_traffic: 'quota.capacity_reason_no_traffic',
   reset_mid_cycle: 'quota.capacity_reason_reset_mid_cycle',
+  rolling_window: 'quota.capacity_reason_rolling_window',
 };
 
 export interface QuotaCapacityReading {

@@ -65,7 +65,8 @@ export type QuotaCapacityUnavailableReason =
   | 'reset_mid_cycle'
   | 'scope_unknown'
   | 'history_unavailable'
-  | 'usage_unavailable';
+  | 'usage_unavailable'
+  | 'rolling_window';
 
 /** Paid usage beyond the plan; reported when it is off too. Amounts are in minor units. */
 export interface QuotaExtraUsage {

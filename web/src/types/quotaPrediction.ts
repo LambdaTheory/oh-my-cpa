@@ -10,7 +10,8 @@ export type QuotaPredictionUnavailableReason =
   | 'history_insufficient'
   | 'window_boundary_unknown'
   | 'usage_abnormal'
-  | 'no_cycle';
+  | 'no_cycle'
+  | 'rolling_window';
 
 export interface QuotaPredictionItem {
   credential_label: string;
@@ -53,6 +54,17 @@ export interface QuotaPredictionProvider {
 export interface DashboardPredictionItem extends QuotaPredictionItem {
   unavailable_reason?: QuotaPredictionUnavailableReason | '';
   reading_stale?: boolean;
+  /**
+   * Console-only: the window's reset moves with the observation, so it has no
+   * fixed cycle to fit a trend against. The panel shows the current share and
+   * the next reset instead of an ETA or a lasts-until-reset conclusion.
+   */
+  is_rolling_window?: boolean;
+  /**
+   * Console-only: requests recorded for the cycle that was looked up. Absent
+   * means usage was not read; `0` is a successful read that found no traffic.
+   */
+  usage_requests?: number;
   window_start_ms?: number | null;
   remaining_percent?: number | null;
   uniform_projected_percent_at_reset?: number | null;

@@ -601,8 +601,9 @@ func TestQuotaPredictionDetectsCurrentSnapshotReset(t *testing.T) {
 	if !slices.Contains(item.Reasons, quota.PredictionReasonResetMidCycle) {
 		t.Fatalf("current snapshot reset was not detected: %+v", item)
 	}
-	if item.SampleCount != 5 {
-		t.Fatalf("current bucket replacement duplicated a sample: %+v", item)
+	if item.SampleCount != 1 || item.Accounting.UnavailableReason != quota.PredictionUnknownHistoryInsufficient ||
+		!slices.Contains(item.Reasons, quota.PredictionReasonFewerThanThreeBuckets) {
+		t.Fatalf("post-reset sample should restart at the current reading: %+v", item)
 	}
 }
 
@@ -627,7 +628,7 @@ func TestPredictionCurrentReadingHasResetConditions(t *testing.T) {
 		if test.name == "no current bucket" {
 			observedAtMS = 600_000
 		}
-		if got := predictionCurrentReadingHasReset(buckets, test.window, observedAtMS); got != test.want {
+		if got := predictionCurrentReadingResetSignal(buckets, test.window, observedAtMS) != nil; got != test.want {
 			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
 		}
 	}
@@ -657,7 +658,7 @@ func TestPredictionBucketsHaveResetConditions(t *testing.T) {
 			bucket.MinResetAtMS = reset(9_500)
 		}, false},
 	} {
-		if got := predictionBucketsHaveReset(buckets(test.mutate)); got != test.want {
+		if got := predictionBucketsResetSignal(buckets(test.mutate)) != nil; got != test.want {
 			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
 		}
 	}

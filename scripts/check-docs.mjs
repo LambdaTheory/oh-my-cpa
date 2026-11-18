@@ -9,10 +9,13 @@
  * maintenance discipline in AGENTS.md only works if someone remembers to run
  * it. This script makes the mechanical half of that discipline cheap:
  *
- *   1. every backticked repo path in a context document must resolve;
+ *   1. every backticked repo path in a maintained context document must resolve;
  *   2. non-archival documents must not cite absolute line numbers, because a
  *      reference like `handler.go:53-128` is wrong the moment the file grows;
- *   3. a known-retired-artifact list catches the specific references that have
+ *   3. acceptance and review reports under docs/delivery/ are frozen evidence:
+ *      they record the tree at their baseline and may cite line numbers and
+ *      paths that no longer exist;
+ *   4. a known-retired-artifact list catches the specific references that have
  *      already gone stale once.
  *
  * It deliberately does not try to judge prose. A path that exists proves
@@ -26,15 +29,28 @@ const DEFAULT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 /** Completed audits and measurement records: frozen evidence that may cite
  * plan-time figures and cite paths that existed at their baseline. Everything
- * else under docs/ is maintained and must resolve against the current tree. */
+ * else under docs/ is maintained and must resolve against the current tree.
+ * Delivery acceptance and review reports are frozen evidence too; they are
+ * recognized by path in discoverDocuments(). */
 export const ARCHIVAL_DOCUMENTS = new Set([
   'docs/plans/architecture-governance.md',
   'docs/plans/ci-testing-optimization.md',
   'docs/performance.md',
 ]);
 
+/** Delivery acceptance and review reports record the evidence at their
+ * baseline. They are frozen: later tree changes must not turn the report into
+ * documentation drift, so they may cite absolute line numbers and paths that
+ * have since moved or been deleted. Maintained delivery documents (cases,
+ * implementation plans) are not covered. */
+function isFrozenDeliveryEvidence(file) {
+  return file.startsWith('docs/delivery/') && file.includes('/acceptance/');
+}
+
 /** Context documents under maintenance. `archival` documents are frozen
- * records: they may cite line numbers and plan-time figures. */
+ * records: they may cite line numbers and plan-time figures. Acceptance
+ * evidence additionally may cite paths that no longer exist, because it
+ * records the tree at its baseline. */
 export function discoverDocuments(projectRoot = DEFAULT_ROOT) {
   const files = fs.readdirSync(projectRoot, {withFileTypes:true})
     .filter(entry => entry.isFile() && entry.name.endsWith('.md')).map(entry => entry.name);
@@ -47,16 +63,22 @@ export function discoverDocuments(projectRoot = DEFAULT_ROOT) {
     }
   };
   visit('docs');
-  return files.sort().map(file => ({
-    file,
-    ...(file.startsWith('docs/adr/') || file.startsWith('docs/releases/') || ARCHIVAL_DOCUMENTS.has(file)
-      ? {archival:true}
-      : {}),
-  }));
+  return files.sort().map(file => {
+    const frozenEvidence = isFrozenDeliveryEvidence(file);
+    return {
+      file,
+      ...(frozenEvidence || file.startsWith('docs/adr/') || file.startsWith('docs/releases/') || ARCHIVAL_DOCUMENTS.has(file)
+        ? {archival:true}
+        : {}),
+      ...(frozenEvidence ? {frozenEvidence:true} : {}),
+    };
+  });
 }
 export const DOCUMENTS = discoverDocuments();
 
-// Accepted decisions retain paths that existed at their frozen baseline, not today's topology.
+// Archival documents other than delivery evidence retain the paths that
+// existed at their frozen baseline, not today's topology. Delivery evidence
+// needs no per-path entries: it is exempt from missing-path checks entirely.
 const ARCHIVAL_RETIRED_PATHS = new Set([
   'docs/ops/vercel-demo.md',
   'internal/cpa/configyaml/layout_rules.go',
@@ -206,7 +228,7 @@ function backtickedSpans(content) {
   return spans;
 }
 
-export function checkDocument({ file, archival = false }, { projectRoot = DEFAULT_ROOT } = {}) {
+export function checkDocument({ file, archival = false, frozenEvidence = false }, { projectRoot = DEFAULT_ROOT } = {}) {
   const absolute = path.join(projectRoot, file);
   if (!fs.existsSync(absolute)) {
     return [{ kind: 'missing-document', file, detail: 'listed for maintenance but does not exist' }];
@@ -229,7 +251,14 @@ export function checkDocument({ file, archival = false }, { projectRoot = DEFAUL
     const classified = classifyPath(span);
     if (!classified) continue;
     if (!resolvePath(classified.path)) {
-      if (isExpectedAbsent(classified.path) || (archival && ARCHIVAL_RETIRED_PATHS.has(classified.path))) continue;
+      // Frozen acceptance evidence records the tree as it was; a path that has
+      // since moved or been deleted is not drift in the report. Other archival
+      // documents keep the explicit exception so stale references still surface.
+      if (
+        frozenEvidence ||
+        isExpectedAbsent(classified.path) ||
+        (archival && ARCHIVAL_RETIRED_PATHS.has(classified.path))
+      ) continue;
       const key = `missing:${classified.path}`;
       if (alreadyReported.has(key)) continue;
       alreadyReported.add(key);
