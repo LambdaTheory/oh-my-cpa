@@ -67,6 +67,54 @@ func TestListFeishuCredentialMetadataReadsStoredFlags(t *testing.T) {
 	}
 }
 
+// TestListCredentialMetadataForTypesKeepsTheFeishuDimensionAuthFileOnly pins
+// the two callers apart: the prediction roster may name opencode's
+// openai-compatibility rows, while the Feishu report keeps reporting only auth
+// files even though both read the same stored table.
+func TestListCredentialMetadataForTypesKeepsTheFeishuDimensionAuthFileOnly(t *testing.T) {
+	repo, _ := testRepository(t)
+	ctx := context.Background()
+	if err := repo.UpsertInstance(ctx, domain.CPAInstance{
+		ID: "compat-test", Name: "Compat", BaseURL: "http://cpa",
+		ManagementKeyCiphertext: []byte("cipher"), ManagementKeyNonce: []byte("nonce"),
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.UpsertDiscoveredResources(ctx, "compat-test", []domain.DiscoveredResource{
+		{ResourceKey: "auth-index:auth-file:idx-file", CPAResourceType: "auth-file", CPAAuthIndex: "idx-file", CPAResourceName: "codex.json", CPADriver: "codex", Status: domain.ResourceStatusUnclaimed},
+		{ResourceKey: "auth-index:openai-compatibility:idx-opc", CPAResourceType: "openai-compatibility", CPAAuthIndex: "idx-opc", CPAResourceName: "opencode", CPADriver: "openai-compatibility", Status: domain.ResourceStatusUnclaimed},
+		{ResourceKey: "auth-index:openai-compatibility:idx-relay", CPAResourceType: "openai-compatibility", CPAAuthIndex: "idx-relay", CPAResourceName: "relay", CPADriver: "openai-compatibility", Status: domain.ResourceStatusUnclaimed},
+	}, time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	feishu, err := repo.ListFeishuCredentialMetadata(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(feishu) != 1 || feishu[0].AuthIndex != "idx-file" {
+		t.Fatalf("feishu metadata = %+v, want only the auth file", feishu)
+	}
+
+	roster, err := repo.ListCredentialMetadataForTypes(ctx, []string{"auth-file", "openai-compatibility"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byIndex := map[string]string{}
+	for _, entry := range roster {
+		byIndex[entry.AuthIndex] = entry.ResourceType
+	}
+	if len(roster) != 3 || byIndex["idx-opc"] != "openai-compatibility" || byIndex["idx-relay"] != "openai-compatibility" || byIndex["idx-file"] != "auth-file" {
+		t.Fatalf("roster metadata = %+v", roster)
+	}
+
+	empty, err := repo.ListCredentialMetadataForTypes(ctx, nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty type list = %+v, err=%v", empty, err)
+	}
+}
+
 // TestListFeishuCredentialMetadataExcludesMissing pins that a credential CPA has
 // removed is not reported as still configured: only a complete discovery sweep
 // marks it missing, and the report respects that.

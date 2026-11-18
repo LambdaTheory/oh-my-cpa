@@ -17,6 +17,53 @@ import (
 	"github.com/oh-my-cpa/oh-my-cpa/internal/repository"
 )
 
+// The prediction roster also carries the opencode keys, which discovery records
+// as openai-compatibility resources, but only that entry: other compatibility
+// providers have no reader here. A key with no reported window still occupies
+// no row.
+func TestQuotaPredictionRosterIncludesOpenCodeKeys(t *testing.T) {
+	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction-compat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	repo := repository.New(database)
+	now := time.Date(2026, 11, 17, 21, 0, 0, 0, time.UTC)
+	reset, period, used := now.Add(48*time.Hour).UnixMilli(), 168.0, 42.0
+	window := quota.QuotaWindow{ID: "weekly", Kind: "weekly", Scope: "standard", UsedPercent: &used, ResetAtMS: &reset, PeriodHours: &period, ResetAccuracy: "exact"}
+	rollingUsed := 5.0
+	rolling := quota.QuotaWindow{ID: "rolling", Kind: "rolling", Scope: "standard", UsedPercent: &rollingUsed}
+	seedPredictionResources(t, repo, []domain.DiscoveredResource{
+		predictionResource("cmc-pred", "commandcode-key.json", "commandcode"),
+		compatibilityPredictionResource("opc-pred", "opencode"),
+		compatibilityPredictionResource("opc-empty", "opencode"),
+		compatibilityPredictionResource("relay-pred", "relay"),
+	})
+	seedPredictionSnapshot(t, repo, "cmc-pred", "commandcode", now.UnixMilli(), []quota.QuotaWindow{window})
+	seedPredictionSnapshot(t, repo, "opc-pred", "opencode", now.UnixMilli(), []quota.QuotaWindow{rolling, window})
+	seedPredictionSnapshot(t, repo, "opc-empty", "opencode", now.UnixMilli(), nil)
+	seedPredictionSnapshot(t, repo, "relay-pred", "openai-compatibility", now.UnixMilli(), []quota.QuotaWindow{window})
+
+	service := &Service{Repo: repo}
+	result, err := service.DashboardQuotaPrediction(capability.WithAnchor(context.Background(), now.UnixMilli()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	byProvider := map[string]int{}
+	for _, item := range result.Items {
+		byProvider[item.Provider]++
+	}
+	if byProvider["opencode"] != 2 || byProvider["commandcode"] != 1 {
+		t.Fatalf("roster = %+v, want two opencode windows and one commandcode window", byProvider)
+	}
+	if byProvider["openai-compatibility"] != 0 {
+		t.Fatalf("a non-opencode compatibility provider entered the roster: %+v", byProvider)
+	}
+	if len(result.Items) != 3 {
+		t.Fatalf("items = %+v, want the empty-window key left out", result.Items)
+	}
+}
+
 func TestQuotaPredictionMasksReadOnlyIdentityAndBoundsRows(t *testing.T) {
 	database, err := repository.Open(context.Background(), filepath.Join(t.TempDir(), "prediction.db"))
 	if err != nil {
@@ -601,8 +648,9 @@ func TestQuotaPredictionDetectsCurrentSnapshotReset(t *testing.T) {
 	if !slices.Contains(item.Reasons, quota.PredictionReasonResetMidCycle) {
 		t.Fatalf("current snapshot reset was not detected: %+v", item)
 	}
-	if item.SampleCount != 5 {
-		t.Fatalf("current bucket replacement duplicated a sample: %+v", item)
+	if item.SampleCount != 1 || item.Accounting.UnavailableReason != quota.PredictionUnknownHistoryInsufficient ||
+		!slices.Contains(item.Reasons, quota.PredictionReasonFewerThanThreeBuckets) {
+		t.Fatalf("post-reset sample should restart at the current reading: %+v", item)
 	}
 }
 
@@ -627,7 +675,7 @@ func TestPredictionCurrentReadingHasResetConditions(t *testing.T) {
 		if test.name == "no current bucket" {
 			observedAtMS = 600_000
 		}
-		if got := predictionCurrentReadingHasReset(buckets, test.window, observedAtMS); got != test.want {
+		if got := predictionCurrentReadingResetSignal(buckets, test.window, observedAtMS) != nil; got != test.want {
 			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
 		}
 	}
@@ -657,7 +705,7 @@ func TestPredictionBucketsHaveResetConditions(t *testing.T) {
 			bucket.MinResetAtMS = reset(9_500)
 		}, false},
 	} {
-		if got := predictionBucketsHaveReset(buckets(test.mutate)); got != test.want {
+		if got := predictionBucketsResetSignal(buckets(test.mutate)) != nil; got != test.want {
 			t.Fatalf("%s reset = %v, want %v", test.name, got, test.want)
 		}
 	}
@@ -901,6 +949,12 @@ func TestQuotaPredictionFindingsArePrioritizedAndCapped(t *testing.T) {
 
 func predictionResource(authIndex, name, driver string) domain.DiscoveredResource {
 	return domain.DiscoveredResource{ResourceKey: "auth-index:auth-file:" + authIndex, CPAResourceType: "auth-file", CPAAuthIndex: authIndex, CPAResourceName: name, CPADriver: driver, Status: domain.ResourceStatusUnclaimed}
+}
+
+// compatibilityPredictionResource is how discovery records one key of an
+// OpenAI-compatible provider: the resource name is the provider's entry name.
+func compatibilityPredictionResource(authIndex, providerName string) domain.DiscoveredResource {
+	return domain.DiscoveredResource{ResourceKey: "auth-index:openai-compatibility:" + authIndex, CPAResourceType: "openai-compatibility", CPAAuthIndex: authIndex, CPAResourceName: providerName, CPADriver: "openai-compatibility", Status: domain.ResourceStatusUnclaimed}
 }
 
 func seedPredictionResources(t *testing.T, repo *repository.Repository, resources []domain.DiscoveredResource) {

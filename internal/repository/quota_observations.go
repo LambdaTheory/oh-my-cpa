@@ -87,6 +87,9 @@ type QuotaObservationBucket struct {
 	MinResetAtMS     *int64
 	MaxResetAtMS     *int64
 	ResetDetected    bool
+	// LastResetObservedAtMS is the latest reading that proved a reset across the
+	// full ordered bucket range, including a drop between adjacent buckets.
+	LastResetObservedAtMS *int64
 }
 
 // quotaObservationInsert is one row the writer may store. It carries the full
@@ -417,6 +420,12 @@ func (r *Repository) ListQuotaObservationBuckets(ctx context.Context, filter Quo
 			           PARTITION BY bucket_start_ms
 			           ORDER BY observed_at_ms ASC, id ASC
 			       ) AS previous_reset_at_ms,
+			       LAG(used_percent) OVER (
+			           ORDER BY observed_at_ms ASC, id ASC
+			       ) AS prior_used_percent,
+			       LAG(reset_at_ms) OVER (
+			           ORDER BY observed_at_ms ASC, id ASC
+			       ) AS prior_reset_at_ms,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY bucket_start_ms
 			           ORDER BY observed_at_ms DESC, id DESC
@@ -437,6 +446,10 @@ func (r *Repository) ListQuotaObservationBuckets(ctx context.Context, filter Quo
 		                 OR (previous_reset_at_ms IS NOT NULL AND reset_at_ms IS NOT NULL
 		                     AND previous_reset_at_ms - reset_at_ms > 1000)
 		                THEN 1 ELSE 0 END)
+		       ,MAX(CASE WHEN prior_used_percent > used_percent + 1.0
+		                  OR (prior_reset_at_ms IS NOT NULL AND reset_at_ms IS NOT NULL
+		                      AND prior_reset_at_ms - reset_at_ms > 1000)
+		                 THEN observed_at_ms END)
 		FROM ordered
 		GROUP BY bucket_start_ms
 		ORDER BY bucket_start_ms ASC
@@ -451,11 +464,11 @@ func (r *Repository) ListQuotaObservationBuckets(ctx context.Context, filter Quo
 	result := []QuotaObservationBucket{}
 	for rows.Next() {
 		var bucket QuotaObservationBucket
-		var minReset, maxReset, lastReset sql.NullInt64
+		var minReset, maxReset, lastReset, lastResetObserved sql.NullInt64
 		var resetDetected int
 		if err := rows.Scan(&bucket.StartMS, &bucket.RowCount, &bucket.MinUsedPercent,
 			&minReset, &maxReset, &bucket.LastUsedPercent, &bucket.LastObservedAtMS,
-			&bucket.LastSource, &lastReset, &resetDetected); err != nil {
+			&bucket.LastSource, &lastReset, &resetDetected, &lastResetObserved); err != nil {
 			return nil, false, fmt.Errorf("scan quota observation bucket: %w", err)
 		}
 		if minReset.Valid {
@@ -469,6 +482,10 @@ func (r *Repository) ListQuotaObservationBuckets(ctx context.Context, filter Quo
 		if lastReset.Valid {
 			value := lastReset.Int64
 			bucket.LastResetAtMS = &value
+		}
+		if lastResetObserved.Valid {
+			value := lastResetObserved.Int64
+			bucket.LastResetObservedAtMS = &value
 		}
 		bucket.ResetDetected = resetDetected != 0
 		result = append(result, bucket)

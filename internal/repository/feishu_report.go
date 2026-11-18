@@ -194,19 +194,47 @@ type FeishuCredentialMetadata struct {
 // was. The report source applies the age rule with that reference, so a
 // deliberately stale sweep does not hide credentials that are merely unread.
 func (r *Repository) ListFeishuCredentialMetadata(ctx context.Context) ([]FeishuCredentialMetadata, error) {
+	return r.ListCredentialMetadataForTypes(ctx, []string{"auth-file"})
+}
+
+// ListCredentialMetadataForTypes returns the stored, non-missing discovered
+// resources of the named types that carry an auth index, deduplicated by index.
+//
+// It exists beside ListFeishuCredentialMetadata so a caller that also needs
+// credentials CPA stores outside its auth-file list — the opencode keys, which
+// discovery records as openai-compatibility resources — can ask for them
+// without widening the Feishu report's credential dimension. The report keeps
+// its auth-file-only semantics by calling that method, not by relying on this
+// one's order or filtering.
+func (r *Repository) ListCredentialMetadataForTypes(ctx context.Context, resourceTypes []string) ([]FeishuCredentialMetadata, error) {
 	if r == nil || r.SQL() == nil {
 		return nil, errors.New("repository is not initialized")
+	}
+	types := make([]string, 0, len(resourceTypes))
+	for _, resourceType := range resourceTypes {
+		if trimmed := strings.TrimSpace(resourceType); trimmed != "" {
+			types = append(types, trimmed)
+		}
+	}
+	if len(types) == 0 {
+		return []FeishuCredentialMetadata{}, nil
+	}
+	placeholders := strings.Repeat("?,", len(types))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := make([]any, 0, len(types))
+	for _, resourceType := range types {
+		args = append(args, resourceType)
 	}
 	rows, err := r.SQL().QueryContext(ctx, `
 		SELECT cpa_auth_index, cpa_resource_name, cpa_driver, cpa_resource_type,
 		       details_json, last_seen_at
 		FROM discovered_resources
 		WHERE cpa_auth_index <> ''
-		  AND cpa_resource_type = 'auth-file'
+		  AND cpa_resource_type IN (`+placeholders+`)
 		  AND status <> 'missing'
-		ORDER BY cpa_auth_index ASC`)
+		ORDER BY cpa_auth_index ASC`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list feishu credential metadata: %w", err)
+		return nil, fmt.Errorf("list credential metadata for types: %w", err)
 	}
 	defer rows.Close()
 

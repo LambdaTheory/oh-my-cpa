@@ -4,7 +4,7 @@ import type { ResetAdvice } from './resetAdvice';
 export interface QuotaWindow {
   id: string;
   label: string;
-  kind?: 'five_hour' | 'weekly' | 'daily' | 'monthly' | 'credit_usage' | 'model_scoped' | 'custom';
+  kind?: 'five_hour' | 'weekly' | 'daily' | 'monthly' | 'rolling' | 'credit_usage' | 'model_scoped' | 'custom';
   /**
    * Which set of limits a window belongs to. `standard` is the credential's plan, `model` and
    * `group` are the per-model and per-family limits the provider publishes beside it, and
@@ -65,7 +65,8 @@ export type QuotaCapacityUnavailableReason =
   | 'reset_mid_cycle'
   | 'scope_unknown'
   | 'history_unavailable'
-  | 'usage_unavailable';
+  | 'usage_unavailable'
+  | 'rolling_window';
 
 /** Paid usage beyond the plan; reported when it is off too. Amounts are in minor units. */
 export interface QuotaExtraUsage {

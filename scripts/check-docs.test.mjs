@@ -126,6 +126,32 @@ test('new maintained documents are automatically gated; only frozen directories 
   assert.ok(docs.find(document => document.file === 'docs/adr/0067-decision.md').archival);
 });
 
+test('acceptance reports under docs/delivery are frozen evidence; maintained delivery documents are not', t => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omc-doc-discovery-'));
+  t.after(() => fs.rmSync(projectRoot, {recursive:true, force:true}));
+  const report = 'docs/delivery/x/acceptance/report.md';
+  const cases = 'docs/delivery/x/cases.md';
+  for (const [file, content] of [
+    [report, 'See `internal/api/gone.go:12-20` and `docs/delivery/.../cases.md`.'],
+    [cases, 'See `internal/api/handler.go:12-20`.'],
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(projectRoot, file)), {recursive:true});
+    fs.writeFileSync(path.join(projectRoot, file), content);
+  }
+  fs.mkdirSync(path.join(projectRoot, 'internal/api'), {recursive:true});
+  fs.writeFileSync(path.join(projectRoot, 'internal/api/handler.go'), '');
+
+  const docs = discoverDocuments(projectRoot);
+  const reportDocument = docs.find(document => document.file === report);
+  const casesDocument = docs.find(document => document.file === cases);
+  assert.equal(reportDocument.archival, true);
+  assert.ok(!casesDocument.archival);
+  // Frozen evidence may cite line numbers and paths from its baseline without
+  // turning the report into documentation drift; a maintained document stays gated.
+  assert.deepEqual(checkDocument(reportDocument, {projectRoot}), []);
+  assert.deepEqual(kinds(checkDocument(casesDocument, {projectRoot})), ['line-reference']);
+});
+
 
 test('frozen retired path exceptions do not exempt current documents or unknown archival paths', t => {
   const projectRoot = fixture(t, 'See `internal/cpa/configyaml/layout_rules.go`.');

@@ -62,3 +62,22 @@ func TestSafeQuotaCarriesMonetaryBalanceOnlyInternally(t *testing.T) {
 		})
 	}
 }
+
+// Command Code reports monthly credits, not dollars. The unit on the balance
+// keeps the model-group projection from reading it as currency while the quota
+// page still shows the text the vendor's own unit implies.
+func TestCommandCodeCreditsAreNotProjectedAsDollars(t *testing.T) {
+	credits := []byte(`{"credits":{"monthlyCredits":42.5,"purchasedCredits":0},"windowLimits":{"limited":true,"fiveHour":{"used":3,"cap":25}}}`)
+	subscription := []byte(`{"success":true,"data":{"planId":"individual-goat"}}`)
+	plan, windows, err := quota.ParseCommandCodeQuota(credits, subscription, 1794900000000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan == nil || plan.Credits == nil || plan.Credits.Balance != "42.5 credits" {
+		t.Fatalf("quota page balance = %+v, want the unit-suffixed credit text", plan)
+	}
+	safe := SafeQuota(&quota.NormalizedQuota{AuthIndex: "cmc-1", Provider: "commandcode", Plan: plan, Windows: windows})
+	if safe.Balance != nil {
+		t.Fatalf("model-group balance = %+v, want credits excluded from USD projection", safe.Balance)
+	}
+}

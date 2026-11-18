@@ -24,8 +24,10 @@ import {
   formatPredictionPercent,
   isExhausted,
   isStaleReading,
+  partitionPredictions,
   predictionConclusion,
   predictionLasts,
+  predictionRowKind,
   predictionUnavailableKey,
   sortPredictions,
   summarizePredictions,
@@ -74,33 +76,54 @@ function translatedValue(prefix: string, value: string, t: ReturnType<typeof use
   return label === key ? value : label;
 }
 
+function windowIdentity(item: DashboardPredictionItem, t: ReturnType<typeof useT>): string {
+  const windowLabel = translatedValue('dash.prediction.window', item.window_kind, t);
+  const detail = item.window_model || item.window_id;
+  return item.window_kind === 'model_scoped' ? `${windowLabel} · ${detail}` : windowLabel;
+}
+
+function rowKey(item: DashboardPredictionItem): string {
+  return JSON.stringify([item.auth_index ?? item.credential_label, item.window_id, item.window_scope, item.window_model]);
+}
+
 const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: number }> = ({ item, generatedAtMS }) => {
   const t = useT();
   const credentialLabel = item.credential_label || item.auth_index || t('dash.prediction.credential_unknown');
-  const windowLabel = translatedValue('dash.prediction.window', item.window_kind, t);
-  const windowDetail = item.window_model || item.window_id;
+  const kind = predictionRowKind(item);
   const lasts = predictionLasts(item);
   const stale = isStaleReading(item);
+  const rolling = kind === 'rolling';
   const conclusion = predictionConclusion(item, generatedAtMS);
   const reasons = item.reasons.map((reason) => translatedValue('dash.prediction.reason', reason, t));
   const diagnostics = [item.verdict, item.evidence, ...reasons].filter(Boolean).join(' · ');
   return (
-    <li className={styles['row']} data-lasts={lasts} data-exhausted={isExhausted(item) ? 'true' : undefined}>
+    <li
+      className={styles['row']}
+      data-kind={kind}
+      data-lasts={kind === 'risk' ? lasts : undefined}
+      data-exhausted={isExhausted(item) ? 'true' : undefined}
+    >
       <div className={styles['identity']}>
         <strong title={credentialLabel}>{credentialLabel}</strong>
-        <span>{item.window_kind === 'model_scoped' ? windowLabel + ' · ' + windowDetail : windowLabel}</span>
+        <span>{windowIdentity(item, t)}</span>
       </div>
       <div className={styles['verdict']}>
-        <Tag size="small" tone={LASTS_TONES[lasts]}>{t(`dash.prediction.lasts.${lasts}`)}</Tag>
+        {rolling
+          ? <Tag size="small" tone={isExhausted(item) ? 'danger' : 'neutral'}>{t(isExhausted(item) ? 'dash.prediction.exhausted' : 'dash.prediction.rolling_tag')}</Tag>
+          : <Tag size="small" tone={LASTS_TONES[lasts]}>{t(`dash.prediction.lasts.${lasts}`)}</Tag>}
         {stale && <Tag size="small">{t('dash.prediction.expired')}</Tag>}
       </div>
-      <div className={styles['combined-reading']}>
+      <div className={`${styles['combined-reading']} ${rolling ? styles['single-reading'] : ''}`}>
         <div><span>{t('dash.prediction.actual')}</span><b>{formatPredictionPercent(item.used_percent, t)}</b></div>
-        <div><span>{t('dash.prediction.expected')}</span><b>{formatPredictionPercent(item.expected_used_percent, t)}</b></div>
-        <div className={styles['deviation']}><span>{t('dash.prediction.deviation')}</span><b>{formatPredictionDeviation(item, t)}</b></div>
+        {!rolling && <>
+          <div><span>{t('dash.prediction.expected')}</span><b>{formatPredictionPercent(item.expected_used_percent, t)}</b></div>
+          <div className={styles['deviation']}><span>{t('dash.prediction.deviation')}</span><b>{formatPredictionDeviation(item, t)}</b></div>
+        </>}
       </div>
       <p className={styles['context']}>
-        {t('dash.prediction.eta_label')} <span>{formatPredictionETA(item, t)}</span>
+        {rolling
+          ? t('dash.prediction.rolling_no_fixed_period')
+          : <>{t('dash.prediction.eta_label')} <span>{formatPredictionETA(item, t)}</span></>}
         {' · '}
         {t('dash.prediction.reset')} <span title={formatReset(item.reset_at_ms, t)}>{formatReset(item.reset_at_ms, t)}</span>
       </p>
@@ -121,6 +144,23 @@ const PredictionRow: React.FC<{ item: DashboardPredictionItem; generatedAtMS: nu
         )}
       </details>
     </li>
+  );
+};
+
+const IdleWindows: React.FC<{ items: DashboardPredictionItem[] }> = ({ items }) => {
+  const t = useT();
+  return (
+    <details className={styles['folded']} data-testid="prediction-idle">
+      <summary>{t('dash.prediction.idle_summary', { n: items.length })}</summary>
+      <ul className={styles['folded-list']}>
+        {items.map((item) => (
+          <li key={rowKey(item)}>
+            <strong>{item.credential_label || item.auth_index || t('dash.prediction.credential_unknown')}</strong>
+            <span>{windowIdentity(item, t)}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 };
 
@@ -147,8 +187,18 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
 
   const generatedAtMS = data?.generated_at_ms ?? 0;
   const allItems = React.useMemo(() => groups.flatMap((group) => group.items), [groups]);
-  const summary = summarizePredictions(allItems);
+  const partitionedGroups = React.useMemo(() => groups.map((group) => ({
+    provider: group.provider,
+    ...partitionPredictions(group.items),
+  })), [groups]);
+  const visibleGroups = partitionedGroups.filter((group) => group.risk.length + group.rolling.length + group.stale.length > 0);
+  const allRisk = partitionedGroups.flatMap((group) => group.risk);
+  const allStale = partitionedGroups.flatMap((group) => group.stale);
+  const allIdle = partitionedGroups.flatMap((group) => group.idle);
+  const summary = summarizePredictions(allRisk);
   const unpushed = summarizeUnpushed(allItems);
+  const hasMainRows = visibleGroups.some((group) => group.risk.length + group.rolling.length > 0);
+  const hasContent = visibleGroups.length > 0 || allIdle.length > 0;
 
   return (
     <Panel className={styles['panel']} data-testid="dashboard-quota-prediction">
@@ -164,14 +214,14 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
               isConfirming={isSending}
               onConfirm={onSend}
             >
-              <Button icon={<SendOutlined />} disabled={isDemo || isSending || isLoading || isError || groups.length === 0}>{t('dash.prediction.send')}</Button>
+              <Button icon={<SendOutlined />} disabled={isDemo || isSending || isLoading || isError || allRisk.length === 0}>{t('dash.prediction.send')}</Button>
             </ConfirmAction>
           )}
           {onRefresh && <RefreshButton isIconOnly label={t('dash.prediction.refresh')} isRefreshing={isFetching} disabled={isFetching} onRefresh={onRefresh} />}
         </div>
       </div>
 
-      {data && groups.length > 0 && (
+      {data && hasMainRows && (
         <p className={styles['summary-count']} data-testid="prediction-summary">
           {t('dash.prediction.summary_window_counts', { cannot: summary.cannot, unknown: summary.unknown })}
           {data.omitted > 0 ? ` · ${t('dash.prediction.summary_omitted', { n: data.omitted })}` : ''}
@@ -182,41 +232,54 @@ export const QuotaPredictionPanel: React.FC<QuotaPredictionPanelProps> = ({
         <LoadFailure title={t('dash.prediction.error')} error={error} onRetry={onRefresh} />
       ) : isLoading && !data ? (
         <ParagraphPlaceholder rows={4} />
-      ) : groups.length === 0 ? (
+      ) : !hasContent ? (
         <EmptyState size="compact" title={t('dash.prediction.empty')} description={t('dash.prediction.empty_desc')} />
       ) : (
         <div className={styles['groups']}>
-          {groups.map((group) => {
-            const groupSummary = summarizePredictions(group.items);
-            const sorted = sortPredictions(group.items, generatedAtMS);
+          {visibleGroups.map((group) => {
+            const groupSummary = summarizePredictions(group.risk);
+            const sorted = sortPredictions([...group.risk, ...group.rolling], generatedAtMS);
+            const riskCount = group.risk.length;
             return (
               <section key={group.provider} className={styles['group']} aria-label={providerLabel(group.provider, t)}>
                 <details>
                   <summary className={styles['group-head']}>
                     <ProviderBrandIcon iconId={credentialProviderIconId(group.provider === 'step' ? 'stepfun' : group.provider)} size={18} />
                     <strong>{providerLabel(group.provider, t)}</strong>
-                    <span>{t('dash.prediction.group_summary', { credentials: countCredentials(group.items), cannot: groupSummary.cannot })}</span>
-                    <Tag size="small" tone={groupSummary.cannot > 0 ? 'danger' : groupSummary.unknown > 0 ? 'neutral' : 'success'}>
-                      {groupSummary.cannot > 0
-                        ? t('dash.prediction.lasts.no')
-                        : groupSummary.unknown > 0 ? t('dash.prediction.lasts.unknown') : t('dash.prediction.lasts.yes')}
-                    </Tag>
+                    <span>{t('dash.prediction.group_summary', {
+                      credentials: countCredentials([...group.risk, ...group.rolling, ...group.stale]),
+                      cannot: groupSummary.cannot,
+                    })}</span>
+                    {riskCount === 0
+                      ? <Tag size="small">{t('dash.prediction.group_no_risk')}</Tag>
+                      : <Tag size="small" tone={groupSummary.cannot > 0 ? 'danger' : groupSummary.unknown > 0 ? 'neutral' : 'success'}>
+                        {groupSummary.cannot > 0
+                          ? t('dash.prediction.lasts.no')
+                          : groupSummary.unknown > 0 ? t('dash.prediction.lasts.unknown') : t('dash.prediction.lasts.yes')}
+                      </Tag>}
                   </summary>
-                  <ul>{sorted.map((item) => (
-                    <PredictionRow
-                      key={JSON.stringify([item.auth_index ?? item.credential_label, item.window_id, item.window_scope, item.window_model])}
-                      item={item}
-                      generatedAtMS={generatedAtMS}
-                    />
-                  ))}</ul>
+                  {sorted.length > 0 && <ul>{sorted.map((item) => (
+                      <PredictionRow key={rowKey(item)} item={item} generatedAtMS={generatedAtMS} />
+                    ))}</ul>}
+                  {group.stale.length > 0 && (
+                    <details className={styles['folded']} data-testid={`prediction-expired-${group.provider}`}>
+                      <summary>{t('dash.prediction.expired_section', { n: group.stale.length })}</summary>
+                      <ul>
+                        {sortPredictions(group.stale, generatedAtMS).map((item) => (
+                          <PredictionRow key={rowKey(item)} item={item} generatedAtMS={generatedAtMS} />
+                        ))}
+                      </ul>
+                    </details>
+                  )}
                 </details>
               </section>
             );
           })}
+          {allIdle.length > 0 && <IdleWindows items={allIdle} />}
           {data && data.omitted > 0 && <Notice tone="info" title={t('dash.prediction.omitted', { n: data.omitted })} />}
         </div>
       )}
-      {data && !isError && groups.length > 0 && (
+      {data && !isError && (allRisk.length > 0 || allStale.length > 0) && (
         <p className={styles['footer']}>{t('dash.prediction.unpushed', unpushed)}</p>
       )}
     </Panel>

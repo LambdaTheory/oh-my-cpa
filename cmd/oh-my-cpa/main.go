@@ -80,6 +80,16 @@ func main() {
 		return
 	}
 
+	// `key` is a local caller-side tool: it must run before the environment file,
+	// configuration, database and gateway client exist, so a machine that has never
+	// hosted the console can still hold and use a repository key. It deliberately
+	// gets no signal.NotifyContext: `key exec` starts a child in the same process
+	// group, and a handler that caught Ctrl-C here would keep that child from seeing
+	// it.
+	if len(os.Args) > 1 && os.Args[1] == "key" {
+		os.Exit(runKey(context.Background(), os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == updater.ROLE_COMMAND {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		code := updater.Run(ctx, os.Args[2:], envOr("OMCPA_VERSION", config.BuildVersion), os.Stdout, os.Stderr)

@@ -72,6 +72,8 @@ var AllowedURLPrefixes = []string{
 	AntigravitySubscriptionURL,
 	"https://cli-chat-proxy.grok.com/v1/user",
 	XaiSettingsURL,
+	CommandCodeBillingPrefix,
+	OpenCodeUsageURL,
 }
 
 // IsAllowedQuotaURL verifies that a target URL is in the strict quota allowlist.
@@ -150,6 +152,12 @@ func DetectProvider(fileType, provider string) string {
 	switch {
 	case t == "antigravity" || p == "antigravity":
 		return "antigravity"
+	// Only the exact provider key is the OpenCode entry OMC reads its usage
+	// from. Plugin credentials spell their type "openai-compatible-opencode";
+	// matching a substring would relabel those and route them away from their
+	// plugin.
+	case t == "opencode" || p == "opencode":
+		return "opencode"
 	case strings.Contains(t, "codex") || strings.Contains(p, "codex") || strings.Contains(t, "chatgpt"):
 		return "codex"
 	case strings.Contains(t, "claude") || strings.Contains(p, "claude") || strings.Contains(t, "anthropic") || strings.Contains(p, "anthropic"):
@@ -194,10 +202,19 @@ func CapabilitiesForProvider(provider string) QuotaCapabilities {
 			ClearCooldownSupported: true,
 			ResetCreditSupported:   true,
 		}
-	case "claude", "antigravity", "kimi", "xai", "devin", "meta":
+	case "claude", "antigravity", "kimi", "xai", "devin", "meta", "commandcode":
 		return QuotaCapabilities{
 			RefreshSupported:       true,
 			ClearCooldownSupported: true,
+			ResetCreditSupported:   false,
+		}
+	case "opencode":
+		// The credential is an openai-compatibility key, not an AuthFile, so
+		// the clear-cooldown operation (which resolves through AuthFiles) has
+		// nothing to act on. Advertising it would offer a 404 action.
+		return QuotaCapabilities{
+			RefreshSupported:       true,
+			ClearCooldownSupported: false,
 			ResetCreditSupported:   false,
 		}
 	default:
@@ -374,6 +391,24 @@ func (s *Service) RefreshCredentialQuota(ctx context.Context, file management.Au
 			} else {
 				result.Windows = windows
 				result.Plan = s.fetchAntigravitySubscription(ctx, file)
+			}
+
+		case "commandcode":
+			plan, windows, err := s.fetchCommandCodeQuota(ctx, file, nowMS)
+			if err != nil {
+				fetchErr = err
+			} else {
+				result.Plan = plan
+				result.Windows = windows
+			}
+
+		case "opencode":
+			plan, windows, err := s.fetchOpenCodeQuota(ctx, file, nowMS)
+			if err != nil {
+				fetchErr = err
+			} else {
+				result.Plan = plan
+				result.Windows = windows
 			}
 
 		case "kimi":
