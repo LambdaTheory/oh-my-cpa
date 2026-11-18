@@ -802,7 +802,15 @@ func TestExecRunsInTheCallersDirectory(t *testing.T) {
 		t.Fatalf("status = %d", status)
 	}
 	report := decodeReport(t, stdout)
-	if filepath.Clean(report.Directory) != filepath.Clean(directory) {
+	wantDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatalf("resolve the caller directory %q: %v", directory, err)
+	}
+	gotDirectory, err := filepath.EvalSymlinks(report.Directory)
+	if err != nil {
+		t.Fatalf("resolve the child's directory %q: %v", report.Directory, err)
+	}
+	if gotDirectory != wantDirectory {
 		t.Fatalf("the child ran in %q, want %q", report.Directory, directory)
 	}
 }

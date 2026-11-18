@@ -79,7 +79,7 @@ $env:OMC_HOME="$TMPROOT/omc-home"; $env:USERPROFILE="$TMPROOT/home"
 
 e2e 用仓库自带 `scripts/fake-cpa.mjs`（`createFakeCpaServer(managementKey)`），**不连生产、不用真实账号**。
 
-已知现状（读代码确认）：该夹具对 `/v1/models` 用 `configDoc.access['api-keys']` 校验客户端 key（`scripts/fake-cpa.mjs:605-613`），不带或带错 key 返回 401。仓库 key 由 OMC 签发时写入同一列表，所以「用这把 key 打一次网关成功」可用 `/v1/models` 的 200 判定。**它没有 `/v1/chat/completions`**（只有 `/v1/models` 一条 `v1` 路由）；若 S7 的夹具补了该路由，两者等价，报告里写明用的哪条。
+已知现状（读代码确认）：该夹具对 `/v1/models` 用 `configDoc.access['api-keys']` 校验客户端 key（见 `scripts/fake-cpa.mjs` 里 `/v1/models` 的 `configDoc.access?.['api-keys']` 校验段），不带或带错 key 返回 401。仓库 key 由 OMC 签发时写入同一列表，所以「用这把 key 打一次网关成功」可用 `/v1/models` 的 200 判定。**它没有 `/v1/chat/completions`**（只有 `/v1/models` 一条 `v1` 路由）；若 S7 的夹具补了该路由，两者等价，报告里写明用的哪条。
 
 OMC 启动环境（沿用既有验收做法，`inbox/agents/验收/2026-11-06-omc-repo-api-keys-e2e/e2e.mjs:153`）：
 
@@ -144,7 +144,7 @@ codex / opencode 的确切变量名与落点**由方案定**（拆分单 S3「�
 - AC：AC-1 · 类型：进程级 · 优先级：P1
 - 前置：改动前后的同一环境。
 - 步骤：
-  1. `./tmp/oh-my-cpa mcp`、`./tmp/oh-my-cpa mcp -h`；确认用法打印在 **stderr**（`cmd/oh-my-cpa/main.go:65-88` 的既有契约：stdout 是协议通道）。
+  1. `./tmp/oh-my-cpa mcp`、`./tmp/oh-my-cpa mcp -h`；确认用法打印在 **stderr**（`cmd/oh-my-cpa/main.go` 的 `main` 里 `mcp` 子命令分支的既有契约：stdout 是协议通道）。
   2. 跑既有 repo-key MCP 鉴权/目录用例（或本机等价脚本），确认 `repo_key_*` 四个工具仍在目录里。
   3. `./tmp/oh-my-cpa updater`（或既有 updater 测试）行为不变。
 - 预期：`mcp` / updater 的参数、退出码、stdout/stderr 分工与改动前一致；`key` 的加入没有改变默认启动路径（`main.go` 末尾的 server 动作仍是不带子命令时的行为）。

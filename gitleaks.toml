@@ -29,3 +29,14 @@ id = "generic-api-key"
   paths = ['''web/src/types/configSchema\.ts''']
   regexTarget = "secret"
   regexes = ['''^Asia/Singapore$''']
+
+  # `TEST_GATEWAY_KEY` in the keyclient install tests is a deliberately shaped
+  # stand-in (`sk-cpa-test-` plus a fixed hex run), never a credential. Allowed by
+  # rule + path + value so the same file keeps being scanned and only this exact
+  # fixture value is exempted.
+  [[rules.allowlists]]
+  description = "Gateway key stand-in constant in keyclient install tests"
+  condition = "AND"
+  paths = ['''internal/keyclient/install_test\.go''']
+  regexTarget = "secret"
+  regexes = ['''^sk-cpa-test-0123456789abcdef0123456789abcdef$''']
