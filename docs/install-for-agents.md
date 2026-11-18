@@ -210,6 +210,12 @@ step 4. Do not bypass macOS/Windows trust controls: unsigned binaries may requir
 explicit user decision after checksum verification. Offer a service manager only if
 requested, retaining the working directory and data path.
 
+Installing generates no key and writes nothing under the user's home directory. If the
+agent will call the gateway with a key owned by the repository it works in, that is a
+separate, later step: the same binary carries `oh-my-cpa key`, it runs without the
+console's `.env` or data directory, and `docs/repo-key-client.md` is the runbook. Do not
+start that flow unless the user asked for a repository key.
+
 ### D. From source
 
 Needs Go 1.25+, Node.js 22+ and pnpm 11+.
@@ -231,6 +237,9 @@ go build -trimpath -o bin/oh-my-cpa ./cmd/oh-my-cpa
 ```
 
 It runs in the foreground. Offer a systemd unit or similar only if the user wants one.
+
+The `key` subcommands need nothing from the build beyond the binary, and generate no key
+at build time; see `docs/repo-key-client.md` if the user wants a repository key.
 
 ### Dokploy fork source build
 

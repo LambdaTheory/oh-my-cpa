@@ -153,6 +153,7 @@ cycle even though the `internal/usage` directory appears in both directions.
 | `internal/agent` | Server-side Agent runtime: conversation persistence, the tool catalogue it declares to the model, the sectioned system prompt, display tools, model loop, resumption | `capability`, `cpa/gateway`, `repository` |
 | `internal/agui` | The AG-UI 1.0 wire protocol for Agent runs: strict `RunAgentInput` decoding, the event translator and SSE framing; knows nothing of OMC | — |
 | `internal/mcpbridge` | MCP server definition over the capability registry, its Streamable HTTP handler and the stdio bridge over the capability HTTP endpoints; no business logic or approval policy | `capability` |
+| internal/keyclient | The caller side of repository keys: `$OMC_HOME` layout and ownership, the local key store and delivery envelopes, runtime injection for Claude Code, Codex and OpenCode, the managed edits and backups behind `install`, and the fingerprint-guarded removal behind `purge`; it holds no CPA connection and no approval logic | `repokey` |
 | `internal/api` | Routes, DTO allowlists, audited sensitive reveals, audit writes, the demo policy, capability/Agent endpoints | all of the above, `internal/web` |
 | `internal/web` | `go:embed` of the built SPA, with a committed placeholder entry page for a binary built without it (ADR 0033) | — |
 | `internal/app` | Wiring, background loops, graceful shutdown | all of the above |
@@ -433,6 +434,17 @@ one tool per capability offered to the `mcp` adapter, plus `omc_operation_status
   configuration, database, and CPA client initialization, so it opens no data directory.
   Non-loopback URLs must be HTTPS, redirects are refused, responses are bounded, and only
   OMC's own refusal codes are repeated to the agent.
+
+`oh-my-cpa key` is the third local entrypoint, sitting beside `mcp` and the server itself.
+It is dispatched at the same point — before configuration, the database and the CPA client —
+and the difference is what it needs instead of them: a directory under `$OMC_HOME` holding
+this machine's private keys, the delivery envelopes they open, and the local state that
+records which repository each belongs to. Its six subcommands are the caller half of the
+repository-key capabilities described in `docs/agent-capabilities.md`, and `key status
+--remote` is the only one that talks to OMC at all, by reusing the `mcp` bridge's transport,
+credential and refusal handling for two reads. The plaintext exists only inside `key exec`
+and the child process it starts, or, when `key install` was run deliberately, in the
+runtime's own configuration file; `docs/repo-key-client.md` is the operating runbook.
 
 Neither can approve operations, submit secrets, or complete OAuth. A prepared operation
 returns its id and a link to `<console>/authorize/<id>`. That route is

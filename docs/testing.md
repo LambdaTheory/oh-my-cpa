@@ -32,6 +32,60 @@ display spelling own rendered amount and identity wiring. The `repo-key-approval
 pending/settled approval geometry, scrolling and hit-testing at desktop and phone widths;
 DOM presence alone does not certify that a clipped approval can be reviewed.
 
+## Repository key client regressions
+
+The caller side of the same feature (`oh-my-cpa key`, `docs/repo-key-client.md`) is checked at
+the Go layer, in the package behind the `key` subcommands (internal/keyclient), because every
+claim there is about the filesystem, a byte stream, or a child process rather than a browser.
+The home layer owns resolution order (`--home` over `OMC_HOME` over the default),
+relative-path handling, the directory layout, and the two permission claims kept
+deliberately apart: Unix asserts `0700`/`0600` through `Mode().Perm()` on a Linux runner,
+while Windows asserts the DACL — no `Everyone`, `BUILTIN\Users` or `Authenticated Users`
+allow entry, current-user control — and never `Mode().Perm()`, which on Windows only carries
+the read-only bit. A filesystem that cannot hold an ACL must produce `home_insecure`, so the
+refusal is tested rather than assumed.
+
+`key gen` owns stdout purity (one `x25519:` line, nothing else), reuse without rotation,
+and repair of a record whose public key is missing. `key accept` owns the parse and
+validation ladder — result wrapper, bare envelope, string-wrapped inner envelope, one
+level of `data` — and, most importantly, the negative case: an envelope sealed to another
+key is refused with nothing written, so "stored an envelope that can never open" is
+unrepresentable. `key status` owns the offline report from local state, orphan detection
+when `state.json` is gone, and the `--remote` refresh including a single repository's
+failure among successes. `key exec` is tested through a helper child process that prints the
+masked variables and the HTTP status it got from a test gateway: the claim is "the child
+holds the key and can use it", not "an environment slice was built". The same helper proves
+the absence claim — no plaintext in stdout, stderr or the parent's arguments — and that a
+failed preflight never starts the child.
+
+`key install` and `key purge` are tested against temporary configuration paths, never the
+user's own: the JSON editor preserves unknown keys and refuses JSONC instead of rewriting
+it, the TOML editor replaces only its marked block, a backup is taken before any write and
+a failed readback restores it, and a value whose fingerprint is not this repository's is
+left alone. `install` also owns the "one slot per runtime" replacement and `--replace`
+refusal; `purge` owns full removal, single-runtime removal, `--dry-run` changing nothing,
+idempotence, and that after a purge the same `exec` fails with `key_not_found`.
+
+The end-to-end path — generate, apply, approve, ciphertext, masked exec against a fake CPA,
+purge, then the same exec failing — lives in that package's e2e directory behind the
+`test:key-e2e` entry. It is a local entry, not part of `verify:full` or CI. It proves the
+key is accepted by a gateway that checks the bearer credential; it does not prove CPA's
+routing or a real Claude Code, Codex or OpenCode run, which stay manual probes recorded
+with the runtime version.
+
+The claims are owned by `internal/keyclient` and `cmd/oh-my-cpa`, at this granularity:
+
+| Claim | Packages and files | Representative cases |
+| --- | --- | --- |
+| home resolution, layout, file names, `home_insecure` | `internal/keyclient/home_test.go`, `home_unix_test.go`, `home_windows_test.go` | `TestResolveHomePrecedence`, `TestEnsureCreatesLayout`, `TestFileStemMapping`, `TestHomePermissionsAreOwnerOnly`, `TestHomeACLIsOwnerOnly` |
+| `key gen` stdout purity, reuse, repair | `internal/keyclient/keystore_test.go`, `cmd/oh-my-cpa/key_test.go` | `TestGenerateCreatesThenReuses`, `TestGenerateRepairsStateFromAnExistingKey`, `TestKeyGenStdoutIsOnlyThePublicKey`, `TestKeyGenSecondRunReusesAndSaysSo` |
+| `key accept` parse ladder, wrong-key refusal | `internal/keyclient/accept_test.go`, `cmd/oh-my-cpa/keyaccept_test.go` | `TestParseCiphertextResultAcceptsBothShapes`, `TestAcceptRefusesAnEnvelopeForAnotherKey`, `TestAcceptReplacesThePreviousEnvelope`, `TestKeyAcceptStoresTheEnvelopeAndPrintsOneLine` |
+| `key status` local report, orphans, `--remote` partial failure, caller identity | `internal/keyclient/status_test.go`, `remote_test.go`, `cmd/oh-my-cpa/keystatus_test.go` | `TestBuildReportTellsTheThreeStatesApart`, `TestBuildReportOnAMachineWithNoKeys`, `TestRefreshRemoteKeepsLocalStateWhenOneReadFails`, `TestKeyStatusRemoteNeedsConfiguration`, `TestNewRemoteClientReportsTheSameCallerAsMCP` |
+| `key exec` helper child, plaintext boundary, preflight | `internal/keyclient/exec_test.go`, `runtime_test.go`, `cmd/oh-my-cpa/keyexec_test.go` | `TestExecClaudeChildSeesTheKeyAndNothingElse`, `TestExecCodexChildSeesTheKeyAndTheProviderFlags`, `TestExecOpenCodeChildSeesTheMergedConfiguration`, `TestExecWritesNothing`, `TestExecMissingKeyNeverStartsTheChild` |
+| `key install` / `key purge` temporary configuration, backup, rollback, fingerprint | `internal/keyclient/install_test.go`, `jsondoc_test.go`, `tomlblock_test.go`, `purge_test.go`, `cmd/oh-my-cpa/keyinstall_test.go`, `keypurge_test.go` | `TestInstallClaudeRefusesAnExistingAPIKey`, `TestInstallBackupHoldsThePreviousFileExactly`, `TestInstallRequiresReplaceForAForeignSlot`, `TestPurgeDryRunChangesNothing`, `TestPurgeRefusesAValueItDoesNotOwn`, `TestKeyInstallConflictIsExitFive` |
+| dispatcher `--json` failure envelope | `cmd/oh-my-cpa/key_test.go` | `TestKeyJSONFailureEnvelope`, `TestKeyJSONFalseKeepsTheTextFailure`, `TestKeyJSONAfterTheTerminatorIsTheChildsArgument` |
+| seven-step e2e | `internal/keyclient/e2e/e2e_test.go` and its fixtures | `TestRepoKeyDeliveryLoop`; entry `scripts/key-e2e.mjs` / `test:key-e2e` |
+
 ## Prebuilt deployment verification
 
 `scripts/prebuilt-web.test.mjs` owns immutable-revision preparation, caller

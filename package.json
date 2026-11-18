@@ -46,6 +46,7 @@
     "test:i18n": "node --test scripts/check-missing-i18n.test.mjs",
     "test:feedback": "node --test scripts/check-feedback.test.mjs",
     "test:install-chromium": "node --test scripts/install-chromium.test.mjs",
+    "test:key-e2e": "node scripts/key-e2e.mjs",
     "test:logic": "node scripts/test-logic.mjs",
     "test:mask-key": "node --experimental-strip-types scripts/test-mask-key.ts",
     "test:motion": "node --test scripts/check-motion.test.mjs",
