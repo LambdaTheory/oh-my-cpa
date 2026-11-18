@@ -40,10 +40,9 @@ type modelListResponse struct {
 
 // ParseModelList reads the `--models` value: a comma-separated list of model ids.
 //
-// An empty value means "not given" and returns no list, which is what makes an explicit
-// empty string different from an omitted flag only in that it is still empty. A value
-// that names no id at all (only commas and spaces) is refused rather than treated as
-// "not given": the person asked for a list and did not give one.
+// An empty value means "not given" and returns no list; the caller then reads the
+// gateway. A value that names no id at all (only commas and spaces) is refused rather
+// than treated as "not given": the person asked for a list and did not give one.
 func ParseModelList(value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, nil
