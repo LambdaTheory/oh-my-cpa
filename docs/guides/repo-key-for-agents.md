@@ -182,9 +182,12 @@ curl -fsS -X POST "$INVOKE" \
   -d '{"name":"repo_key_query","arguments":{"repo":"<org>/<repo>"}}'
 ```
 
-A successful call answers `{"status":"success","data":{...}}`. A refusal answers HTTP 400
-with `{"code":"<code>"}`; a missing or wrong credential answers HTTP 401 with
-`{"code":"authentication_required"}`.
+An authenticated call answers HTTP 200 with a result envelope: success is
+`{"status":"success","data":{...}}`, a refused call is
+`{"status":"error","code":"<code>","detail":"..."}` (the detail is written for the caller).
+Authentication failure answers HTTP 401 with `{"code":"authentication_required"}`. A tool the
+credential may not use, or arguments the schema rejects, answers HTTP 400 with
+`{"code":"capability_forbidden"}` / `{"code":"invalid_tool_arguments"}`.
 
 ### The tools
 
@@ -245,13 +248,14 @@ curl -fsS -X POST "$INVOKE" \
 and give `approval_url` to the operator. If the caller was already approved for this
 repository with this public key, `data.status` is `approved` and you skip to step 5.
 **Failure:**
-- Missing `X-Omc-Agent` → HTTP 400 `invalid_parameters`; the MCP tool error reads
-  `The agent name is required and must be at most 128 characters.`
-- Missing `X-Omc-Device` → `The device name could not be determined; reconnect with a device
-  header.`
-- Read-only token → `{"code":"capability_forbidden"}`. Apply needs the management key, or
-  the operator files it from the console.
-- `purpose` empty or over 500 characters → `invalid_parameters`.
+- Missing `X-Omc-Agent` → result `{"status":"error","code":"invalid_parameters","detail":"The agent
+  name is required and must be at most 128 characters."}`.
+- Missing `X-Omc-Device` → the same shape with `The device name could not be determined;
+  reconnect with a device header.`
+- Read-only token → HTTP 400 `{"code":"capability_forbidden"}`. Apply needs the management
+  key, or the operator files it from the console.
+- `purpose` empty or over 500 characters → `invalid_parameters` with a detail naming the
+  limit.
 - Existing MCP connections keep the headers they connected with; after changing
   `X-Omc-Agent`/`X-Omc-Device`, reconnect the MCP session.
 
@@ -276,8 +280,10 @@ Or call `repo_key_status` with `{"application_id":"<id>"}`.
   asks.
 - The link is older than 24 hours (`approval_link_expired` on the approval page) — call
   `repo_key_apply` again for a fresh application and link; or ask the operator to re-issue
-  the link from the console. Do not fetch ciphertext for a pending application
-  (`application_not_approved`).
+  the link from the console.
+- Fetching `repo_key_ciphertext` before approval returns a result with
+  `{"status":"error","code":"operation_failed"}` and no detail (the server does not expose
+  the pending reason). Nothing was delivered — wait for the decision.
 - `remote_not_configured` (exit 3) — `OMCPA_SERVER_URL` or the credential is missing locally;
   local state is unchanged.
 - `remote_unavailable` (exit 1) — OMC could not be reached. Keep polling offline with
@@ -371,11 +377,12 @@ code list is in [`repo-key-agent.json`](repo-key-agent.json).
 
 | Code | Exit | What to do |
 | --- | --- | --- |
-| `agent required` (MCP detail: `The agent name is required ...`) | 400 HTTP / tool error | Set `X-Omc-Agent` (or `OMCPA_AGENT_NAME`) and reconnect the MCP session. |
-| `The device name could not be determined` | 400 HTTP / tool error | Set `X-Omc-Device` (or `OMCPA_DEVICE_NAME`) and reconnect. |
-| `capability_forbidden` | 400 HTTP / tool error | The credential is read-only or lacks the tool. Apply needs the management key or a console-filed application. |
-| `invalid_parameters` | 400 HTTP / tool error | A required field is missing or too long. Read the detail. |
-| `application_not_approved` | tool error | Do not fetch ciphertext yet; wait for the approval. |
+| `agent required` (result detail: `The agent name is required ...`) | `invalid_parameters` result | Set `X-Omc-Agent` (or `OMCPA_AGENT_NAME`) and reconnect the MCP session. |
+| `The device name could not be determined` | `invalid_parameters` result | Set `X-Omc-Device` (or `OMCPA_DEVICE_NAME`) and reconnect. |
+| `capability_forbidden` | HTTP 400 | The credential is read-only or lacks the tool. Apply needs the management key or a console-filed application. |
+| `invalid_tool_arguments` | HTTP 400 | The arguments do not match the tool schema (for example an extra `agent` field). Use only the documented arguments. |
+| `invalid_parameters` | error result | A required field is missing or too long. Read the detail. |
+| `operation_failed` on `repo_key_ciphertext` | error result | The application is not approved yet; the server does not expose the pending reason. Wait for the decision. |
 | `approval_link_expired` | approval page | Apply again for a fresh application and link. |
 | `models_unavailable` | 1 | OpenCode could not read the gateway's `/v1/models`. Fix the gateway address/network, or pass `--models`. Nothing was written or started. |
 | `models_required` | 3 | The gateway named no usable model ids. Pass `--models id1,id2`. |
