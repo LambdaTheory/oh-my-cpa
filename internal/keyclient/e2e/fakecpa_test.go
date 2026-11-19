@@ -109,6 +109,23 @@ func (g *fakeCPA) handle(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/yaml")
 		writer.WriteHeader(http.StatusOK)
 		_, _ = writer.Write([]byte("config-version: 8\n"))
+	case request.Method == http.MethodGet && request.URL.Path == "/v1/models":
+		// The OpenAI-compatible model listing `key exec`/`key install` read for the
+		// OpenCode provider. It is gated by the client keys exactly like inference is,
+		// because the caller authenticates with the repository key, not the
+		// management key.
+		token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+		if !g.clientKeyAuthorized(token) {
+			writeFixtureJSON(writer, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+			return
+		}
+		writeFixtureJSON(writer, http.StatusOK, map[string]any{
+			"object": "list",
+			"data": []any{
+				map[string]any{"id": "gpt-e2e"},
+				map[string]any{"id": "claude-e2e"},
+			},
+		})
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
 		g.handleInference(writer, request, false)
 	case request.Method == http.MethodPost && request.URL.Path == "/v1/messages":
@@ -171,6 +188,19 @@ func (g *fakeCPA) handleInference(writer http.ResponseWriter, request *http.Requ
 
 func (g *fakeCPA) authorized(request *http.Request) bool {
 	return request.Header.Get("Authorization") == "Bearer "+g.managementKey
+}
+
+// clientKeyAuthorized reports whether token is one of the keys the configuration write
+// stored. It is the gate the real gateway puts on its model listing and inference alike.
+func (g *fakeCPA) clientKeyAuthorized(token string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, key := range g.clientKeys {
+		if key != "" && key == token {
+			return true
+		}
+	}
+	return false
 }
 
 func writeFixtureJSON(writer http.ResponseWriter, status int, body any) {

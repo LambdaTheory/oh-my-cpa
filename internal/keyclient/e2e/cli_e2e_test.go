@@ -392,6 +392,7 @@ func TestKeyCLIFullLoop(t *testing.T) {
 		"one_content":         opencodeReport.EnvCounts["OPENCODE_CONFIG_CONTENT"] == 1,
 		"provider_written":    containsString(opencodeReport.OpenCodeProviders, "oh-my-cpa"),
 		"provider_other_kept": containsString(opencodeReport.OpenCodeProviders, "other"),
+		"models_declared":     containsString(opencodeReport.OpenCodeModels, "gpt-e2e"),
 		"theme_kept":          opencodeReport.OpenCodeTheme == "dark",
 		"base_url_v1":         opencodeReport.Inference != nil && strings.HasSuffix(opencodeReport.Inference.Base, "/v1"),
 		"gateway_200":         opencodeReport.Inference != nil && opencodeReport.Inference.Status == http.StatusOK,
@@ -406,7 +407,8 @@ func TestKeyCLIFullLoop(t *testing.T) {
 	}
 	loop.step("exec-opencode", map[string]any{
 		"exit_code": opencodeExec.Code, "checks": opencodeChecks,
-		"providers": opencodeReport.OpenCodeProviders, "parent_checked": opencodeReport.ParentChecked,
+		"providers": opencodeReport.OpenCodeProviders, "models": opencodeReport.OpenCodeModels,
+		"parent_checked": opencodeReport.ParentChecked,
 	})
 	loop.require("exec-opencode", opencodeChecks, tail(redact(opencodeExec.Stderr, secret)))
 

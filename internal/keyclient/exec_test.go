@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -99,6 +101,7 @@ type helperOpenCode struct {
 	BaseURL       string   `json:"base_url"`
 	APIKeySha256  string   `json:"api_key_sha256"`
 	APIKeyPresent bool     `json:"api_key_present"`
+	ModelIDs      []string `json:"model_ids"`
 	Theme         string   `json:"theme"`
 }
 
@@ -176,6 +179,12 @@ func observeOpenCode(content string) *helperOpenCode {
 	if apiKey, ok := options["apiKey"].(string); ok {
 		observation.APIKeyPresent = true
 		observation.APIKeySha256 = digestOf(apiKey)
+	}
+	if models, ok := ours["models"].(map[string]any); ok {
+		for id := range models {
+			observation.ModelIDs = append(observation.ModelIDs, id)
+		}
+		sort.Strings(observation.ModelIDs)
 	}
 	return observation
 }
@@ -449,6 +458,9 @@ func TestExecOpenCodeChildSeesTheMergedConfiguration(t *testing.T) {
 		Argv:    helperCommand(),
 		Env:     environment,
 		Home:    fixture.Home,
+		// An explicit list is used as given: no gateway is listening on 8317, and this
+		// run must still start, which is the offline path --models promises.
+		Models: []string{"gpt-6.2-sol"},
 	})
 	if err != nil {
 		t.Fatalf("RunChild: %v (stderr=%s)", err, stderr)
@@ -475,8 +487,83 @@ func TestExecOpenCodeChildSeesTheMergedConfiguration(t *testing.T) {
 	if !report.OpenCode.APIKeyPresent || report.OpenCode.APIKeySha256 != digestOf(sampleKey) {
 		t.Fatalf("the key was not carried to the child intact")
 	}
+	if !slices.Equal(report.OpenCode.ModelIDs, []string{"gpt-6.2-sol"}) {
+		t.Fatalf("the child saw models %v, want the explicit list", report.OpenCode.ModelIDs)
+	}
 	if strings.Contains(stdout, sampleKey) || strings.Contains(stderr, sampleKey) {
 		t.Fatalf("the key reached an output stream")
+	}
+}
+
+// TestExecOpenCodeFetchesModelsFromTheGateway is the default path: without --models the
+// command reads GET <root>/v1/models with the decrypted key before the child starts and
+// declares what the gateway advertises.
+func TestExecOpenCodeFetchesModelsFromTheGateway(t *testing.T) {
+	fixture := newExecFixture(t)
+	var authorization string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		authorization = request.Header.Get("Authorization")
+		_, _ = writer.Write([]byte(`{"object":"list","data":[{"id":"gpt-6.2-sol"},{"id":"claude-sonnet-5-5"}]}`))
+	}))
+	defer server.Close()
+
+	status, stdout, stderr, err := runExec(t, ExecOptions{
+		Runtime: RuntimeOpenCode,
+		Repo:    fixture.Repo,
+		BaseURL: server.URL,
+		Argv:    helperCommand(),
+		Env:     helperEnvironment(helperModeEnvReport),
+		Home:    fixture.Home,
+	})
+	if err != nil {
+		t.Fatalf("RunChild: %v (stderr=%s)", err, stderr)
+	}
+	if status != EXIT_OK {
+		t.Fatalf("status = %d (stderr=%s)", status, stderr)
+	}
+	if authorization != "Bearer "+sampleKey {
+		t.Fatal("the model-list request did not carry the decrypted key as a bearer token")
+	}
+	report := decodeReport(t, stdout)
+	if report.OpenCode == nil || !slices.Equal(report.OpenCode.ModelIDs, []string{"claude-sonnet-5-5", "gpt-6.2-sol"}) {
+		t.Fatalf("the child saw %+v, want the gateway's model list", report.OpenCode)
+	}
+	if strings.Contains(stdout, sampleKey) || strings.Contains(stderr, sampleKey) {
+		t.Fatalf("the key reached an output stream")
+	}
+}
+
+// TestExecOpenCodeFailsBeforeTheChildWhenTheGatewayIsUnreachable is the refusal the
+// acceptance gap called for: a provider without models is never started, so a gateway
+// that cannot answer is this command's error rather than a ProviderModelNotFoundError
+// from a child that could not have worked.
+func TestExecOpenCodeFailsBeforeTheChildWhenTheGatewayIsUnreachable(t *testing.T) {
+	fixture := newExecFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {}))
+	address := server.URL
+	server.Close()
+
+	marker := filepath.Join(t.TempDir(), "started")
+	environment := append(helperEnvironment(helperModeEnvReport), helperMarkerEnv+"="+marker)
+	status, stdout, _, err := runExec(t, ExecOptions{
+		Runtime: RuntimeOpenCode,
+		Repo:    fixture.Repo,
+		BaseURL: address,
+		Argv:    helperCommand(),
+		Env:     environment,
+		Home:    fixture.Home,
+	})
+	if CodeOf(err) != CODE_MODELS_UNAVAILABLE {
+		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_MODELS_UNAVAILABLE, err)
+	}
+	if status != EXIT_FAILED {
+		t.Fatalf("status = %d, want %d", status, EXIT_FAILED)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatal("the child started even though the model list could not be read")
+	}
+	if stdout != "" {
+		t.Fatalf("a failed exec wrote to stdout: %q", stdout)
 	}
 }
 

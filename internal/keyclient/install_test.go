@@ -49,8 +49,20 @@ func seedRepo(t *testing.T, home Home, repo string, gatewayKey string) installed
 	return installedRepo{Record: generated.Record, Key: gatewayKey}
 }
 
+// testModelIDs stands in for a gateway's model list. The installer needs at least one
+// id for OpenCode, and using the same pair everywhere keeps an install's output easy to
+// compare between tests.
+var testModelIDs = []string{"claude-sonnet-5-5", "gpt-6.2-sol"}
+
 // installForTest runs one install against a temp config path.
 func installForTest(t *testing.T, home Home, repo installedRepo, runtime Runtime, configPath string, replace bool) InstallResult {
+	t.Helper()
+	return installWithModelsForTest(t, home, repo, runtime, configPath, replace, testModelIDs)
+}
+
+// installWithModelsForTest is installForTest with an explicit model list, so a test can
+// exercise the refused or replacement paths.
+func installWithModelsForTest(t *testing.T, home Home, repo installedRepo, runtime Runtime, configPath string, replace bool, models []string) InstallResult {
 	t.Helper()
 	key, err := InstallKeyMaterial(home, repo.Record.Repo)
 	if err != nil {
@@ -64,6 +76,7 @@ func installForTest(t *testing.T, home Home, repo installedRepo, runtime Runtime
 		BaseURL:    "http://127.0.0.1:8317",
 		ConfigPath: configPath,
 		Replace:    replace,
+		Models:     models,
 		Now:        time.Date(2026, 11, 17, 9, 15, 0, 0, time.UTC),
 	})
 	if err != nil {
@@ -291,8 +304,8 @@ func TestInstallBackupHoldsThePreviousFileExactly(t *testing.T) {
 	}
 }
 
-// TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape covers the JSON structure the
-// plan fixes: v1 singular `provider`, one new entry under it, no `models` map.
+// TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape covers the JSON structure:
+// v1 singular `provider`, one new entry under it, and the model table OpenCode needs.
 func TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape(t *testing.T) {
 	home := newTestHome(t)
 	repo := seedRepo(t, home, "org/repo", TEST_GATEWAY_KEY)
@@ -336,8 +349,17 @@ func TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape(t *testing.T) {
 	if installed["name"] != "Oh My CPA (org/repo)" {
 		t.Fatalf("name = %v", installed["name"])
 	}
-	if _, hasModels := installed["models"]; hasModels {
-		t.Fatal("install wrote a models map")
+	models, ok := installed["models"].(map[string]any)
+	if !ok {
+		t.Fatalf("models is not an object: %T", installed["models"])
+	}
+	if len(models) != len(testModelIDs) {
+		t.Fatalf("models = %v, want the %d ids the install was given", models, len(testModelIDs))
+	}
+	for _, id := range testModelIDs {
+		if _, present := models[id]; !present {
+			t.Fatalf("model %q is missing: %v", id, models)
+		}
 	}
 	options, ok := installed["options"].(map[string]any)
 	if !ok {
@@ -348,6 +370,129 @@ func TestInstallOpenCodeKeepsOtherProvidersAndWritesV1Shape(t *testing.T) {
 	}
 	if options["baseURL"] != "http://127.0.0.1:8317/v1" {
 		t.Fatalf("options.baseURL = %v", options["baseURL"])
+	}
+	if decoded["theme"] != "dark" {
+		t.Fatal("install dropped an unrelated top-level member")
+	}
+}
+
+// TestInstallOpenCodeWithoutModelsWritesNothing is the replacement for "write the
+// provider and hope": OpenCode refuses a provider that declares no models, so an
+// install without a list is refused before the backup and leaves no file behind.
+func TestInstallOpenCodeWithoutModelsWritesNothing(t *testing.T) {
+	home := newTestHome(t)
+	repo := seedRepo(t, home, "org/repo", TEST_GATEWAY_KEY)
+	config := filepath.Join(t.TempDir(), "opencode.json")
+	key, err := InstallKeyMaterial(home, repo.Record.Repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Install(InstallOptions{
+		Home:       home,
+		Runtime:    RuntimeOpenCode,
+		Repo:       repo.Record,
+		Key:        key,
+		BaseURL:    "http://127.0.0.1:8317",
+		ConfigPath: config,
+		Now:        time.Date(2026, 11, 17, 9, 15, 0, 0, time.UTC),
+	})
+	if CodeOf(err) != CODE_MODELS_REQUIRED {
+		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_MODELS_REQUIRED, err)
+	}
+	if ExitCode(err) != EXIT_CONFIG {
+		t.Fatalf("exit = %d, want %d", ExitCode(err), EXIT_CONFIG)
+	}
+	if _, statErr := os.Stat(config); !os.IsNotExist(statErr) {
+		t.Fatalf("a refused install created %s", config)
+	}
+	entries, readErr := os.ReadDir(home.BackupsDir())
+	if readErr == nil && len(entries) != 0 {
+		t.Fatalf("a refused install left %d backups", len(entries))
+	}
+}
+
+// TestInstallOpenCodeIsIdempotentWithModels is the repeat-install rule for the new
+// model table: the same list produces the same bytes, one backup, and one entry per
+// model.
+func TestInstallOpenCodeIsIdempotentWithModels(t *testing.T) {
+	home := newTestHome(t)
+	repo := seedRepo(t, home, "org/repo", TEST_GATEWAY_KEY)
+	config := filepath.Join(t.TempDir(), "opencode.json")
+	if err := os.WriteFile(config, []byte(`{"theme":"dark"}`), FILE_MODE); err != nil {
+		t.Fatal(err)
+	}
+	installForTest(t, home, repo, RuntimeOpenCode, config, false)
+	afterFirst, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := installForTest(t, home, repo, RuntimeOpenCode, config, false)
+	if !second.Unchanged {
+		t.Fatal("the second install was not reported as unchanged")
+	}
+	afterSecond, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(afterFirst, afterSecond) {
+		t.Fatalf("the second install changed the file:\n%s\n---\n%s", afterFirst, afterSecond)
+	}
+	if entries, readErr := os.ReadDir(home.BackupsDir()); readErr != nil || len(entries) != 1 {
+		t.Fatalf("backups = %v (err=%v), want the one the first install took", entries, readErr)
+	}
+	decoded := readJSONFile(t, config)
+	installed := decoded["provider"].(map[string]any)[OPENCODE_PROVIDER_ID].(map[string]any)
+	models := installed["models"].(map[string]any)
+	if len(models) != len(testModelIDs) {
+		t.Fatalf("models = %v, want no duplicates", models)
+	}
+}
+
+// TestInstallOpenCodeReplacesTheModelTable keeps the table tied to the gateway: every
+// install replaces the previous list, including entries the person added under this
+// tool's own provider, and leaves every other provider alone.
+func TestInstallOpenCodeReplacesTheModelTable(t *testing.T) {
+	home := newTestHome(t)
+	repo := seedRepo(t, home, "org/repo", TEST_GATEWAY_KEY)
+	config := filepath.Join(t.TempDir(), "opencode.json")
+	original := `{
+  "provider": {
+    "other": {"npm": "@ai-sdk/openai", "options": {"baseURL": "http://other/v1"}},
+    "oh-my-cpa": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Oh My CPA (org/repo)",
+      "models": {"retired-model": {"name": "Retired"}, "custom-model": {"name": "Custom"}},
+      "options": {"baseURL": "http://127.0.0.1:8317/v1", "apiKey": "` + TEST_GATEWAY_KEY + `"}
+    }
+  },
+  "theme": "dark"
+}
+`
+	if err := os.WriteFile(config, []byte(original), FILE_MODE); err != nil {
+		t.Fatal(err)
+	}
+	installForTest(t, home, repo, RuntimeOpenCode, config, false)
+
+	decoded := readJSONFile(t, config)
+	providers := decoded["provider"].(map[string]any)
+	installed := providers[OPENCODE_PROVIDER_ID].(map[string]any)
+	models := installed["models"].(map[string]any)
+	if len(models) != len(testModelIDs) {
+		t.Fatalf("models = %v, want exactly the list this install was given", models)
+	}
+	for _, id := range testModelIDs {
+		if _, present := models[id]; !present {
+			t.Fatalf("model %q is missing: %v", id, models)
+		}
+	}
+	for _, retired := range []string{"retired-model", "custom-model"} {
+		if _, present := models[retired]; present {
+			t.Fatalf("the retired model %q survived the install: %v", retired, models)
+		}
+	}
+	other := providers["other"].(map[string]any)
+	if other["options"].(map[string]any)["baseURL"] != "http://other/v1" {
+		t.Fatal("install changed another provider")
 	}
 	if decoded["theme"] != "dark" {
 		t.Fatal("install dropped an unrelated top-level member")
@@ -793,7 +938,7 @@ func TestInstallVerificationRepairsAFileThatLostContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := RepoState{Repo: "org/repo"}
-	err := verifyRuntimeEdit(RuntimeClaude, original, config, record, "http://127.0.0.1:8317", TEST_GATEWAY_KEY)
+	err := verifyRuntimeEdit(RuntimeClaude, original, config, record, "http://127.0.0.1:8317", TEST_GATEWAY_KEY, nil)
 	if err == nil {
 		t.Fatal("verification accepted a file that lost a member")
 	}
@@ -825,7 +970,7 @@ func TestInstallVerificationReportsAnotherRepositorysValue(t *testing.T) {
 	if err := os.WriteFile(config, content, FILE_MODE); err != nil {
 		t.Fatal(err)
 	}
-	err := verifyRuntimeEdit(RuntimeClaude, nil, config, RepoState{Repo: "org/repo"}, "http://127.0.0.1:8317", TEST_GATEWAY_KEY)
+	err := verifyRuntimeEdit(RuntimeClaude, nil, config, RepoState{Repo: "org/repo"}, "http://127.0.0.1:8317", TEST_GATEWAY_KEY, nil)
 	if err == nil {
 		t.Fatal("verification accepted a file that holds another value")
 	}
