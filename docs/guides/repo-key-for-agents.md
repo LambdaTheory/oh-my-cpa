@@ -74,8 +74,8 @@ oh-my-cpa key --help
 ```
 
 If `~/.local/bin` is not on your `PATH` in new shells, add
-`export PATH="$HOME/.local/bin:$PATH"` to the shell profile (or install to a directory already
-on `PATH`).
+`export PATH="$HOME/.local/bin:$PATH"` to the shell profile (for example `~/.bashrc` or
+`~/.profile`, whichever your shell reads), or install to a directory already on `PATH`.
 
 **Success:** `sha256sum -c` prints `<name>: OK`, and `key --help` prints
 `Usage: oh-my-cpa key <command> [options]` followed by the six commands `accept`, `exec`,
@@ -246,11 +246,13 @@ then `gen` is the only supported rotation, and it requires a new approval.
 
 ### Step 3 — apply (MCP `repo_key_apply`)
 
-Call the tool with the repository, a one-sentence purpose, and the public key:
+Call the tool with the repository, a one-sentence purpose, and the public key. The example
+uses `-sS`, not `-f`, so that a refusal's JSON body stays visible; check `status` in the
+answer.
 
 ```bash
 INVOKE="https://omc.madebynight.top/omc/api/v1/capabilities/invoke"
-curl -fsS -X POST "$INVOKE" \
+curl -sS -X POST "$INVOKE" \
   -H "Authorization: Bearer $OMCPA_CPA_MANAGEMENT_KEY" \
   -H "X-Omc-Agent: $OMCPA_AGENT_NAME" \
   -H "X-Omc-Device: $OMCPA_DEVICE_NAME" \
@@ -315,20 +317,27 @@ Poll no more often than every 30 seconds.
 
 ### Step 5 — fetch the envelope and accept it
 
+Fetch to a temporary file first and check the HTTP status, so an authentication or rate-limit
+failure is not mistaken for an empty envelope:
+
 ```bash
-set -o pipefail   # bash: a failed curl must not look like an empty envelope
-curl -fsS -X POST "$INVOKE" \
+INVOKE="https://omc.madebynight.top/omc/api/v1/capabilities/invoke"
+umask 077
+RESPONSE="$(mktemp)"
+STATUS="$(curl -sS -o "$RESPONSE" -w '%{http_code}' -X POST "$INVOKE" \
   -H "Authorization: Bearer $OMCPA_CPA_MANAGEMENT_KEY" \
   -H "X-Omc-Agent: $OMCPA_AGENT_NAME" \
   -H "X-Omc-Device: $OMCPA_DEVICE_NAME" \
   -H "Content-Type: application/json" \
-  -d '{"name":"repo_key_ciphertext","arguments":{"application_id":"<application-id>"}}' \
-  | oh-my-cpa key accept --repo <org>/<repo> --application-id <application-id>
+  -d '{"name":"repo_key_ciphertext","arguments":{"application_id":"<application-id>"}}')"
+if [ "$STATUS" != "200" ]; then cat "$RESPONSE"; echo; echo "HTTP $STATUS"; exit 1; fi
+oh-my-cpa key accept --repo <org>/<repo> --application-id <application-id> < "$RESPONSE"
+rm -f "$RESPONSE"
 ```
 
 If the ciphertext arrived through an MCP tool result instead, pipe that result object into
-the same command. `key accept` unwraps the capability envelope, a bare data object, or the
-inner envelope.
+the same `key accept` command. `key accept` unwraps the capability envelope, a bare data
+object, or the inner envelope.
 
 **Success:** exit 0 and one line `accepted <repo>: key <mask> at <path>` (or `replaced the
 envelope ...` when one existed).
@@ -348,10 +357,10 @@ oh-my-cpa key exec --runtime opencode --repo <org>/<repo> -- opencode run "<prom
 
 `exec` prints nothing of its own. **Success:** the child runs and its output appears; the
 child's exit code becomes `key exec`'s exit code once the child has started.
-**Failure before the child starts:** `key_not_found` (exit 4) — run `key gen`; 
-`envelope_missing` (exit 4) — run step 5; `base_url_required` (exit 3); `runtime_unknown`
-(exit 2); `exec_failed` (exit 1) — the runtime program is missing from `PATH`, not executable,
-or the working directory is gone.
+**Failure before the child starts:** `key_not_found` (exit 4) — run `key gen`;
+`envelope_missing` (exit 4) — run step 5; `base_url_required` (exit 3) is checked only after
+the key and envelope exist; `runtime_unknown` (exit 2); `exec_failed` (exit 1) — the runtime
+program is missing from `PATH`, not executable, or the working directory is gone.
 **OpenCode only:** `exec` and `install` read `GET <base-url>/v1/models` with the repository
 key before starting. If the gateway cannot be reached, the command stops with
 `models_unavailable` (exit 1) and nothing is written or started. Fix the gateway address or
@@ -403,6 +412,7 @@ code list is in [`repo-key-agent.json`](repo-key-agent.json).
 | --- | --- | --- |
 | `agent required` (result detail: `The agent name is required ...`) | `invalid_parameters` result | Set `X-Omc-Agent` (or `OMCPA_AGENT_NAME`) and reconnect the MCP session. |
 | `The device name could not be determined` | `invalid_parameters` result | Set `X-Omc-Device` (or `OMCPA_DEVICE_NAME`) and reconnect. |
+| `authentication_required` / `authentication_rate_limited` | HTTP 401 / HTTP 429 | The credential is missing or wrong; repeated failures are rate-limited. Wait, then retry once with the right credential. |
 | `capability_forbidden` | HTTP 400 | The credential is read-only or lacks the tool. Apply needs the management key or a console-filed application. |
 | `invalid_tool_arguments` | HTTP 400 | The arguments do not match the tool schema (for example an extra `agent` field). Use only the documented arguments. |
 | `invalid_parameters` | error result | A required field is missing or too long. Read the detail. |
