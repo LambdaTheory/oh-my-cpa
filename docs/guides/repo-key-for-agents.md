@@ -59,10 +59,11 @@ case "$(uname -m)" in
   *) echo "unsupported architecture: $(uname -m)"; exit 1 ;;
 esac
 BASE="https://github.com/LambdaTheory/oh-my-cpa/releases/download/${VERSION}"
-curl -fsSL -o /tmp/oh-my-cpa.tar.gz "${BASE}/oh-my-cpa_${VERSION}_linux_${ARCH}.tar.gz"
+ASSET="oh-my-cpa_${VERSION}_linux_${ARCH}.tar.gz"
+curl -fsSL -o "/tmp/${ASSET}" "${BASE}/${ASSET}"
 curl -fsSL -o /tmp/checksums.txt "${BASE}/checksums.txt"
 (cd /tmp && grep "linux_${ARCH}\.tar\.gz$" checksums.txt | sha256sum -c -)
-tar -xzf /tmp/oh-my-cpa.tar.gz -C /tmp oh-my-cpa
+tar -xzf "/tmp/${ASSET}" -C /tmp oh-my-cpa
 install -m 0755 /tmp/oh-my-cpa "$HOME/.local/bin/oh-my-cpa"
 oh-my-cpa key --help
 ```
@@ -73,6 +74,10 @@ oh-my-cpa key --help
 **Failure:** a checksum mismatch means the download is corrupt — delete it and download
 again; do not run the binary. `command not found` for `sha256sum` means coreutils is missing.
 If `key --help` prints no `key` commands, the binary is older than this feature.
+
+This archive is the CLI build of `oh-my-cpa` for `key` users; it does not embed the console.
+The console is served by the OMC deployment (`https://omc.madebynight.top/omc`), not by this
+download.
 
 Other platforms (same release, same `checksums.txt`):
 

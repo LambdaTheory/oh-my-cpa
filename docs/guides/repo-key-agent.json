@@ -47,7 +47,8 @@
     },
     "checksums": "checksums.txt",
     "verify": "grep \" linux_${ARCH}\\.tar\\.gz$\" checksums.txt | sha256sum -c -",
-    "success": "sha256sum prints OK and `oh-my-cpa key --help` lists accept, exec, gen, install, purge, status"
+    "success": "sha256sum prints OK and `oh-my-cpa key --help` lists accept, exec, gen, install, purge, status",
+    "notes": "this is the CLI build for key users; it does not embed the console SPA, which is served by the OMC deployment"
   },
   "tools": [
     {
