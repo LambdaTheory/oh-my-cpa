@@ -107,7 +107,7 @@ func TestKeyExecHelp(t *testing.T) {
 		if code != keyclient.EXIT_OK {
 			t.Fatalf("%s: exit = %d (stderr=%s)", flag, code, stderr)
 		}
-		for _, phrase := range []string{"--runtime", "ANTHROPIC_AUTH_TOKEN", "OMC_REPO_KEY", "OPENCODE_CONFIG_CONTENT", "after --"} {
+		for _, phrase := range []string{"--runtime", "--models", "ANTHROPIC_AUTH_TOKEN", "OMC_REPO_KEY", "OPENCODE_CONFIG_CONTENT", "after --"} {
 			if !strings.Contains(stdout, phrase) {
 				t.Fatalf("%s: help is missing %q:\n%s", flag, phrase, stdout)
 			}
@@ -308,5 +308,60 @@ func TestKeyExecCodexRefusesAWrapper(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "key install") {
 		t.Fatalf("the message should offer install: %q", stderr)
+	}
+}
+
+// TestKeyExecOpenCodeWithModelsSkipsTheGateway is the offline path: the explicit list is
+// used as given, so an unreachable gateway does not stop the child.
+func TestKeyExecOpenCodeWithModelsSkipsTheGateway(t *testing.T) {
+	home, _ := newExecCommandHome(t)
+	t.Setenv("OMC_KEY_EXEC_HELPER", "argv")
+	code, stdout, stderr := runKeyCommand(t,
+		"exec", "--home", home, "--repo", "org/repo", "--base-url", closedGatewayAddress(t),
+		"--runtime", "opencode", "--models", "gpt-6.2-sol",
+		"--", os.Args[0], "-test.run=TestKeyExecHelperProcess",
+	)
+	if code != keyclient.EXIT_OK {
+		t.Fatalf("exit = %d (stderr=%s)", code, stderr)
+	}
+	if !strings.Contains(stdout, `"arguments"`) {
+		t.Fatalf("the child did not run: %q", stdout)
+	}
+}
+
+// TestKeyExecOpenCodeWithoutModelsFailsBeforeTheChild is the refusal: a gateway that
+// cannot name the models stops the command before anything is started.
+func TestKeyExecOpenCodeWithoutModelsFailsBeforeTheChild(t *testing.T) {
+	home, _ := newExecCommandHome(t)
+	t.Setenv("OMC_KEY_EXEC_HELPER", "argv")
+	code, stdout, stderr := runKeyCommand(t,
+		"exec", "--home", home, "--repo", "org/repo", "--base-url", closedGatewayAddress(t),
+		"--runtime", "opencode",
+		"--", os.Args[0], "-test.run=TestKeyExecHelperProcess",
+	)
+	if code != keyclient.EXIT_FAILED {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, keyclient.EXIT_FAILED, stderr)
+	}
+	if !strings.Contains(stderr, keyclient.CODE_MODELS_UNAVAILABLE) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("the child ran or the command wrote to stdout: %q", stdout)
+	}
+}
+
+// TestKeyExecModelsOnlyAppliesToOpenCode keeps --models from silently doing nothing on a
+// runtime that has no model table to fill.
+func TestKeyExecModelsOnlyAppliesToOpenCode(t *testing.T) {
+	home, _ := newExecCommandHome(t)
+	code, _, stderr := runKeyCommand(t,
+		"exec", "--home", home, "--repo", "org/repo", "--base-url", "http://127.0.0.1:8317",
+		"--runtime", "claude", "--models", "gpt-6.2-sol", "--", "true",
+	)
+	if code != keyclient.EXIT_USAGE {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, keyclient.EXIT_USAGE, stderr)
+	}
+	if !strings.Contains(stderr, "--models applies only to --runtime opencode") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }

@@ -117,6 +117,7 @@ type maskingReport struct {
 	// receives one merged document. Reporting the shape lets the caller assert both.
 	Overrides         []string `json:"overrides,omitempty"`
 	OpenCodeProviders []string `json:"opencode_providers,omitempty"`
+	OpenCodeModels    []string `json:"opencode_models,omitempty"`
 	OpenCodeTheme     string   `json:"opencode_theme,omitempty"`
 }
 
@@ -182,6 +183,7 @@ func runMaskHelper(t *testing.T) {
 		}
 		secret = observation.APIKey
 		report.OpenCodeProviders = observation.Providers
+		report.OpenCodeModels = observation.Models
 		report.OpenCodeTheme = observation.Theme
 		status, content := callOpenAIShape(observation.BaseURL, secret)
 		report.Inference = &maskingInference{Status: status, Content: content, Base: observation.BaseURL}
@@ -330,6 +332,7 @@ type openCodeObservation struct {
 	BaseURL   string
 	APIKey    string
 	Providers []string
+	Models    []string
 	Theme     string
 }
 
@@ -339,6 +342,7 @@ func readOpenCodeObservation(raw string) (openCodeObservation, error) {
 	var document struct {
 		Theme    string `json:"theme"`
 		Provider map[string]struct {
+			Models  map[string]any `json:"models"`
 			Options struct {
 				BaseURL string `json:"baseURL"`
 				APIKey  string `json:"apiKey"`
@@ -360,10 +364,16 @@ func readOpenCodeObservation(raw string) (openCodeObservation, error) {
 		providers = append(providers, name)
 	}
 	sort.Strings(providers)
+	models := make([]string, 0, len(entry.Models))
+	for id := range entry.Models {
+		models = append(models, id)
+	}
+	sort.Strings(models)
 	return openCodeObservation{
 		BaseURL:   entry.Options.BaseURL,
 		APIKey:    entry.Options.APIKey,
 		Providers: providers,
+		Models:    models,
 		Theme:     document.Theme,
 	}, nil
 }

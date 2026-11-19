@@ -87,6 +87,11 @@ type InjectOptions struct {
 	OpenCodeDocument []byte
 	// OpenCodeConfigPath names that file in error messages.
 	OpenCodeConfigPath string
+	// Models is the list of model ids OpenCode should see under provider.oh-my-cpa.
+	// OpenCode refuses a custom provider that declares no models
+	// (ProviderModelNotFoundError), so RuntimeOpenCode requires at least one id; the
+	// command layer reads it from the gateway or takes it from --models.
+	Models []string
 }
 
 // BaseURL is the endpoint one runtime is pointed at. Claude Code takes the gateway root
@@ -199,7 +204,11 @@ func injectOpenCode(options InjectOptions, baseURL string) (Injection, error) {
 	if strings.TrimSpace(options.Key) == "" {
 		return Injection{}, Errorf(CODE_DECRYPT_FAILED, "the envelope opened to an empty key")
 	}
-	content, err := mergeOpenCodeConfig(options, baseURL)
+	models, err := NormalizeModelIDs(options.Models)
+	if err != nil {
+		return Injection{}, err
+	}
+	content, err := mergeOpenCodeConfig(options, baseURL, models)
 	if err != nil {
 		return Injection{}, err
 	}
@@ -211,7 +220,7 @@ func injectOpenCode(options InjectOptions, baseURL string) (Injection, error) {
 // mergeOpenCodeConfig composes the document OpenCode should see: the user's file, then
 // any inherited OPENCODE_CONFIG_CONTENT over it (the environment is the more specific
 // instruction), then this command's provider entry.
-func mergeOpenCodeConfig(options InjectOptions, baseURL string) (string, error) {
+func mergeOpenCodeConfig(options InjectOptions, baseURL string, models []string) (string, error) {
 	document := map[string]any{}
 	if len(bytes.TrimSpace(options.OpenCodeDocument)) > 0 {
 		if err := json.Unmarshal(options.OpenCodeDocument, &document); err != nil {
@@ -235,8 +244,9 @@ func mergeOpenCodeConfig(options InjectOptions, baseURL string) (string, error) 
 		providers = object
 	}
 	providers[OPENCODE_PROVIDER_ID] = map[string]any{
-		"npm":  OPENCODE_PROVIDER_PACKAGE,
-		"name": PROVIDER_DISPLAY_NAME,
+		"npm":    OPENCODE_PROVIDER_PACKAGE,
+		"name":   PROVIDER_DISPLAY_NAME,
+		"models": modelMembers(models),
 		"options": map[string]any{
 			"baseURL": baseURL,
 			"apiKey":  options.Key,

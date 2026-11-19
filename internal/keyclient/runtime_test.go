@@ -218,6 +218,7 @@ func TestOpenCodeInjectionMergesTheUsersConfiguration(t *testing.T) {
 		Env:                []string{"PATH=/usr/bin", ENV_OPENCODE_CONTENT + "=" + inheritedContent},
 		OpenCodeDocument:   document,
 		OpenCodeConfigPath: "/home/user/.config/opencode/opencode.json",
+		Models:             []string{"gpt-6.2-sol", "claude-sonnet-5-5"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -272,14 +273,48 @@ func TestOpenCodeInjectionMergesTheUsersConfiguration(t *testing.T) {
 	if options["baseURL"] != "http://127.0.0.1:8317/v1" {
 		t.Fatalf("baseURL = %v", options["baseURL"])
 	}
+	models, ok := ours["models"].(map[string]any)
+	if !ok {
+		t.Fatalf("models is not an object: %T", ours["models"])
+	}
+	if len(models) != 2 {
+		t.Fatalf("models = %v, want exactly the two ids", models)
+	}
+	for _, id := range []string{"gpt-6.2-sol", "claude-sonnet-5-5"} {
+		if _, present := models[id]; !present {
+			t.Fatalf("model %q is missing: %v", id, models)
+		}
+	}
 }
 
-func TestOpenCodeInjectionWithoutAFileIsOnlyOurLayer(t *testing.T) {
-	injection, err := RuntimeOpenCode.Inject(InjectOptions{
+// TestOpenCodeInjectionRequiresModels is the gap the acceptance run found: OpenCode
+// refuses a custom provider that declares no models (ProviderModelNotFoundError), so a
+// provider entry without them is refused here instead of started and failing later.
+func TestOpenCodeInjectionRequiresModels(t *testing.T) {
+	_, err := RuntimeOpenCode.Inject(InjectOptions{
 		Key:  sampleKey,
 		Root: "http://127.0.0.1:8317",
 		Argv: []string{"opencode"},
 		Env:  []string{},
+	})
+	if CodeOf(err) != CODE_MODELS_REQUIRED {
+		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_MODELS_REQUIRED, err)
+	}
+	if ExitCode(err) != EXIT_CONFIG {
+		t.Fatalf("exit = %d, want %d", ExitCode(err), EXIT_CONFIG)
+	}
+	if !strings.Contains(MessageOf(err), "--models") {
+		t.Fatalf("the message does not name the way forward: %q", MessageOf(err))
+	}
+}
+
+func TestOpenCodeInjectionWithoutAFileIsOnlyOurLayer(t *testing.T) {
+	injection, err := RuntimeOpenCode.Inject(InjectOptions{
+		Key:    sampleKey,
+		Root:   "http://127.0.0.1:8317",
+		Argv:   []string{"opencode"},
+		Env:    []string{},
+		Models: []string{"gpt-6.2-sol"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +343,7 @@ func TestOpenCodeInjectionRefusesNonJSON(t *testing.T) {
 		Env:                []string{},
 		OpenCodeDocument:   []byte("{\n  // a comment\n  \"theme\": \"dark\"\n}\n"),
 		OpenCodeConfigPath: "/home/user/.config/opencode/opencode.json",
+		Models:             []string{"gpt-6.2-sol"},
 	})
 	if CodeOf(err) != CODE_CONFIG_NOT_JSON {
 		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_CONFIG_NOT_JSON, err)
@@ -319,10 +355,11 @@ func TestOpenCodeInjectionRefusesNonJSON(t *testing.T) {
 
 func TestOpenCodeInjectionRefusesAnInheritedNonJSONContent(t *testing.T) {
 	_, err := RuntimeOpenCode.Inject(InjectOptions{
-		Key:  sampleKey,
-		Root: "http://127.0.0.1:8317",
-		Argv: []string{"opencode"},
-		Env:  []string{ENV_OPENCODE_CONTENT + "=not json"},
+		Key:    sampleKey,
+		Root:   "http://127.0.0.1:8317",
+		Argv:   []string{"opencode"},
+		Env:    []string{ENV_OPENCODE_CONTENT + "=not json"},
+		Models: []string{"gpt-6.2-sol"},
 	})
 	if CodeOf(err) != CODE_CONFIG_NOT_JSON {
 		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_CONFIG_NOT_JSON, err)
@@ -340,6 +377,7 @@ func TestOpenCodeInjectionRefusesAnOversizedMergedDocument(t *testing.T) {
 		Env:                []string{},
 		OpenCodeDocument:   []byte(large),
 		OpenCodeConfigPath: "/home/user/.config/opencode/opencode.json",
+		Models:             []string{"gpt-6.2-sol"},
 	})
 	if CodeOf(err) != CODE_CONFIG_TOO_LARGE {
 		t.Fatalf("code = %q, want %q (err=%v)", CodeOf(err), CODE_CONFIG_TOO_LARGE, err)
@@ -370,10 +408,11 @@ func TestInjectionNeverPutsTheKeyInArgv(t *testing.T) {
 	commands := map[Runtime]string{RuntimeClaude: "claude", RuntimeCodex: "codex", RuntimeOpenCode: "opencode"}
 	for _, runtimeName := range Runtimes() {
 		injection, err := runtimeName.Inject(InjectOptions{
-			Key:  sampleKey,
-			Root: "http://127.0.0.1:8317",
-			Argv: []string{commands[runtimeName]},
-			Env:  []string{},
+			Key:    sampleKey,
+			Root:   "http://127.0.0.1:8317",
+			Argv:   []string{commands[runtimeName]},
+			Env:    []string{},
+			Models: []string{"gpt-6.2-sol"},
 		})
 		if err != nil {
 			t.Fatalf("%s: %v", runtimeName, err)

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,7 +54,7 @@ func TestKeyInstallHelp(t *testing.T) {
 		if code != keyclient.EXIT_OK {
 			t.Fatalf("%s: exit = %d (stderr=%s)", flag, code, stderr)
 		}
-		for _, phrase := range []string{"--runtime", "--replace", "--config", "settings.json", "config.toml", "opencode.json"} {
+		for _, phrase := range []string{"--runtime", "--replace", "--config", "--models", "settings.json", "config.toml", "opencode.json"} {
 			if !strings.Contains(stdout, phrase) {
 				t.Fatalf("%s: help is missing %q:\n%s", flag, phrase, stdout)
 			}
@@ -263,5 +265,87 @@ func TestKeyInstallReportsTheReplacedCodexProvider(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "openai") || !strings.Contains(stdout, "purge") {
 		t.Fatalf("stdout does not say what it replaced and how to undo it:\n%s", stdout)
+	}
+}
+
+// closedGatewayAddress returns the address of a server that has just been shut down, so
+// a request to it fails the way an unreachable gateway does instead of waiting.
+func closedGatewayAddress(t *testing.T) string {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {}))
+	address := server.URL
+	server.Close()
+	return address
+}
+
+// TestKeyInstallOpenCodeWithoutModelsReportsTheGatewayFailure is the refusal the task
+// asks for: no config is written when the model list cannot be read, and the message
+// names both the failure and --models.
+func TestKeyInstallOpenCodeWithoutModelsReportsTheGatewayFailure(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	prepareKeyedRepo(t, home, "org/repo", commandTestGatewayKey)
+	config := filepath.Join(t.TempDir(), "opencode.json")
+	code, stdout, stderr := runKeyCommand(t, "install", "--home", home, "--repo", "org/repo",
+		"--runtime", "opencode", "--config", config, "--base-url", closedGatewayAddress(t))
+	if code != keyclient.EXIT_FAILED {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, keyclient.EXIT_FAILED, stderr)
+	}
+	if !strings.Contains(stderr, keyclient.CODE_MODELS_UNAVAILABLE) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if !strings.Contains(stderr, "--models") {
+		t.Fatalf("the failure does not name the way forward: %q", stderr)
+	}
+	if stdout != "" {
+		t.Fatalf("a failure wrote to stdout: %q", stdout)
+	}
+	if _, err := os.Stat(config); !os.IsNotExist(err) {
+		t.Fatal("a failed install created the configuration file")
+	}
+}
+
+// TestKeyInstallOpenCodeUsesTheExplicitModelList is the offline path: --models skips
+// the gateway request that the address above cannot answer.
+func TestKeyInstallOpenCodeUsesTheExplicitModelList(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	prepareKeyedRepo(t, home, "org/repo", commandTestGatewayKey)
+	config := filepath.Join(t.TempDir(), "opencode.json")
+	code, stdout, stderr := runKeyCommand(t, "install", "--home", home, "--repo", "org/repo",
+		"--runtime", "opencode", "--config", config, "--base-url", closedGatewayAddress(t),
+		"--models", " gpt-6.2-sol, claude-sonnet-5-5 ")
+	if code != keyclient.EXIT_OK {
+		t.Fatalf("exit = %d (stderr=%s)", code, stderr)
+	}
+	if !strings.Contains(stdout, "installed opencode") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	content, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{`"gpt-6.2-sol": {}`, `"claude-sonnet-5-5": {}`} {
+		if !strings.Contains(string(content), id) {
+			t.Fatalf("the written file is missing %s:\n%s", id, content)
+		}
+	}
+}
+
+// TestKeyInstallModelsOnlyAppliesToOpenCode keeps --models from silently doing nothing on
+// a runtime that has no model table to fill.
+func TestKeyInstallModelsOnlyAppliesToOpenCode(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	prepareKeyedRepo(t, home, "org/repo", commandTestGatewayKey)
+	config := filepath.Join(t.TempDir(), "settings.json")
+	code, _, stderr := runKeyCommand(t, "install", "--home", home, "--repo", "org/repo",
+		"--runtime", "claude", "--config", config, "--base-url", "http://127.0.0.1:8317",
+		"--models", "gpt-6.2-sol")
+	if code != keyclient.EXIT_USAGE {
+		t.Fatalf("exit = %d, want %d (stderr=%s)", code, keyclient.EXIT_USAGE, stderr)
+	}
+	if !strings.Contains(stderr, "--models applies only to --runtime opencode") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if _, err := os.Stat(config); !os.IsNotExist(err) {
+		t.Fatal("a refused install created the configuration file")
 	}
 }

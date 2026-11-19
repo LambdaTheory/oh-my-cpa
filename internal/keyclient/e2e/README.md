@@ -85,7 +85,8 @@ key can succeed before the approval writes one.
    overrides; the key is in neither argv nor the parent's observable environment
    (checked through `/proc` on Linux).
 5. `key exec` for OpenCode sets `OPENCODE_CONFIG_CONTENT`, keeping the user's
-   other provider and theme and adding `provider.oh-my-cpa`.
+   other provider and theme and adding `provider.oh-my-cpa`, including the model
+   list it reads from the fixture gateway's `GET /v1/models`.
 6. `key install` writes Claude's settings, backs up the previous file, and warns
    that the key is plaintext.
 7. `key purge` removes the private key, envelope, state record and configured

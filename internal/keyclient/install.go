@@ -173,7 +173,12 @@ type InstallOptions struct {
 	BaseURL    string
 	ConfigPath string
 	Replace    bool
-	Now        time.Time
+	// Models is the OpenCode model list to declare. RuntimeOpenCode requires at least
+	// one id: OpenCode refuses a custom provider without `models`, so a config missing
+	// them would be written only to fail at the first request. The command layer reads
+	// the list from the gateway or takes it from --models; the other runtimes ignore it.
+	Models []string
+	Now    time.Time
 	// Warn receives the plaintext warning before anything is written. It is a writer
 	// rather than a []string so the warning cannot be reordered after the write.
 	Warn io.Writer
@@ -249,7 +254,7 @@ func Install(options InstallOptions) (InstallResult, error) {
 	if err != nil {
 		return InstallResult{}, err
 	}
-	edited, changed, err := applyRuntimeEdit(options.Runtime, before, options.Repo, options.BaseURL, options.Key)
+	edited, changed, err := applyRuntimeEdit(options.Runtime, before, options.Repo, options.BaseURL, options.Key, options.Models)
 	if err != nil {
 		return InstallResult{}, err
 	}
@@ -285,7 +290,7 @@ func Install(options InstallOptions) (InstallResult, error) {
 	if err := writeFileAtomic(contentPath, edited); err != nil {
 		return InstallResult{}, Wrapf(err, CODE_INSTALL_FAILED, "cannot write %s; the previous file is unchanged", contentPath)
 	}
-	if verifyErr := verifyRuntimeEdit(options.Runtime, before, contentPath, options.Repo, options.BaseURL, options.Key); verifyErr != nil {
+	if verifyErr := verifyRuntimeEdit(options.Runtime, before, contentPath, options.Repo, options.BaseURL, options.Key, options.Models); verifyErr != nil {
 		restoreErr := restoreConfig(contentPath, before, existed, backupPath)
 		if restoreErr != nil {
 			return InstallResult{}, Errorf(CODE_INSTALL_FAILED, "wrote %s but the result did not read back correctly (%v), and restoring it also failed (%v); the backup is %s", contentPath, verifyErr, restoreErr, backupPath)
@@ -542,7 +547,7 @@ func codexPreviousModelProvider(runtime Runtime, content []byte, existingSlot Ru
 
 // applyRuntimeEdit returns the file content with this tool's slot written, and the
 // names of the members that changed.
-func applyRuntimeEdit(runtime Runtime, before []byte, record RepoState, baseURL, key string) ([]byte, []string, error) {
+func applyRuntimeEdit(runtime Runtime, before []byte, record RepoState, baseURL, key string, models []string) ([]byte, []string, error) {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	switch runtime {
 	case RuntimeClaude:
@@ -572,6 +577,10 @@ func applyRuntimeEdit(runtime Runtime, before []byte, record RepoState, baseURL,
 		}
 		return encoded, []string{"env." + CLAUDE_ENV_BASE_URL, "env." + CLAUDE_ENV_KEY}, nil
 	case RuntimeOpenCode:
+		normalizedModels, modelsErr := NormalizeModelIDs(models)
+		if modelsErr != nil {
+			return nil, nil, modelsErr
+		}
 		object, err := parseEmptyOrConfigObject(before)
 		if err != nil {
 			return nil, nil, err
@@ -592,6 +601,13 @@ func applyRuntimeEdit(runtime Runtime, before []byte, record RepoState, baseURL,
 			return nil, nil, err
 		}
 		if err := entry.set("name", "Oh My CPA ("+record.Repo+")"); err != nil {
+			return nil, nil, err
+		}
+		// The model table follows the gateway: every install replaces it with the list
+		// that was fetched or named for this run, so a model the gateway dropped does
+		// not linger and a model it added appears. Other members and other providers are
+		// left as they are.
+		if err := entry.set("models", modelMembers(normalizedModels)); err != nil {
 			return nil, nil, err
 		}
 		if err := options.set("baseURL", baseURL+"/v1"); err != nil {
@@ -662,7 +678,7 @@ func parseEmptyOrConfig(content []byte) (*tomlDocument, error) {
 // verifyRuntimeEdit re-reads the written file and checks two things: this tool's slot
 // now holds this repository's values, and everything the file held before is still
 // there. A failure is what triggers the restore.
-func verifyRuntimeEdit(runtime Runtime, before []byte, path string, record RepoState, baseURL, key string) error {
+func verifyRuntimeEdit(runtime Runtime, before []byte, path string, record RepoState, baseURL, key string, models []string) error {
 	after, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -705,10 +721,18 @@ func verifyRuntimeEdit(runtime Runtime, before []byte, path string, record RepoS
 		written := []string{
 			prefix + ".npm",
 			prefix + ".name",
+			prefix + ".models",
+			// The model table is this tool's to replace on every install, so entries the
+			// previous file held under it are not "members the install must leave alone".
+			// The exact set is checked below, where an empty model object cannot hide.
+			prefix + ".models.*",
 			prefix + ".options.baseURL",
 			prefix + ".options.apiKey",
 		}
 		if err := verifyUnwrittenJSONMembers(beforeObject, afterObject, written); err != nil {
+			return err
+		}
+		if err := verifyOpenCodeModels(afterObject, models); err != nil {
 			return err
 		}
 		return verifyOpenCodeBaseURL(afterObject, strings.TrimSuffix(baseURL, "/"))
@@ -728,10 +752,6 @@ func verifyRuntimeEdit(runtime Runtime, before []byte, path string, record RepoS
 // file holds the operator's other providers. Comparing only the outermost member would
 // let an edit silently drop them.
 func verifyUnwrittenJSONMembers(before, after *jsonObject, written []string) error {
-	skip := make(map[string]bool, len(written))
-	for _, path := range written {
-		skip[path] = true
-	}
 	beforeLeaves, err := jsonLeaves(before, "")
 	if err != nil {
 		return err
@@ -741,7 +761,7 @@ func verifyUnwrittenJSONMembers(before, after *jsonObject, written []string) err
 		return err
 	}
 	for path, value := range beforeLeaves {
-		if skip[path] {
+		if ownsJSONLeaf(path, written) {
 			continue
 		}
 		afterValue, ok := afterLeaves[path]
@@ -753,6 +773,21 @@ func verifyUnwrittenJSONMembers(before, after *jsonObject, written []string) err
 		}
 	}
 	return nil
+}
+
+// ownsJSONLeaf reports whether path is a member the edit is allowed to write. A written
+// entry ending in ".*" covers every leaf below that prefix, which is how an install
+// declares a whole sub-object its own without listing each member.
+func ownsJSONLeaf(path string, written []string) bool {
+	for _, entry := range written {
+		if entry == path {
+			return true
+		}
+		if prefix, isPrefixRule := strings.CutSuffix(entry, "*"); isPrefixRule && strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // jsonLeaves flattens an object into dotted leaf paths. An empty object contributes no
@@ -797,6 +832,39 @@ func verifyClaudeBaseURL(object *jsonObject, baseURL string) error {
 	}
 	if value != baseURL {
 		return errors.New("the base URL member does not hold the gateway root")
+	}
+	return nil
+}
+
+// verifyOpenCodeModels confirms the provider's model table is exactly the list this
+// install was given.
+//
+// The generic leaf comparison cannot do this: a model entry is an empty object, and an
+// empty object contributes no leaf, so a missing or dropped model would otherwise pass.
+func verifyOpenCodeModels(object *jsonObject, models []string) error {
+	normalized, err := NormalizeModelIDs(models)
+	if err != nil {
+		return err
+	}
+	provider, err := object.child("provider")
+	if err != nil {
+		return err
+	}
+	entry, err := provider.child(OPENCODE_PROVIDER_ID)
+	if err != nil {
+		return err
+	}
+	members, err := entry.child("models")
+	if err != nil {
+		return errors.New("the provider's models member is not an object after the write")
+	}
+	if len(members.keys) != len(normalized) {
+		return errors.New("the provider's model list is not what this install wrote")
+	}
+	for _, id := range normalized {
+		if !members.has(id) {
+			return errors.New("the provider's model list is missing " + id)
+		}
 	}
 	return nil
 }
