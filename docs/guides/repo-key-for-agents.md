@@ -211,8 +211,8 @@ oh-my-cpa key status
 ```
 
 **Success:** exit 0; the home path, the gateway address, and any repositories this machine
-already holds.
-**Failure:** `base_url_required` (exit 3) only affects `exec`/`install`; `status` still works.
+already holds. A missing gateway address is not an error here — it shows as
+`base_url_source: absent` and only blocks `exec`/`install` later.
 
 ### Step 2 — generate the key pair
 
