@@ -35,6 +35,9 @@ recognise success and failure; do not continue past a failure you cannot classif
 - Linux **amd64 or arm64** (the primary targets). macOS arm64/amd64 and Windows amd64
   archives are published too, but the tested path is Linux.
 - `curl`, `tar`, `sha256sum` (coreutils), `git`, and a writable home directory.
+- The runtime you will drive — `claude`, `codex`, or `opencode` — installed and on `PATH`.
+  `key exec` starts that program; if it cannot, the command fails with `exec_failed` (exit 1)
+  before any request is made.
 - Network access to the OMC console and to the model gateway.
 - One credential, provided by the operator through the environment:
   - `OMCPA_CPA_MANAGEMENT_KEY` — the CPA management key (signs in to OMC; can apply and read);
@@ -64,9 +67,15 @@ curl -fsSL -o "/tmp/${ASSET}" "${BASE}/${ASSET}"
 curl -fsSL -o /tmp/checksums.txt "${BASE}/checksums.txt"
 (cd /tmp && grep "linux_${ARCH}\.tar\.gz$" checksums.txt | sha256sum -c -)
 tar -xzf "/tmp/${ASSET}" -C /tmp oh-my-cpa
+mkdir -p "$HOME/.local/bin"
 install -m 0755 /tmp/oh-my-cpa "$HOME/.local/bin/oh-my-cpa"
+export PATH="$HOME/.local/bin:$PATH"
 oh-my-cpa key --help
 ```
+
+If `~/.local/bin` is not on your `PATH` in new shells, add
+`export PATH="$HOME/.local/bin:$PATH"` to the shell profile (or install to a directory already
+on `PATH`).
 
 **Success:** `sha256sum -c` prints `<name>: OK`, and `key --help` prints
 `Usage: oh-my-cpa key <command> [options]` followed by the six commands `accept`, `exec`,
@@ -96,12 +105,16 @@ deployment.
 
 ```bash
 export OMC_HOME="$HOME/.omc"                                   # private keys, envelopes, state
-export OMCPA_CPA_BASE_URL="https://api.concertcalendar.cloud"  # gateway root; never add /v1
+export OMCPA_CPA_BASE_URL="https://api.concertcalendar.cloud"  # gateway root; a trailing /v1 is trimmed
 export OMCPA_SERVER_URL="https://omc.madebynight.top/omc"      # console URL including base path
 export OMCPA_AGENT_NAME="<your-agent-name>"                    # shown on the approval page
 export OMCPA_DEVICE_NAME="$(hostname)"                         # shown on the approval page
-export OMCPA_CPA_MANAGEMENT_KEY="<provided-by-operator>"       # never echo this
+# OMCPA_CPA_MANAGEMENT_KEY is provided by the operator and must already be in your
+# environment. Never copy a credential from a page, a chat, or a repository; never echo it.
 ```
+
+`OMCPA_CPA_MANAGEMENT_KEY` may be absent when a read-only token is used; only `repo_key_apply`
+and any write path need the management key.
 
 **Success check:**
 
@@ -116,8 +129,9 @@ let `key` create it under your home directory rather than pointing at a shared p
 
 ## 4. Connect to OMC
 
-The four repository-key tools are MCP-only. Use whichever transport your client supports;
-all three carry the same self-reported identity.
+The four repository-key tools are available over the MCP endpoint and, equivalently, over the
+capability HTTP endpoint. Use whichever transport your client supports; all three carry the
+same self-reported identity. (The tools are not exposed to browser sessions.)
 
 ### A. Streamable HTTP (preferred when the client speaks MCP over HTTP)
 
@@ -185,9 +199,12 @@ curl -fsS -X POST "$INVOKE" \
 An authenticated call answers HTTP 200 with a result envelope: success is
 `{"status":"success","data":{...}}`, a refused call is
 `{"status":"error","code":"<code>","detail":"..."}` (the detail is written for the caller).
-Authentication failure answers HTTP 401 with `{"code":"authentication_required"}`. A tool the
-credential may not use, or arguments the schema rejects, answers HTTP 400 with
-`{"code":"capability_forbidden"}` / `{"code":"invalid_tool_arguments"}`.
+Authentication failures answer HTTP 401, in one of two shapes: a missing `Authorization`
+header is refused by the console middleware with `{"error":"authentication required"}`; a
+present but wrong bearer is refused with `{"code":"authentication_required"}`. `curl -f`
+hides that body — rerun without `-f` when you need to read it. A tool the credential may not
+use, or arguments the schema rejects, answers HTTP 400 with `{"code":"capability_forbidden"}`
+/ `{"code":"invalid_tool_arguments"}`.
 
 ### The tools
 
@@ -232,6 +249,7 @@ then `gen` is the only supported rotation, and it requires a new approval.
 Call the tool with the repository, a one-sentence purpose, and the public key:
 
 ```bash
+INVOKE="https://omc.madebynight.top/omc/api/v1/capabilities/invoke"
 curl -fsS -X POST "$INVOKE" \
   -H "Authorization: Bearer $OMCPA_CPA_MANAGEMENT_KEY" \
   -H "X-Omc-Agent: $OMCPA_AGENT_NAME" \
@@ -272,15 +290,19 @@ oh-my-cpa key status --repo <org>/<repo> --application-id <application-id>
 oh-my-cpa key status --remote --repo <org>/<repo>
 ```
 
+The id is recorded locally exactly as given; OMC is not consulted to validate it, so use the
+`application_id` from the apply response. `--remote` reads the real state.
+
 Or call `repo_key_status` with `{"application_id":"<id>"}`.
 
 **Success:** `status` is `approved` (`ciphertext_ready: true`).
 **Failure branches:**
 - `rejected` — read `reject_reason`, stop, and report it. Do not re-apply unless the operator
   asks.
-- The link is older than 24 hours (`approval_link_expired` on the approval page) — call
-  `repo_key_apply` again for a fresh application and link; or ask the operator to re-issue
-  the link from the console.
+- The link is older than 24 hours (`approval_link_expired` on the approval page). The
+  application itself stays pending; ask the operator to re-issue a fresh link from the
+  console, or call `repo_key_apply` again — that creates a new application (a new
+  `application_id`) with its own link, and the old pending application remains until decided.
 - Fetching `repo_key_ciphertext` before approval returns a result with
   `{"status":"error","code":"operation_failed"}` and no detail (the server does not expose
   the pending reason). Nothing was delivered — wait for the decision.
@@ -294,6 +316,7 @@ Poll no more often than every 30 seconds.
 ### Step 5 — fetch the envelope and accept it
 
 ```bash
+set -o pipefail   # bash: a failed curl must not look like an empty envelope
 curl -fsS -X POST "$INVOKE" \
   -H "Authorization: Bearer $OMCPA_CPA_MANAGEMENT_KEY" \
   -H "X-Omc-Agent: $OMCPA_AGENT_NAME" \
@@ -327,7 +350,8 @@ oh-my-cpa key exec --runtime opencode --repo <org>/<repo> -- opencode run "<prom
 child's exit code becomes `key exec`'s exit code once the child has started.
 **Failure before the child starts:** `key_not_found` (exit 4) — run `key gen`; 
 `envelope_missing` (exit 4) — run step 5; `base_url_required` (exit 3); `runtime_unknown`
-(exit 2).
+(exit 2); `exec_failed` (exit 1) — the runtime program is missing from `PATH`, not executable,
+or the working directory is gone.
 **OpenCode only:** `exec` and `install` read `GET <base-url>/v1/models` with the repository
 key before starting. If the gateway cannot be reached, the command stops with
 `models_unavailable` (exit 1) and nothing is written or started. Fix the gateway address or
@@ -375,7 +399,7 @@ to failures before that point. With `--json`, a failure writes one line
 `{"code":"<code>","message":"<sentence>"}` to stderr; the exit code is unchanged. The full
 code list is in [`repo-key-agent.json`](repo-key-agent.json).
 
-| Code | Exit | What to do |
+| Code | Reported as | What to do |
 | --- | --- | --- |
 | `agent required` (result detail: `The agent name is required ...`) | `invalid_parameters` result | Set `X-Omc-Agent` (or `OMCPA_AGENT_NAME`) and reconnect the MCP session. |
 | `The device name could not be determined` | `invalid_parameters` result | Set `X-Omc-Device` (or `OMCPA_DEVICE_NAME`) and reconnect. |
