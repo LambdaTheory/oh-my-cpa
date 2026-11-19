@@ -1,0 +1,192 @@
+{
+  "schema": 1,
+  "name": "oh-my-cpa-repo-key-for-agents",
+  "description": "Machine-readable summary of docs/guides/repo-key-for-agents.md: how a coding agent obtains and uses a repository-owned Oh My CPA key.",
+  "source": {
+    "repository": "LambdaTheory/oh-my-cpa",
+    "commit": "af68e8c88a03dc00461cd71e1e1cf3afc6b83bcc",
+    "cli_release": "key-cli-v0.3.4.1",
+    "go": "1.27.1",
+    "build_flags": "CGO_ENABLED=0, -trimpath, -buildvcs=false, -tags timetzdata",
+    "targets": [
+      "linux/amd64",
+      "linux/arm64",
+      "darwin/arm64",
+      "darwin/amd64",
+      "windows/amd64"
+    ]
+  },
+  "endpoints": {
+    "console": "https://omc.madebynight.top/omc",
+    "mcp_http": "https://omc.madebynight.top/omc/api/mcp",
+    "capability_invoke": "https://omc.madebynight.top/omc/api/v1/capabilities/invoke",
+    "gateway": "https://api.concertcalendar.cloud"
+  },
+  "headers": {
+    "Authorization": "Bearer <credential>",
+    "X-Omc-Agent": "<agent name, required; max 128 characters>",
+    "X-Omc-Device": "<device name, required; max 128 characters>",
+    "Content-Type": "application/json"
+  },
+  "environment": {
+    "OMC_HOME": "where private keys, envelopes and state live; default ~/.omc; keep outside repositories",
+    "OMCPA_CPA_BASE_URL": "gateway root, no /v1; e.g. https://api.concertcalendar.cloud",
+    "OMCPA_SERVER_URL": "console URL including base path; e.g. https://omc.madebynight.top/omc",
+    "OMCPA_CPA_MANAGEMENT_KEY": "the CPA management key; never echo, never commit",
+    "OMCPA_AGENT_NAME": "self-reported agent identity shown on the approval page",
+    "OMCPA_DEVICE_NAME": "self-reported device identity shown on the approval page"
+  },
+  "install": {
+    "release_base_url": "https://github.com/LambdaTheory/oh-my-cpa/releases/download/key-cli-v0.3.4.1",
+    "assets": {
+      "linux/amd64": "oh-my-cpa_key-cli-v0.3.4.1_linux_amd64.tar.gz",
+      "linux/arm64": "oh-my-cpa_key-cli-v0.3.4.1_linux_arm64.tar.gz",
+      "darwin/arm64": "oh-my-cpa_key-cli-v0.3.4.1_darwin_arm64.tar.gz",
+      "darwin/amd64": "oh-my-cpa_key-cli-v0.3.4.1_darwin_amd64.tar.gz",
+      "windows/amd64": "oh-my-cpa_key-cli-v0.3.4.1_windows_amd64.zip"
+    },
+    "checksums": "checksums.txt",
+    "verify": "grep \" linux_${ARCH}\\.tar\\.gz$\" checksums.txt | sha256sum -c -",
+    "success": "sha256sum prints OK and `oh-my-cpa key --help` lists accept, exec, gen, install, purge, status"
+  },
+  "tools": [
+    {
+      "name": "repo_key_query",
+      "permission": "read",
+      "arguments": { "repo": "org/repo or local directory name" },
+      "returns": ["repo", "repo_has_remote", "state", "key_mask", "next_kind", "auto_approve"],
+      "notes": "state is active|none|stopped; next_kind is reuse|issue|reissue"
+    },
+    {
+      "name": "repo_key_apply",
+      "permission": "write",
+      "arguments": {
+        "repo": "org/repo or local directory name",
+        "purpose": "one sentence; max 500 characters",
+        "public_key": "x25519:<base64>; required on the first application, later applications may omit it"
+      },
+      "returns": ["application_id", "status", "kind", "repo", "repo_display", "agent", "device", "key_mask", "approval_url", "approval_expires_at_ms", "next_action"],
+      "notes": "status is pending on first application, approved when a previously approved caller reuses the same key; the caller identity comes from X-Omc-Agent and X-Omc-Device, not from arguments; approval link lifetime is 24 hours"
+    },
+    {
+      "name": "repo_key_status",
+      "permission": "read",
+      "arguments": { "application_id": "id returned by repo_key_apply" },
+      "returns": ["application_id", "status", "kind", "repo", "repo_display", "agent", "device", "purpose", "key_mask", "reject_reason", "decided_at_ms", "first_delivered_at_ms", "ciphertext_ready", "created_at_ms"],
+      "notes": "status is pending|approved|rejected"
+    },
+    {
+      "name": "repo_key_ciphertext",
+      "permission": "read",
+      "arguments": { "application_id": "approved application id" },
+      "returns": ["application_id", "kind", "key_mask", "algorithm", "ciphertext", "instructions"],
+      "notes": "ciphertext is an X25519-HKDF-SHA256-AES256-GCM envelope; it opens only with the registered private key; fetching before approval fails with application_not_approved"
+    }
+  ],
+  "cli": {
+    "status": {
+      "usage": "oh-my-cpa key status [--repo <repo>] [--application-id <id>] [--remote] [--json] [--home <dir>]",
+      "success": "exit 0; prints local keys, envelope presence, approval state, installed runtimes",
+      "notes": "--remote needs OMCPA_SERVER_URL and a credential; it only reads repo_key_status and repo_key_query"
+    },
+    "gen": {
+      "usage": "oh-my-cpa key gen --repo <repo> [--base-url <url>] [--home <dir>]",
+      "success": "stdout is exactly one line: x25519:<base64>; stderr names the private key file",
+      "notes": "an existing key is reused; a key is never replaced silently"
+    },
+    "accept": {
+      "usage": "oh-my-cpa key accept --repo <repo> [--application-id <id>] [--json] [--home <dir>]",
+      "stdin": "the repo_key_ciphertext result: the capability envelope, the bare data object, or a bare envelope",
+      "success": "exit 0; prints accepted <repo>: key <mask> at <envelope file> (or replaced the envelope ...)",
+      "notes": "validates the envelope against the local private key before storing"
+    },
+    "exec": {
+      "usage": "oh-my-cpa key exec --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] [--models <ids>] [--home <dir>] -- <command> [args...]",
+      "success": "the child runs; its exit code becomes key exec's exit code once started",
+      "notes": "opens the envelope in memory only; codex requires the command to be codex itself; opencode reads GET <base-url>/v1/models unless --models is given"
+    },
+    "install": {
+      "usage": "oh-my-cpa key install --runtime <claude|codex|opencode> [--repo <repo>] [--base-url <url>] [--config <path>] [--models <ids>] [--replace] [--home <dir>]",
+      "success": "exit 0; writes the runtime's user-level configuration after backing the previous file up",
+      "notes": "the only command that leaves the plaintext on disk; never point it at a project-level configuration"
+    },
+    "purge": {
+      "usage": "oh-my-cpa key purge --repo <repo> [--runtime <runtime>] [--dry-run] [--home <dir>]",
+      "success": "exit 0; private key, envelope, installed values and local record removed; a following key exec fails with key_not_found (exit 4)",
+      "notes": "local only; the key in CPA stays active until the operator stops or reissues it in the console"
+    }
+  },
+  "flow": [
+    "key status (optional) to see what the machine already holds",
+    "key gen --repo <org>/<repo> --base-url https://api.concertcalendar.cloud; take x25519:<base64> from stdout",
+    "repo_key_apply {repo, purpose, public_key}; record application_id; give approval_url to a human",
+    "poll repo_key_status (or key status --remote) until approved; never fetch ciphertext before approval",
+    "repo_key_ciphertext {application_id} | oh-my-cpa key accept --repo <repo> --application-id <id>",
+    "key exec --runtime <runtime> --repo <repo> -- <command> (or key install when it must persist)",
+    "key purge --repo <repo> when done; a following key exec fails with key_not_found"
+  ],
+  "exit_codes": {
+    "0": "success, including already existed / reused / already gone",
+    "1": "operation failed (I/O, decrypt, backup, gateway or remote refusal, an item left behind)",
+    "2": "usage error (unknown subcommand, missing --runtime, a command Codex will not accept)",
+    "3": "configuration missing or invalid",
+    "4": "a key, envelope, application or installed value was not found",
+    "5": "conflict: a different key or value already occupies the place, or state is corrupt",
+    "note": "key exec returns the child's exit code once the child has started"
+  },
+  "error_codes": [
+    { "code": "agent_required", "where": "MCP tool / capability HTTP", "http": 400, "detail": "The agent name is required and must be at most 128 characters.", "fix": "set X-Omc-Agent (or OMCPA_AGENT_NAME) and reconnect the MCP session" },
+    { "code": "device_required", "where": "MCP tool / capability HTTP", "http": 400, "detail": "The device name could not be determined; reconnect with a device header.", "fix": "set X-Omc-Device (or OMCPA_DEVICE_NAME) and reconnect the MCP session" },
+    { "code": "capability_forbidden", "where": "MCP tool / capability HTTP", "http": 400, "fix": "the credential is read-only or lacks the tool; apply with the management key or have the operator file the application in the console" },
+    { "code": "invalid_parameters", "where": "MCP tool / capability HTTP", "http": 400, "fix": "read the detail; a required field is missing or too long" },
+    { "code": "authentication_required", "where": "capability HTTP", "http": 401, "fix": "supply a valid Authorization: Bearer credential" },
+    { "code": "application_not_approved", "where": "MCP tool / capability HTTP", "fix": "wait for the human decision; do not fetch ciphertext before approval" },
+    { "code": "approval_link_expired", "where": "approval page", "fix": "apply again for a fresh application and link, or ask the operator to re-issue the link in the console" },
+    { "code": "home_unavailable", "exit": 1, "fix": "fix $OMC_HOME path and ownership" },
+    { "code": "home_insecure", "exit": 1, "fix": "let key create OMC_HOME under the user's home, or remove inherited permissions" },
+    { "code": "repo_required", "exit": 2, "fix": "pass --repo org/repo or run from the repository root" },
+    { "code": "repo_invalid", "exit": 2, "fix": "use org/repo or a local directory name; absolute paths and .. are refused" },
+    { "code": "key_not_found", "exit": 4, "fix": "run key gen; after a purge this is the expected counterproof" },
+    { "code": "key_unreadable", "exit": 1, "fix": "the private key file is not readable or is not 32 bytes; purge before generating a new one" },
+    { "code": "key_exists", "exit": 5, "fix": "a key file appeared during generation; rerun key gen to reuse it" },
+    { "code": "envelope_missing", "exit": 4, "fix": "fetch repo_key_ciphertext and pipe it into key accept" },
+    { "code": "envelope_invalid", "exit": 1, "fix": "pass the tool result as it came back" },
+    { "code": "envelope_key_mismatch", "exit": 1, "fix": "the envelope is sealed to another key pair; check OMC_HOME and the repository" },
+    { "code": "base_url_required", "exit": 3, "fix": "set --base-url, OMCPA_CPA_BASE_URL, or run key gen with --base-url" },
+    { "code": "base_url_invalid", "exit": 3, "fix": "give the gateway root (http/https, no userinfo, query, fragment or concrete /v1 endpoint)" },
+    { "code": "insecure_base_url", "exit": 0, "fix": "warning only: a non-loopback http:// gateway was accepted; confirm it is acceptable" },
+    { "code": "runtime_unknown", "exit": 2, "fix": "use claude, codex or opencode" },
+    { "code": "command_required", "exit": 2, "fix": "put the command after --" },
+    { "code": "codex_command_required", "exit": 2, "fix": "call codex directly instead of a wrapper, or use key install" },
+    { "code": "decrypt_failed", "exit": 1, "fix": "the envelope and private key disagree; fetch again, or purge and generate a new key (needs a new approval)" },
+    { "code": "state_unreadable", "exit": 1, "fix": "fix permissions on $OMC_HOME/state.json; exec works by deterministic paths even if state is lost" },
+    { "code": "state_corrupt", "exit": 5, "fix": "state.json is corrupt; do not delete .lock while a command runs" },
+    { "code": "state_locked", "exit": 1, "fix": "another key write holds the lock; wait and rerun" },
+    { "code": "config_unreadable", "exit": 1, "fix": "fix permissions on the runtime configuration" },
+    { "code": "config_not_json", "exit": 1, "fix": "the runtime configuration is JSONC or otherwise not pure JSON; nothing was rewritten" },
+    { "code": "config_too_large", "exit": 3, "fix": "the merged OpenCode configuration exceeds 24 KiB; use key install" },
+    { "code": "config_conflict", "exit": 5, "fix": "resolve the foreign value by hand or pass --replace where supported" },
+    { "code": "config_owned_by_another_repo", "exit": 5, "fix": "purge the other repository's install or pass --replace" },
+    { "code": "models_required", "exit": 3, "fix": "pass --models id1,id2 for OpenCode; nothing was written or started" },
+    { "code": "models_unavailable", "exit": 1, "fix": "the gateway's /v1/models could not be read with this key; fix the gateway address or network, or pass --models" },
+    { "code": "backup_failed", "exit": 1, "fix": "the backup could not be written, so the target file was not touched" },
+    { "code": "install_failed", "exit": 1, "fix": "the runtime configuration was not written; read the message" },
+    { "code": "install_not_installed", "exit": 4, "fix": "that runtime has no installed value for this repository" },
+    { "code": "install_not_owned", "exit": 1, "fix": "the configured value no longer matches this repository's key; it was left alone" },
+    { "code": "remote_not_configured", "exit": 3, "fix": "set OMCPA_SERVER_URL and the credential for status --remote" },
+    { "code": "remote_unavailable", "exit": 1, "fix": "OMC could not be reached; local state is unchanged" },
+    { "code": "purge_pending", "exit": 1, "fix": "something belonging to this repository could not be removed; it is listed, rerun after fixing" },
+    { "code": "exec_failed", "exit": 1, "fix": "the child could not be started (missing program, permission, working directory)" },
+    { "code": "usage", "exit": 2, "fix": "correct the command line" }
+  ],
+  "prohibitions": [
+    "never print, echo or log the plaintext key, the private key file, or the decrypted envelope",
+    "never put the key, the envelope or OMC_HOME in git or in any repository worktree",
+    "never write $OMC_HOME/envelopes yourself; only key accept stores an envelope",
+    "never put the key in a command line, a tool argument, or a project-level runtime configuration",
+    "never approve an application or open the approval_url on the human's behalf",
+    "never treat key purge as revocation; the key in CPA stays active",
+    "never fetch repo_key_ciphertext before the application is approved"
+  ],
+  "system_prompt_short": "You have an Oh My CPA repository key. Work only through `oh-my-cpa key`: set OMC_HOME=~/.omc, OMCPA_CPA_BASE_URL=https://api.concertcalendar.cloud, OMCPA_SERVER_URL=https://omc.madebynight.top/omc, OMCPA_AGENT_NAME and OMCPA_DEVICE_NAME. Run `oh-my-cpa key gen --repo <org>/<repo>` and send its stdout public key to `repo_key_apply` over OMC MCP (headers Authorization, X-Omc-Agent, X-Omc-Device). Give approval_url to the human; never approve it yourself; poll repo_key_status. Fetch repo_key_ciphertext and pipe it into `oh-my-cpa key accept --repo <org>/<repo> --application-id <id>`. Run `oh-my-cpa key exec --runtime claude|codex|opencode --repo <org>/<repo> -- <cmd>`. Never print, commit or log the key, private key or envelope; never put the key in a command line or project config. Exit codes: 0 ok, 1 failed, 2 usage, 3 config, 4 not found, 5 conflict."
+}
