@@ -247,8 +247,10 @@ then `gen` is the only supported rotation, and it requires a new approval.
 ### Step 3 — apply (MCP `repo_key_apply`)
 
 Call the tool with the repository, a one-sentence purpose, and the public key. The example
-uses `-sS`, not `-f`, so that a refusal's JSON body stays visible; check `status` in the
-answer.
+uses `-sS`, not `-f`, so a refusal's JSON body stays visible: a refusal is `{"code":"..."}`
+(for a missing or wrong credential, `authentication_required`), while an authenticated
+result is `{"status":"success"|"error",...}`. `curl` exits 0 whenever the HTTP request
+completed, so the exit code alone is not proof of success — inspect the body.
 
 ```bash
 INVOKE="https://omc.madebynight.top/omc/api/v1/capabilities/invoke"
