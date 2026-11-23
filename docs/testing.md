@@ -295,6 +295,31 @@ refresh control with the credentials it may be asked about. Chromium still owns 
 only it can measure: the panel's geometry against the grid, the grid's own scrolling and the real
 refetch lifecycle.
 
+`web/tests/lending-advice.component.test.tsx` owns the same-pool advice page body: the
+five page shapes (`advised` with prefer/avoid, `balanced`, `limited`, `unavailable`, and no pool),
+the fixed read-only label beside the title, the detail membership and unpooled reason, an estimated
+reset shown with `~` and "reference", a missing figure shown as an em dash rather than zero, the
+default-collapsed "not in any pool" section (counts by reason always visible, credential names
+behind a second disclosure), and the invariant that no shape offers an apply, write, route-switch or
+entitlement control. The only buttons are the unpooled disclosures.
+`web/tests/quota-lending-mount.component.test.tsx` owns the mount module and every link that reads
+it: the route constant, the highlighted nav key, the route mounting, the history guard, the OAuth
+header entry's three states and its absence when `lending` is missing or `null`, and the
+credential detail href with its hidden state.
+`web/tests/quota-lending-page.component.test.tsx` owns the page shell: the back control appears
+only with an entry behind it, the basis subtitle, and the empty state for `lending: null`. `scripts/test-quota-lending.ts` owns the pure derivation behind it: role
+and state flipping as the page clock advances, the entry three states, `groupUnpooled` counts
+without loss or duplication, the one-point-per-day boundary and the one-hour daily floor, the
+freshness downgrade to `reading_stale`, `lendingBasisMS` naming the oldest reading, `lendingEntryState`
+covering the three header states, `groupLendingUnpooled` counting each reason once per credential,
+and `lendingDetailFor` selecting the pool the page shows.
+`scripts/test-oauth-sort.ts` and `scripts/test-auth-file-logic.ts` own the "soonest natural reset"
+sort: short windows excluded, nulls last, equal instants ordered by lower remaining then name.
+The credential-quota suite adds the exact/derived/text-only reset label, the fast-reset high/low
+boundary, the detail lending section and its link to the lending page; the reset-advice suite
+keeps the two sections separate and ordered (AC-13). Browser geometry for the page, the header
+entry and the dense row stays in the `quota-lending` and OAuth management scenarios.
+
 `web/tests/list-view-preferences.component.test.tsx` owns OAuth view parsing,
 saved filter/sort/page-size restoration with a fresh QueryClient, explicit-link
 precedence, persisted reset, refused-write rollback and usable URL-only controls
@@ -1208,6 +1233,22 @@ the handwritten API projection; no new route is introduced.
   repository joins, observation seeding and the model-advice capability declaration
   through `scripts/demo-inputs.mjs`.
 
+### Lending advice coverage
+
+`internal/quota/lending_test.go` owns the cross-credential projection: pool membership by
+provider and `plan_type`, the standard-window period floor, bottleneck-window selection
+and its tie-break, the one-hour floor and one-decimal daily rate, the one-point-per-day
+balance threshold, serviceability reasons (cooldown, reauth, failed read, exhausted
+window, below ten percent), comparability and freshness reasons, precision flags, detail
+selection and determinism, including a limited pool that keeps a comparable card with no
+serviceability reason at `normal` and an unavailable pool with no `valid_until_ms`.
+`internal/api/quota_lending_test.go` owns the handler contract:
+the overview's `lending` object, the credential detail's identical pool, `pool: null` with
+reasons for an unpooled card, `lending: null` when a snapshot or cooldown read fails, the
+handwritten wire allowlist, and `reset_advice` parity with a direct service read. `internal/demo/quota_test.go` pins the seeded Codex plan, and
+`internal/api/demo_export_test.go` keeps the lending instants on the export reference; the
+generated dataset must contain a pool with two cards (`pnpm check:demo`). The display
+layer's claims remain with the frontend package in P2.
 ### Request selection and export coverage
 
 What an export may contain is a logic claim: `scripts/test-request-export.ts` builds the image's

@@ -11,6 +11,8 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **Claude reset grant reading**: Supplemental collection has independent available, unavailable and failed outcomes. A valid grant list remains observable without redemption eligibility. Missing historical status stays unknown; a successful absent/empty list is not a measured zero balance (ADR 0112).
 - **Reset advice evidence**: A fact describes a directly observed exhausted or expired entitlement balance; a projection is an advisory judgment from the remaining entitlement, expiry and current quota share. Unknown means evidence is missing, stale, invalid or inapplicable and never means a zero balance.
 
+- **Quota lending advice**: A read-only, same-pool comparison of credentials that share one provider and `plan_type`. A **lending pool** is that group (key `provider + ":" + plan_type`); a **long standard window** is `scope=standard` with `period_hours >= 24`, and a **reset-before daily available** is that window's remaining percentage divided by the days until its own **natural reset** (floored at one hour). Cards are ranked by reset-before daily available, with the highest marked prefer and the lowest avoid; a spread below one point per day is balanced. It is advice about usage ordering only: it writes no CPA priority or weight, switches no routing and spends no reset entitlement. It is distinct from reset advice, which weighs entitlement expiry rather than natural-reset distance, and neither verdict replaces the other.
+
 - **Fork build identity**: Immutable source metadata shown separately from the upstream OMC and CPA release observations. A supplied build tag is displayed as-is; otherwise a known source revision yields `dev+<12-character SHA>`. The commit and branch/ref are independent observations; missing metadata is unknown, never an invented branch. `OMCPA_VERSION` remains the display/User-Agent and release-comparison override, not evidence of the source identity. Dokploy fork builds keep that comparison value incomparable (`fork`) even when the separate build tag is stable-looking.
 
 - **Model group**: An operator-named, ordered list of model names kept for one purpose (`力工组`, `审查组`), stored in `model_groups` and `model_group_members`. It is OMC's own naming and touches no CPA configuration: the gateway still decides what a model routes to, and a name in a group that CPA no longer serves stays listed rather than being pruned. A group name is the identity a reader resolves, unique case-insensitively and at most 40 characters, so a rename is the same group under a new name and a deleted group is gone rather than hidden. One model may sit in several groups, each with its own order; a **preset group** is one of the five a deployment starts with, and it renames and deletes like any other - what distinguishes it is that "restore the default groups" recreates it empty when it is missing, recognising it by identity rather than name so a renamed preset is left as it is. This is unrelated to the OAuth contact's management group, the model square's manufacturer grouping, or the request list's grouping mode.
@@ -682,6 +684,30 @@ not extend the quota_prediction capability schema.
   makes the reference unavailable. Detected reset evidence and failed history-read
   evidence remain attached to subsequent observations of that cycle even after the original readings expire.
   An evidence failure withholds estimates but does not block saving a fresh reading.
+- **Natural Reset**: A quota window refilling on its own at the reset instant upstream
+  reports, without an entitlement being spent. It is the clock Lending Advice ranks
+  against, and it is distinct from the provider reset a Reset Entitlement performs,
+  which spends a counted right.
+- **Lendable Pool**: The credentials that share a normalized provider and `plan_type`
+  and each publish a comparable long standard window (scope `standard`, period of at
+  least 24 hours). A credential whose plan is missing or `unknown` joins no pool, and a
+  plan with fewer than two credentials that published such a window is not a pool. Only
+  a pool's members are compared; the grouping is a projection over credentials the quota
+  read already loads, not a stored roster.
+- **Daily Available Until Reset**: A comparable card's remaining percentage divided by
+  the days until that window's Natural Reset, with a reset under an hour away counted as
+  one hour and the rate rounded to one decimal. It measures how much of the current
+  window can be spent per day without running out before the natural refill, and it never
+  feeds routing or status.
+- **Lending Advice**: A read-only, per-pool conclusion that names the card with the
+  highest Daily Available Until Reset as `prefer`, the lowest as `avoid` and the rest
+  `normal`; when the spread is under one percentage point per day every serviceable
+  card is `balanced`. A pool whose cards cannot be compared, whose bottleneck window
+  kinds differ, or which has fewer than two serviceable cards is `unavailable` or
+  `limited` and states the reasons instead of ranking by remaining percentage. It is
+  computed from the same stored readings as the quota card, persisted nowhere, requests
+  nothing upstream, and changes no CPA route or weight. It is separate from Reset Advice,
+  which decides whether to spend an entitlement.
 - **Preference**: Console state stored server-side rather than in the browser,
   so it follows the deployment across devices, browsers, incognito windows, and
   cleared browser storage rather than binding to a single client instance.
