@@ -126,6 +126,22 @@
   text-overflow: ellipsis;
 }
 
+/* The fast-reset tag rides the reset line: it stays on the text's baseline and never widens the
+   row's own gap, so the line still wraps as one sentence on a phone. */
+.progress-fast {
+  display: inline-flex;
+  max-width: 100%;
+  margin-inline-start: 6px;
+  vertical-align: baseline;
+}
+
+/* On a phone the full mark is wider than the reset cell, so it wraps inside its own chip
+   instead of pushing the Drawer into horizontal scroll. */
+.fast-tag {
+  max-width: 100%;
+  white-space: normal;
+}
+
 /* Recorded usage sits at the start and the estimate at the end; on a narrow Drawer the two
    wrap onto their own lines instead of truncating a figure. */
 .capacity-row {
@@ -379,12 +395,31 @@
 }
 
 .window-label {
+  flex: 1 1 auto;
   color: var(--fg-2);
   font-size: var(--text-xs);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A fast-reset mark belongs on the window's own line: unlike the footer it can take the
+   label's spare width, so the measured row keeps its height whether or not a mark applies. */
+.window-fast {
+  flex: none;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.window-fast-high {
+  color: var(--accent);
+}
+
+.window-fast-low {
+  color: var(--warn);
 }
 
 .window-value {
@@ -420,6 +455,7 @@
 }
 
 .window-reset {
+  flex: 1 1 0;
   min-width: 0;
   color: var(--meta);
   font-family: var(--font-mono);
@@ -449,4 +485,11 @@
   font-size: var(--text-2xs);
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.quota-lending-link {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: var(--text-sm);
 }

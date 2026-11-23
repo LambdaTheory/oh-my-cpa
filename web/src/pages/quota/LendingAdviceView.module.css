@@ -1,0 +1,298 @@
+.panel {
+  min-width: 0;
+}
+
+.basis {
+  margin: 0 0 8px;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.pools {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pool {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+  min-width: 0;
+}
+
+.pool:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.pool-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pool-title {
+  color: var(--fg);
+  font-size: var(--text-md);
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pool-valid {
+  margin-left: auto;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.membership {
+  margin-top: 6px;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.reason {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--hover-inset);
+  border-radius: var(--radius-sm);
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.card {
+  display: grid;
+  grid-template-columns: 72px minmax(110px, 1fr) repeat(3, minmax(88px, 1fr));
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--border-soft);
+  min-width: 0;
+}
+
+.card:first-child {
+  border-top: 0;
+}
+
+.card[data-lending-current="true"] {
+  background: var(--hover-inset);
+  border-radius: var(--radius-xs);
+  padding-inline: 6px;
+}
+
+.role {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.name {
+  color: var(--fg);
+  font-size: var(--text-md);
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.metric-value {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+.metric-label {
+  color: var(--meta);
+  font-size: var(--text-xs);
+}
+
+.reasons {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  padding-inline-start: 18px;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.empty {
+  padding: 12px 8px;
+  text-align: center;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.empty strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--fg);
+  font-size: var(--text-base);
+}
+
+.note,
+.distinction {
+  margin: 12px 0 0;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.distinction {
+  padding-inline-start: 12px;
+  border-inline-start: 3px solid var(--border);
+}
+
+@media (max-width: 760px) {
+  .strip {
+    flex-wrap: wrap;
+  }
+
+  .strip :global(.tag) {
+    margin-inline-start: 0;
+  }
+
+  .pool-valid {
+    margin-left: 0;
+  }
+
+  .card {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .metric {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+  }
+}
+
+/* The header carries a fixed-word read-only tag beside the title. Inside the phone-width drawer
+   the two do not fit on one line, and Ant Design's title is a nowrap ellipsis, so the title lost
+   half its words; wrapping lets the tag fall to its own line instead of clipping the title. */
+@media (max-width: 760px) {
+  .panel :global(.ant-card-head-wrapper) {
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+
+  .panel :global(.ant-card-head-title) {
+    flex: 1 1 auto;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* The secondary page is one column of blocks; its header carries the basis line. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* The fixed read-only label sits beside the page title: the page and the drawer state the same
+   boundary in the same words, so a reader never has to work out whether one of them can apply. */
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The unpooled list is folded twice: the reason summary first, each reason's names second. */
+.unpooled {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+  min-width: 0;
+}
+
+.unpooled-summary,
+.unpooled-group {
+  min-width: 0;
+}
+
+/* Both disclosures are buttons: the reason summary and each reason group share one reset, so
+   the summary does not render as the browser's grey default box beside a plain-text toggle. */
+.unpooled-summary,
+.unpooled-group-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-align: start;
+  cursor: pointer;
+}
+
+.unpooled-title {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.unpooled-chevron,
+.unpooled-sep,
+.unpooled-count,
+.unpooled-group-count {
+  color: var(--meta);
+}
+
+.unpooled-chevron {
+  display: inline-flex;
+  flex: none;
+}
+
+.unpooled-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-inline-start: 20px;
+}
+
+.unpooled-group-toggle {
+  gap: 6px;
+}
+
+.unpooled-names {
+  margin: 2px 0 0;
+  padding-inline-start: 22px;
+  color: var(--meta);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+.unpooled-names li {
+  margin-top: 2px;
+}

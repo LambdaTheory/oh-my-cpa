@@ -105,6 +105,38 @@ export function quotaResetCountdown(
   return t('quota.recovered');
 }
 
+/**
+ * A window's reset line: the countdown, its date, and how far the instant can be trusted.
+ *
+ * The row and the Drawer share this one string so they cannot disagree about the instant or its
+ * provenance. A derived or approximate instant keeps its `~` and names itself a reference rather
+ * than a verified deadline. When upstream stated only text there is no instant to count down to,
+ * so the text is kept verbatim and the missing instant is named instead of being converted into a
+ * fake time. A boundary that has passed is only "recovered" when upstream stated it exactly.
+ */
+export function quotaResetCountdownLabel(
+  window: { reset_at_ms?: number; reset_label?: string; reset_accuracy?: string },
+  nowMS: number,
+  t: TFunc,
+): string {
+  const approximate = resetAccuracyMarker(window.reset_accuracy);
+  if (window.reset_at_ms) {
+    const countdown = formatCountdown(window.reset_at_ms, nowMS, t);
+    if (countdown) {
+      const label = t('quota.reset_countdown_label', {
+        time: countdown,
+        date: formatShortDateTime(window.reset_at_ms),
+      });
+      return approximate ? `~${label} · ${t('quota.reset_reference')}` : label;
+    }
+    if (approximate) {
+      return window.reset_label ? `~${window.reset_label} · ${t('quota.reset_reference')}` : '';
+    }
+    return t('quota.recovered');
+  }
+  return window.reset_label ? t('quota.reset_time_unknown_label', { label: window.reset_label }) : '';
+}
+
 /** The message an empty window list carries, as the dictionary key that states it. */
 export type QuotaEmptyStateKey =
   | 'quota.credential_disabled'

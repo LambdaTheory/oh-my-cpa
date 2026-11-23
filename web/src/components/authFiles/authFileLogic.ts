@@ -112,7 +112,8 @@ export type AuthFileSortKey =
   | 'name-desc'
   | 'requests-desc'
   | 'priority-desc'
-  | 'weight-desc';
+  | 'weight-desc'
+  | 'reset-asc';
 
 export function sortAuthFiles(
   files: ManagementAuthFile[],
@@ -149,6 +150,13 @@ export function sortAuthFiles(
         if (wB !== wA) return wB - wA;
         return a.name.localeCompare(b.name);
       });
+    case 'reset-asc':
+      // This projection carries no quota windows, so reset order has no key here: the workspace
+      // sorter owns it. Accepting the key keeps a saved preference readable, and name order is
+      // the only stable order this input can supply.
+      return copy.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+      );
     default:
       return copy.sort((a, b) => a.name.localeCompare(b.name));
   }
