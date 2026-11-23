@@ -708,9 +708,9 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 	}
 
 	var targetFile *management.AuthFile
-	for _, f := range files {
-		if strings.TrimSpace(f.AuthIndex) == authIndex {
-			targetFile = &f
+	for index := range files {
+		if strings.TrimSpace(files[index].AuthIndex) == authIndex {
+			targetFile = &files[index]
 			break
 		}
 	}
@@ -720,76 +720,32 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 	}
 
 	nowMS := h.now().UnixMilli()
-	stdProvider := quota.DetectProvider(targetFile.Type, targetFile.Provider)
-	caps := quota.CapabilitiesForFile(*targetFile)
-
-	normalized := quota.NormalizedQuota{
-		AuthIndex:    authIndex,
-		Name:         targetFile.Name,
-		Type:         targetFile.Type,
-		Provider:     stdProvider,
-		Disabled:     targetFile.Disabled,
-		ObservedAtMS: nowMS,
-		Capabilities: caps,
-		Windows:      []quota.QuotaWindow{},
+	// The detail is computed over the whole roster, not one credential: the lending
+	// advice for a pool only exists when its siblings are present. The overview
+	// builds the same batch, so the two reads cannot disagree on a role or a number.
+	states, lendingComplete, err := h.quotaCardStates(ctx, files, nowMS)
+	if err != nil {
+		writeInternalError(writer, err)
+		return
 	}
-
-	if h.repo != nil {
-		if cooldowns, err := h.repo.BatchCorrelatedCooldowns(ctx, []string{authIndex}, nowMS); err == nil {
-			if cooldown, ok := cooldowns[authIndex]; ok && cooldown.IsActive {
-				normalized.ActiveCooldown = &quota.ActiveCooldown{
-					IsActive:          true,
-					Reason:            cooldown.Reason,
-					RecoverAtMS:       cooldown.RecoverAtMS,
-					RetryAfterSeconds: cooldown.RetryAfterSeconds,
-					CorrelatedAtMS:    cooldown.CorrelatedAtMS,
-				}
-			}
+	items := make([]QuotaItemDTO, 0, len(states))
+	var target *QuotaItemDTO
+	for _, state := range states {
+		item := QuotaItemDTO{
+			NormalizedQuota: h.buildQuotaCard(ctx, state, nowMS),
+			LastRefresh:     projectQuotaRefreshAttempt(state.attempt),
+			LastSuccessAtMS: state.snapshot.ObservedAtMS,
 		}
-		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
-			if snapshot, ok := snapshots[authIndex]; ok {
-				normalized.ObservedAtMS = snapshot.ObservedAtMS
-				normalized.LastAuthenticatedReadAtMS = snapshot.ObservedAtMS
-				normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
-				// See buildQuotaOverview: an empty reading survives only through the stored status.
-				normalized.Status = snapshot.Status
-				if plan := planFromSnapshot(snapshot); plan != nil {
-					normalized.Plan = plan
-				}
-				if snapshot.WindowsJSON != "" && snapshot.WindowsJSON != "[]" {
-					var windows []quota.QuotaWindow
-					if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err == nil {
-						normalized.Windows = windows
-					}
-				}
-				if snapshot.ResetCreditsJSON != "" {
-					var credits quota.CodexResetCreditsInfo
-					if err := json.Unmarshal([]byte(snapshot.ResetCreditsJSON), &credits); err == nil {
-						normalized.ResetCredits = &credits
-					}
-				}
-				if snapshot.ResetGrantsJSON != "" {
-					var grants []quota.ClaudeResetGrant
-					if err := json.Unmarshal([]byte(snapshot.ResetGrantsJSON), &grants); err == nil {
-						normalized.ResetGrants = grants
-					}
-				}
-			}
+		if strings.TrimSpace(state.file.AuthIndex) == authIndex {
+			copied := item
+			target = &copied
 		}
+		items = append(items, item)
 	}
-
-	if h.repo != nil {
-		signals, err := h.repo.GetFeishuAccountSignals(ctx, []string{authIndex})
-		if err != nil {
-			writeInternalError(writer, err)
-			return
-		}
-		applyQuotaCollectionSignal(&normalized, signals[authIndex])
+	if target == nil {
+		writeError(writer, http.StatusNotFound, fmt.Sprintf("credential %q not found", authIndex))
+		return
 	}
-	quota.ApplyCredentialStatus(&normalized, *targetFile, nowMS)
-	quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
-	h.attachWindowCapacity(ctx, &normalized, nowMS)
-	h.overlayPassiveObservations(ctx, &normalized)
 
 	var history []repository.QuotaSnapshotRecord
 	if h.repo != nil {
@@ -803,23 +759,22 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 		writeInternalError(writer, err)
 		return
 	}
-	var lastRefresh *quotaRefreshAttemptDTO
-	var lastSuccessAtMS int64
-	if h.repo != nil {
-		attempts, err := h.repo.GetQuotaRefreshAttempts(ctx, []string{authIndex})
-		if err != nil {
-			writeInternalError(writer, err)
-			return
-		}
-		lastRefresh = projectQuotaRefreshAttempt(attempts[authIndex])
-		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, []string{authIndex}); err == nil {
-			lastSuccessAtMS = snapshots[authIndex].ObservedAtMS
-		}
+	target.ResetAdvice = advice[authIndex]
+	// A partial snapshot or cooldown read still returns the original detail fields,
+	// but lending stays null rather than being projected from data the console never
+	// actually compared.
+	var lending *lendingDetailDTO
+	if lendingComplete {
+		projection := quota.ProjectLendingAdvice(lendingCardInputs(items), nowMS)
+		projected := projectLendingDetail(projection.DetailFor(authIndex))
+		lending = &projected
 	}
+
 	writeJSON(writer, http.StatusOK, map[string]any{
-		"quota":        QuotaItemDTO{NormalizedQuota: normalized, ResetAdvice: advice[authIndex], LastRefresh: lastRefresh, LastSuccessAtMS: lastSuccessAtMS},
+		"quota":        *target,
 		"history":      history,
 		"model_quotas": projectModelQuotas(targetFile.ModelQuotas),
+		"lending":      lending,
 	})
 }
 
@@ -842,6 +797,148 @@ type quotaOverviewData struct {
 	Summary quota.QuotaOverviewSummary `json:"summary"`
 	Quotas  []QuotaItemDTO             `json:"quotas"`
 	Total   int                        `json:"total"`
+	Lending *lendingOverviewDTO        `json:"lending"`
+}
+
+// quotaCardState is the repository state one credential is projected from. The
+// overview loads it for every roster credential in one batch; the detail loads the
+// same batch, because a pool exists only when its siblings are present.
+type quotaCardState struct {
+	file        management.AuthFile
+	snapshot    repository.QuotaSnapshotRecord
+	hasSnapshot bool
+	attempt     repository.QuotaRefreshAttempt
+	cooldown    repository.ActiveCooldownRecord
+	hasCooldown bool
+	signal      repository.FeishuAccountSignal
+}
+
+// quotaCardStates reads every roster credential's snapshot, last refresh, cooldown
+// and collection signal in one pass. Snapshot and cooldown read failures are
+// tolerated because a credential without them is still displayable, but the second
+// return says whether both succeeded: lending is projected only from a complete
+// batch, because a role or a date derived from missing reads would be a promise the
+// console cannot keep. The signal and refresh reads are part of the card itself and
+// their failure fails the read.
+func (h *Handler) quotaCardStates(ctx context.Context, files []management.AuthFile, nowMS int64) ([]quotaCardState, bool, error) {
+	authIndexes := make([]string, 0, len(files))
+	for _, file := range files {
+		if authIndex := strings.TrimSpace(file.AuthIndex); authIndex != "" {
+			authIndexes = append(authIndexes, authIndex)
+		}
+	}
+	var snapshots map[string]repository.QuotaSnapshotRecord
+	var attempts map[string]repository.QuotaRefreshAttempt
+	var cooldowns map[string]repository.ActiveCooldownRecord
+	var signals map[string]repository.FeishuAccountSignal
+	lendingComplete := true
+	if h.repo != nil && len(authIndexes) > 0 {
+		loadedSignals, err := h.repo.GetFeishuAccountSignals(ctx, authIndexes)
+		if err != nil {
+			return nil, false, err
+		}
+		signals = loadedSignals
+		loadedAttempts, err := h.repo.GetQuotaRefreshAttempts(ctx, authIndexes)
+		if err != nil {
+			return nil, false, err
+		}
+		attempts = loadedAttempts
+		if loaded, err := h.repo.GetLatestQuotaSnapshots(ctx, authIndexes); err == nil {
+			snapshots = loaded
+		} else {
+			lendingComplete = false
+		}
+		if loaded, err := h.repo.BatchCorrelatedCooldowns(ctx, authIndexes, nowMS); err == nil {
+			cooldowns = loaded
+		} else {
+			lendingComplete = false
+		}
+	}
+	states := make([]quotaCardState, 0, len(files))
+	for _, file := range files {
+		authIndex := strings.TrimSpace(file.AuthIndex)
+		if authIndex == "" {
+			continue
+		}
+		state := quotaCardState{file: file, attempt: attempts[authIndex], signal: signals[authIndex]}
+		if snapshot, ok := snapshots[authIndex]; ok {
+			state.snapshot = snapshot
+			state.hasSnapshot = true
+		}
+		if cooldown, ok := cooldowns[authIndex]; ok {
+			state.cooldown = cooldown
+			state.hasCooldown = true
+		}
+		states = append(states, state)
+	}
+	return states, lendingComplete, nil
+}
+
+// buildQuotaCard projects one credential from already-loaded state. Sharing this
+// projection is what keeps the detail's lending pool identical to the overview's;
+// only the surface-specific extras (raw CPA summaries, history) are added by the
+// caller.
+func (h *Handler) buildQuotaCard(ctx context.Context, state quotaCardState, nowMS int64) quota.NormalizedQuota {
+	file := state.file
+	normalized := quota.NormalizedQuota{
+		AuthIndex:    strings.TrimSpace(file.AuthIndex),
+		Name:         file.Name,
+		Type:         file.Type,
+		Provider:     quota.DetectProvider(file.Type, file.Provider),
+		Disabled:     file.Disabled,
+		ObservedAtMS: nowMS,
+		Capabilities: quota.CapabilitiesForFile(file),
+		Windows:      []quota.QuotaWindow{},
+	}
+
+	if state.hasCooldown && state.cooldown.IsActive {
+		normalized.ActiveCooldown = &quota.ActiveCooldown{
+			IsActive:          true,
+			Reason:            state.cooldown.Reason,
+			RecoverAtMS:       state.cooldown.RecoverAtMS,
+			RetryAfterSeconds: state.cooldown.RetryAfterSeconds,
+			CorrelatedAtMS:    state.cooldown.CorrelatedAtMS,
+		}
+	}
+
+	if state.hasSnapshot {
+		snapshot := state.snapshot
+		normalized.ObservedAtMS = snapshot.ObservedAtMS
+		normalized.LastAuthenticatedReadAtMS = snapshot.ObservedAtMS
+		normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
+		// The stored status is what the last read produced, and an empty reading is only
+		// knowable from it: without it the evaluation below recomputes the credential as one
+		// nobody has read, and the console asks for a repeat of a read that already happened.
+		normalized.Status = snapshot.Status
+		if plan := planFromSnapshot(snapshot); plan != nil {
+			normalized.Plan = plan
+		}
+		if snapshot.WindowsJSON != "" && snapshot.WindowsJSON != "[]" {
+			var windows []quota.QuotaWindow
+			if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err == nil {
+				normalized.Windows = windows
+			}
+		}
+		if snapshot.ResetCreditsJSON != "" {
+			var credits quota.CodexResetCreditsInfo
+			if err := json.Unmarshal([]byte(snapshot.ResetCreditsJSON), &credits); err == nil {
+				normalized.ResetCredits = &credits
+			}
+		}
+		if snapshot.ResetGrantsJSON != "" {
+			var grants []quota.ClaudeResetGrant
+			if err := json.Unmarshal([]byte(snapshot.ResetGrantsJSON), &grants); err == nil {
+				normalized.ResetGrants = grants
+			}
+		}
+	}
+
+	applyQuotaCollectionSignal(&normalized, state.signal)
+	quota.ApplyCredentialStatus(&normalized, file, nowMS)
+	quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
+	h.attachWindowCapacity(ctx, &normalized, nowMS)
+	h.overlayPassiveObservations(ctx, &normalized)
+	return normalized
 }
 
 func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Client) (quotaOverviewData, error) {
@@ -850,130 +947,44 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 		return quotaOverviewData{}, err
 	}
 
-	authIndexes := make([]string, 0, len(files))
-	fileMap := make(map[string]management.AuthFile)
-	for _, file := range files {
-		authIndex := strings.TrimSpace(file.AuthIndex)
-		if authIndex == "" {
-			continue
-		}
-		authIndexes = append(authIndexes, authIndex)
-		fileMap[authIndex] = file
-	}
-
 	nowMS := h.now().UnixMilli()
-	var latestSnapshots map[string]repository.QuotaSnapshotRecord
-	var latestAttempts map[string]repository.QuotaRefreshAttempt
-	var activeCooldowns map[string]repository.ActiveCooldownRecord
-	var collectionSignals map[string]repository.FeishuAccountSignal
-
-	if h.repo != nil && len(authIndexes) > 0 {
-		collectionSignals, err = h.repo.GetFeishuAccountSignals(ctx, authIndexes)
-		if err != nil {
-			return quotaOverviewData{}, err
-		}
-		latestAttempts, err = h.repo.GetQuotaRefreshAttempts(ctx, authIndexes)
-		if err != nil {
-			return quotaOverviewData{}, err
-		}
-		if snapshots, err := h.repo.GetLatestQuotaSnapshots(ctx, authIndexes); err == nil {
-			latestSnapshots = snapshots
-		}
-		if cooldowns, err := h.repo.BatchCorrelatedCooldowns(ctx, authIndexes, nowMS); err == nil {
-			activeCooldowns = cooldowns
-		}
+	states, lendingComplete, err := h.quotaCardStates(ctx, files, nowMS)
+	if err != nil {
+		return quotaOverviewData{}, err
 	}
 
-	items := make([]QuotaItemDTO, 0, len(authIndexes))
+	items := make([]QuotaItemDTO, 0, len(states))
 	var soonestRecoveryMS *int64
 
 	var healthyCount, warningCount, exhaustedCount, cooldownCount, attentionCount int
 
-	for _, authIndex := range authIndexes {
-		file := fileMap[authIndex]
-		stdProvider := quota.DetectProvider(file.Type, file.Provider)
-		caps := quota.CapabilitiesForFile(file)
-
-		normalized := quota.NormalizedQuota{
-			AuthIndex:    authIndex,
-			Name:         file.Name,
-			Type:         file.Type,
-			Provider:     stdProvider,
-			Disabled:     file.Disabled,
-			ObservedAtMS: nowMS,
-			Capabilities: caps,
-			Windows:      []quota.QuotaWindow{},
-		}
-
+	for _, state := range states {
+		file := state.file
+		normalized := h.buildQuotaCard(ctx, state, nowMS)
 		if file.Quota != nil {
 			if signals, ok := file.Quota["signals"].(map[string]any); ok {
-				rawSigs := make(map[string]string)
-				for k, v := range signals {
-					rawSigs[k] = fmt.Sprint(v)
+				rawSigs := make(map[string]string, len(signals))
+				for key, value := range signals {
+					rawSigs[key] = fmt.Sprint(value)
 				}
 				normalized.RawSignals = rawSigs
 			}
 		}
 
-		if cooldown, ok := activeCooldowns[authIndex]; ok && cooldown.IsActive {
-			normalized.ActiveCooldown = &quota.ActiveCooldown{
-				IsActive:          true,
-				Reason:            cooldown.Reason,
-				RecoverAtMS:       cooldown.RecoverAtMS,
-				RetryAfterSeconds: cooldown.RetryAfterSeconds,
-				CorrelatedAtMS:    cooldown.CorrelatedAtMS,
-			}
-			if cooldown.RecoverAtMS != nil && *cooldown.RecoverAtMS > nowMS {
-				if soonestRecoveryMS == nil || *cooldown.RecoverAtMS < *soonestRecoveryMS {
-					soonestRecoveryMS = cooldown.RecoverAtMS
+		if normalized.ActiveCooldown != nil && normalized.ActiveCooldown.IsActive {
+			if recoverAt := normalized.ActiveCooldown.RecoverAtMS; recoverAt != nil && *recoverAt > nowMS {
+				if soonestRecoveryMS == nil || *recoverAt < *soonestRecoveryMS {
+					soonestRecoveryMS = recoverAt
 				}
 			}
 		}
-
-		if snapshot, ok := latestSnapshots[authIndex]; ok {
-			normalized.ObservedAtMS = snapshot.ObservedAtMS
-			normalized.LastAuthenticatedReadAtMS = snapshot.ObservedAtMS
-			normalized.ResetGrantsStatus = quota.ResetGrantsStatus(snapshot.ResetGrantsStatus)
-			// The stored status is what the last read produced, and an empty reading is only
-			// knowable from it: without it the evaluation below recomputes the credential as one
-			// nobody has read, and the console asks for a repeat of a read that already happened.
-			normalized.Status = snapshot.Status
-			if plan := planFromSnapshot(snapshot); plan != nil {
-				normalized.Plan = plan
-			}
-			if snapshot.WindowsJSON != "" && snapshot.WindowsJSON != "[]" {
-				var windows []quota.QuotaWindow
-				if err := json.Unmarshal([]byte(snapshot.WindowsJSON), &windows); err == nil {
-					normalized.Windows = windows
-					// Check windows for soonest recovery
-					for _, w := range windows {
-						if w.ResetAtMS != nil && *w.ResetAtMS > nowMS {
-							if soonestRecoveryMS == nil || *w.ResetAtMS < *soonestRecoveryMS {
-								soonestRecoveryMS = w.ResetAtMS
-							}
-						}
-					}
-				}
-			}
-			if snapshot.ResetCreditsJSON != "" {
-				var credits quota.CodexResetCreditsInfo
-				if err := json.Unmarshal([]byte(snapshot.ResetCreditsJSON), &credits); err == nil {
-					normalized.ResetCredits = &credits
-				}
-			}
-			if snapshot.ResetGrantsJSON != "" {
-				var grants []quota.ClaudeResetGrant
-				if err := json.Unmarshal([]byte(snapshot.ResetGrantsJSON), &grants); err == nil {
-					normalized.ResetGrants = grants
+		for _, window := range normalized.Windows {
+			if window.ResetAtMS != nil && *window.ResetAtMS > nowMS {
+				if soonestRecoveryMS == nil || *window.ResetAtMS < *soonestRecoveryMS {
+					soonestRecoveryMS = window.ResetAtMS
 				}
 			}
 		}
-
-		applyQuotaCollectionSignal(&normalized, collectionSignals[authIndex])
-		quota.ApplyCredentialStatus(&normalized, file, nowMS)
-		quota.EvaluateStatusAndRecommendation(&normalized, nowMS)
-		h.attachWindowCapacity(ctx, &normalized, nowMS)
-		h.overlayPassiveObservations(ctx, &normalized)
 
 		switch normalized.Status {
 		case "healthy":
@@ -993,8 +1004,8 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 
 		dto := QuotaItemDTO{
 			NormalizedQuota: normalized,
-			LastRefresh:     projectQuotaRefreshAttempt(latestAttempts[authIndex]),
-			LastSuccessAtMS: latestSnapshots[authIndex].ObservedAtMS,
+			LastRefresh:     projectQuotaRefreshAttempt(state.attempt),
+			LastSuccessAtMS: state.snapshot.ObservedAtMS,
 			Quota:           projectQuota(file.Quota),
 			ModelQuotas:     projectModelQuotas(file.ModelQuotas),
 		}
@@ -1023,6 +1034,11 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 		AttentionCount:    attentionCount,
 		SoonestRecoveryMS: soonestRecoveryMS,
 	}
+	var lending *lendingOverviewDTO
+	if lendingComplete {
+		projected := projectLendingOverview(quota.ProjectLendingAdvice(lendingCardInputs(items), nowMS))
+		lending = &projected
+	}
 
-	return quotaOverviewData{summary, items, len(items)}, nil
+	return quotaOverviewData{Summary: summary, Quotas: items, Total: len(items), Lending: lending}, nil
 }

@@ -25,10 +25,11 @@ func seedQuotaObservations(ctx context.Context, repo *repository.Repository, now
 		if err != nil {
 			return fmt.Errorf("marshal quota payload for %s: %w", credential.authIndex, err)
 		}
+		var plan *quota.QuotaPlan
 		var windows []quota.QuotaWindow
 		switch credential.provider {
 		case "codex":
-			_, windows, _, err = quota.ParseCodexUsage(raw, now.UnixMilli())
+			plan, windows, _, err = quota.ParseCodexUsage(raw, now.UnixMilli())
 		case "claude":
 			windows, _, err = quota.ParseClaudeUsage(raw, now.UnixMilli())
 		case "antigravity":
@@ -44,26 +45,47 @@ func seedQuotaObservations(ctx context.Context, repo *repository.Repository, now
 				previous.ResetAtMS = &currentStart
 				used, remaining := 65.0, 35.0
 				previous.UsedPercent, previous.RemainingPercent = &used, &remaining
-				if err := saveDemoQuotaSnapshot(ctx, repo, credential.authIndex, credential.provider, []quota.QuotaWindow{previous}, currentStart-60000); err != nil {
+				if err := saveDemoQuotaSnapshot(ctx, repo, credential.authIndex, credential.provider, plan, []quota.QuotaWindow{previous}, currentStart-60000); err != nil {
 					return fmt.Errorf("seed previous-cycle quota for %s: %w", credential.authIndex, err)
 				}
 				currentUsed, currentRemaining := 2.0, 98.0
 				windows[0].UsedPercent, windows[0].RemainingPercent = &currentUsed, &currentRemaining
 			}
 		}
-		if err := saveDemoQuotaSnapshot(ctx, repo, credential.authIndex, credential.provider, windows, now.UnixMilli()); err != nil {
+		if err := saveDemoQuotaSnapshot(ctx, repo, credential.authIndex, credential.provider, plan, windows, now.UnixMilli()); err != nil {
 			return fmt.Errorf("seed current-cycle quota for %s: %w", credential.authIndex, err)
 		}
 	}
 	return nil
 }
 
-func saveDemoQuotaSnapshot(ctx context.Context, repo *repository.Repository, authIndex, provider string, windows []quota.QuotaWindow, observedAtMS int64) error {
+// saveDemoQuotaSnapshot writes the plan beside the windows. The lending pool is
+// grouped by provider and plan_type, so a demo snapshot without the plan leaves
+// every card in the "unpooled" list and the demonstration never shows advice.
+func saveDemoQuotaSnapshot(ctx context.Context, repo *repository.Repository, authIndex, provider string, plan *quota.QuotaPlan, windows []quota.QuotaWindow, observedAtMS int64) error {
 	raw, err := json.Marshal(windows)
 	if err != nil {
 		return fmt.Errorf("marshal quota snapshot for %s: %w", authIndex, err)
 	}
-	if err := repo.SaveQuotaSnapshot(ctx, repository.QuotaSnapshotRecord{ID: "demo-quota-" + authIndex + "-" + strconv.FormatInt(observedAtMS, 10), CreatedAtMS: observedAtMS, AuthIndex: authIndex, Provider: provider, Status: "healthy", WindowsJSON: string(raw), ObservedAtMS: observedAtMS}); err != nil {
+	record := repository.QuotaSnapshotRecord{
+		ID:           "demo-quota-" + authIndex + "-" + strconv.FormatInt(observedAtMS, 10),
+		CreatedAtMS:  observedAtMS,
+		AuthIndex:    authIndex,
+		Provider:     provider,
+		Status:       "healthy",
+		WindowsJSON:  string(raw),
+		ObservedAtMS: observedAtMS,
+	}
+	if plan != nil {
+		encoded, err := json.Marshal(plan)
+		if err != nil {
+			return fmt.Errorf("marshal quota plan for %s: %w", authIndex, err)
+		}
+		record.PlanJSON = string(encoded)
+		record.PlanType = plan.PlanType
+		record.PlanTier = plan.Tier
+	}
+	if err := repo.SaveQuotaSnapshot(ctx, record); err != nil {
 		return fmt.Errorf("save quota snapshot for %s: %w", authIndex, err)
 	}
 	return nil

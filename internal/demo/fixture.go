@@ -53,7 +53,7 @@ func credentialCatalog() []credential {
 		},
 		{
 			name: "codex-team-secondary.json", authIndex: "auth-codex-02", kind: "codex", provider: "codex",
-			label: "Codex · overflow seat", email: "eng@acme-labs.example", accountType: "oauth", plan: "plus",
+			label: "Codex · overflow seat", email: "eng@acme-labs.example", accountType: "oauth", plan: "pro",
 			models:  []string{"gpt-5-codex", "gpt-5"},
 			success: 1733, failed: 28, priority: 5, weight: 3, note: "used when the primary seat cools down",
 		},
