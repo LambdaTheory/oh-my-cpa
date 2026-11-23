@@ -15,7 +15,7 @@ import { buildOAuthWorkspaceProjection, countWorkspaceQuotaStatuses } from '../s
 import { quotaFreshnessMS, resolveQuotaStatus } from '../src/utils/quotaStatus';
 import { verifiedQuotaCredits } from '../src/utils/quotaCredits';
 import type { ManagementAuthFile } from '../src/types/managementAuthFile';
-import type { QuotaItem, QuotaWindow } from '../src/types/quota';
+import type { LendingCard, LendingDetail, LendingPool, QuotaItem, QuotaWindow } from '../src/types/quota';
 
 const NOW_MS = Date.parse('2026-10-10T08:00:00Z');
 const HOUR_MS = 3_600_000;
@@ -486,5 +486,95 @@ describe('paid usage, balances and usage breakdown', () => {
     const breakdown = document.querySelector('[data-quota-usage-breakdown]') as HTMLElement;
     expect(within(breakdown).getByText('96%')).toBeTruthy();
     expect(within(breakdown).getByText('Unavailable')).toBeTruthy();
+  });
+});
+
+describe('quota reset labels and the same-pool advice section', () => {
+  const renderBody = (item: QuotaItem, lending?: LendingDetail) => render(
+    <MemoryRouter>
+      <I18nProvider>
+        <CredentialQuotaBody item={item} nowMS={NOW_MS} isDemo={false} lending={lending} />
+      </I18nProvider>
+    </MemoryRouter>,
+  );
+  const bodyText = () => (document.querySelector('[data-quota-body]') as HTMLElement).textContent ?? '';
+  const longWindow = (overrides: Partial<QuotaWindow>): QuotaWindow => ({
+    id: 'weekly', label: 'weekly', kind: 'weekly', scope: 'standard',
+    remaining_percent: 80, reset_at_ms: NOW_MS + 72 * HOUR_MS, reset_accuracy: 'exact', period_hours: 168,
+    ...overrides,
+  });
+
+  it('labels an exact reset with a countdown and its date', () => {
+    renderBody(quota('exact-reset', [longWindow({})]));
+    expect(bodyText()).toContain('3d left');
+    expect(bodyText()).toMatch(/\d{2}\/\d{2} \d{2}:\d{2}/);
+    expect(document.querySelector('[data-fast-reset]')).toBeNull();
+  });
+
+  it('marks a derived or approximate instant with a tilde and names it a reference', () => {
+    const derived = renderBody(quota('derived-reset', [longWindow({ reset_accuracy: 'derived' })]));
+    expect(bodyText()).toContain('~3d left');
+    expect(bodyText()).toContain('Reference');
+    derived.unmount();
+
+    const approximate = renderBody(quota('approximate-reset', [longWindow({ reset_accuracy: 'approximate' })]));
+    expect(bodyText()).toContain('~3d left');
+    expect(bodyText()).toContain('Reference');
+    approximate.unmount();
+  });
+
+  it('keeps upstream text and marks a reset instant as unknown', () => {
+    renderBody(quota('text-reset', [longWindow({ reset_at_ms: undefined, reset_label: 'end of month' })]));
+    expect(bodyText()).toContain('end of month (reset time unknown)');
+  });
+
+  it('marks a fast reset with its remaining level and does not mark an unknown period', () => {
+    const highBody = renderBody(quota('fast-high', [longWindow({ reset_at_ms: NOW_MS + 40 * HOUR_MS, remaining_percent: 80 })]));
+    const high = document.querySelector('[data-fast-reset]') as HTMLElement;
+    expect(high.getAttribute('data-fast-reset')).toBe('high');
+    expect(high.textContent).toContain('Fast reset · plenty left');
+    highBody.unmount();
+
+    const lowBody = renderBody(quota('fast-low', [longWindow({ reset_at_ms: NOW_MS + 40 * HOUR_MS, remaining_percent: 49 })]));
+    const low = document.querySelector('[data-fast-reset]') as HTMLElement;
+    expect(low.getAttribute('data-fast-reset')).toBe('low');
+    expect(low.textContent).toContain('Fast reset · low');
+    lowBody.unmount();
+
+    const unknownBody = renderBody(quota('period-unknown', [longWindow({ period_hours: undefined, reset_at_ms: NOW_MS + HOUR_MS })]));
+    expect(document.querySelector('[data-fast-reset]')).toBeNull();
+    unknownBody.unmount();
+  });
+
+  it('shows the same pool beside the credential, separate from reset advice', () => {
+    const cards: LendingCard[] = [
+      {
+        auth_index: 'pool-primary', name: 'codex-primary', role: 'prefer', window_id: 'weekly',
+        window_kind: 'weekly', remaining_percent: 88, reset_at_ms: NOW_MS + 4 * 24 * HOUR_MS,
+        reset_accuracy: 'exact', observed_at_ms: NOW_MS, fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS,
+        reason_codes: [], is_comparable: true,
+      },
+      {
+        auth_index: 'pool-secondary', name: 'codex-secondary', role: 'avoid', window_id: 'weekly',
+        window_kind: 'weekly', remaining_percent: 40, reset_at_ms: NOW_MS + 2 * 24 * HOUR_MS,
+        reset_accuracy: 'exact', observed_at_ms: NOW_MS, fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS,
+        reason_codes: [], is_comparable: true,
+      },
+    ];
+    const pool: LendingPool = {
+      id: 'codex:pro', provider: 'codex', plan_type: 'pro', plan_label: 'Pro 200', window_kind: 'weekly',
+      state: 'advised', valid_until_ms: NOW_MS + 2 * 24 * HOUR_MS, observed_at_ms: NOW_MS,
+      fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS, is_reference: false, reason_codes: [], cards,
+    };
+    renderBody(
+      quota('pool-secondary', [longWindow({})]),
+      { generated_at_ms: NOW_MS, pool, unpooled_reason_codes: [] },
+    );
+    const section = document.querySelector('[data-lending-view="detail"]') as HTMLElement;
+    expect(section).toBeTruthy();
+    expect(section.textContent).toContain('This credential');
+    expect(section.textContent).toContain('Advice only, routing unchanged');
+    expect(section.textContent).toContain('In the codex · Pro 200 · Weekly limit pool (2 credentials)');
+    expect(document.querySelector('[data-lending-view="overview"]')).toBeNull();
   });
 });

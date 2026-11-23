@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { createCpaLendingFixture } from './acceptance/lending-fixtures.mjs';
 
 // The endpoints the client reads on /v0/management; every other one lives under
 // /v8/management only. `/config.yaml` is on both: v0 returns the file as stored
@@ -187,6 +188,14 @@ export function createFakeCpaServer({
   // (`rate-limit` / `upstream-error`). The scenario switches modes through
   // `fixture.setQuotaMode`; the default keeps every other suite on fresh data.
   quotaMode = 'ok',
+  // A named lending-fixtures.mjs scene, or null for the default credential set.
+  // omitBaseCredentials keeps the hero environment to the two cards the operator
+  // is meant to see instead of mixing them with the general-purpose codex seats.
+  lendingFixture = null,
+  omitBaseCredentials = false,
+  // Keep the server to the lending scene alone: no base seats and no plugin
+  // credentials. The experience environment uses this so the two cards are the page.
+  lendingOnly = false,
 } = {}) {
   const requests = [];
   let legacyHostEnabled = legacyHost;
@@ -347,19 +356,26 @@ export function createFakeCpaServer({
       success: 1, failed: 0, models: [], priority: 1, weight: 1,
     },
   ];
-  let pluginQuotaCredentialsEnabled = true;
+  let pluginQuotaCredentialsEnabled = !lendingOnly;
   // Credentials the quota scheduler must not pick up. A suite that runs the real
   // auto-refresh loop uses this to keep a deliberately failing credential out of
   // the round, where its 429 would park the whole provider for the fixture's
   // Retry-After and race the reads the suite is asserting on.
   const disabledCredentialIndexes = new Set();
-  let authFiles = JSON.parse(JSON.stringify(baseAuthFiles));
+  // The lending scenes are credential sets of their own: a scenario that swaps
+  // from one to another must not leave the previous scene's seats behind.
+  let activeLending = lendingFixture ? createCpaLendingFixture(lendingFixture) : null;
+  let syncedLendingIDs = new Set();
+  let authFiles = JSON.parse(JSON.stringify((omitBaseCredentials || lendingOnly) ? [] : baseAuthFiles));
   const syncPluginQuotaCredentials = () => {
     const quotaIDs = new Set(pluginQuotaAuthFiles.map((file) => file.id));
     authFiles = authFiles.filter((file) => !quotaIDs.has(file.id));
     if (pluginQuotaCredentialsEnabled) {
       authFiles.push(...JSON.parse(JSON.stringify(pluginQuotaAuthFiles)));
     }
+    authFiles = authFiles.filter((file) => !syncedLendingIDs.has(file.id));
+    syncedLendingIDs = new Set(activeLending ? activeLending.authFiles.map((file) => file.id) : []);
+    if (activeLending) authFiles.push(...JSON.parse(JSON.stringify(activeLending.authFiles)));
     for (const file of authFiles) {
       if (disabledCredentialIndexes.has(file.auth_index)) file.disabled = true;
     }
@@ -1130,10 +1146,16 @@ export function createFakeCpaServer({
         body = JSON.parse(requests[requests.length - 1].body || '{}');
       } catch {}
       const targetURL = body.url || '';
+      const lendingAuthIndex = body.auth_index || '';
       // The subscription probe is scoped per credential. One codex credential answers
       // it (exercising a live read) and the other reports the upstream failure, so the
       // unverified-snapshot path is covered in the same run.
       if (targetURL.includes('backend-api/subscriptions')) {
+        const lendingSubscription = activeLending?.subscription(lendingAuthIndex);
+        if (lendingSubscription) {
+          json(response, 200, { status_code: 200, header: { 'content-type': ['application/json'] }, body: lendingSubscription });
+          return;
+        }
         if ((body.auth_index || '') === 'auth-index-e2e-8') {
           json(response, 200, {
             status_code: 503,
@@ -1159,6 +1181,11 @@ export function createFakeCpaServer({
         return;
       }
       if (targetURL.includes('rate-limit-reset-credits')) {
+        const lendingCredits = activeLending?.credits(lendingAuthIndex);
+        if (lendingCredits) {
+          json(response, 200, { status_code: 200, header: { 'content-type': ['application/json'] }, body: lendingCredits });
+          return;
+        }
         json(response, 200, {
           status_code: 200,
           header: { 'content-type': ['application/json'] },
@@ -1175,6 +1202,11 @@ export function createFakeCpaServer({
         return;
       }
       if (targetURL.includes('backend-api/wham/usage')) {
+        const lendingUsage = activeLending?.usage(lendingAuthIndex);
+        if (lendingUsage) {
+          json(response, 200, { status_code: 200, header: { 'content-type': ['application/json'] }, body: lendingUsage });
+          return;
+        }
         json(response, 200, {
           status_code: 200,
           header: { 'content-type': ['application/json'] },
@@ -1402,6 +1434,15 @@ export function createFakeCpaServer({
     setLegacyHost(enabled) { legacyHostEnabled = Boolean(enabled); },
     setQuotaMode(mode) { pluginQuotaMode = mode; },
     quotaMode() { return pluginQuotaMode; },
+    // Swap the lending scene without restarting the fixture. The reset instants are
+    // anchored at this call, which is also how a run reseeds the hero scene.
+    setLendingFixture(name) {
+      activeLending = name ? createCpaLendingFixture(name) : null;
+      syncPluginQuotaCredentials();
+    },
+    lendingAuthIndexes() {
+      return activeLending ? activeLending.authFiles.map((file) => file.auth_index) : [];
+    },
     // The default list keeps the twelve pre-quota credentials; the quota suite
     // adds the plugin credentials and the sparse/failing shapes it needs.
     setPluginQuotaCredentials(enabled) {

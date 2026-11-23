@@ -192,7 +192,7 @@ const SCENARIO_PATHS = [
   // three retired pages' UI claims; overlay-back covers the shared history layer.
   {
     prefix: 'web/src/pages/oauthManagement/',
-    scenarios: ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'omc-account-automation', 'omc-ollama-accounts', 'overlay-back', 'mobile-console'],
+    scenarios: ['quota-lending', 'oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'omc-account-automation', 'omc-ollama-accounts', 'overlay-back', 'mobile-console'],
   },
   {
     prefix: 'web/src/pages/oauthProviderLogic',
@@ -208,7 +208,7 @@ const SCENARIO_PATHS = [
   },
   {
     prefix: 'web/src/pages/quota/',
-    scenarios: ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
+    scenarios: ['quota-lending', 'oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
   },
   // The remaining list surfaces ADR 0012 converted. Each renders rows on a phone and a table
   // otherwise, and `phone-lists` is the scenario that reads both renderings of each; without a

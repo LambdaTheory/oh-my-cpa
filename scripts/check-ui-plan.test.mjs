@@ -100,7 +100,7 @@ test('the unified OAuth workspace selects its density scenario and overlay histo
   // it selects the two scenarios that drive them as well.
   assert.deepEqual(
     planFor('web/src/pages/oauthManagement/OAuthManagementPage.tsx'),
-    ['omc-account-automation', 'omc-ollama-accounts', 'oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
+    ['omc-account-automation', 'omc-ollama-accounts', 'oauth-management', 'quota-lending', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
   );
   assert.deepEqual(
     planFor('web/src/components/authFiles/AuthFileDetailDrawer.tsx'),
@@ -108,7 +108,7 @@ test('the unified OAuth workspace selects its density scenario and overlay histo
   );
   assert.deepEqual(
     planFor('web/src/pages/quota/CredentialQuotaBody.tsx'),
-    ['oauth-management', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
+    ['oauth-management', 'quota-lending', 'oauth-vertex-import', 'oauth-model-rules', 'oauth-token-capacity', 'oauth-authorization-outcomes', 'oauth-workspace-scale', 'oauth-plugin-connections', 'overlay-back', 'mobile-console'],
   );
   assert.deepEqual(
     planFor('web/src/pages/LegacyOAuthManagementRedirect.tsx'),
