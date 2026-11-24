@@ -1,5 +1,5 @@
-/* RepoKeysPanel.module.css — repository-owned keys on the key management page.
-   Same terminal-flat language as the gateway key list above it: one border, one inset,
+/* RepoKeysPanel.module.css — the repository-owned keys panel.
+   Same terminal-flat language as the gateway key list: one border, one inset,
    section rules instead of nested cards. */
 
 .repo-keys {

@@ -1,7 +1,7 @@
 import { ActionMenu } from '../components/common/ActionMenu';
 import { useTimeZone } from '../utils/TimeZoneProvider';
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Button,
   Input,
@@ -23,7 +23,6 @@ import { useT } from '../i18n';
 import { isDemoMode } from '../types/demoMode';
 import { useOverlayHistory } from '../hooks/useOverlayHistory';
 import { ApiKeysList, type ApiKeyRecord } from '../components/keys/ApiKeysList';
-import { RepoKeysPanel } from '../components/keys/RepoKeysPanel';
 import { updateFieldWithBaseline, getFieldSemanticValue } from '../components/config/configDirty';
 import { computeConfigChanges } from '../components/config/configPatch';
 import { describeConfigSaveError } from '../components/config/configSaveErrors';
@@ -506,10 +505,12 @@ export const ApiKeysPage: React.FC = () => {
         )}
       </Panel>
 
-      {/* Repository-owned keys: the same page, a different owner. The list above edits the
-          gateway's one shared key list; this panel holds the keys an agent applies for on a
-          repository's behalf and the decisions on those applications. */}
-      <RepoKeysPanel />
+      {/* The repository keys panel moved to its own page. This pointer is static: it does not
+          depend on the list above, so it is there when the list is empty or could not be read. */}
+      <p className={styles['repo-keys-moved']}>
+        {t('keys.repo_keys_moved')}{' '}
+        <Link to="/repo-keys">{t('keys.repo_keys_moved_action')}</Link>
+      </p>
 
       {/* One editor for both of a key's editable parts: the secret CPA authenticates it with,
           and the name this console shows it by. */}

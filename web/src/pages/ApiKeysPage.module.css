@@ -66,6 +66,18 @@
   max-width: 100%;
 }
 
+/* The pointer to the repository keys page: one static line, not a panel, so an empty or
+   unreadable gateway list does not take it away. */
+.repo-keys-moved {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.repo-keys-moved a {
+  color: var(--accent);
+}
+
 /* Loading and failure states take the rows' own inset, so the surface does not change shape
    when the query resolves. */
 .keys-state {
