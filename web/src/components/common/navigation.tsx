@@ -17,17 +17,21 @@ import {
   SettingOutlined,
   BlockOutlined,
   AppstoreOutlined,
+  BranchesOutlined,
+  SwapOutlined,
 } from '../icons';
 import { PLUGIN_PAGE_ROUTE_PREFIX, type PluginPageEntry } from '../plugins/pluginPages';
 import { isRenderableLogoURL } from '../../types/pluginOAuthProviders';
 import { isDemoMode } from '../../types/demoMode';
 import type { NavEntry, NavGroup } from '../../types/sidebarNav';
+import { QUOTA_LENDING_NAV_LABEL_KEY, QUOTA_LENDING_PATH } from '../../types/quotaLendingMount';
 
 export { PLUGIN_PAGE_ROUTE_PREFIX };
 
 /**
  * The rail's fixed destinations, grouped the way the console reasons about them: what it runs,
- * the gateway in front of those models, what it observed, and how it is controlled.
+ * the gateway in front of those models, what it observed, the capabilities the team builds on
+ * top of them, and how it is controlled.
  *
  * The groups are a leaf model rather than the layout's own data so the settings page can list the
  * same entries the rail draws - the two must agree about what a rail entry is, or one of them
@@ -42,7 +46,6 @@ export const STATIC_NAV_GROUPS: readonly NavGroup[] = [
       { key: '/agent', labelKey: 'nav.agent', icon: <RobotOutlined /> },
       { key: '/playground', labelKey: 'nav.playground', icon: <CodeSandboxOutlined /> },
       { key: '/model-square', labelKey: 'nav.model_square', icon: <BlockOutlined /> },
-      { key: '/model-groups', labelKey: 'nav.model_groups', icon: <AppstoreOutlined /> },
     ],
   },
   {
@@ -67,6 +70,17 @@ export const STATIC_NAV_GROUPS: readonly NavGroup[] = [
       { key: '/pricing', labelKey: 'nav.pricing', icon: <DollarOutlined /> },
       { key: '/logs', labelKey: 'nav.logs', icon: <ProfileOutlined /> },
       { key: '/audit', labelKey: 'nav.audit', icon: <AuditOutlined /> },
+    ],
+  },
+  {
+    key: 'capabilities',
+    labelKey: 'nav.group.capabilities',
+    items: [
+      // Mature first, newest last: a named set of models, one key per repository, and the
+      // cross-credential lending advice.
+      { key: '/model-groups', labelKey: 'nav.model_groups', icon: <AppstoreOutlined /> },
+      { key: '/repo-keys', labelKey: 'repo_keys.title', icon: <BranchesOutlined /> },
+      { key: QUOTA_LENDING_PATH, labelKey: QUOTA_LENDING_NAV_LABEL_KEY, icon: <SwapOutlined /> },
     ],
   },
   {

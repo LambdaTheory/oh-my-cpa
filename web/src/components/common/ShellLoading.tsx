@@ -5,10 +5,10 @@ import { progressTasks } from '../../utils/progressTasks';
 import { BrandArtwork } from './BrandArtwork';
 import { ListPlaceholder, LoadingRegion, PageHeadPlaceholder, Placeholder } from './Placeholder';
 import { ProgressBar } from './ProgressBar';
-
-// One entry per group the rail carries, with each group's item count, so the placeholder rail is
-// as long as the real one and the nav does not grow under the reader when it lands.
-const NAV_GROUPS = [4, 3, 4, 4];
+import { isDemoMode } from '../../types/demoMode';
+// Counts live in a leaf module, not the navigation model: this component is eager, and the
+// placeholder rail must be as long as the real one so the nav does not grow under the reader.
+import { shellNavGroupSizes } from '../../types/navGroupSizes';
 
 /**
  * The authenticated shell's stand-in: the rail, the header and a page frame, drawn at the geometry
@@ -22,6 +22,7 @@ const NAV_GROUPS = [4, 3, 4, 4];
 export const ShellLoading: React.FC = () => {
   const t = useT();
   useProgressTask();
+  const groupSizes = shellNavGroupSizes(isDemoMode());
   return (
     <div className="shell-loading">
       <aside className="shell-loading-sider" aria-hidden="true">
@@ -29,7 +30,7 @@ export const ShellLoading: React.FC = () => {
           <BrandArtwork shape="wordmark" height={20} className="app-brand-logo" />
         </div>
         <div className="shell-loading-nav">
-          {NAV_GROUPS.map((items, group) => (
+          {groupSizes.map((items, group) => (
             <div key={group} className="shell-loading-nav-group">
               <Placeholder width={56} row={group} className="placeholder-line is-meta" />
               {Array.from({ length: items }, (_, item) => (

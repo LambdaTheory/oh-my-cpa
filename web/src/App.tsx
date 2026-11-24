@@ -26,6 +26,7 @@ import {
   PricingPage,
   ProvidersPage,
   ApiKeysPage,
+  RepoKeysPage,
   DashboardPage,
   InsightsPage,
   AgentPage,
@@ -47,7 +48,7 @@ import {
   PluginPageHost,
   OmcSettingsPage,
 } from './routePages';
-import { QUOTA_LENDING_PATH } from './pages/quota/lendingMount';
+import { QUOTA_LENDING_PATH } from './types/quotaLendingMount';
 import { ThemeProvider, ThemeServerSync, useTheme } from './theme/ThemeContext';
 import { I18nProvider, useI18n } from './i18n';
 import { TokenDisplayProvider } from './types/tokenDisplayContext';
@@ -154,6 +155,7 @@ export const AppRoutes: React.FC = () => {
         { path: 'model-groups/:id/add', element: <ModelGroupAddPage /> },
         { path: 'ai-providers', element: <ProvidersPage /> },
         { path: 'api-keys', element: <ApiKeysPage /> },
+        { path: 'repo-keys', element: <RepoKeysPage /> },
         { path: QUOTA_LENDING_PATH, element: <QuotaLendingPage /> },
         { path: 'oauth-management', element: <OAuthManagementPage /> },
         { path: 'auth-files', element: <LegacyOAuthManagementRedirect from="/auth-files" /> },

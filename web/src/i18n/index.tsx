@@ -378,6 +378,7 @@ const DICT: Record<string, [string, string]> = {
   'nav.group.operate': ['运行', 'Operate'],
   'nav.group.gateway': ['网关', 'Gateway'],
   'nav.group.observe': ['观测', 'Observe'],
+  'nav.group.capabilities': ['能力', 'Capabilities'],
   'nav.group.control': ['控制', 'Control'],
   'nav.group.plugins': ['插件', 'Plugins'],
   'nav.group.ohmycpa': ['Oh My CPA', 'Oh My CPA'],
@@ -2221,6 +2222,8 @@ const DICT: Record<string, [string, string]> = {
   'keys.delete_confirm_desc': ['确认后立即从 CPA 的客户端密钥列表中移除；本控制台不保存该密钥值，删除后无法恢复。如需保留请先复制。', 'Confirming removes it from CPA\'s client-key list at once. This console stores no copy of the value, so it cannot be recovered; copy it first if you want to keep it.'],
   // ── repository-owned keys ────────────────────────────────────────────────
   'repo_keys.title': ['仓库自有密钥', 'Repository keys'],
+  'keys.repo_keys_moved': ['仓库自有密钥已移到「能力」分组。', 'Repository keys now live under Capabilities.'],
+  'keys.repo_keys_moved_action': ['前往仓库自有密钥', 'Open repository keys'],
   'repo_keys.subtitle': ['每个仓库一把密钥，由 agent 通过 MCP 申请，人工审批一次；控制台只显示掩码，只有明确查看时才会显示明文。', 'One key per repository. An agent applies over MCP, a person approves once, and this console shows masks until a value is deliberately revealed.'],
   'repo_keys.search': ['按仓库、密钥或 agent 搜索', 'Search by repository, key or agent'],
   'repo_keys.filter_status': ['按状态筛选', 'Filter by status'],

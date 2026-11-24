@@ -17,7 +17,7 @@ import { ConfirmAction } from '../../components/common/ConfirmAction';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import { ResetAdviceView } from './ResetAdviceView';
 import { LendingAdviceView } from './LendingAdviceView';
-import { QUOTA_LENDING_PATH } from './lendingMount';
+import { QUOTA_LENDING_PATH } from '../../types/quotaLendingMount';
 
 interface CredentialQuotaBodyProps {
   item: QuotaItem;

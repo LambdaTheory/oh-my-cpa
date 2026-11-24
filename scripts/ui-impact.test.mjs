@@ -358,11 +358,11 @@ test('direct App pages cannot hide a disconnected or empty route registry', () =
 });
 
 test('a registry helper imported for a constant is not a routed page', () => {
-  const mount = 'web/src/pages/quota/lendingMount.ts';
+  const mount = 'web/src/types/quotaLendingMount.ts';
   const graph = graphOf({
     ...LAZY_CONSOLE,
     [mount]: 'export const PATH = \'/quota-lending\';',
-    'web/src/App.tsx': `${LAZY_CONSOLE['web/src/App.tsx']} import { PATH } from './pages/quota/lendingMount';`,
+    'web/src/App.tsx': `${LAZY_CONSOLE['web/src/App.tsx']} import { PATH } from './types/quotaLendingMount';`,
   });
   assert.ok(!discoverRoutedPages(graph).includes(mount));
 });
@@ -407,6 +407,15 @@ test('Insights and repository approvals select the scenarios that open their rou
       assert.deepEqual(planScenarios([file], ALL, { ...realGraph, isAdditionOnly: () => false }).ids, ids, file);
     }
   }
+});
+
+test('the repository keys page selects the route sweep that opens it', () => {
+  const ids = ['mobile-console'];
+  for (const id of ids) assert.ok(ALL.includes(id), `${id} must be a registered browser scenario`);
+  assert.deepEqual(
+    planScenarios(['web/src/pages/RepoKeysPage.tsx'], ALL, { ...realGraph, isAdditionOnly: () => false }).ids,
+    ids,
+  );
 });
 
 test('the real registry can be attributed', () => {
