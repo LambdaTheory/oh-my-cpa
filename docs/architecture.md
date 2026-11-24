@@ -902,7 +902,13 @@ global OAuth exclusions share a separate Model Rules Drawer, with independent
 section drafts; switching provider or closing cannot discard an unsaved section
 without a guard. Its names and brand marks match the provider filter tabs. `CredentialQuotaBody` is the single quota renderer used by the
 workspace and its detail panel. The list always renders a compact quota summary;
-the Quota tab always renders the full quota body. Codex and Claude credentials expose
+the Quota tab always renders the full quota body. The complete same-pool advice lives on
+its own page at `/quota-lending`, mounted by `web/src/pages/quota/lendingMount.ts`; the OAuth workspace header carries only a
+link summarising it, and the drawer keeps the credential's own pool membership. All three
+read one `lending` projection computed server-side from the same already-loaded roster, and
+no extra upstream request is made to obtain it. A snapshot or cooldown read that fails the batch
+returns `lending: null`, and the entry, the page and the drawer degrade together. See *Cross-credential lending advice* under
+Quota flow. Codex and Claude credentials expose
 a separate Window warmup tab for rules, status and confirmed manual runs. Warmup drafts
 survive tab switches. Configuration and Models are separate tabs with query eligibility
 bound to the selected tab. The configuration
@@ -916,6 +922,11 @@ editing a control saves the effective view and resets pagination. Reset filters
 persists the default status, quota and sort while preserving page size. If the
 preference read fails, the controls remain usable through URL state; saves stay
 disabled until the stored document has been read successfully.
+
+The compact credential row shows its pool role and the window's own reset and fast-reset marks;
+the Quota tab shows the pool beside `ResetAdviceView`. The overview adds the cross-pool panel
+only when the projection exists; a gateway without the field states its absence in the summary
+line and in the detail rather than hiding the credential or inventing a pool.
 
 A quota refresh reports its outcome once, as a toast, so it never pushes the
 credential list down (ADR 0045). The batch endpoint returns one result per credential;
@@ -2467,6 +2478,34 @@ credential's available credit count is positive. Upstream's `applicable_availabl
 gate, and the consume response is what states the outcome. The redemption POST carries the same
 `Chatgpt-Account-Id` the read probes send, so the redemption is scoped to the same
 account as the reading it was decided from.
+
+### Cross-credential lending advice
+
+The quota read carries a second read-only projection beside `reset_advice`:
+`quota.ProjectLendingAdvice` groups the cards the handler has already normalized by
+normalized provider and `plan_type`, picks each card's lowest-remaining standard window
+of at least a day, and ranks the cards that can take traffic by the percentage points per
+day each has left before its natural reset. A pool stands on long standard windows
+(`scope=standard`, `period_hours >= 24`), and its reset-before daily figure is the
+remaining share over the days to that window's natural reset. The overview and the
+credential detail both build the whole roster through the same shared card projection
+(`Handler.quotaCardStates` and `buildQuotaCard`) and feed it to that one function, so a
+role, number, reason or expiry cannot differ between the two surfaces.
+
+The projection consumes only the auth files, snapshots, cooldowns, refresh attempts and
+passive observations the quota read already loads: it issues no upstream request, writes
+neither a snapshot nor an audit event, and is not persisted. Freshness uses
+`quota.PredictionFreshWindow`, not the two-hour `reset_advice` entitlement window, and a
+stale or incomparable reading makes the whole pool unavailable rather than falling back
+to a remaining-percentage sort; an unavailable pool carries no `valid_until_ms`, and a comparable
+card with no serviceability reason stays `normal` in a limited pool instead of being labelled
+limited. When a snapshot or cooldown read fails, the handler still returns the quota read with
+`lending: null` rather than projecting advice from an incomplete batch. `internal/api/quota_lending.go` holds the handwritten wire
+allowlist; the domain structs are never marshalled directly. The console projects that
+same object with `web/src/pages/quota/lendingAdvice.ts`, re-reading only the
+clock-dependent figures against the page clock. The complete advice is rendered on `/quota-lending`; the OAuth header only summarises pool states in a link, and
+the credential drawer shows the card's own pool. No route applies the advice: CPA routing
+weights stay outside this projection.
 
 ### Account-level auto-management
 

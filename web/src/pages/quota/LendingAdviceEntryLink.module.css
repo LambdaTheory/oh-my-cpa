@@ -1,0 +1,27 @@
+/* Inside the OAuth summary strip: one inline item, never a block of its own. */
+.entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.entry:hover {
+  text-decoration: underline;
+}
+
+.advised { color: var(--accent); }
+.balanced { color: var(--fg-2); }
+.plain { color: var(--meta); }
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+}

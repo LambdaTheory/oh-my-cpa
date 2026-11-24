@@ -67,9 +67,31 @@ func TestSeedQuotaObservationsWrapSnapshotFailure(t *testing.T) {
 
 func TestSaveDemoQuotaSnapshotWrapMarshalFailure(t *testing.T) {
 	usedPercent := math.NaN()
-	err := saveDemoQuotaSnapshot(context.Background(), nil, "auth-test", "codex", []quota.QuotaWindow{{UsedPercent: &usedPercent}}, 1)
+	err := saveDemoQuotaSnapshot(context.Background(), nil, "auth-test", "codex", nil, []quota.QuotaWindow{{UsedPercent: &usedPercent}}, 1)
 	var marshalError *json.UnsupportedValueError
 	if !errors.As(err, &marshalError) || !strings.Contains(err.Error(), "marshal quota snapshot for auth-test") {
 		t.Fatalf("marshal failure must identify the credential and preserve its cause: %v", err)
+	}
+}
+
+func TestSeedQuotaObservationsWriteCodexPlan(t *testing.T) {
+	repo, _, _ := seededDatabase(t)
+	ctx := context.Background()
+	latest, err := repo.GetLatestQuotaSnapshots(ctx, []string{"auth-codex-01", "auth-codex-02"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, authIndex := range []string{"auth-codex-01", "auth-codex-02"} {
+		snapshot := latest[authIndex]
+		if snapshot.PlanType != "pro" || snapshot.PlanJSON == "" {
+			t.Fatalf("%s plan = %q / %q, want the demo pool to carry a pro plan", authIndex, snapshot.PlanType, snapshot.PlanJSON)
+		}
+		var plan quota.QuotaPlan
+		if err := json.Unmarshal([]byte(snapshot.PlanJSON), &plan); err != nil {
+			t.Fatal(err)
+		}
+		if plan.PlanType != "pro" || plan.PlanLabel == "" || plan.Tier == "" {
+			t.Fatalf("%s plan payload = %+v", authIndex, plan)
+		}
 	}
 }

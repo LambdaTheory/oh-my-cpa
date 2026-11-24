@@ -1,7 +1,92 @@
 import type { QuotaWindow } from '../../types/quota';
+import { quotaRemainingPercent } from './quotaFormat';
 
 /** How many windows a list row shows before the rest need the Drawer. */
 export const COMPACT_QUOTA_WINDOW_COUNT = 2;
+
+const HOUR_MS = 3_600_000;
+
+/**
+ * A window the lending rules compare: the credential's own plan, a day or longer.
+ *
+ * Shorter windows reset too quickly to say anything about stretching an allowance to the reset,
+ * and rolling or credit windows have no fixed cycle to compare. The backend's `LongStandardWindow`
+ * uses the same rule; the display layer must not drift from it.
+ */
+export function isLongStandardWindow(window: QuotaWindow): boolean {
+  if (window.scope !== 'standard') return false;
+  if (window.kind === 'rolling' || window.kind === 'credit_usage') return false;
+  return window.period_hours != null && window.period_hours >= 24;
+}
+
+/** The reset sort's key: the soonest reset among a credential's long windows. */
+export interface EarliestLongWindow {
+  resetAtMS: number;
+  remainingPercent?: number;
+}
+
+function compareNullablePercent(left?: number, right?: number): number {
+  if (left == null && right == null) return 0;
+  if (left == null) return 1;
+  if (right == null) return -1;
+  return left - right;
+}
+
+/**
+ * The soonest natural reset among a credential's long windows, with that window's remaining share.
+ *
+ * A credential with no long window, or none that states a reset instant, has no key and sinks to
+ * the end of the reset sort. A short window never decides the order, even when its boundary is the
+ * next one on the credential: the row may carry it, but the comparison is about the long cycle.
+ */
+export function earliestLongWindow(windows: QuotaWindow[]): EarliestLongWindow | null {
+  const candidates = windows.filter((window) => isLongStandardWindow(window) && window.reset_at_ms != null);
+  if (candidates.length === 0) return null;
+  candidates.sort((left, right) => (
+    (left.reset_at_ms ?? 0) - (right.reset_at_ms ?? 0)
+      || compareNullablePercent(quotaRemainingPercent(left), quotaRemainingPercent(right))
+      || left.id.localeCompare(right.id)
+  ));
+  const chosen = candidates[0];
+  return { resetAtMS: chosen.reset_at_ms ?? 0, remainingPercent: quotaRemainingPercent(chosen) };
+}
+
+/**
+ * Whether a window is close enough to its own reset to be read as "fast reset".
+ *
+ * The period is what makes the distance meaningful, so a window without one is never marked. A
+ * boundary already in the past is not fast either: that window has reset, and marking it would
+ * describe a state it is no longer in.
+ */
+export function isFastResetWindow(
+  window: Pick<QuotaWindow, 'period_hours' | 'reset_at_ms'>,
+  nowMS: number,
+): boolean {
+  if (window.period_hours == null || window.period_hours <= 0 || window.reset_at_ms == null) return false;
+  const remainingMS = window.reset_at_ms - nowMS;
+  return remainingMS > 0 && remainingMS <= (window.period_hours * HOUR_MS) / 3;
+}
+
+/**
+ * The remaining-share half of the fast-reset mark: `high` from 50%, `low` below it.
+ *
+ * `null` means no share is stated, so the caller prints the plain "fast reset" mark rather than
+ * inventing a level; it also covers a window that is not fast at all.
+ */
+export function quotaFastResetState(
+  window: Pick<QuotaWindow, 'period_hours' | 'reset_at_ms' | 'remaining_percent' | 'used_percent'>,
+  nowMS: number,
+): 'high' | 'low' | null {
+  if (!isFastResetWindow(window, nowMS)) return null;
+  // The 50% line is exact: `quotaRemainingPercent` rounds for the progress bar, which would turn
+  // 49.9% into 50% and label a low window as high.
+  const share = window.remaining_percent ?? (window.used_percent != null ? 100 - window.used_percent : undefined);
+  const remaining = share == null || !Number.isFinite(share)
+    ? undefined
+    : Math.max(0, Math.min(100, share));
+  if (remaining == null) return null;
+  return remaining >= 50 ? 'high' : 'low';
+}
 
 /**
  * Which window a reading describes.

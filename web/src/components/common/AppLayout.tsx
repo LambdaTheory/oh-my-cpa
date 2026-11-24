@@ -24,6 +24,7 @@ import { useToast } from '../feedback';
 import { preloadRoute } from '../../routePreload';
 import { collectPluginPages, PLUGIN_PAGE_ROUTE_PREFIX } from '../plugins/pluginPages';
 import { buildNavGroups, STATIC_NAV_GROUPS } from './navigation';
+import { lendingNavKeyForPath } from '../../pages/quota/lendingMount';
 import { navEntryLabel, retainVisibleGroups, type NavEntry, type NavGroup } from '../../types/sidebarNav';
 import { useNavVisibility } from '../../hooks/useNavVisibility';
 import { usePendingUpdates } from '../../hooks/useUpdateNotice';
@@ -176,8 +177,9 @@ export const AppLayout: React.FC = () => {
   const { hiddenSet } = useNavVisibility();
   const visibleNavGroups = React.useMemo(() => retainVisibleGroups(navGroups, hiddenSet), [navGroups, hiddenSet]);
 
+  const navKey = lendingNavKeyForPath(location.pathname);
   const currentEntry = navEntries
-    .filter((entry) => location.pathname === entry.key || location.pathname.startsWith(`${entry.key}/`))
+    .filter((entry) => navKey === entry.key || navKey.startsWith(`${entry.key}/`))
     .sort((a, b) => b.key.length - a.key.length)[0];
   const selectedKey = currentEntry?.key ?? '/dashboard';
   const currentGroup = navGroups.find((group) => group.items.some((entry) => entry.key === selectedKey));

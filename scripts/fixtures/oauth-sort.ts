@@ -1,7 +1,7 @@
 import { buildOAuthWorkspaceProjection, type OAuthWorkspaceRecord } from '../../web/src/pages/oauthManagement/oauthWorkspaceLogic';
 import type { AuthFileSortKey } from '../../web/src/components/authFiles/authFileLogic';
 
-export const OAUTH_SORT_KEYS: AuthFileSortKey[] = ['name-asc', 'name-desc', 'requests-desc', 'priority-desc', 'weight-desc'];
+export const OAUTH_SORT_KEYS: AuthFileSortKey[] = ['name-asc', 'name-desc', 'requests-desc', 'priority-desc', 'weight-desc', 'reset-asc'];
 
 export function createOAuthSortRecords(count: number): OAuthWorkspaceRecord[] {
   const files = Array.from({length: count}, (_, index) => {
@@ -23,6 +23,10 @@ export function legacyOAuthSort(records: OAuthWorkspaceRecord[], sort: AuthFileS
     case 'requests-desc': return copy.sort((left, right) => (right.file.success + right.file.failed) - (left.file.success + left.file.failed) || byName(left, right));
     case 'priority-desc': return copy.sort((left, right) => (right.file.priority ?? 0) - (left.file.priority ?? 0) || byName(left, right));
     case 'weight-desc': return copy.sort((left, right) => (right.file.weight ?? 1) - (left.file.weight ?? 1) || byName(left, right));
+    // These records carry no quota windows, so every reset key is absent and the projection falls
+    // back to name order, then to the record key for labels the base-sensitive name compare treats
+    // as equal. The keyed order has its own fixture in `test-oauth-sort`.
+    case 'reset-asc': return copy.sort((left, right) => byName(left, right) || left.key.localeCompare(right.key));
     case 'name-asc':
     default: return copy.sort(byName);
   }

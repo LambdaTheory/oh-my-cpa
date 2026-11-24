@@ -60,6 +60,9 @@ export const ConfigPage = React.lazy(loadConfigPage);
 export const loadOAuthManagementPage = createPageLoader(() => import('./pages/oauthManagement/OAuthManagementPage'), 'OAuthManagementPage');
 export const OAuthManagementPage = React.lazy(loadOAuthManagementPage);
 
+export const loadQuotaLendingPage = createPageLoader(() => import('./pages/quota/QuotaLendingPage'), 'QuotaLendingPage');
+export const QuotaLendingPage = React.lazy(loadQuotaLendingPage);
+
 export const loadLegacyOAuthManagementRedirect = createPageLoader(() => import('./pages/LegacyOAuthManagementRedirect'), 'LegacyOAuthManagementRedirect');
 export const LegacyOAuthManagementRedirect = React.lazy(loadLegacyOAuthManagementRedirect);
 

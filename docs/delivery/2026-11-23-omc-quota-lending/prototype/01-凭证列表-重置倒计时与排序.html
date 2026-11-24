@@ -1,0 +1,383 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>凭证列表：重置倒计时与排序</title>
+<style>
+:root {
+  --fs-12: 12px; --fs-13: 13px; --fs-14: 14px; --fs-16: 16px; --fs-20: 20px; --fs-28: 28px;
+  --sp-4: 4px; --sp-8: 8px; --sp-12: 12px; --sp-16: 16px; --sp-24: 24px; --sp-32: 32px;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
+  --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --mono: "Cascadia Mono", ui-monospace, Consolas, monospace;
+  --bg: #f4f3ef; --panel: #ffffff; --panel-2: #f7f6f2; --line: #e6e3db; --text: #1f1e1b; --muted: #6f6b63; --faint: #9a968d;
+  --brand: #2f6f5e; --brand-soft: #e2efe9; --brand-text: #ffffff;
+  --red: #c2410c; --red-soft: #fdebdf; --orange: #b7791f; --orange-soft: #fbf1d9; --blue: #2563eb; --blue-soft: #e3ebfd;
+  --violet: #7c3aed; --violet-soft: #efe7fd; --gray-soft: #eeece6;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141413; --panel: #1d1d1b; --panel-2: #242421; --line: #33322e; --text: #ecebe6; --muted: #a6a29a; --faint: #78756e;
+  --brand: #6cc3a8; --brand-soft: #1f3530; --brand-text: #10201b;
+  --red: #fb8a5c; --red-soft: #3a2216; --orange: #f2c15b; --orange-soft: #392e15; --blue: #8fb1ff; --blue-soft: #1c2742;
+  --violet: #b99cff; --violet-soft: #2a2140; --gray-soft: #2a2a27; --shadow: 0 1px 2px rgba(0,0,0,.3); } }
+:root[data-theme="dark"] {
+  --bg: #141413; --panel: #1d1d1b; --panel-2: #242421; --line: #33322e; --text: #ecebe6; --muted: #a6a29a; --faint: #78756e;
+  --brand: #6cc3a8; --brand-soft: #1f3530; --brand-text: #10201b;
+  --red: #fb8a5c; --red-soft: #3a2216; --orange: #f2c15b; --orange-soft: #392e15; --blue: #8fb1ff; --blue-soft: #1c2742;
+  --violet: #b99cff; --violet-soft: #2a2140; --gray-soft: #2a2a27; --shadow: 0 1px 2px rgba(0,0,0,.3); }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 400 var(--fs-14)/1.6 var(--font); font-variant-numeric: tabular-nums; }
+h1 { font-size: var(--fs-28); line-height: 1.25; } h2 { font-size: var(--fs-20); line-height: 1.35; } h3 { font-size: var(--fs-16); }
+small, .small { font-size: var(--fs-12); }
+a { color: var(--brand); }
+
+.appbar { height: 56px; display: flex; align-items: center; gap: var(--sp-24); padding: 0 var(--sp-24); background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: var(--sp-8); font-weight: 600; font-size: var(--fs-14); }
+.brandmark { width: 28px; height: 28px; border-radius: var(--r-sm); background: var(--brand); color: var(--brand-text); display: grid; place-items: center; font-size: var(--fs-12); font-weight: 700; letter-spacing: .02em; }
+.appnav { display: flex; gap: var(--sp-4); margin-left: var(--sp-8); }
+.appnav span { padding: var(--sp-4) var(--sp-12); border-radius: var(--r-sm); color: var(--muted); font-size: var(--fs-13); }
+.appnav span.on { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.appbar .right { margin-left: auto; display: flex; gap: var(--sp-8); align-items: center; color: var(--muted); font-size: var(--fs-12); }
+.dotg { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--brand); }
+
+.page { max-width: 1232px; margin: 0 auto; padding: var(--sp-24); }
+.head { display: flex; align-items: flex-start; gap: var(--sp-24); margin-bottom: var(--sp-16); }
+.head h1 { margin: 0 0 var(--sp-4); }
+.sub { margin: 0; color: var(--muted); font-size: var(--fs-13); }
+.summary { margin-left: auto; display: flex; align-items: center; gap: var(--sp-8); color: var(--muted); font-size: var(--fs-13); padding-top: var(--sp-8); flex-wrap: wrap; }
+.summary b { color: var(--text); font-weight: 600; }
+.summary .sep { color: var(--faint); }
+.summary .warn { color: var(--orange); }
+.summary .ok { color: var(--brand); }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow); }
+.advice { margin-bottom: var(--sp-16); overflow: hidden; }
+.advice-head { display: flex; align-items: center; gap: var(--sp-8); padding: var(--sp-12) var(--sp-16); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.advice-head h2 { margin: 0; font-size: var(--fs-16); }
+.basis { color: var(--muted); font-size: var(--fs-12); }
+.pill { display: inline-flex; align-items: center; gap: var(--sp-4); padding: 2px var(--sp-8); border-radius: var(--r-pill); font-size: var(--fs-12); line-height: 1.7; border: 1px solid transparent; white-space: nowrap; }
+.pill.primary { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); font-weight: 600; }
+.pill.warn { background: var(--orange-soft); color: var(--orange); border-color: var(--orange); }
+.pill.info { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
+.pill.gray { background: var(--gray-soft); color: var(--muted); }
+.pill.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+.pool { padding: var(--sp-12) var(--sp-16) var(--sp-16); }
+.pool + .pool { border-top: 1px dashed var(--line); }
+.pool-head { display: flex; align-items: baseline; gap: var(--sp-8); margin-bottom: var(--sp-8); flex-wrap: wrap; }
+.pool-title { font-size: var(--fs-14); font-weight: 600; }
+.pool-horizon { margin-left: auto; color: var(--muted); font-size: var(--fs-12); }
+.advice-row { display: grid; grid-template-columns: 68px 160px 92px 128px 128px; gap: var(--sp-8); align-items: center; padding: var(--sp-8) 0; border-top: 1px solid var(--panel-2); }
+.advice-row:first-of-type { border-top: 0; }
+.cred { font-size: var(--fs-13); font-weight: 600; }
+.metric { font-size: var(--fs-13); color: var(--text); }
+.metric span { color: var(--muted); font-size: var(--fs-12); }
+.reason { margin: var(--sp-8) 0 0; padding: var(--sp-8) var(--sp-12); background: var(--panel-2); border-radius: var(--r-sm); color: var(--muted); font-size: var(--fs-13); }
+.reason b { color: var(--text); font-weight: 600; }
+.advice-foot { padding: var(--sp-8) var(--sp-16); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--fs-12); display: flex; gap: var(--sp-8); flex-wrap: wrap; }
+.empty-advice { display: none; padding: var(--sp-24) var(--sp-16); text-align: center; color: var(--muted); font-size: var(--fs-13); }
+.empty-advice strong { display: block; color: var(--text); font-size: var(--fs-14); margin-bottom: var(--sp-4); }
+
+.tabs { display: flex; gap: var(--sp-4); border-bottom: 1px solid var(--line); margin-bottom: var(--sp-12); overflow-x: auto; }
+.tabs span { padding: var(--sp-8) var(--sp-12); color: var(--muted); font-size: var(--fs-13); border-bottom: 2px solid transparent; white-space: nowrap; }
+.tabs span.on { color: var(--brand); border-bottom-color: var(--brand); font-weight: 600; }
+.tabs .count { color: var(--faint); font-size: var(--fs-12); }
+
+.toolbar { display: flex; gap: var(--sp-8); margin-bottom: var(--sp-12); align-items: center; flex-wrap: wrap; }
+.search { flex: 1 1 280px; display: flex; align-items: center; gap: var(--sp-8); height: 34px; padding: 0 var(--sp-12); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--faint); font-size: var(--fs-13); }
+.search .lens { width: 12px; height: 12px; border: 1.5px solid var(--faint); border-radius: 50%; position: relative; }
+.search .lens::after { content: ""; position: absolute; width: 5px; height: 1.5px; background: var(--faint); transform: rotate(45deg); right: -4px; bottom: 0; }
+.btn { height: 34px; padding: 0 var(--sp-12); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--text); font-size: var(--fs-13); display: inline-flex; align-items: center; gap: var(--sp-4); cursor: default; white-space: nowrap; }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--brand-text); }
+.btn.soft { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.filters { display: flex; gap: var(--sp-16); padding: var(--sp-12) var(--sp-16); margin-bottom: var(--sp-12); background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); flex-wrap: wrap; }
+.field { display: flex; flex-direction: column; gap: var(--sp-4); }
+.field label { color: var(--muted); font-size: var(--fs-12); }
+.select { min-width: 150px; height: 32px; padding: 0 var(--sp-24) 0 var(--sp-8); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); color: var(--text); font: inherit; font-size: var(--fs-13); appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 14px, calc(100% - 9px) 14px; background-size: 5px 5px, 5px 5px; background-repeat: no-repeat; }
+.select.new { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand-soft); }
+.reset-link { margin-left: auto; align-self: flex-end; color: var(--brand); font-size: var(--fs-13); }
+
+.table { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; box-shadow: var(--shadow); }
+.thead, .row { display: grid; grid-template-columns: 236px 92px 56px 124px 1fr 76px; gap: var(--sp-12); align-items: center; padding: 0 var(--sp-16); }
+.thead { height: 38px; background: var(--panel-2); border-bottom: 1px solid var(--line); color: var(--muted); font-size: var(--fs-12); }
+.row { padding-top: var(--sp-12); padding-bottom: var(--sp-12); border-bottom: 1px solid var(--line); align-items: start; }
+.row:last-child { border-bottom: 0; }
+.identity { display: flex; gap: var(--sp-8); min-width: 0; }
+.avatar { flex: none; width: 32px; height: 32px; border-radius: var(--r-sm); display: grid; place-items: center; font-size: var(--fs-12); font-weight: 700; background: var(--brand-soft); color: var(--brand); }
+.avatar.blue { background: var(--blue-soft); color: var(--blue); }
+.avatar.violet { background: var(--violet-soft); color: var(--violet); }
+.avatar.gray { background: var(--gray-soft); color: var(--muted); }
+.identity .name { font-size: var(--fs-14); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.identity .meta { color: var(--muted); font-size: var(--fs-12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { padding-top: 2px; }
+.switch { width: 34px; height: 18px; border-radius: var(--r-pill); background: var(--brand); position: relative; margin-top: 4px; }
+.switch::after { content: ""; position: absolute; width: 14px; height: 14px; border-radius: 50%; background: #fff; top: 2px; right: 2px; }
+.switch.off { background: var(--gray-soft); }
+.switch.off::after { left: 2px; right: auto; background: var(--faint); }
+.traffic { font-size: var(--fs-12); color: var(--muted); }
+.traffic b { display: block; color: var(--text); font-size: var(--fs-13); font-weight: 600; }
+.tbar { height: 4px; border-radius: var(--r-pill); background: var(--panel-2); margin-top: var(--sp-4); overflow: hidden; }
+.tbar i { display: block; height: 100%; background: var(--brand); }
+.windows { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-16); }
+.window { min-width: 0; }
+.win-head { display: flex; align-items: baseline; gap: var(--sp-4); }
+.win-label { color: var(--muted); font-size: var(--fs-12); }
+.win-value { margin-left: auto; font-size: var(--fs-14); font-weight: 600; }
+.meter { height: 6px; border-radius: var(--r-pill); background: var(--panel-2); margin: var(--sp-4) 0; overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: var(--r-pill); }
+.win-foot { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; }
+.win-reset { color: var(--muted); font-size: var(--fs-12); }
+.win-reset b { color: var(--text); font-weight: 600; }
+.actions { display: flex; justify-content: flex-end; }
+.linkbtn { border: 0; background: transparent; color: var(--brand); font: inherit; font-size: var(--fs-13); padding: var(--sp-4); cursor: default; }
+
+.banner { display: none; align-items: center; gap: var(--sp-8); margin-bottom: var(--sp-12); padding: var(--sp-8) var(--sp-12); background: var(--blue-soft); border: 1px solid var(--blue); border-radius: var(--r-sm); color: var(--blue); font-size: var(--fs-13); }
+body[data-state="按重置排序"] .banner { display: flex; }
+body[data-state="无同池"] .pool { display: none; }
+body[data-state="无同池"] .empty-advice { display: block; }
+body[data-state="无同池"] .advice-foot { display: none; }
+</style>
+</head>
+<body data-states="默认,按重置排序,无同池" data-state="默认">
+<header class="appbar">
+  <div class="brand"><span class="brandmark">OMC</span> Oh My CPA</div>
+  <nav class="appnav">
+    <span>仪表盘</span><span>模型</span><span class="on">凭证</span><span>洞察</span><span>设置</span>
+  </nav>
+  <div class="right"><span class="dotg"></span> 网关正常 · GMT+8</div>
+</header>
+
+<main class="page">
+  <div class="head">
+    <div>
+      <h1>凭证</h1>
+      <p class="sub">没有读数时说明是哪一种缺失；缺失不等于 0%</p>
+    </div>
+    <div class="summary">
+      <span>共 <b>5</b> 张</span><span class="sep">·</span>
+      <span class="ok">正常 3</span><span class="sep">·</span>
+      <span class="warn">余量偏低 1</span><span class="sep">·</span>
+      <span>未拉取 1</span>
+    </div>
+  </div>
+
+  <section class="panel advice" data-note="1">
+    <div class="advice-head">
+      <h2>额度拆借建议</h2>
+      <span class="pill ghost">只提示，不改路由</span>
+      <span class="basis">基于 11-23 11:20 的读数重算 · 建议随页面时钟推进</span>
+    </div>
+    <div class="pool" data-note="2">
+      <div class="pool-head">
+        <span class="pool-title">Codex · Pro 200 · 周限额</span>
+        <span class="pill info">2 张可拆借</span>
+        <span class="pool-horizon">建议有效到 11/25 18:00（B 自然重置后重算）</span>
+      </div>
+      <div class="advice-row" data-note="3">
+        <span class="pill primary">偏用</span>
+        <span class="cred">codex_a</span>
+        <span class="metric"><b>88%</b> <span>剩余</span></span>
+        <span class="metric"><b>3.9 天</b> <span>距重置</span></span>
+        <span class="metric"><b>22.6%/天</b> <span>日均可用</span></span>
+      </div>
+      <div class="advice-row">
+        <span class="pill warn">少用</span>
+        <span class="cred">codex_b</span>
+        <span class="metric"><b>40%</b> <span>剩余</span></span>
+        <span class="metric"><b>2.3 天</b> <span>距重置</span></span>
+        <span class="metric"><b>17.6%/天</b> <span>日均可用</span></span>
+      </div>
+      <p class="reason" data-note="4"><b>A 距 11/27 09:00 自然重置还有 3.9 天、剩 88%</b>，比 B 宽裕；<b>B 距 11/25 18:00 只剩 2.3 天、剩 40%</b>，按当前余量每天约 17.6%。先偏用 A，把 B 的 40% 留到回满；B 回满后按当时的余量和距重置时间重算。</p>
+    </div>
+    <div class="empty-advice">
+      <strong>暂无可拆借的同池凭证</strong>
+      同池需要同 provider、同套餐，且至少两张凭证有周期 24 小时以上的窗口读数。当前 5 张凭证中，0 个池可比较：套餐未知 1、同套餐不足 2 张 2、读数不可用 2。
+    </div>
+    <div class="advice-foot" data-note="8">
+      <span>未参与：3 张</span><span>·</span><span>Kimi 1 张（套餐未知）</span><span>·</span><span>Claude Max / Pro 各 1 张（各自成池）</span>
+    </div>
+  </section>
+
+  <div class="banner">当前按「距自然重置最近」排序：每张卡取周期 24 小时以上窗口中最早的自然重置时刻，短的 5 小时窗口不参与排序。</div>
+
+  <div class="tabs">
+    <span class="on">全部 <span class="count">5</span></span>
+    <span>Codex <span class="count">2</span></span>
+    <span>Claude <span class="count">2</span></span>
+    <span>Kimi <span class="count">1</span></span>
+  </div>
+
+  <div class="toolbar">
+    <div class="search"><span class="lens"></span> 搜索凭证名称、邮箱、备注</div>
+    <button class="btn soft">更多筛选</button>
+    <button class="btn">自动刷新设置</button>
+    <button class="btn">刷新额度 5</button>
+    <button class="btn primary">接入账号</button>
+  </div>
+
+  <div class="filters">
+    <div class="field"><label>状态</label><div class="select">全部</div></div>
+    <div class="field"><label>额度</label><div class="select">全部</div></div>
+    <div class="field" data-note="5"><label>排序</label>
+      <select class="select new" id="sort-select" aria-label="排序">
+        <option value="name">名称 A → Z</option>
+        <option value="requests">请求数从多到少</option>
+        <option value="priority">priority 从高到低</option>
+        <option value="weight">weight 从高到低</option>
+        <option value="reset">距自然重置最近</option>
+      </select>
+    </div>
+    <span class="reset-link">重置筛选</span>
+  </div>
+
+  <div class="table">
+    <div class="thead">
+      <div>凭证</div><div>状态</div><div>开关</div><div>流量</div><div>用量窗口</div><div>操作</div>
+    </div>
+
+    <div class="row" data-order-default="3" data-order-reset="2" data-note="6">
+      <div class="identity">
+        <span class="avatar">CA</span>
+        <div><div class="name">codex_a</div><div class="meta">Codex · oauth · Pro 200</div></div>
+      </div>
+      <div class="status"><span class="pill primary">正常</span></div>
+      <div><div class="switch"></div></div>
+      <div class="traffic"><b>1,284</b>今日请求<div class="tbar"><i style="width:64%"></i></div></div>
+      <div class="windows">
+        <div class="window">
+          <div class="win-head"><span class="win-label">5 小时限额</span><span class="win-value">92%</span></div>
+          <div class="meter"><i style="width:92%;background:var(--brand)"></i></div>
+          <div class="win-foot"><span class="win-reset" data-note="7">距重置 <b>3 小时</b></span></div>
+        </div>
+        <div class="window">
+          <div class="win-head"><span class="win-label">周限额</span><span class="win-value">88%</span></div>
+          <div class="meter"><i style="width:88%;background:var(--brand)"></i></div>
+          <div class="win-foot"><span class="win-reset">距重置 <b>3.9 天</b> · 11/27 09:00</span></div>
+        </div>
+      </div>
+      <div class="actions"><button class="linkbtn">详情</button></div>
+    </div>
+
+    <div class="row" data-order-default="4" data-order-reset="1">
+      <div class="identity">
+        <span class="avatar">CB</span>
+        <div><div class="name">codex_b</div><div class="meta">Codex · oauth · Pro 200</div></div>
+      </div>
+      <div class="status"><span class="pill warn">余量偏低</span></div>
+      <div><div class="switch"></div></div>
+      <div class="traffic"><b>2,031</b>今日请求<div class="tbar"><i style="width:88%"></i></div></div>
+      <div class="windows">
+        <div class="window">
+          <div class="win-head"><span class="win-label">5 小时限额</span><span class="win-value">70%</span></div>
+          <div class="meter"><i style="width:70%;background:var(--brand)"></i></div>
+          <div class="win-foot"><span class="win-reset">距重置 <b>1 小时</b></span><span class="pill info" data-note="9">快重置 · 余量高</span></div>
+        </div>
+        <div class="window">
+          <div class="win-head"><span class="win-label">周限额</span><span class="win-value">40%</span></div>
+          <div class="meter"><i style="width:40%;background:var(--orange)"></i></div>
+          <div class="win-foot"><span class="win-reset">距重置 <b>2.3 天</b> · 11/25 18:00</span><span class="pill warn">快重置 · 余量低</span></div>
+        </div>
+      </div>
+      <div class="actions"><button class="linkbtn">详情</button></div>
+    </div>
+
+    <div class="row" data-order-default="1" data-order-reset="3">
+      <div class="identity">
+        <span class="avatar blue">CM</span>
+        <div><div class="name">claude_max</div><div class="meta">Claude · oauth · Max</div></div>
+      </div>
+      <div class="status"><span class="pill primary">正常</span></div>
+      <div><div class="switch"></div></div>
+      <div class="traffic"><b>906</b>今日请求<div class="tbar"><i style="width:45%"></i></div></div>
+      <div class="windows">
+        <div class="window">
+          <div class="win-head"><span class="win-label">5 小时限额</span><span class="win-value">80%</span></div>
+          <div class="meter"><i style="width:80%;background:var(--brand)"></i></div>
+          <div class="win-foot"><span class="win-reset">距重置 <b>2 小时</b></span></div>
+        </div>
+        <div class="window">
+          <div class="win-head"><span class="win-label">周限额</span><span class="win-value">72%</span></div>
+          <div class="meter"><i style="width:72%;background:var(--brand)"></i></div>
+          <div class="win-foot"><span class="win-reset">距重置 <b>6 天</b> · 11/29 10:00</span></div>
+        </div>
+      </div>
+      <div class="actions"><button class="linkbtn">详情</button></div>
+    </div>
+
+    <div class="row" data-order-default="2" data-order-reset="5">
+      <div class="identity">
+        <span class="avatar blue">CP</span>
+        <div><div class="name">claude_pro</div><div class="meta">Claude · oauth · Pro</div></div>
+      </div>
+      <div class="status"><span class="pill gray">未拉取</span></div>
+      <div><div class="switch off"></div></div>
+      <div class="traffic"><b>312</b>今日请求<div class="tbar"><i style="width:16%"></i></div></div>
+      <div class="windows">
+        <div class="window">
+          <div class="win-head"><span class="win-label">5 小时限额</span><span class="win-value">—</span></div>
+          <div class="meter"><i style="width:0"></i></div>
+          <div class="win-foot"><span class="win-reset">尚无读数，点「刷新额度」获取</span></div>
+        </div>
+        <div class="window">
+          <div class="win-head"><span class="win-label">周限额</span><span class="win-value">—</span></div>
+          <div class="meter"><i style="width:0"></i></div>
+          <div class="win-foot"><span class="win-reset">尚无读数</span></div>
+        </div>
+      </div>
+      <div class="actions"><button class="linkbtn">详情</button></div>
+    </div>
+
+    <div class="row" data-order-default="5" data-order-reset="4">
+      <div class="identity">
+        <span class="avatar violet">KM</span>
+        <div><div class="name">kimi_main</div><div class="meta">Kimi · oauth · 套餐未知</div></div>
+      </div>
+      <div class="status"><span class="pill primary">正常</span></div>
+      <div><div class="switch"></div></div>
+      <div class="traffic"><b>157</b>今日请求<div class="tbar"><i style="width:8%"></i></div></div>
+      <div class="windows">
+        <div class="window">
+          <div class="win-head"><span class="win-label">月限额</span><span class="win-value">91%</span></div>
+          <div class="meter"><i style="width:91%;background:var(--brand)"></i></div>
+          <div class="win-foot"><span class="win-reset">距重置 <b>7 天</b> · 11/30 12:00</span></div>
+        </div>
+        <div class="window"></div>
+      </div>
+      <div class="actions"><button class="linkbtn">详情</button></div>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.row'));
+  var table = document.querySelector('.table');
+  var select = document.getElementById('sort-select');
+  function reorder(key) {
+    var copy = rows.slice().sort(function (a, b) {
+      return Number(a.getAttribute(key)) - Number(b.getAttribute(key));
+    });
+    copy.forEach(function (row) { table.appendChild(row); });
+  }
+  window.setState = function (name) {
+    document.body.dataset.state = name;
+    if (name === '按重置排序') {
+      reorder('data-order-reset');
+      select.value = 'reset';
+    } else {
+      reorder('data-order-default');
+      select.value = 'name';
+    }
+  };
+  select.addEventListener('change', function () {
+    window.setState(select.value === 'reset' ? '按重置排序' : '默认');
+    select.value = select.value;
+  });
+})();
+</script>
+</body>
+</html>

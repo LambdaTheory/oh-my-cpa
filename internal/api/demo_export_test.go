@@ -643,6 +643,14 @@ func demoExportRebase(value any, deltaMS int64, requestIDs map[string]int) any {
 		if typed["auth_index"] != nil && typed["observed_at_ms"] != nil && (typed["windows"] != nil || typed["windows_json"] != nil) {
 			deltaMS = 0
 		}
+		// The lending projection is computed from the same fixed handler clock and the
+		// seeded readings, so every instant it carries is already on the reference:
+		// generated_at_ms, each card's observed_at_ms and its fresh_until_ms. Shifting
+		// only the field names the list above knows would move observed_at_ms away from
+		// the other two and describe a reading taken in another year.
+		if typed["generated_at_ms"] != nil && (typed["pools"] != nil || typed["pool"] != nil || typed["unpooled_reason_codes"] != nil) {
+			deltaMS = 0
+		}
 		for key, item := range typed {
 			switch {
 			case key == "started_at_ms":
@@ -1678,6 +1686,42 @@ func TestDemoExportPreservesSeededQuotaCyclesAndUsageEnds(t *testing.T) {
 	}
 }
 
+func TestDemoExportPreservesLendingInstants(t *testing.T) {
+	reference := demoExportReference.UnixMilli()
+	input := map[string]any{
+		"lending": map[string]any{
+			"generated_at_ms": float64(reference),
+			"pools": []any{map[string]any{
+				"id": "codex:pro", "state": "advised",
+				"observed_at_ms": float64(reference), "fresh_until_ms": float64(reference + 86_400_000),
+				"cards": []any{map[string]any{
+					"auth_index": "demo-auth", "observed_at_ms": float64(reference),
+					"fresh_until_ms": float64(reference + 86_400_000), "reset_at_ms": float64(reference + 3_600_000),
+				}},
+			}},
+			"unpooled_count": 0, "unpooled": []any{},
+		},
+	}
+	output := demoExportRebase(input, -90*86400000, map[string]int{}).(map[string]any)
+	lending := output["lending"].(map[string]any)
+	pool := lending["pools"].([]any)[0].(map[string]any)
+	card := pool["cards"].([]any)[0].(map[string]any)
+	expected := map[string]float64{
+		"generated_at_ms": float64(reference),
+		"observed_at_ms":  float64(reference),
+		"fresh_until_ms":  float64(reference + 86_400_000),
+		"reset_at_ms":     float64(reference + 3_600_000),
+	}
+	if lending["generated_at_ms"] != expected["generated_at_ms"] {
+		t.Fatalf("generated_at_ms moved: %v", lending["generated_at_ms"])
+	}
+	if pool["observed_at_ms"] != expected["observed_at_ms"] || pool["fresh_until_ms"] != expected["fresh_until_ms"] {
+		t.Fatalf("pool instants moved: %+v", pool)
+	}
+	if card["observed_at_ms"] != expected["observed_at_ms"] || card["fresh_until_ms"] != expected["fresh_until_ms"] || card["reset_at_ms"] != expected["reset_at_ms"] {
+		t.Fatalf("card instants moved: %+v", card)
+	}
+}
 func TestDemoExportPreservesSeededLatencyAndSourceSize(t *testing.T) {
 	for _, shouldUseNumber := range []bool{false, true} {
 		t.Run(fmt.Sprintf("use-number=%t", shouldUseNumber), func(t *testing.T) {

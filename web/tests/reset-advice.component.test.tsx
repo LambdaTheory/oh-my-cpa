@@ -1,10 +1,12 @@
 
 import { render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { I18nProvider } from '../src/i18n';
 import { CompactQuotaView } from '../src/pages/quota/CompactQuotaView';
 import { CredentialQuotaBody } from '../src/pages/quota/CredentialQuotaBody';
 import type { QuotaItem } from '../src/types/quota';
+import type { LendingDetail } from '../src/types/quota';
 import type { ResetAdvice } from '../src/types/resetAdvice';
 
 const NOW = Date.parse('2026-10-20T08:00:00Z');
@@ -107,3 +109,53 @@ describe('Claude entitlement read outcomes', () => {
     expect(screen.getByText(/Earliest local entitlement expiry:/).textContent).toContain('2d');
   });
 });
+
+describe('reset-entitlement advice beside lending advice', () => {
+  const LENDING: LendingDetail = {
+    generated_at_ms: NOW,
+    pool: {
+      id: 'codex:pro', provider: 'codex', plan_type: 'pro', plan_label: 'Pro 200', window_kind: 'weekly',
+      state: 'advised', valid_until_ms: NOW + 3 * 3_600_000, observed_at_ms: NOW,
+      fresh_until_ms: NOW + 24 * 3_600_000, is_reference: false, reason_codes: [],
+      cards: [
+        {
+          auth_index: 'synthetic-credential', name: 'Synthetic credential', role: 'prefer', window_id: 'weekly',
+          window_kind: 'weekly', remaining_percent: 88, reset_at_ms: NOW + 3 * 3_600_000, reset_accuracy: 'exact',
+          observed_at_ms: NOW, fresh_until_ms: NOW + 24 * 3_600_000, reason_codes: [], is_comparable: true,
+        },
+        {
+          auth_index: 'synthetic-peer', name: 'Synthetic peer', role: 'avoid', window_id: 'weekly',
+          window_kind: 'weekly', remaining_percent: 40, reset_at_ms: NOW + 2 * 3_600_000, reset_accuracy: 'exact',
+          observed_at_ms: NOW, fresh_until_ms: NOW + 24 * 3_600_000, reason_codes: [], is_comparable: true,
+        },
+      ],
+    },
+    unpooled_reason_codes: [],
+  };
+
+  it('keeps the two sections separate, ordered and unchanged in meaning', () => {
+    render(
+      <MemoryRouter>
+        <I18nProvider>
+          <CredentialQuotaBody item={{ ...QUOTA, reset_advice: ADVICE }} nowMS={NOW} isDemo={false} lending={LENDING} />
+        </I18nProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText('Reset advice')).toBeTruthy();
+    expect(screen.getByText('Quota lending advice')).toBeTruthy();
+    const reset = document.querySelector('[data-reset-advice-detail="true"]') as HTMLElement;
+    const lending = document.querySelector('[data-lending-view="detail"]') as HTMLElement;
+    expect(reset).toBeTruthy();
+    expect(lending).toBeTruthy();
+    expect(reset.contains(lending)).toBe(false);
+    expect(lending.contains(reset)).toBe(false);
+    // The reset verdict stays in its own panel, and the lending panel does not repeat it.
+    expect(reset.textContent).toContain('Use before expiry');
+    expect(reset.textContent).not.toContain('Advice only, routing unchanged');
+    expect(lending.textContent).not.toContain('Use before expiry');
+    expect(lending.textContent).toContain('Advice only, routing unchanged');
+    // The reset-entitlement block keeps the position it had before lending advice existed.
+    expect(reset.compareDocumentPosition(lending) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+

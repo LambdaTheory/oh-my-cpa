@@ -70,6 +70,13 @@ route or reading evidence stays unknown, and the advice does not choose a route.
   The dashboard combines inferred remaining allowance with endurance for Codex, Claude,
   Antigravity, Ollama and Step, labels estimate error, folds providers and counts shortages
   using the 10%-remaining-or-exhaust-before-reset rule. Suggestions remain manual.
+- Read-only cross-credential quota lending advice compares credentials that share a provider
+  and plan, and says which one to prefer before its natural reset and which to leave until it
+  resets. It states each card's remaining share, days to reset and reset-before daily available,
+  marks a window that resets within a third of its period, and degrades to "advice unavailable"
+  rather than guessing from remaining percentage alone. It is advice only: it writes no CPA
+  priority or weight, switches no routing, spends no reset entitlement, and no apply, write or
+  spend control exists.
 - Feishu sends one scheduled prediction digest for exhaustion or under-use findings and
   replaces the ordinary digest for that minute; prediction never changes routing,
   credentials or models.
