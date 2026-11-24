@@ -13,12 +13,14 @@ import {
   loadAuditPage,
   loadConfigPage,
   loadOAuthManagementPage,
+  loadQuotaLendingPage,
   loadLegacyOAuthManagementRedirect,
   loadSystemPage,
   loadPluginsPage,
   loadPluginPageHost,
   loadOmcSettingsPage,
 } from './routePages';
+import { QUOTA_LENDING_PATH } from './pages/quota/lendingMount';
 
 const ROUTE_LOADERS: Record<string, () => Promise<unknown>> = {
   '/usage/events': loadUsageEventsPage,
@@ -35,6 +37,7 @@ const ROUTE_LOADERS: Record<string, () => Promise<unknown>> = {
   '/audit': loadAuditPage,
   '/config': loadConfigPage,
   '/oauth-management': loadOAuthManagementPage,
+  [QUOTA_LENDING_PATH]: loadQuotaLendingPage,
   '/auth-files': loadLegacyOAuthManagementRedirect,
   '/system': loadSystemPage,
   '/plugins': loadPluginsPage,

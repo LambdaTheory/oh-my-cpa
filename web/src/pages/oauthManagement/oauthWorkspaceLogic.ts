@@ -1,4 +1,5 @@
 import { isAuthFileDisabled, isAuthFileProblem, matchesStatusFilter, providerOf, type AuthFileSortKey, type AuthFileStatusFilter } from '../../components/authFiles/authFileLogic';
+import { earliestLongWindow, type EarliestLongWindow } from '../quota/quotaWindowSelection';
 import { getCredentialProviderMetadata } from '../../components/common/providerMetadata';
 import type { ManagementAuthFile } from '../../types/managementAuthFile';
 import type { PluginItem } from '../../types/plugin';
@@ -128,6 +129,7 @@ const AUTH_FILE_SORTS = new Set<AuthFileSortKey>([
   'requests-desc',
   'priority-desc',
   'weight-desc',
+  'reset-asc',
 ]);
 const PAGE_SIZES = new Set<number>([12, 24, 48]);
 
@@ -579,6 +581,31 @@ export function sortOAuthWorkspaceRecords(
         const weightDelta = (right.file.weight ?? 1) - (left.file.weight ?? 1);
         return weightDelta || byName(left, right);
       });
+    case 'reset-asc': {
+      // The key is a long window's soonest reset, resolved once per record: a comparator that
+      // rescanned every window on every comparison would redo this for each sort probe.
+      const resetKeys = new Map<OAuthWorkspaceRecord, EarliestLongWindow | null>();
+      for (const record of copy) resetKeys.set(record, earliestLongWindow(record.quota?.windows ?? []));
+      return copy.sort((left, right) => {
+        const leftKey = resetKeys.get(left) ?? null;
+        const rightKey = resetKeys.get(right) ?? null;
+        // A credential without a stated long-window reset has no place in the comparison.
+        if (!leftKey && !rightKey) return byName(left, right) || left.key.localeCompare(right.key);
+        if (!leftKey) return 1;
+        if (!rightKey) return -1;
+        const resetDelta = leftKey.resetAtMS - rightKey.resetAtMS;
+        if (resetDelta) return resetDelta;
+        // Same instant: the tighter window is the one more likely to need attention.
+        const leftRemaining = leftKey.remainingPercent;
+        const rightRemaining = rightKey.remainingPercent;
+        if (leftRemaining != null && rightRemaining != null && leftRemaining !== rightRemaining) {
+          return leftRemaining - rightRemaining;
+        }
+        if (leftRemaining == null && rightRemaining != null) return 1;
+        if (leftRemaining != null && rightRemaining == null) return -1;
+        return byName(left, right) || left.key.localeCompare(right.key);
+      });
+    }
     case 'name-asc':
     default:
       return copy.sort(byName);

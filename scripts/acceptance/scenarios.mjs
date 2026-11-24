@@ -69,7 +69,7 @@ import { pricingBook, pricingFixtures, pricingFromRequestList } from './probes/p
 import { touchErgonomics } from './probes/touchErgonomics.mjs';
 import { scrollSmoothing } from './probes/scrollSmoothing.mjs';
 import { requestListTouch } from './probes/requestListTouch.mjs';
-import { oauthWindowWarmup, oauthManagement, oauthVertexImport, oauthModelRules, oauthTokenCapacity, oauthAuthorizationOutcomes, oauthWorkspaceScale, oauthPluginConnections, oauthManagementFixtures, oauthManagementProbeRoutes } from './probes/oauthManagement.mjs';
+import { oauthWindowWarmup, oauthManagement, oauthVertexImport, oauthModelRules, oauthTokenCapacity, oauthAuthorizationOutcomes, oauthWorkspaceScale, oauthPluginConnections, quotaLending, oauthManagementFixtures, oauthManagementProbeRoutes } from './probes/oauthManagement.mjs';
 import { customIconLibrary, customIconProbeRoutes, iconPickerStacking, pickerCatalog, pickerProvider, providerIconPick, providerModelPicker } from './probes/providerConsole.mjs';
 import { routePreloading } from './probes/routePreloading.mjs';
 import { systemInformationNarrow, systemInformationPage, systemVersionFeedback, systemHealthAnomalies, systemUpdateIndicator, systemFixtures } from './probes/systemInformation.mjs';
@@ -292,6 +292,12 @@ export const SCENARIOS = [
       routes: oauthManagementProbeRoutes(),
     },
     run: oauthManagement,
+  },
+  {
+    id: 'quota-lending',
+    name: 'the OAuth entry stays inline and the lending page carries the complete advice',
+    options: { viewport: { width: 1440, height: 900 }, routes: oauthManagementProbeRoutes() },
+    run: quotaLending,
   },
   { id: 'oauth-window-warmup', name: 'OAuth window warmup settings and guarded phone editor', options: { routes: oauthManagementProbeRoutes() }, run: oauthWindowWarmup },
   { id: 'oauth-vertex-import', name: 'Vertex import file lifecycle', options: {routes: oauthManagementProbeRoutes()}, run: oauthVertexImport },

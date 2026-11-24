@@ -317,15 +317,21 @@ test('the runner, anything it imports and unattributable registry edits select a
 
 // ── properties of the real tree the narrowing depends on ──────────────────────
 
+// A route element is a React component module, so only `.tsx` files under `pages/` are
+// discovered as pages. A directory can also hold registry-level helpers that the router
+// imports for a constant - the lending mount table does - and counting one as a page would
+// demand a scenario rule for a module no probe opens as a route.
+const isPageModule = (file) => file.startsWith('web/src/pages/') && file.endsWith('.tsx');
+
 function discoverRoutedPages({ importers, routePages }) {
   const registry = 'web/src/routePages.ts';
   assert.ok(importers.get(registry)?.has('web/src/App.tsx'), 'expected App to import the route registry at runtime');
   const registryPages = [...importers]
-    .filter(([file, owners]) => file.startsWith('web/src/pages/') && owners.has(registry) && routePages?.has(file))
+    .filter(([file, owners]) => isPageModule(file) && owners.has(registry) && routePages?.has(file))
     .map(([file]) => file);
   assert.ok(registryPages.length > 0, 'expected the route registry to import at least one page');
   const directPages = [...importers]
-    .filter(([file, owners]) => file.startsWith('web/src/pages/') && owners.has('web/src/App.tsx'))
+    .filter(([file, owners]) => isPageModule(file) && owners.has('web/src/App.tsx'))
     .map(([file]) => file);
   return [...new Set([...registryPages, ...directPages])];
 }
@@ -349,6 +355,16 @@ test('direct App pages cannot hide a disconnected or empty route registry', () =
   assert.deepEqual(new Set(discoverRoutedPages(graphOf(LAZY_CONSOLE))), new Set([
     'web/src/pages/SystemPage.tsx', 'web/src/pages/ApiKeysPage.tsx', 'web/src/pages/UnmappedPage.tsx',
   ]));
+});
+
+test('a registry helper imported for a constant is not a routed page', () => {
+  const mount = 'web/src/pages/quota/lendingMount.ts';
+  const graph = graphOf({
+    ...LAZY_CONSOLE,
+    [mount]: 'export const PATH = \'/quota-lending\';',
+    'web/src/App.tsx': `${LAZY_CONSOLE['web/src/App.tsx']} import { PATH } from './pages/quota/lendingMount';`,
+  });
+  assert.ok(!discoverRoutedPages(graph).includes(mount));
 });
 
 test('registry helpers do not become discovered route pages through a directory rule', () => {

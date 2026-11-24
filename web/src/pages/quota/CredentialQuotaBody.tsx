@@ -1,9 +1,10 @@
 import { useTimeZone } from '../../utils/TimeZoneProvider';
 import React from 'react';
 import { Button } from 'antd';
+import { Link } from 'react-router-dom';
 import { SyncOutlined, ThunderboltOutlined } from '../../components/icons';
 import { useT } from '../../i18n';
-import type { QuotaItem } from '../../types/quota';
+import type { LendingDetail, QuotaItem } from '../../types/quota';
 import { formatGmtOffsetLabel, formatObservedAgo, formatQuotaMoney, formatSnapshotRenewalBound, formatTimeWithCountdown, quotaEmptyStateKey } from './quotaFormat';
 import { QuotaProgressBar } from './QuotaProgressBar';
 import { orderQuotaWindows } from './quotaWindowSelection';
@@ -15,11 +16,15 @@ import { Tag } from '../../components/common/Tag';
 import { ConfirmAction } from '../../components/common/ConfirmAction';
 import { verifiedQuotaCredits } from '../../utils/quotaCredits';
 import { ResetAdviceView } from './ResetAdviceView';
+import { LendingAdviceView } from './LendingAdviceView';
+import { QUOTA_LENDING_PATH } from './lendingMount';
 
 interface CredentialQuotaBodyProps {
   item: QuotaItem;
   nowMS: number;
   isDemo: boolean;
+  /** This credential's pool, projected from the overview the workspace already loaded. */
+  lending?: LendingDetail | null;
   isRefreshing?: boolean;
   onRefresh?: (authIndex: string) => void;
   onClearCooldown?: (authIndex: string) => void;
@@ -36,6 +41,7 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
   item,
   nowMS,
   isDemo,
+  lending,
   isRefreshing,
   onRefresh,
   onClearCooldown,
@@ -124,6 +130,7 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
           resetAtMS={window.reset_at_ms}
           resetLabel={window.reset_label}
           resetAccuracy={window.reset_accuracy}
+          periodHours={window.period_hours}
           stale={window.stale}
           note={window.note}
           capacity={window}
@@ -156,6 +163,16 @@ export const CredentialQuotaBody: React.FC<CredentialQuotaBodyProps> = ({
       </div>
 
       {item.reset_advice && <ResetAdviceView advice={item.reset_advice} nowMS={nowMS} />}
+      {/* A separate section from reset advice: this one compares natural resets, the other
+          weighs reset-credit expiry. Merging them would let one verdict stand in for the other. */}
+      {lending && (
+        <>
+          <LendingAdviceView lending={lending} mode="detail" authIndex={item.auth_index} nowMS={nowMS} />
+          <Link to={QUOTA_LENDING_PATH} className={styles['quota-lending-link']} data-lending-detail-link="true">
+            {t('quota.lending.detail_open_page')}
+          </Link>
+        </>
+      )}
       {item.error && (
         <Notice
           tone="error"

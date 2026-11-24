@@ -1,7 +1,7 @@
 import React from 'react';
 import { ThunderboltOutlined } from '../../components/icons';
 import { useT } from '../../i18n';
-import type { QuotaItem } from '../../types/quota';
+import type { LendingOverview, QuotaItem } from '../../types/quota';
 import {
   formatCountdown,
   formatObservedAgo,
@@ -10,15 +10,23 @@ import {
   quotaEmptyStateKey,
   quotaRemainingPercent,
   quotaRemainingText,
-  quotaResetCountdown,
+  quotaResetCountdownLabel,
   quotaResetText,
   quotaWindowLabel,
 } from './quotaFormat';
 import { quotaRemainingStroke } from './quotaThresholds';
-import { orderQuotaWindows, pickCompactQuotaWindows, quotaWindowKindOf } from './quotaWindowSelection';
+import {
+  isFastResetWindow,
+  orderQuotaWindows,
+  pickCompactQuotaWindows,
+  quotaFastResetState,
+  quotaWindowKindOf,
+} from './quotaWindowSelection';
 import { quotaStatusTag } from './quotaStatusTag';
 import { compactCooldownDiagnostic } from './quotaCooldown';
 import { compactQuotaCapacity } from './quotaCapacity';
+import { findLendingCard, lendingRoleLabel, lendingRoleTone } from './lendingAdvice';
+import { Tag } from '../../components/common/Tag';
 import { useTokenDisplayStyle } from '../../types/tokenDisplayContext';
 import styles from './QuotaPresentation.module.css';
 import { Meter } from '../../components/common/Meter';
@@ -30,6 +38,8 @@ import { quotaRefreshReasonLabel } from '../../utils/quotaStatus';
 interface CompactQuotaViewProps {
   item: QuotaItem;
   nowMS: number;
+  /** The same-pool advice the list already loaded; absent when the gateway predates it. */
+  lending?: LendingOverview | null;
 }
 
 /**
@@ -52,10 +62,12 @@ interface CompactQuotaViewProps {
 export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   item,
   nowMS,
+  lending,
 }) => {
   const t = useT();
   const { style: tokenStyle } = useTokenDisplayStyle();
   const windows = pickCompactQuotaWindows(orderQuotaWindows(item.windows ?? []));
+  const lendingRole = lending ? findLendingCard(lending, item.auth_index, nowMS)?.card.role : undefined;
   const planText = item.plan?.plan_label;
   const cooldownDiagnostic = compactCooldownDiagnostic(item);
   const availableCredits = item.reset_credits?.available_count ?? 0;
@@ -94,6 +106,11 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
     >
       <div className={styles.head}>
         {quotaStatusTag(item, t, nowMS)}
+        {lendingRole && lendingRole !== 'unavailable' && lendingRole !== 'limited' && (
+          <Tag tone={lendingRoleTone(lendingRole)} size="small" data-lending-role-chip={lendingRole}>
+            {lendingRoleLabel(lendingRole, t)}
+          </Tag>
+        )}
         {pluginStale && (
           <span
             className={styles.plan}
@@ -163,6 +180,14 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
             const remaining = quotaRemainingPercent(window);
             const kind = quotaWindowKindOf(window);
             const capacityText = compactQuotaCapacity(window, tokenStyle, t);
+            const fastState = quotaFastResetState(window, nowMS);
+            const isFast = isFastResetWindow(window, nowMS);
+            const fastText = fastState === 'high'
+              ? t('quota.fast_reset.high')
+              : fastState === 'low' ? t('quota.fast_reset.low') : t('quota.fast_reset.plain');
+            const fastShort = fastState === 'high'
+              ? t('quota.fast_reset.short_high')
+              : fastState === 'low' ? t('quota.fast_reset.short_low') : t('quota.fast_reset.short_plain');
             return (
               <div
                 className={styles.window}
@@ -174,12 +199,21 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
                   <span className={styles['window-label']} title={window.label}>
                     {quotaWindowLabel(kind, window.label, t)}
                   </span>
+                  {isFast && (
+                    <span
+                      className={`${styles['window-fast']} ${fastState === 'low' ? styles['window-fast-low'] : styles['window-fast-high']}`}
+                      data-fast-reset={fastState ?? 'unknown'}
+                      title={fastText}
+                    >
+                      {fastShort}
+                    </span>
+                  )}
                   <span className={styles['window-value']}>{quotaRemainingText(window)}</span>
                 </div>
                 <Meter value={remaining ?? 0} color={quotaRemainingStroke(remaining)} label={remaining == null ? undefined : quotaWindowLabel(kind, window.label, t)} />
                 <div className={styles['window-foot']}>
                   <span className={styles['window-reset']} title={quotaResetText(window, nowMS, t) || t('quota.window_boundary_unknown')}>
-                    {quotaResetCountdown(window, nowMS, t) || t('quota.window_boundary_unknown')}
+                    {quotaResetCountdownLabel(window, nowMS, t) || t('quota.window_boundary_unknown')}
                   </span>
                   {capacityText && (
                     <span

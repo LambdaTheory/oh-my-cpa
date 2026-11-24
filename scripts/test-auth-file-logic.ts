@@ -74,7 +74,7 @@ test('Identity derivation: account-first display', () => {
   assert.equal(identity3.isAccountPrimary, false);
 });
 
-test('Sorting: handles name, requests, priority, weight', () => {
+test('Sorting: handles name, requests, priority, weight, reset', () => {
   const fA: ManagementAuthFile = { ...baseFile, name: 'a.json', success: 5, failed: 5, priority: 1, weight: 10 };
   const fB: ManagementAuthFile = { ...baseFile, name: 'b.json', success: 20, failed: 0, priority: 10, weight: 2 };
 
@@ -92,6 +92,11 @@ test('Sorting: handles name, requests, priority, weight', () => {
 
   const byWeight = sortAuthFiles([fB, fA], 'weight-desc');
   assert.equal(byWeight[0].name, 'a.json', 'a.json has weight 10 vs 2');
+
+  // This projection carries no quota windows, so the reset key has no value here; the workspace
+  // sorter owns the real order. Accepting the key keeps a saved preference readable.
+  const byReset = sortAuthFiles([fB, fA], 'reset-asc');
+  assert.equal(byReset[0].name, 'a.json', 'reset-asc falls back to name order without windows');
 });
 
 test('Filtering: matches query, provider, and status', () => {

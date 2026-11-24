@@ -46,6 +46,8 @@ import { oauthProviderChoices } from '../oauthProviderLogic';
 import { CompactQuotaView } from '../quota/CompactQuotaView';
 import { ResetAnnouncements } from '../quota/ResetAnnouncements';
 import { CredentialQuotaBody } from '../quota/CredentialQuotaBody';
+import { lendingDetailFor } from '../quota/lendingAdvice';
+import { LendingAdviceEntryLink } from '../quota/LendingAdviceEntryLink';
 import { VertexImportModal } from '../../components/authFiles/VertexImportModal';
 import { OAuthConnectPanel } from './OAuthConnectPanel';
 import { OAuthCredentialRecord } from './OAuthCredentialRecord';
@@ -533,6 +535,7 @@ export const OAuthManagementPage: React.FC = () => {
           <CompactQuotaView
             item={record.quota}
             nowMS={visibleNow}
+            lending={quotaQuery.data?.lending}
           />
         );
       }
@@ -540,6 +543,7 @@ export const OAuthManagementPage: React.FC = () => {
         <CredentialQuotaBody
           item={record.quota}
           nowMS={visibleNow}
+          lending={lendingDetailFor(quotaQuery.data?.lending, record.quota.auth_index, visibleNow)}
           isDemo={isDemo}
           isRefreshing={isRefreshing}
           onRefresh={() => void actions.refreshQuotaForRecord(record)}
@@ -665,6 +669,12 @@ export const OAuthManagementPage: React.FC = () => {
               </span>
             </React.Fragment>
           ))}
+          {quotaQuery.data?.lending && (
+            <React.Fragment>
+              <span className={styles['summary-divider']}>·</span>
+              <LendingAdviceEntryLink lending={quotaQuery.data.lending} nowMS={visibleNow} />
+            </React.Fragment>
+          )}
         </div>
       </PageHeader>
 
@@ -873,6 +883,7 @@ export const OAuthManagementPage: React.FC = () => {
                 { value: 'requests-desc', label: t('af.sort_requests') },
                 { value: 'priority-desc', label: t('af.sort_priority') },
                 { value: 'weight-desc', label: t('af.sort_weight') },
+                { value: 'reset-asc', label: t('af.sort_reset_asc') },
               ]}
             />
           </div>

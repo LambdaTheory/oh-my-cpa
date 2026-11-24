@@ -242,6 +242,12 @@ export interface QuotaOverviewResponse {
   summary: QuotaOverviewSummary;
   quotas: QuotaItem[];
   total: number;
+  /**
+   * Read-only same-pool advice from the same projection. Absent on a gateway that predates the
+   * field; null when a snapshot or cooldown read failed, so no advice was projected from an
+   * incomplete batch.
+   */
+  lending?: LendingOverview | null;
 }
 
 interface QuotaRefreshResultBase {
@@ -266,4 +272,73 @@ export interface CredentialQuotaDetailResponse {
   quota: QuotaItem;
   history: QuotaSnapshotHistoryItem[];
   model_quotas?: Record<string, ManagementQuotaObservation>;
+  /**
+   * The pool this credential belongs to; `pool` is null when it belongs to none. Null when a
+   * snapshot or cooldown read failed, so the drawer shows no advice rather than a partial one.
+   */
+  lending?: LendingDetail | null;
+}
+
+export type LendingPoolState = 'advised' | 'balanced' | 'limited' | 'unavailable';
+
+export type LendingCardRole = 'prefer' | 'avoid' | 'normal' | 'balanced' | 'limited' | 'unavailable';
+
+/**
+ * One credential's line inside a lendable pool.
+ *
+ * The backend owns grouping, window choice and the static reasons. `days_to_reset` and
+ * `daily_available_percent` are a snapshot at `generated_at_ms`; the console recomputes them
+ * against the page clock so the number and the role never drift apart.
+ */
+export interface LendingCard {
+  auth_index: string;
+  name: string;
+  role: LendingCardRole;
+  window_id?: string;
+  window_kind?: string;
+  remaining_percent?: number;
+  reset_at_ms?: number;
+  reset_accuracy?: 'exact' | 'derived' | 'approximate';
+  observed_at_ms?: number;
+  fresh_until_ms?: number;
+  days_to_reset?: number;
+  daily_available_percent?: number;
+  reason_codes: string[];
+  is_comparable: boolean;
+}
+
+/** Credentials of one provider and plan, compared on one long window. */
+export interface LendingPool {
+  id: string;
+  provider: string;
+  plan_type: string;
+  plan_label?: string;
+  window_kind?: string;
+  state: LendingPoolState;
+  valid_until_ms?: number;
+  observed_at_ms?: number;
+  fresh_until_ms?: number;
+  is_reference: boolean;
+  reason_codes: string[];
+  cards: LendingCard[];
+}
+
+/** A credential that belongs to no pool, with the reasons it was left out. */
+export interface LendingUnpooled {
+  auth_index: string;
+  name: string;
+  reason_codes: string[];
+}
+
+export interface LendingOverview {
+  generated_at_ms: number;
+  pools: LendingPool[];
+  unpooled_count: number;
+  unpooled: LendingUnpooled[];
+}
+
+export interface LendingDetail {
+  generated_at_ms: number;
+  pool: LendingPool | null;
+  unpooled_reason_codes: string[];
 }
