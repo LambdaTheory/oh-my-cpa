@@ -31,7 +31,7 @@ no console data directory, and it needs no `.env`.
    has no `0600` semantics at all. `key accept` validates the envelope against the local
    private key before storing it.
 5. **`key purge` is local.** It removes what this machine holds. The key stays active in
-   CPA until someone stops or reissues it in the console.
+   CPA until someone stops or reissues it on the console's Repository keys page (`/repo-keys`).
 
 ## 1. Before the first command
 

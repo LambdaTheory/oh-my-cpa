@@ -32,6 +32,11 @@ display spelling own rendered amount and identity wiring. The `repo-key-approval
 pending/settled approval geometry, scrolling and hit-testing at desktop and phone widths;
 DOM presence alone does not certify that a clipped approval can be reviewed.
 
+The console-side panel has its own page at `/repo-keys`; the key management page keeps the
+gateway list and a pointer to it. Rendered component tests own the page shell - its title, the
+preserved explanation and the header refresh - as well as the pointer and the panel's absence
+on `/api-keys`.
+
 ## Repository key client regressions
 
 The caller side of the same feature (`oh-my-cpa key`, `docs/repo-key-client.md`) is checked at
@@ -1112,7 +1117,7 @@ For changes here, run affected self-tests, `pnpm verify`, `pnpm check:ui` and
 - `scripts/test-source-wrap.ts` pins phone/desktop defaults and manual-choice precedence.
 - `scripts/test-visible-viewport.ts` tests usable bounds, keyboard/caret panning, invalid/absent
   readings, overscroll and pinch-zoom fallback as pure logic, automatically discovered.
-- `mobile-console` navigates all 15 live console routes through the phone navigation at
+- `mobile-console` navigates its 16-route sweep through the phone navigation at
   320/375/390px, waits for each route's own content, and measures content/header
   overflow and reachable header tools, then checks selected preference state, 44px menu rows,
   Back/focus restoration, 640/641 and 900/901 boundaries, desktop and landscape, plus simulated

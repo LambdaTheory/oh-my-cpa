@@ -76,7 +76,7 @@ summary: "Read-only cross-credential quota lending: backend projects same-pool p
 - 总览：`GET /api/v1/management/quota` 响应增加只读顶层对象 `lending`；快照或冷却读失败、批次不完整时为 `null`。
 - 详情：`GET /api/v1/management/quota/{authIndex}` 响应增加只读顶层对象 `lending`，返回该卡所属池的同一份对象；同一读失败条件下为 `null`，其余详情字段仍返回 200。
 - 不新增 MCP 能力；`reset_advice` 的语义、字段、阈值与动作保持不变。若后续要给 Agent 读同一份建议，另立 `lending_advice` 能力工作包，不在本切片。
-- 控制台展示位置：拆借建议的完整内容在独立二级页 `/quota-lending`；OAuth 页页头只留入口摘要，凭证详情只保留单卡池角色。三处读同一份 `lending`，不新增后端路由。路径、侧栏高亮与菜单文案集中在挂载模块 `web/src/pages/quota/lendingMount.ts`，路由与各处链接都引用它。
+- 控制台展示位置：拆借建议的完整内容在独立二级页 `/quota-lending`；OAuth 页页头只留入口摘要，凭证详情只保留单卡池角色。三处读同一份 `lending`，不新增后端路由。路径与菜单文案集中在挂载模块 `web/src/types/quotaLendingMount.ts`；侧栏高亮由「能力」组里的额度拆借条目自己决定，路由与各处链接都引用它。
 
 ### 2.1 暴露位置与理由
 
@@ -451,7 +451,7 @@ summary: "Read-only cross-credential quota lending: backend projects same-pool p
 
 **建议层（按 §2 契约用 typed mock 先做，最后接 P1）**
 
-5. 新增二级页 `QuotaLendingPage`（`/quota-lending`，位置与高亮由 `web/src/pages/quota/lendingMount.ts` 决定）：页头标题、返回上一页的链接（直接打开时不显示）、一行「依据 X 时刻的读数 · 随页面时钟重算」；每个池一块（沿用现有池块：池标题、结论与参考标签、有效期、理由、逐卡角色 / 剩余 / 距重置 / 日均）；「未进池」区；页底只读声明。页面是一列区块，为二期的多窗口、订阅截止、将断档、自动化确认留位置，但一期不画空占位。
+5. 新增二级页 `QuotaLendingPage`（`/quota-lending`，路径由 `web/src/types/quotaLendingMount.ts` 决定，高亮由「能力」组条目自己决定）：页头标题、返回上一页的链接（直接打开时不显示）、一行「依据 X 时刻的读数 · 随页面时钟重算」；每个池一块（沿用现有池块：池标题、结论与参考标签、有效期、理由、逐卡角色 / 剩余 / 距重置 / 日均）；「未进池」区；页底只读声明。页面是一列区块，为二期的多窗口、订阅截止、将断档、自动化确认留位置，但一期不画空占位。
 6. OAuth 页页头统计行末尾新增轻入口：不再渲染 `LendingAdviceView`；入口按 `lending` 的池状态显示「额度拆借 · N 条建议」「额度拆借 · 均衡」或「额度拆借」；`lending` 字段缺失时不显示。整项是链接，不是按钮，不占独立区块，不增加页面纵向高度。
 7. 凭证详情额度页保留单卡池角色小块（角色、一句理由、有效期）；下面加「在额度拆借页查看整池」链接，不复制整池表格。
 8. 空状态与降级：旧后端没有 `lending` 或读取失败返回 `null` 时二级页显示降级空态；OAuth 页入口与凭证详情建议块同样不显示。有字段但没有池时显示空状态并带「未进池」汇总，不无声跳过。
@@ -479,11 +479,11 @@ summary: "Read-only cross-credential quota lending: backend projects same-pool p
 | `web/src/components/authFiles/authFileLogic.ts` | `AuthFileSortKey` 增加 `'reset-asc'`；`sortAuthFiles` 增加分支 | 兼容仍使用 `sortAuthFiles` 的脚本 |
 | `web/src/pages/oauthManagement/oauthWorkspaceLogic.ts` | `AUTH_FILE_SORTS` 增加 `'reset-asc'`；`sortOAuthWorkspaceRecords` 增加排序分支 | 使用记录的 `windows[]` 调 `earliestLongWindow`；无值排最后 |
 | `web/src/pages/oauthManagement/OAuthManagementPage.tsx` | 排序 `Select` 增加「距自然重置最近」；页头统计行末尾渲染 `LendingAdviceEntryLink`；移除 `LendingAdviceView`；把 `lending` 传给 `CompactQuotaView` / `CredentialQuotaBody` | 页面只做装配，不重算建议 |
-| `web/src/pages/quota/QuotaLendingPage.tsx`（新增） | 二级页：同一个 `['management-quota']` react-query 缓存、`useVisibleNow`、「返回上一页」、降级空态 | 路径与挂载由 `lendingMount.ts` 决定；不新增请求 |
-| `web/src/pages/quota/lendingMount.ts`（新增） | `QUOTA_LENDING_PATH`、`QUOTA_LENDING_NAV_KEY`、菜单文案键 `nav.quota_lending`、路径到菜单键的查表；路由、入口、详情链接、返回链接都引用它 | 导航调整时只改这一处 |
+| `web/src/pages/quota/QuotaLendingPage.tsx`（新增） | 二级页：同一个 `['management-quota']` react-query 缓存、`useVisibleNow`、「返回上一页」、降级空态 | 路径由 `quotaLendingMount.ts` 决定；不新增请求 |
+| `web/src/types/quotaLendingMount.ts`（新增） | `QUOTA_LENDING_PATH`、菜单文案键 `nav.quota_lending`、返回按钮文案键 `common.back`、历史守卫 `hasPreviousHistoryEntry`；路由、入口、详情链接、返回链接都引用它 | 导航调整时只改这一处 |
 | `web/src/pages/quota/LendingAdviceEntryLink.tsx`（新增） | `LendingAdviceEntryLink`：按 `lending` 三态渲染页头入口链接；缺字段返回 `null` | 入口只跳转，不含任何写入口 |
 | `web/src/App.tsx` / `routePages.ts` / `routePreload.ts` | 新增平铺路由、懒加载与预加载登记 | 风格同 `model-groups/:id/add` |
-| `web/src/components/common/AppLayout.tsx` | 高亮取键前调用挂载模块的路径→菜单键查表；不新增菜单项 | 只改取键处，`navigation.tsx` / 侧栏配置不动 |
+| `web/src/components/common/AppLayout.tsx` | 无改动：借调页在「能力」组里，高亮由该条目自己决定 | 不再需要路径→菜单键查表，与其它页面共用同一套导航解析 |
 | `web/src/pages/oauthManagement/useOAuthManagementViewState.ts` | 验证 `sort` 已在偏好里；不需要为新键加特判 | 若现有持久化不接受新键，只补白名单 |
 | `web/src/hooks/useVisibleNow.ts` | 复用现有页面时钟 | 倒计时与建议随页面时钟重算，不新增请求 |
 | `web/src/i18n/index.tsx` | 新增 `quota.lending.*`、`quota.reset_countdown_label`、`quota.fast_reset.*`、`quota.sort.reset_asc` 等 `[zh, en]` | 文案不硬编码 |
@@ -516,7 +516,7 @@ summary: "Read-only cross-credential quota lending: backend projects same-pool p
 | AC-12 | 无应用/写入/切换/消耗按钮；固定只读说明 |
 | AC-13 | 与 `ResetAdviceView` 分区、文案不混用、原建议不变 |
 | AC-14 | 空状态 + 未进池数量与原因汇总 |
-| AC-14a | 二级页路径（挂载模块）、标题、返回上一页（直接打开不显示）、侧栏高亮（挂载配置）、直接打开/刷新/前进后退、旧后端降级 |
+| AC-14a | 二级页路径（挂载模块）、标题、返回上一页（直接打开不显示）、侧栏高亮（能力组条目）、直接打开/刷新/前进后退、旧后端降级 |
 | AC-14b | 入口三态 + 缺字段不显示；无面板；不增高；点击进二级页 |
 | AC-14c | 未进池默认折叠、按原因计数、每组展开列凭证名、计数与后端一致 |
 | AC-15 | 二级页、入口摘要与详情同一份池建议 |
@@ -694,7 +694,7 @@ summary: "Read-only cross-credential quota lending: backend projects same-pool p
 | 2026-11-23 | P1 / P2 并行 | 并行；显示层可先落地，建议面板按契约用 mock | 写集不重叠；契约 §2 冻结字段与枚举 |
 | 2026-11-23 | 计算放后端还是前端 | 后端算一次，列表与详情共用 | AC-9/10/15 要求两处一致；前端各算一份会漂移 |
 | 2026-11-23 | 鲜度用哪个界 | `quota.PredictionFreshWindow` | 与额度预测一致；`reset_advice` 的 2h 是权益鲜度，回答不同问题 |
-| 2026-11-23 | 建议放在哪 | 完整建议搬到 `/quota-lending` 二级页，OAuth 页页头只留入口；挂载点集中在 `lendingMount.ts` | 浩文看体验环境后要求独立二级页；二期内容也落在这一页；入口不占地、不增加页面纵向高度；备选「继续放 OAuth 页顶部」会让凭证列表、问题提示与建议挤在一起 |
+| 2026-11-23 | 建议放在哪 | 完整建议搬到 `/quota-lending` 二级页，OAuth 页页头只留入口；挂载点集中在 `quotaLendingMount.ts` | 浩文看体验环境后要求独立二级页；二期内容也落在这一页；入口不占地、不增加页面纵向高度；备选「继续放 OAuth 页顶部」会让凭证列表、问题提示与建议挤在一起 |
 
 ### 11.1 与 PRD 的冲突
 

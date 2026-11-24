@@ -1298,15 +1298,15 @@ and halo. Ringing the inner field too drew a second rectangle inside the control
 
 - `body { overflow: hidden }` — the shell is `100dvh`; sidebar and content
   scroll independently (`overscroll-behavior: contain`).
-- Nav groups: Operate / Gateway / Observe / Control, with the plugins group - management, the
-  store, then each plugin's own page - before Control. Group labels 10px
+- Nav groups: Operate / Gateway / Observe / Capabilities / Plugins / Control. The plugins group
+  holds management, the store, then each plugin's own page, and sits before Control. Group labels 10px
   uppercase `--meta`. Items: icon + label only, no subtitles. Selected item =
   2px `--fg` inset rule (`box-shadow: inset 2px 0 0 var(--fg)`) + `--fg` bold text,
   never a filled background block. Hover uses `--surface` for immediate feedback.
 - The rail is the operator's: which of its entries a deployment shows is a stored preference
   (`omc_nav_hidden`, holding the *hidden* routes, so an entry a later release adds arrives
   already visible), set from the OMC settings page - one row that opens the rail's own panel,
-  rather than sixteen rows grown onto a page of one-line settings - and applied to the expanded
+  rather than twenty rows grown onto a page of one-line settings - and applied to the expanded
   rail, the collapsed rail and the phone sheet from one filtered model. The panel lists the model
   the rail draws, including the pages a running plugin registered, so the two cannot disagree
   about which destinations exist. A group whose every entry is hidden goes with
@@ -2454,7 +2454,7 @@ the copy they stand for (title 18px, body 10px, meta 8px).
 
 | Surface | Placeholder |
 | --- | --- |
-| Shell (`ShellLoading`) | The real wordmark, the rail at its 28px label / 36px item rhythm and group sizes, the header's crumbs and actions, and a page frame |
+| Shell (`ShellLoading`) | The real wordmark, the rail at its 28px label / 36px item rhythm and each group's item count, the header's crumbs and actions, and a page frame |
 | A lazy route (`RouteLoading`) | The page head (title, subtitle) and a framed list of six rows |
 | A list (`PageLoading variant="block"`) | Rows of mark, name, meta line and trailing state at the list's 64px row height |
 | The request list | Table rows at the list's 44px row height (`TablePlaceholder`) |
@@ -2786,8 +2786,8 @@ it in, and a second navigation would be a second place for the grouping to drift
 layer over where they were — which is also what tells them Back will put it away.
 
 A bottom tab bar was considered and rejected: it costs 56px of vertical space plus the home-indicator
-inset on every screen, in a console whose subject is dense tables, and it cannot express four groups
-of seventeen destinations without a "More" that reintroduces the sheet anyway.
+inset on every screen, in a console whose subject is dense tables, and it cannot express six groups
+of twenty destinations without a "More" that reintroduces the sheet anyway.
 
 ### A finger has no hover
 

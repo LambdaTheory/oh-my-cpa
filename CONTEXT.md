@@ -730,13 +730,20 @@ not extend the quota_prediction capability schema.
   arrangement mode on the dashboard itself and stored only when the operator chooses Done. Like the
   rail visibility it is console state: it changes what the dashboard draws, never what is served or
   read for another page. See [[Preference]].
+- **Navigation Group**: A heading in the console rail that gathers destinations by the kind of
+  work they do - `Operate`, `Gateway`, `Observe`, `Capabilities`, `Plugins`, `Control` - and the
+  only thing a rail heading means. It is not a [[Capability]]: a capability is a declared
+  operation OMC exposes to an agent, while a navigation group is a reading aid for a person
+  moving between management pages. Moving a page between groups changes only where the rail
+  draws it; its address, its stored visibility and its behaviour do not change.
 - **Sidebar Visibility**: Which of the rail's entries this console shows, stored as the
   `omc_nav_hidden` preference - the set of *hidden* route keys, so a destination a later release
   adds arrives already visible rather than waiting to be re-enabled. The entries are turned off
   in a panel that a single row on OMC Settings opens - the panel lists the same model the rail
   draws, so a plugin's page or a later release's destination appears there without a second list
   to maintain - and the row states how many entries are out of the rail, so the page reads without
-  opening it. It is console state rather
+  opening it. Entries are stored by route key rather than by group, so moving a page between
+  the rail's groups keeps its hidden or visible state. It is console state rather
   than a deployment capability: it changes nothing about what the gateway serves, the pages it
   hides stay reachable by URL, the filter applies to the expanded rail, the collapsed rail and
   the phone sheet from one model, and the two irreplaceable management surfaces cannot be hidden:
