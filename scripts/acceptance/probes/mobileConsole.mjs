@@ -4,6 +4,7 @@ import { until, settleLayout } from '../harness.mjs';
 const ROUTES = [
   ['/dashboard', '.dashboard-page'], ['/ai-providers', '.providers-page'],
   ['/oauth-management', '.oauth-management-page'], ['/api-keys', '.keys-page'],
+  ['/repo-keys', '.repo-keys-page'],
   ['/usage/events', '.usage-events-page'], ['/pricing', '[data-testid="pricing-page"]'],
   ['/logs', '.logs-page'], ['/audit', '[data-testid="audit-page"]'],
   ['/config', '.config-page'], ['/plugins', '.plugins-page'],

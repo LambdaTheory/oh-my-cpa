@@ -6,12 +6,13 @@ import { AppRoutes } from '../src/App';
 import { I18nProvider } from '../src/i18n';
 import { CredentialQuotaBody } from '../src/pages/quota/CredentialQuotaBody';
 import { LendingAdviceEntryLink } from '../src/pages/quota/LendingAdviceEntryLink';
+import { buildNavGroups } from '../src/components/common/navigation';
+import { navEntryLabel, resolveNavLocation } from '../src/types/sidebarNav';
 import {
-  QUOTA_LENDING_NAV_KEY,
+  QUOTA_LENDING_NAV_LABEL_KEY,
   QUOTA_LENDING_PATH,
   hasPreviousHistoryEntry,
-  lendingNavKeyForPath,
-} from '../src/pages/quota/lendingMount';
+} from '../src/types/quotaLendingMount';
 import type { LendingCard, LendingDetail, LendingOverview, LendingPool, QuotaItem } from '../src/types/quota';
 
 vi.mock('../src/components/common/AuthGate', () => ({
@@ -112,17 +113,25 @@ function renderEntry(lending?: LendingOverview | null) {
 beforeEach(() => window.localStorage.setItem('omc-lang', 'en'));
 
 describe('quota lending mount module', () => {
-  it('keeps the path, the highlighted nav key and the history guard in one module', () => {
+  it('keeps the path, the menu label key and the history guard in one module', () => {
     expect(QUOTA_LENDING_PATH).toBe('/quota-lending');
-    expect(QUOTA_LENDING_NAV_KEY).toBe('/oauth-management');
-    expect(lendingNavKeyForPath(QUOTA_LENDING_PATH)).toBe(QUOTA_LENDING_NAV_KEY);
-    expect(lendingNavKeyForPath(`${QUOTA_LENDING_PATH}/`)).toBe(QUOTA_LENDING_NAV_KEY);
-    expect(lendingNavKeyForPath(`${QUOTA_LENDING_PATH}//`)).toBe(QUOTA_LENDING_NAV_KEY);
-    expect(lendingNavKeyForPath('/model-groups')).toBe('/model-groups');
-    expect(lendingNavKeyForPath('/model-groups/')).toBe('/model-groups/');
+    expect(QUOTA_LENDING_NAV_LABEL_KEY).toBe('nav.quota_lending');
     expect(hasPreviousHistoryEntry({ idx: 1 })).toBe(true);
     expect(hasPreviousHistoryEntry({ idx: 0 })).toBe(false);
     expect(hasPreviousHistoryEntry(undefined)).toBe(false);
+  });
+
+  it('resolves the lending page to its own entry under Capabilities', () => {
+    window.__OMCPA_CONFIG__ = { basePath: '/omc', demo: false };
+    const groups = buildNavGroups([]);
+    const { entry, group } = resolveNavLocation(groups, QUOTA_LENDING_PATH);
+    expect(entry?.key).toBe(QUOTA_LENDING_PATH);
+    expect(entry?.labelKey).toBe(QUOTA_LENDING_NAV_LABEL_KEY);
+    expect(group?.key).toBe('capabilities');
+    expect(group?.labelKey).toBe('nav.group.capabilities');
+    // The breadcrumb and the tab title read the same entry name.
+    expect(navEntryLabel(entry!, (key) => (key === 'nav.quota_lending' ? 'Quota lending' : key))).toBe('Quota lending');
+    expect(resolveNavLocation(groups, QUOTA_LENDING_PATH + '/').entry?.key).toBe(QUOTA_LENDING_PATH);
   });
 
   it('mounts the page from the route constant', async () => {

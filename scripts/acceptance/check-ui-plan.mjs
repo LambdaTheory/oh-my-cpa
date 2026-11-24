@@ -238,6 +238,9 @@ const SCENARIO_PATHS = [
   // The key list page: the phone rendering, the touch rules and the modal Back dismissal
   // each load `/api-keys`.
   { prefix: 'web/src/pages/ApiKeysPage', scenarios: ['phone-lists', 'touch-ergonomics', 'overlay-back', 'mobile-console'] },
+  // The repository keys page puts the panel on its own route; the route sweep is the scenario
+  // that opens it.
+  { prefix: 'web/src/pages/RepoKeysPage', scenarios: ['mobile-console'] },
   {
     prefix: 'web/src/pages/PluginPageHost',
     scenarios: ['plugin-management', 'plugin-management-narrow', 'mobile-console'],
