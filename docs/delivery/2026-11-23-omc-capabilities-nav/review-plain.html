@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>评审：左侧菜单新增「能力」分组（大白话版）</title>
+<style>
+/* 视觉规范：字号只有六级（12 辅助 · 13 说明 · 14 正文 · 16 小标题 · 20 标题 · 28 大标题）；
+   间距用 4 的倍数；圆角三档 8 / 12 / 16，胶囊 999；颜色只用变量，浅色深色两套都要能看；
+   状态色：红 = 要改 / 框出，橙 = 注意 / 要搬动，蓝 = 信息，品牌绿 = 通过 / 新增；
+   不用 emoji，不引用任何外部资源，断网也能看。 */
+:root {
+  --fs-12: 12px; --fs-13: 13px; --fs-14: 14px; --fs-16: 16px; --fs-20: 20px; --fs-28: 28px;
+  --sp-4: 4px; --sp-8: 8px; --sp-12: 12px; --sp-16: 16px; --sp-24: 24px; --sp-32: 32px;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
+  --font: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", system-ui, -apple-system, sans-serif;
+  --bg: #f4f3ef; --panel: #ffffff; --panel-2: #f7f6f2; --line: #e6e3db; --text: #1f1e1b; --muted: #6f6b63; --faint: #9a968d;
+  --brand: #2f6f5e; --brand-soft: #e2efe9; --brand-text: #ffffff;
+  --red: #c2410c; --red-soft: #fdebdf; --orange: #b7791f; --orange-soft: #fbf1d9; --blue: #2563eb; --blue-soft: #e3ebfd;
+  --gray-soft: #eeece6; --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 14px rgba(0,0,0,.05);
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141413; --panel: #1d1d1b; --panel-2: #242421; --line: #33322e; --text: #ecebe6; --muted: #a6a29a; --faint: #78756e;
+  --brand: #6cc3a8; --brand-soft: #1f3530; --brand-text: #10201b; --red: #fb8a5c; --red-soft: #3a2216;
+  --orange: #f2c15b; --orange-soft: #392e15; --blue: #8fb1ff; --blue-soft: #1c2742; --gray-soft: #2a2a27; --shadow: 0 1px 2px rgba(0,0,0,.3); } }
+:root[data-theme="dark"] {
+  --bg: #141413; --panel: #1d1d1b; --panel-2: #242421; --line: #33322e; --text: #ecebe6; --muted: #a6a29a; --faint: #78756e;
+  --brand: #6cc3a8; --brand-soft: #1f3530; --brand-text: #10201b; --red: #fb8a5c; --red-soft: #3a2216;
+  --orange: #f2c15b; --orange-soft: #392e15; --blue: #8fb1ff; --blue-soft: #1c2742; --gray-soft: #2a2a27; --shadow: 0 1px 2px rgba(0,0,0,.3); }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 400 var(--fs-14)/1.7 var(--font); }
+h1 { font-size: var(--fs-28); line-height: 1.25; margin: 0; } h2 { font-size: var(--fs-20); line-height: 1.35; margin: 0; } h3 { font-size: var(--fs-16); line-height: 1.4; margin: 0; }
+p { margin: 0 0 var(--sp-8); } ul, ol { margin: 0; padding-left: 20px; } a { color: var(--brand); } small, .small { font-size: var(--fs-12); }
+[hidden] { display: none !important; }
+button { font: inherit; font-size: var(--fs-14); cursor: pointer; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--panel); color: var(--text); padding: var(--sp-4) var(--sp-12); }
+button:hover { border-color: var(--brand); }
+button.primary { background: var(--brand); color: var(--brand-text); border-color: var(--brand); }
+button.on { background: var(--orange-soft); border-color: var(--orange); }
+button:focus-visible, a:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+header.top { position: sticky; top: 0; z-index: 10; background: var(--bg); border-bottom: 1px solid var(--line); }
+.bar { max-width: 1240px; margin: 0 auto; padding: var(--sp-12) var(--sp-16); display: flex; gap: var(--sp-12); align-items: center; flex-wrap: wrap; }
+.ttl { font-size: var(--fs-16); font-weight: 600; flex: 1 1 240px; min-width: 0; }
+.prog { display: flex; align-items: center; gap: var(--sp-8); color: var(--muted); font-size: var(--fs-13); flex: 1 1 280px; }
+.track { flex: 0 0 96px; height: 6px; background: var(--panel-2); border-radius: var(--r-pill); overflow: hidden; border: 1px solid var(--line); }
+.fill { height: 100%; width: 0; background: var(--brand); transition: width .2s; }
+.n-pass { color: var(--brand); } .n-ask { color: var(--orange); } .n-fix { color: var(--red); }
+.layout { max-width: 1240px; margin: 0 auto; padding: var(--sp-16); display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--sp-24); }
+.layout > * { min-width: 0; }
+nav { position: sticky; top: 72px; align-self: start; font-size: var(--fs-13); max-height: calc(100vh - 88px); overflow: auto; }
+nav a { display: flex; gap: var(--sp-8); align-items: baseline; padding: var(--sp-4) var(--sp-8); border-radius: var(--r-sm); color: var(--text); text-decoration: none; }
+nav a:hover { background: var(--panel-2); } nav .lb { flex: 1; min-width: 0; } nav .badge { color: var(--orange); font-size: var(--fs-12); font-weight: 600; }
+.dot { flex: none; width: 8px; height: 8px; border-radius: var(--r-pill); border: 1px solid var(--faint); align-self: center; }
+.dot.v-pass { background: var(--brand); border-color: var(--brand); } .dot.v-ask { background: var(--orange); border-color: var(--orange); } .dot.v-fix { background: var(--red); border-color: var(--red); }
+.only-open .scr.v-pass, .only-open nav a.v-pass { display: none; }
+.scr { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: var(--sp-24); margin-bottom: var(--sp-24); box-shadow: var(--shadow); scroll-margin-top: 80px; }
+.scr-h { display: flex; gap: var(--sp-12); align-items: center; flex-wrap: wrap; margin-bottom: var(--sp-12); }
+.scr-h h2, .scr-h h1, .scr-h h3 { flex: 1 1 320px; min-width: 0; }
+.no { flex: none; display: inline-grid; place-items: center; min-width: 28px; height: 28px; border-radius: var(--r-pill); background: var(--brand); color: var(--brand-text); font-size: var(--fs-14); font-weight: 600; }
+.no.q { background: var(--orange); color: var(--panel); }
+.lead { font-size: var(--fs-16); line-height: 1.7; margin: 0 0 var(--sp-16); }
+.kicker { color: var(--brand); font-size: var(--fs-13); font-weight: 600; margin: 0 0 var(--sp-4); }
+.hint { color: var(--muted); font-size: var(--fs-13); }
+.muted { color: var(--muted); }
+.vd { display: inline-flex; gap: var(--sp-4); flex-wrap: wrap; }
+.vd button { font-size: var(--fs-13); padding: 0 var(--sp-12); border-radius: var(--r-pill); line-height: 1.9; }
+.vd button[data-v="pass"] { border-color: var(--brand); } .vd button[data-v="ask"] { border-color: var(--orange); } .vd button[data-v="fix"] { border-color: var(--red); }
+.vd button[data-v="pass"].on { background: var(--brand); color: var(--brand-text); } .vd button[data-v="ask"].on { background: var(--orange); color: var(--panel); } .vd button[data-v="fix"].on { background: var(--red); color: var(--panel); }
+.vd button[data-c] { color: var(--muted); }
+.thread { margin: var(--sp-8) 0 var(--sp-12); padding: var(--sp-8) var(--sp-12); border-left: 3px solid var(--orange); background: var(--orange-soft); border-radius: 0 var(--r-sm) var(--r-sm) 0; }
+.thread .c { margin: 0 0 var(--sp-4); } .thread .meta { color: var(--muted); font-size: var(--fs-12); }
+.thread .meta button { font-size: var(--fs-12); padding: 0 var(--sp-4); margin-left: var(--sp-4); }
+textarea { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: var(--r-sm); padding: var(--sp-8); }
+.row { display: flex; gap: var(--sp-8); margin-top: var(--sp-8); flex-wrap: wrap; align-items: center; }
+dialog { width: min(760px, calc(100vw - 32px)); border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); color: var(--text); padding: var(--sp-16); }
+dialog h3 { margin: 0 0 var(--sp-8); } dialog::backdrop { background: rgba(0,0,0,.4); }
+dialog textarea.out { height: 50vh; font-family: ui-monospace, Consolas, monospace; font-size: var(--fs-13); }
+.pill { display: inline-flex; align-items: center; padding: 0 var(--sp-8); border-radius: var(--r-pill); font-size: var(--fs-12); line-height: 1.8; border: 1px solid transparent; white-space: nowrap; }
+.pill.brand { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); font-weight: 600; }
+.pill.warn { background: var(--orange-soft); color: var(--orange); border-color: var(--orange); }
+.pill.info { background: var(--blue-soft); color: var(--blue); border-color: var(--blue); }
+.pill.ghost { background: transparent; color: var(--muted); border-color: var(--line); }
+.pill.gray { background: var(--gray-soft); color: var(--muted); }
+.push { margin-left: auto; }
+.howto { border: 1px solid var(--blue); background: var(--blue-soft); border-radius: var(--r-md); padding: var(--sp-12) var(--sp-16); font-size: var(--fs-13); margin-top: var(--sp-12); }
+.eg { border: 1px solid var(--brand); background: var(--brand-soft); border-radius: var(--r-md); padding: var(--sp-12) var(--sp-16); margin-top: var(--sp-16); }
+.eg .k { color: var(--brand); margin-right: var(--sp-8); }
+.scr.q { border-color: var(--orange); background: var(--orange-soft); padding: var(--sp-16) var(--sp-24); }
+.scr.q .scr-h { margin-bottom: var(--sp-8); } .scr.q .thread { background: var(--panel); }
+/* 已定的问题：沿用问题屏的版式，配色换成品牌绿 */
+.scr.q.done, .duo-c.decide.done { border-color: var(--brand); background: var(--brand-soft); }
+.scr.q.done .no.q, .duo-c.done .no.q { background: var(--brand); color: var(--brand-text); }
+@media (max-width: 860px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: var(--sp-12); padding: var(--sp-12); }
+  nav { position: static; max-height: 200px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: var(--sp-4); }
+  .scr { padding: var(--sp-16); } .prog { flex-basis: 100%; }
+}
+.no { padding: 0 var(--sp-8); }
+/* 先说结论：分组标题对比条、做什么 / 要定什么 */
+.chips { display: grid; gap: var(--sp-8); margin: 0 0 var(--sp-16); }
+.chip-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-8); }
+.chip-l { flex: 0 0 72px; color: var(--muted); font-size: var(--fs-13); }
+.gchip { padding: var(--sp-4) var(--sp-12); border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel-2); font-size: var(--fs-13); }
+.gchip.new { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.duo { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-16); }
+.duo-c { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); padding: var(--sp-12) var(--sp-16); }
+.duo-c.decide { border-color: var(--orange); background: var(--orange-soft); }
+.duo-c h3 { margin-bottom: var(--sp-8); }
+.dolist { display: grid; gap: var(--sp-4); padding-left: 20px; }
+.dq { display: flex; gap: var(--sp-8); align-items: flex-start; margin-bottom: var(--sp-8); }
+.dq .no { margin-top: 2px; }
+@media (max-width: 860px) { .duo { grid-template-columns: minmax(0, 1fr); } .chip-l { flex-basis: 100%; } }
+/* 图：菜单示意（rail）、图例、图注 */
+.fig { margin: var(--sp-16) 0; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel-2); padding: var(--sp-16); }
+figcaption { color: var(--muted); font-size: var(--fs-13); margin-top: var(--sp-8); }
+.ln { stroke: var(--faint); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rails { display: grid; grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr); gap: var(--sp-8); align-items: start; }
+.rails-ar { display: grid; place-items: center; align-self: center; }
+.rail { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: var(--sp-12) var(--sp-8); font-size: var(--fs-13); }
+.rail h3 { font-size: var(--fs-13); color: var(--muted); font-weight: 600; margin: 0 var(--sp-8) var(--sp-4); }
+.rail .g { display: flex; align-items: center; gap: var(--sp-8); margin: var(--sp-12) var(--sp-8) var(--sp-4); color: var(--faint); font-size: var(--fs-12); }
+.rail .g.boxed > span { outline: 2px solid var(--red); outline-offset: 3px; padding: 0 2px; }
+.rail .g.hot { color: var(--brand); font-weight: 600; }
+.rail ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.rail li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-4) var(--sp-8); min-height: 28px; padding: var(--sp-4) var(--sp-8); border: 1px solid transparent; border-radius: var(--r-sm); }
+.rail li .ic { flex: none; width: 14px; height: 14px; border: 1.5px solid var(--faint); border-radius: 4px; }
+.rail li .pill { margin-left: auto; }
+.rail em { font-style: normal; }
+.rail li.mv { background: var(--orange-soft); border-color: var(--orange); } .rail li.mv .ic { border-color: var(--orange); }
+.rail li.in { background: var(--brand-soft); border-color: var(--brand); } .rail li.in .ic { border-color: var(--brand); }
+.rail li.sel { font-weight: 600; box-shadow: inset 3px 0 0 var(--brand); background: var(--panel-2); }
+.legend { display: flex; gap: var(--sp-16); flex-wrap: wrap; margin-top: var(--sp-12); font-size: var(--fs-13); color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: var(--sp-8); }
+.sw { display: inline-block; width: 16px; height: 12px; border-radius: 4px; border: 1px solid var(--line); }
+.sw.or { background: var(--orange-soft); border-color: var(--orange); } .sw.gr { background: var(--brand-soft); border-color: var(--brand); }
+.sw.red { border: 2px solid var(--red); background: var(--panel); }
+@media (max-width: 860px) { .rails { grid-template-columns: minmax(0, 1fr); } .rails-ar { display: none; } }
+/* 表格、判断口径、提示条 */
+.tw { overflow-x: auto; }
+.pt { width: 100%; border-collapse: collapse; font-size: var(--fs-13); }
+.pt th, .pt td { border: 1px solid var(--line); padding: var(--sp-8) var(--sp-12); text-align: left; vertical-align: top; }
+.pt th { background: var(--panel-2); color: var(--muted); font-weight: 400; }
+.pt td:first-child { font-weight: 600; width: 26%; }
+.pt tr.in td { background: var(--brand-soft); }
+.pt small { font-weight: 400; }
+.pt td:nth-child(2) { width: 20%; }
+.pt td:nth-child(2) small { display: block; margin-top: var(--sp-4); color: var(--muted); }
+@media (max-width: 860px) {
+  .pt thead { display: none; }
+  .pt, .pt tbody, .pt tr, .pt td { display: block; width: 100% !important; }
+  .pt tr { border: 1px solid var(--line); border-radius: var(--r-sm); margin-bottom: var(--sp-8); overflow: hidden; }
+  .pt td { border: 0; padding: var(--sp-4) var(--sp-12); }
+  .pt td:first-child { padding-top: var(--sp-8); } .pt td:last-child { padding-bottom: var(--sp-8); }
+}
+.defs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: 0 0 var(--sp-12); }
+.defs > div { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-8) var(--sp-12); background: var(--panel-2); font-size: var(--fs-13); }
+.defs .yes { border-color: var(--brand); background: var(--brand-soft); }
+.why { margin: var(--sp-12) 0 0; padding: var(--sp-8) var(--sp-12); border-radius: var(--r-sm); background: var(--orange-soft); border: 1px solid var(--orange); font-size: var(--fs-13); }
+.why.info { background: var(--blue-soft); border-color: var(--blue); }
+@media (max-width: 860px) { .defs { grid-template-columns: minmax(0, 1fr); } }
+/* 「密钥管理」页拆前拆后线框 */
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr); gap: var(--sp-8); align-items: start; }
+.split-col { display: grid; gap: var(--sp-12); }
+.split-h { margin: 0; font-size: var(--fs-13); color: var(--muted); display: flex; gap: var(--sp-8); align-items: center; }
+.split-ar { display: grid; place-items: center; align-self: center; }
+.pgm { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--panel); padding: var(--sp-12); display: grid; gap: var(--sp-8); font-size: var(--fs-13); }
+.pgm.new { border-color: var(--brand); }
+.pgm-bar { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; }
+.pgm-t { font-size: var(--fs-16); font-weight: 600; margin-right: auto; }
+.pgm-act { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 var(--sp-8); font-size: var(--fs-12); color: var(--muted); }
+.blk { border: 1px solid var(--line); border-radius: var(--r-sm); padding: var(--sp-8) var(--sp-12); display: grid; gap: var(--sp-8); background: var(--panel-2); }
+.blk.hot { border-color: var(--orange); background: var(--orange-soft); }
+.blk.in { border-color: var(--brand); background: var(--brand-soft); }
+.blk-h { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; }
+.blk-tools { display: flex; gap: var(--sp-4); flex-wrap: wrap; }
+.row-ph { display: flex; align-items: center; gap: var(--sp-8); }
+.row-ph .ph { flex: 1; }
+.ph { display: block; height: 8px; border-radius: var(--r-pill); background: var(--line); }
+.sec-ph { display: grid; gap: var(--sp-4); padding-top: var(--sp-4); border-top: 1px dashed var(--line); }
+.sec-ph b { font-size: var(--fs-12); }
+.hintline { border: 1px dashed var(--blue); background: var(--blue-soft); border-radius: var(--r-sm); padding: var(--sp-4) var(--sp-12); font-size: var(--fs-12); display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; }
+.cn { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: var(--r-pill); background: var(--brand); color: var(--brand-text); font-size: var(--fs-12); font-style: normal; font-weight: 600; flex: none; }
+.leg { margin: var(--sp-12) 0 0; padding: 0; list-style: none; display: grid; gap: var(--sp-8); font-size: var(--fs-13); }
+.leg li { display: flex; gap: var(--sp-8); align-items: baseline; }
+.leg .cn { transform: translateY(2px); }
+.path { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; margin: var(--sp-12) 0 0; font-size: var(--fs-13); }
+.pbox { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--panel); padding: var(--sp-4) var(--sp-12); }
+.pbox.hot { border-color: var(--brand); background: var(--brand-soft); }
+.parr { display: flex; align-items: center; gap: var(--sp-8); color: var(--muted); font-size: var(--fs-12); }
+@media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); } .split-ar { display: none; } }
+/* 问题屏：选项卡片 */
+.opts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-12); margin: var(--sp-12) 0; }
+.opt { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-12) var(--sp-16); display: grid; gap: var(--sp-8); align-content: start; font-size: var(--fs-13); }
+.opt.rec { border-color: var(--brand); box-shadow: inset 0 0 0 1px var(--brand); }
+.opt-h { display: flex; gap: var(--sp-8); align-items: center; flex-wrap: wrap; font-size: var(--fs-14); }
+.opt p { margin: 0; }
+.opt .why-l, .opt .cost-l { display: inline-block; min-width: 3em; font-weight: 600; color: var(--brand); }
+.opt .cost-l { color: var(--orange); }
+.mini { display: flex; flex-wrap: wrap; gap: var(--sp-4); align-items: center; }
+.mini-g { flex: 0 0 40px; color: var(--muted); font-size: var(--fs-12); }
+.mini .gchip { padding: 0 var(--sp-8); font-size: var(--fs-12); background: var(--panel-2); }
+.mini .gchip.in { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+.mini .gchip.off { text-decoration: line-through; color: var(--faint); }
+@media (max-width: 860px) { .opts { grid-template-columns: minmax(0, 1fr); } }
+/* 位置两种放法：小菜单图 */
+.rails2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-16); align-items: start; }
+.rail.mini-r h3 { display: flex; align-items: center; gap: var(--sp-8); flex-wrap: wrap; font-size: var(--fs-14); color: var(--text); }
+.rail.mini-r .g { margin-top: var(--sp-8); }
+.rail.mini-r .g .cnt { color: var(--faint); font-weight: 400; }
+.bars { display: grid; gap: var(--sp-4); padding: 0 var(--sp-8) var(--sp-4); }
+.bars i { display: block; height: 8px; border-radius: var(--r-pill); background: var(--line); }
+.bars i:nth-child(odd) { width: 62%; } .bars i:nth-child(even) { width: 48%; } .bars i:nth-child(3n) { width: 70%; }
+.rail.mini-r ul.cap { margin: 0 0 var(--sp-4); }
+@media (max-width: 860px) { .rails2 { grid-template-columns: minmax(0, 1fr); } }
+/* 一句话回答 */
+.ans { border-left: 4px solid var(--brand); background: var(--brand-soft); border-radius: 0 var(--r-sm) var(--r-sm) 0; padding: var(--sp-8) var(--sp-12); margin: 0 0 var(--sp-12); font-size: var(--fs-16); line-height: 1.7; }
+/* 额度拆借建议页现在与挂入后：一对菜单图，每张图下面写页面顶部的路径 */
+.rail .crumb { display: flex; flex-wrap: wrap; gap: var(--sp-8); align-items: center; margin: var(--sp-12) var(--sp-8) 0; padding-top: var(--sp-8); border-top: 1px dashed var(--line); font-size: var(--fs-13); color: var(--muted); }
+.rail .crumb b { color: var(--text); }
+/* 术语翻译表 */
+.pt.gl td:nth-child(1) { width: 24%; } .pt.gl td:nth-child(2) { width: 46%; } .pt.gl td:nth-child(3) { width: 30%; }
+.pt.gl td:nth-child(2), .pt.gl td:nth-child(3) { font-weight: 400; }
+</style>
+</head>
+<body>
+<header class="top"><div class="bar">
+  <div class="ttl">评审：左侧菜单新增「能力」分组（大白话版）</div>
+  <div class="prog"><div class="track"><div class="fill" id="fill"></div></div><span id="ptext"></span></div>
+  <button id="btnOpen" type="button" title="隐藏已经点了「没问题」的屏">只看没过的</button>
+  <button class="primary" id="btnExport" type="button">导出评审</button><button id="btnTheme" type="button">主题</button>
+</div></header>
+<div class="layout">
+  <nav id="nav" aria-label="目录"></nav>
+  <main id="main">
+<section class="scr" id="s0" data-k="s0" data-title="先说结论：菜单多一个「能力」分组">
+  <p class="kicker">大白话版 · 先说结论</p>
+  <div class="scr-h"><h1>左侧菜单新增一个「能力」分组</h1></div>
+  <p class="lead">老板的原话：「二级栏把之前的分 key、模型组这些，做成一个能力栏目，放里面。」方案的理解是：在菜单里「运行、网关、观测、插件、控制」这排分组标题旁边，再加一个同级的「能力」，把团队自己做的几项能力放到一起。只调菜单，不改各个页面自己的功能。</p>
+  <div class="chips" role="group" aria-label="菜单里的分组标题，现在和改后对比">
+    <div class="chip-row"><span class="chip-l">现在 5 组</span><span class="gchip">运行</span><span class="gchip">网关</span><span class="gchip">观测</span><span class="gchip">插件</span><span class="gchip">控制</span></div>
+    <div class="chip-row"><span class="chip-l">改后 6 组</span><span class="gchip">运行</span><span class="gchip">网关</span><span class="gchip">观测</span><span class="gchip new">能力 · 新增</span><span class="gchip">插件</span><span class="gchip">控制</span></div>
+  </div>
+  <div class="duo">
+    <article class="duo-c">
+      <h3>这次做什么</h3>
+      <ol class="dolist">
+        <li>菜单多一个「能力」分组</li>
+        <li>「模型组」从「运行」搬进去</li>
+        <li>「分 key」（界面名叫「仓库自有密钥」）现在藏在「密钥管理」页的下半截，拆成单独一页，也放进去</li>
+        <li>「额度拆借建议」页已经上线，这次也挂进去，菜单里叫「额度拆借」</li>
+      </ol>
+    </article>
+    <article class="duo-c decide done">
+      <h3>两件事已定（按推荐）</h3>
+      <div class="dq"><span class="no q">问 1</span><div><b>里面放哪几项？</b><br><span class="hint">已定：模型组、仓库自有密钥、额度拆借</span> <a href="#q1" data-jump="q1">看详情 →</a></div></div>
+      <div class="dq"><span class="no q">问 2</span><div><b>「能力」放在菜单第几个位置？</b><br><span class="hint">已定：观测之后、插件之前</span> <a href="#q2" data-jump="q2">看详情 →</a></div></div>
+    </article>
+  </div>
+  <p class="hint" style="margin-top:var(--sp-12)">例子都取自老板截图里现有的菜单；示意以外的情形标「假设」。</p>
+  <div class="howto"><b>怎么看这一页</b>　往下 6 屏，每屏一张图加一个例子；第 3、4 屏后面各有一个问题，已按推荐定下来（标了「已定」）。看完点标题旁的「没问题 / 有疑问 / 要改」，看不懂就点「有疑问」写一句「没看懂」；最后点右上角「导出评审」。</div>
+</section>
+<section class="scr" id="s1" data-k="s1" data-title="1 · 现在长这样 → 改后长这样">
+  <div class="scr-h"><span class="no">1</span><h2>现在长这样 → 改后长这样</h2></div>
+  <p class="lead">左边是老板截图里现在的菜单，右边是改后的样子（按推荐的位置画）。橙色是要动的条目，写明了从哪来；「额度拆借建议」页已经上线，这次一起挂进「能力」。红框是老板在截图里框出的三个分组标题：方案把「二级栏」理解成这一层标题，所以「能力」是和它们并排的又一个分组。</p>
+  <figure class="fig">
+    <div class="rails">
+      <div class="rail" data-rail="now" role="group" aria-label="现在的菜单"></div>
+      <div class="rails-ar" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24"><path class="ln" d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="rail" data-rail="after" role="group" aria-label="改后的菜单"></div>
+    </div>
+    <div class="legend">
+      <span><i class="sw or"></i>要动的条目</span>
+      <span><i class="sw gr"></i>新分组「能力」里的条目</span>
+      <span><i class="sw red"></i>老板截图里框出的标题</span>
+    </div>
+    <figcaption>示意图按现有菜单画。「插件」下的 CommandCode、GitHub Copilot 是老板这套部署里装的插件页，因部署而异；「控制」的后两项截图没拍到，按现有菜单补全。「额度拆借」现在不在菜单里，要从「OAuth 管理」页头的小入口点进去。</figcaption>
+  </figure>
+  <div class="eg"><b class="k">拿老板自己的操作来说</b>现在要处理一个仓库密钥申请，得点「网关 › 密钥管理」，再往下翻到第二块；改后直接点「能力 › 仓库自有密钥」。看模型组也一样，从「运行 › 模型组」改成「能力 › 模型组」。</div>
+</section>
+<section class="scr" id="s2" data-k="s2" data-title="2 · 为什么这三项进、别的不进">
+  <div class="scr-h"><span class="no">2</span><h2>为什么这三项进、别的不进</h2></div>
+  <p class="lead">判断口径只有一句：像「能力」的进，属于基础运维的不动。下面把菜单里每一项都过了一遍，每行一句人话。</p>
+  <div class="defs">
+    <div class="yes"><b>能力</b>：团队自己做的、能用一句话说清「它替人做什么」的功能。</div>
+    <div><b>基础运维</b>：CPA 本来就有的那些管理页（登录凭证、网关密钥、配置、日志），以及只看数据、看记录的页面。</div>
+  </div>
+  <figure class="fig">
+    <div class="tw"><table class="pt">
+      <thead><tr><th>菜单项</th><th>去向</th><th>一句人话</th></tr></thead>
+      <tbody>
+        <tr class="in"><td>模型组</td><td><span class="pill brand">进「能力」</span></td><td>给一批模型起个名字、排好先后，一个用途一组（比如「审查组」）。团队自己做的。</td></tr>
+        <tr class="in"><td>仓库自有密钥<br><small class="muted">老板说的「分 key」</small></td><td><span class="pill brand">进「能力」</span><small>新开一页</small></td><td>让每个代码仓库里的 agent 自己来申请一把专属密钥，人批一次就行。团队自己做的。</td></tr>
+        <tr class="in"><td>额度拆借<br><small class="muted">页标题叫「额度拆借建议」，老板说的借调建议</small></td><td><span class="pill brand">进「能力」</span><small>已上线，这次挂入</small></td><td>看多张卡该多用谁、少用谁，并给出建议。团队自己做的，已经上线。</td></tr>
+        <tr><td>OAuth 管理</td><td><span class="pill ghost">不动</span><small>留在「网关」</small></td><td>登录账号和凭证的工作台。里面也有团队自己做的账号自动管理、Ollama 监控、额度卡，但整页搬走会让「网关」只剩两项，原因见下面的提示。</td></tr>
+        <tr><td>密钥管理<br><small class="muted">拆页后只剩网关密钥</small></td><td><span class="pill ghost">不动</span></td><td>管「谁能连上网关」的那批密钥，是基础运维。</td></tr>
+        <tr><td>AI 提供商</td><td><span class="pill ghost">不动</span></td><td>配置上游的提供商和密钥，网关的基础运维。</td></tr>
+        <tr><td>仪表盘、智能体、操练场、模型广场</td><td><span class="pill ghost">不动</span></td><td>日常看和用的入口，不是替人做一件具体运维活儿的功能。</td></tr>
+        <tr><td>洞察、请求记录、费用与用量、日志查看、操作审计</td><td><span class="pill ghost">不动</span></td><td>只看数据和记录，留在「观测」。</td></tr>
+        <tr><td>插件管理、插件商店，及各插件自带的页</td><td><span class="pill ghost">不动</span></td><td>装和管插件，留在「插件」。</td></tr>
+        <tr><td>配置面板、OMC 设置、系统信息</td><td><span class="pill ghost">不动</span></td><td>系统设置，留在「控制」。</td></tr>
+      </tbody></table></div>
+    <figcaption>绿色三行是进「能力」的；其余都原样留在原来的分组里。</figcaption>
+  </figure>
+  <p class="why info"><b>最容易被问到的一条：</b>OAuth 管理里的账号自动管理、Ollama 监控、额度卡也是团队自己做的，为什么不搬？因为这一页首先是登录凭证的工作台，是这几块功能唯一的入口，而且被锁定、不能隐藏。整页搬走，「网关」就只剩 AI 提供商和密钥管理两项。想让这几块也进「能力」，得先把它们从 OAuth 页拆成单独的页，工作量比这次大，这次不做。</p>
+  <div class="eg"><b class="k">用这条口径过一遍老板框出的三个分组</b>「运行」里只有模型组符合；「网关」里只有「分 key」那一块符合；「观测」五项都是只看数据、看记录，没有符合的。要是老板觉得「观测」里哪一项也该进，点「要改」写上名字就行。</div>
+</section>
+<section class="scr" id="s3" data-k="s3" data-title="3 ·「分 key」是哪一页、怎么拆">
+  <div class="scr-h"><span class="no">3</span><h2>「分 key」是哪一页、怎么拆</h2></div>
+  <p class="lead">今天没有一页叫「分 key」。它在界面上叫「仓库自有密钥」，是「密钥管理」页里排在网关密钥列表下面的第二块。要让它在「能力」里有自己的一行，就得把这一块拆成单独的一页。</p>
+  <figure class="fig">
+    <div class="split">
+      <div class="split-col">
+        <p class="split-h"><span class="pill gray">拆前</span>一个页面，上下两块</p>
+        <div class="pgm" role="group" aria-label="拆前的密钥管理页">
+          <div class="pgm-bar"><span class="pgm-t">密钥管理</span><span class="pgm-act">刷新</span><span class="pgm-act">添加 API 密钥</span></div>
+          <div class="blk"><div class="blk-h"><i class="cn">1</i><b>API 密钥列表</b><small class="muted">共 n 个密钥</small></div>
+            <div class="row-ph"><i class="ph" style="width:55%"></i><span class="pill gray">未绑定仓库</span></div>
+            <div class="row-ph"><i class="ph" style="width:45%"></i><span class="pill info">某个仓库的名字</span></div></div>
+          <div class="blk hot"><div class="blk-h"><i class="cn">2</i><b>仓库自有密钥</b><span class="pill warn">要拆出去</span></div>
+            <div class="blk-tools"><span class="pill ghost">搜索</span><span class="pill ghost">全部状态</span><span class="pill ghost">代 agent 提交申请</span></div>
+            <div class="sec-ph"><b>待审批（n）</b><i class="ph" style="width:70%"></i></div>
+            <div class="sec-ph"><b>待交付（n）</b><i class="ph" style="width:55%"></i></div>
+            <div class="sec-ph"><b>密钥（n）</b><i class="ph" style="width:80%"></i><i class="ph" style="width:65%"></i></div>
+            <div class="sec-ph"><b>审计平台推送</b><i class="ph" style="width:40%"></i></div></div>
+        </div>
+      </div>
+      <div class="split-ar" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24"><path class="ln" d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="split-col">
+        <p class="split-h"><span class="pill brand">拆后</span>两个页面</p>
+        <div class="pgm" role="group" aria-label="拆后的密钥管理页">
+          <div class="pgm-bar"><span class="pgm-t">密钥管理</span><span class="pgm-act">刷新</span><span class="pgm-act">添加 API 密钥</span></div>
+          <div class="blk"><div class="blk-h"><i class="cn">1</i><b>API 密钥列表</b><small class="muted">共 n 个密钥</small></div>
+            <div class="row-ph"><i class="ph" style="width:55%"></i><span class="pill gray">未绑定仓库</span></div>
+            <div class="row-ph"><i class="ph" style="width:45%"></i><span class="pill info">某个仓库的名字</span></div></div>
+          <div class="hintline"><i class="cn">4</i>仓库自有密钥已移到「能力 › 仓库自有密钥」，点这里过去 →</div>
+        </div>
+        <div class="pgm new" role="group" aria-label="拆后新增的仓库自有密钥页">
+          <div class="pgm-bar"><span class="pgm-t">仓库自有密钥</span><span class="pill brand">新页</span></div>
+          <div class="blk in"><div class="blk-h"><i class="cn">3</i><b>原来下半块的全部内容，原样搬来</b></div>
+            <div class="blk-tools"><span class="pill ghost">搜索</span><span class="pill ghost">全部状态</span><span class="pill ghost">代 agent 提交申请</span></div>
+            <div class="sec-ph"><b>待审批（n）</b><i class="ph" style="width:70%"></i></div>
+            <div class="sec-ph"><b>待交付（n）</b><i class="ph" style="width:55%"></i></div>
+            <div class="sec-ph"><b>密钥（n）</b><i class="ph" style="width:80%"></i><i class="ph" style="width:65%"></i></div>
+            <div class="sec-ph"><b>审计平台推送</b><i class="ph" style="width:40%"></i></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="path" role="group" aria-label="审批链接页的返回入口">
+      <span class="pbox"><i class="cn">5</i> agent 发来的一次性审批链接页<small class="muted"> 在菜单之外</small></span>
+      <span class="parr">页尾「仓库自有密钥」返回入口：原来回「密钥管理」，改后回<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path class="ln" d="M4 12h14M13 6l6 6-6 6"/></svg></span>
+      <span class="pbox hot">仓库自有密钥（新页）</span>
+    </div>
+    <ol class="leg">
+      <li><i class="cn">1</i><span><b>上半块「API 密钥列表」</b>：连网关用的那批密钥，是基础运维，留在「密钥管理」页，原样不变；每把密钥后面标着属于哪个仓库（或「未绑定仓库」）的小标也留着。</span></li>
+      <li><i class="cn">2</i><span><b>下半块「仓库自有密钥」</b>：agent 来申请、人来审批、有哪些密钥、停用、看用量、推送审计，都在这一块。这就是老板说的「分 key」，也是要拆出去的部分。</span></li>
+      <li><i class="cn">3</i><span><b>拆后的新页「仓库自有密钥」</b>：这一块原样搬过来，逐项一样，没有多也没有少，只是换了位置；页标题就是「仓库自有密钥」。</span></li>
+      <li><i class="cn">4</i><span><b>「密钥管理」页底多一行提示</b>：写明仓库自有密钥搬到哪了，点一下过去。老用户习惯往下翻的地方，现在看得到指路。</span></li>
+      <li><i class="cn">5</i><span><b>审批链接页的返回入口</b>：文字还叫「仓库自有密钥」，只是原来回「密钥管理」页，改后回新页。链接本身不变，审批照旧。</span></li>
+    </ol>
+    <figcaption>图里的「n」是数量，线框是简化示意，不是最终视觉；方案是原样搬，不新增也不删减功能。</figcaption>
+  </figure>
+  <div class="eg"><b class="k">拿 agent 发来的审批链接来说</b>老板点开链接、批准之后，页尾的「仓库自有密钥」入口，原来会回到「密钥管理」页，改后直接回到新的「仓库自有密钥」页，不用再往下翻。</div>
+</section>
+<section class="scr q done" id="q1" data-k="q1" data-reco="A（三项，「分 key」拆成单独一页）" data-title="问 1 · 能力里放哪几项？（已定）">
+  <div class="scr-h"><span class="no q">问</span><h3>已定：「能力」里放哪几项？</h3></div>
+  <p>老板的原话是「分 key、模型组这些」。两个方案只差在「分 key」怎么进：拆成单独一页，还是把整页「密钥管理」搬进来。<b>已定 A</b>：老板答复开工、没有另外点选，按老板之前定下的做法（没点选的按推荐）定稿。</p>
+  <div class="opts">
+    <article class="opt rec">
+      <div class="opt-h"><span class="pill brand">已定</span><b>A　三项，「分 key」拆成单独一页</b></div>
+      <div class="mini"><span class="mini-g">能力</span><span class="gchip in">模型组</span><span class="gchip in">仓库自有密钥</span><span class="gchip in">额度拆借</span><span class="hint">（已上线，这次挂入）</span></div>
+      <div class="mini"><span class="mini-g">网关</span><span class="gchip">AI 提供商</span><span class="gchip">OAuth 管理</span><span class="gchip">密钥管理（只剩网关密钥）</span></div>
+      <p><span class="why-l">理由</span>三项都是团队自己做的、能一句话说清「它替人做什么」；基础运维的页面原样不动；菜单里「分 key」有自己的一行。</p>
+      <p><span class="cost-l">代价</span>要把「密钥管理」页的下半块拆成单独一页（多一个页面地址），并保证拆前拆后功能一模一样。</p>
+    </article>
+    <article class="opt">
+      <div class="opt-h"><span class="pill gray">备选</span><b>B　不拆页，整页「密钥管理」搬进「能力」</b></div>
+      <div class="mini"><span class="mini-g">能力</span><span class="gchip in">模型组</span><span class="gchip in">密钥管理（整页）</span><span class="gchip in">额度拆借</span></div>
+      <div class="mini"><span class="mini-g">网关</span><span class="gchip">AI 提供商</span><span class="gchip">OAuth 管理</span><span class="gchip off">密钥管理</span></div>
+      <p><span class="why-l">理由</span>省事，只调菜单，不新增页面，也不动密钥管理页。</p>
+      <p><span class="cost-l">代价</span>管「谁能连网关」的基础运维密钥也进了「能力」，「网关」只剩两项；「分 key」仍藏在页面下半块，菜单里没有它自己的一行。</p>
+    </article>
+  </div>
+  <p class="hint">已按推荐的 A 定稿，不用再答；如果想改成 B，或想增减别的条目（比如觉得「观测」里哪一项也该进），点「要改」写一句就行。</p>
+</section>
+<section class="scr" id="s4" data-k="s4" data-title="4 ·「能力」放在菜单哪个位置">
+  <div class="scr-h"><span class="no">4</span><h2>「能力」放在菜单哪个位置</h2></div>
+  <p class="lead">位置只有两种放法。两张小图只画分组标题和每组有几项，「能力」那一组展开画；灰色小标写明对老位置的影响。</p>
+  <figure class="fig">
+    <div class="rails2">
+      <div class="rail mini-r" data-rail="posA" role="group" aria-label="放法 A：观测之后、插件之前"></div>
+      <div class="rail mini-r" data-rail="posB" role="group" aria-label="放法 B：紧跟运行"></div>
+    </div>
+    <div class="legend">
+      <span><i class="sw gr"></i>新分组「能力」</span>
+    </div>
+    <figcaption>菜单收起成窄栏（只剩图标、没有分组标题）时，各组按同样的顺序排成一列，所以这个顺序也决定窄栏里谁挨着谁。「插件」组的条数取自老板截图，因部署而异。</figcaption>
+  </figure>
+  <div class="eg"><b class="k">拿老板截图里正停着的「OAuth 管理」来说</b>放法 A：它还在「网关」下面第二项，位置基本不动（模型组搬走，反而上移一行）；放法 B：它整体往下挪约 3 到 4 行，因为前面多出了「能力」这一组。</div>
+</section>
+<section class="scr q done" id="q2" data-k="q2" data-reco="A（观测之后、插件之前）" data-title="问 2 · 能力放第几个位置？（已定）">
+  <div class="scr-h"><span class="no q">问</span><h3>已定：「能力」放在菜单第几个位置？</h3></div>
+  <p>上一屏的两张图里，定的是 A。位置还决定窄栏（只剩图标）里谁挨着谁。<b>已定 A</b>：老板没有另外点选，按推荐定稿（同问 1）。</p>
+  <div class="opts">
+    <article class="opt rec">
+      <div class="opt-h"><span class="pill brand">已定</span><b>A　观测之后、插件之前</b></div>
+      <div class="mini"><span class="gchip">运行</span><span class="gchip">网关</span><span class="gchip">观测</span><span class="gchip in">能力</span><span class="gchip">插件</span><span class="gchip">控制</span></div>
+      <p><span class="why-l">理由</span>老板框出的「运行」「网关」「观测」三个分组，先后顺序不变，「能力」接在它们后面，插件、控制仍垫底；读起来是「先日常、再团队自己的能力、最后扩展和设置」。</p>
+      <p><span class="cost-l">代价</span>「能力」排第 4，菜单高度不够时要往下看一眼才见到；它是新入口，一开始被看到的机会少一些。</p>
+    </article>
+    <article class="opt">
+      <div class="opt-h"><span class="pill gray">备选</span><b>B　紧跟运行</b></div>
+      <div class="mini"><span class="gchip">运行</span><span class="gchip in">能力</span><span class="gchip">网关</span><span class="gchip">观测</span><span class="gchip">插件</span><span class="gchip">控制</span></div>
+      <p><span class="why-l">理由</span>更靠前、更显眼，打开菜单第二组就是它；窄栏里模型组仍紧挨模型广场。</p>
+      <p><span class="cost-l">代价</span>「网关」「观测」整体被挤后一组，老位置习惯被动一次，「OAuth 管理」等条目往下挪约 3 到 4 行。</p>
+    </article>
+  </div>
+  <p class="hint">已按推荐的 A 定稿，不用再答；想放别的位置，点「要改」写一句就行。</p>
+</section>
+<section class="scr" id="s5" data-k="s5" data-title="5 · 老链接、已设置的隐藏项会不会坏">
+  <div class="scr-h"><span class="no">5</span><h2>老链接、已设置的隐藏项会不会坏</h2></div>
+  <p class="ans"><b>不会。</b>所有老地址照旧能打开，老板已经在「OMC 设置」里隐藏的菜单项照旧隐藏；整个改动只多一个新页面、一个新地址。</p>
+  <figure class="fig">
+    <div class="tw"><table class="pt">
+      <thead><tr><th>老板手里的东西</th><th>改后</th><th>会怎样</th></tr></thead>
+      <tbody>
+        <tr><td>收藏夹里的「模型组」链接（含点进某个组的详情页）</td><td><span class="pill brand">照旧</span></td><td>照旧打开同一页。变的只有菜单高亮和页面顶部的路径，写成「能力 › 模型组」。</td></tr>
+        <tr><td>收藏夹里的「密钥管理」链接</td><td><span class="pill brand">照旧</span></td><td>照旧打开。下半块的仓库自有密钥换成页底一行指路。</td></tr>
+        <tr><td>agent 发来的仓库密钥「一次性审批链接」</td><td><span class="pill brand">照旧</span></td><td>照旧能点、能批。页尾的返回入口改回新的「仓库自有密钥」页。</td></tr>
+        <tr><td>「OAuth 管理」等其余页面的链接</td><td><span class="pill brand">照旧</span></td><td>完全不变。</td></tr>
+        <tr><td>在「OMC 设置 › 侧栏」里已经隐藏的菜单项</td><td><span class="pill brand">照旧隐藏</span></td><td>隐藏是按页面记的、不按分组记，搬家不影响；「OAuth 管理」「OMC 设置」仍然锁定、不能隐藏。</td></tr>
+        <tr><td>新出现的「仓库自有密钥」</td><td><span class="pill info">默认显示</span></td><td>因为是新页面。就算早先把「密钥管理」隐藏过，它也会出现；想藏，到设置里再关一次。</td></tr>
+        <tr><td>某个分组里的菜单项被全部隐藏</td><td><span class="pill ghost">整组不显示</span></td><td>规则不变，「能力」也一样：里面全藏了，分组标题也不留。</td></tr>
+      </tbody></table></div>
+    <figcaption>菜单收起成窄栏、手机上滑出的抽屉，和展开的菜单用同一份内容，一起变。</figcaption>
+  </figure>
+  <div class="eg"><b class="k">假设：老板早先把「模型组」隐藏过</b>改后它搬到「能力」里，仍然是隐藏的，不用重新设置；「能力」里别的条目照常显示。（从截图看，老板这套菜单里能看到的条目都没有隐藏，这里只是举例。）</div>
+</section>
+<section class="scr" id="s6" data-k="s6" data-title="6 · 额度拆借建议页怎么挂进来">
+  <div class="scr-h"><span class="no">6</span><h2>「额度拆借建议」页怎么挂进来</h2></div>
+  <p class="ans">这一页已经上线（另一项需求先做完的），这次把它挂进「能力」，作为第三项，菜单里叫「额度拆借」；打开它时，菜单高亮落在它自己，页面顶部的路径写「能力 › 额度拆借」。</p>
+  <figure class="fig">
+    <div class="rails">
+      <div class="rail" data-rail="mountNow" data-crumb="网关|OAuth 管理" role="group" aria-label="现在：打开额度拆借建议页时的菜单"></div>
+      <div class="rails-ar" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24"><path class="ln" d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="rail" data-rail="mountAfter" data-crumb="能力|额度拆借" role="group" aria-label="挂入后：打开额度拆借建议页时的菜单"></div>
+    </div>
+    <ol class="leg">
+      <li><i class="cn">1</i><span><b>位置</b>：排在「能力」第三项，在模型组、仓库自有密钥后面。</span></li>
+      <li><i class="cn">2</i><span><b>打开它时</b>：菜单高亮落在它自己，页面顶部路径写「能力 › 额度拆借」，浏览器标签页上的名字也是「额度拆借」；页面里的标题仍是「额度拆借建议」。现在这几处都借用「OAuth 管理」。</span></li>
+      <li><i class="cn">3</i><span><b>谁来挂</b>：额度拆借建议页已经先上线，所以这次的改动负责把它挂进来；怎么挂，以额度拆借建议页那边的一处配置为准，这里不重复定义，挂的时候把现在借用「OAuth 管理」的做法撤掉。</span></li>
+    </ol>
+    <figcaption>左边是今天：菜单里没有「额度拆借」这一项，高亮、页面顶部的路径和浏览器标签页的名字都借用了「OAuth 管理」；右边是这次挂入后。两张图只画「网关」「能力」两组。菜单里的名字取自这个页面自带的短名「额度拆借」；它没有带图标，挂条目的这一方在现有图标里选一个，不能和其他固定条目重样。</figcaption>
+  </figure>
+  <div class="eg"><b class="k">拿老板的操作来说</b>从「OAuth 管理」页头点进额度拆借建议页，今天菜单高亮和页面顶部的路径停在「OAuth 管理」上；挂入后，落在「能力 › 额度拆借」这一项自己身上。</div>
+</section>
+<section class="scr" id="s7" data-k="s7" data-title="附 · 术语翻译表">
+  <div class="scr-h"><span class="no">附</span><h2>术语翻译表</h2></div>
+  <p class="hint">正文里放在括号里的词，这里统一翻成大白话；开发和验收用的说法在同目录的术语版方案文档里。</p>
+  <div class="tw"><table class="pt gl">
+    <thead><tr><th>词</th><th>大白话</th><th>在哪里看到</th></tr></thead>
+    <tbody>
+      <tr><td>分组标题<br><small class="muted">老板说的「二级栏」</small></td><td>菜单里一组条目上面的那行小号灰字，比如「运行」「网关」。</td><td>左侧菜单，截图里红框框的就是</td></tr>
+      <tr><td>条目</td><td>菜单里的一行，点它就打开一个页面，比如「模型组」。</td><td>左侧菜单</td></tr>
+      <tr><td>分 key<br><small class="muted">界面名：仓库自有密钥（Repository keys）</small></td><td>每个代码仓库一把专属密钥：agent 来申请，人批一次；平时只显示打了码的样子，明文要明确点「查看明文」才出现。</td><td>现在在「密钥管理」页的下半块</td></tr>
+      <tr><td>agent</td><td>AI 编程助手，比如 Claude Code、Codex、OpenCode。仓库密钥是它们自己来申请的。</td><td>「仓库自有密钥」里的申请人</td></tr>
+      <tr><td>网关密钥<br><small class="muted">网关客户端密钥</small></td><td>连接网关用的那批 API 密钥，管的是「谁能连上网关」。</td><td>「密钥管理」页的上半块</td></tr>
+      <tr><td>高亮</td><td>当前所在的页面，在菜单里加粗并带一条竖线。</td><td>左侧菜单</td></tr>
+      <tr><td>面包屑</td><td>页面顶部的一行路径，写成「分组 › 页面」。</td><td>页面左上角</td></tr>
+      <tr><td>隐藏条目</td><td>在「OMC 设置」里关掉某项菜单的显示。页面还在，只是菜单里看不到，用链接仍能打开。</td><td>OMC 设置 › 侧栏</td></tr>
+      <tr><td>收起栏（窄栏）</td><td>菜单收成只剩图标的窄条，没有分组标题，所有条目按分组顺序排成一列。</td><td>点菜单顶部的折叠按钮</td></tr>
+      <tr><td>抽屉</td><td>手机上点左上角、从左边滑出来的菜单，内容和展开的菜单一样。</td><td>手机浏览器</td></tr>
+      <tr><td>占位栏<br><small class="muted">加载骨架</small></td><td>页面刚打开、数据还没到时，先画出来的灰色菜单轮廓，防止数据到了菜单突然变长。</td><td>刷新页面的那一瞬</td></tr>
+      <tr><td>演示模式</td><td>对外公开的演示站，只能看、不能改。</td><td>演示网址</td></tr>
+      <tr><td>能力<br><small class="muted">Capability</small></td><td>研发文档里的「能力」是系统开放给 agent 的一项操作；菜单里新增的「能力」只是一个分组，里面是给人用的页面，两者不是一回事。</td><td>智能体页的「能力目录」说的是前者</td></tr>
+    </tbody></table></div>
+</section>
+<section class="scr" id="sx" data-k="all" data-title="整页意见（可选）" data-nov="1">
+  <div class="scr-h"><span class="no">总</span><h2>整页意见（可选）</h2></div>
+  <p class="hint">还想让它多做、少做，或者哪里还是看不懂，点右边「评论」写在这里，导出时一并带回。全部看完，点右上角「导出评审」。</p>
+</section>
+  </main>
+</div>
+<dialog id="dlg">
+  <h3>导出评审（Markdown）</h3>
+  <textarea class="out" id="out" readonly></textarea>
+  <div class="row"><button class="primary" id="btnCopy" type="button">复制</button><button id="btnDl" type="button">下载 .md</button>
+    <span style="flex:1"></span><button id="btnClear" type="button">清空全部评审</button><button id="btnClose" type="button">关闭</button></div>
+  <div class="hint">复制后粘贴回产品 Agent 的会话。</div>
+</dialog>
+<script>
+const SLUG = "2026-11-23-omc-capabilities-nav";
+const SOURCE = "E:/works/Newoahil__oh-my-cpa/11-24-t9-s2-claude/docs/delivery/2026-11-23-omc-capabilities-nav/review-plain.html";
+const KEY = "plain-prd-" + SLUG;
+const V = { pass: "没问题", ask: "有疑问", fix: "要改" }, VX = { pass: "通过", ask: "有疑问", fix: "要改" };
+let st = { verdicts: {}, comments: [], drafts: {}, theme: "", only: false };
+try { const raw = localStorage.getItem(KEY); if (raw) st = Object.assign(st, JSON.parse(raw)); } catch (e) {}
+st.verdicts = st.verdicts || {}; st.comments = st.comments || []; st.drafts = st.drafts || {};
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) {} };
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const when = iso => { const d = new Date(iso), p = n => String(n).padStart(2, "0"); return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+
+// 每一屏标题旁补上「没问题 / 有疑问 / 要改 / 评论」，评论区放在屏尾
+const secs = [...document.querySelectorAll("section.scr")], byK = {};
+secs.forEach(sec => {
+  const k = sec.dataset.k; byK[k] = sec;
+  const vd = document.createElement("span"); vd.className = "vd"; vd.dataset.k = k;
+  vd.innerHTML = (sec.dataset.nov ? "" : Object.entries(V).map(([v, l]) => `<button type="button" data-v="${v}" aria-pressed="false">${l}</button>`).join("")) + '<button type="button" data-c>评论</button>';
+  sec.querySelector(".scr-h").appendChild(vd);
+  const th = document.createElement("div"); th.className = "th"; sec.appendChild(th);
+});
+const verdictable = secs.filter(s => !s.dataset.nov);
+const commentsOf = k => st.comments.filter(c => c.target === k);
+const count = () => { const c = { seen: 0, pass: 0, ask: 0, fix: 0 };
+  verdictable.forEach(s => { const v = st.verdicts[s.dataset.k]; if (v) { c.seen++; c[v]++; } }); return c; };
+
+function render() {
+  for (const sec of secs) {
+    const k = sec.dataset.k, th = sec.querySelector(":scope > .th"), v = st.verdicts[k] || "";
+    th.querySelectorAll(".thread:not(.newbox)").forEach(x => x.remove());
+    for (const c of commentsOf(k)) {
+      const d = document.createElement("div"); d.className = "thread";
+      d.innerHTML = `<p class="c">${esc(c.text)}</p><div class="meta">${when(c.t)}<button type="button" data-edit="${c.id}">改</button><button type="button" data-del="${c.id}">删除</button></div>`;
+      th.appendChild(d);
+    }
+    sec.classList.remove("v-pass", "v-ask", "v-fix"); if (v) sec.classList.add("v-" + v);
+    sec.querySelectorAll(`.vd[data-k="${k}"] [data-v]`).forEach(b => { const on = b.dataset.v === v; b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); });
+  }
+  const c = count();
+  $("fill").style.width = (verdictable.length ? c.seen / verdictable.length * 100 : 0) + "%";
+  $("ptext").innerHTML = `已看 ${c.seen} / ${verdictable.length}：<span class="n-pass">没问题 ${c.pass}</span>、<span class="n-ask">有疑问 ${c.ask}</span>、<span class="n-fix">要改 ${c.fix}</span> · ${st.comments.length} 条评论`;
+  $("nav").innerHTML = secs.map(s => { const k = s.dataset.k, v = st.verdicts[k] || "", n = commentsOf(k).length;
+    return `<a href="#${s.id}" data-jump="${s.id}" class="${v ? "v-" + v : ""}"><i class="dot ${v ? "v-" + v : ""}"></i><span class="lb">${esc(s.dataset.title)}</span>${n ? `<span class="badge">${n}</span>` : ""}</a>`; }).join("");
+  document.body.classList.toggle("only-open", !!st.only);
+  $("btnOpen").classList.toggle("on", !!st.only);
+}
+
+// 评论框：没保存的内容存成草稿，刷新页面也不丢
+function openBox(k, editId) {
+  const sec = byK[k]; if (!sec) return;
+  const th = sec.querySelector(":scope > .th"); th.querySelector(".newbox")?.remove();
+  const old = editId ? st.comments.find(c => c.id === editId) : null, draft = st.drafts[k], v = st.verdicts[k];
+  const div = document.createElement("div"); div.className = "thread newbox";
+  div.innerHTML = (old ? '<div class="meta">改这条评论</div>' : v && v !== "pass" ? `<div class="meta">结论：${V[v]}。写一句为什么（看不懂就写「没看懂」）</div>` : "") +
+    '<textarea rows="3" placeholder="写下意见……（Ctrl+Enter 保存）"></textarea><div class="row"><button class="primary" type="button">保存</button><button type="button">取消</button></div>';
+  th.prepend(div);
+  const ta = div.querySelector("textarea"), [ok, cancel] = div.querySelectorAll("button");
+  ta.value = draft && (draft.edit || 0) === (editId || 0) ? draft.text : old ? old.text : "";
+  const drop = () => { delete st.drafts[k]; save(); div.remove(); };
+  ta.addEventListener("input", () => { st.drafts[k] = { text: ta.value, edit: editId || 0 }; save(); });
+  ok.onclick = () => { const text = ta.value.trim(); if (!text) return;
+    if (old) { old.text = text; old.t = new Date().toISOString(); } else st.comments.push({ id: Date.now(), target: k, title: sec.dataset.title, text, t: new Date().toISOString() });
+    drop(); render(); };
+  cancel.onclick = drop;
+  ta.addEventListener("keydown", e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) ok.click(); });
+  ta.focus();
+}
+
+document.addEventListener("click", e => {
+  const x = e.target.closest("[data-v], [data-c], [data-del], [data-edit], [data-jump]"); if (!x) return;
+  if (x.matches("[data-v]")) {
+    const k = x.closest(".vd").dataset.k, v = x.dataset.v;
+    if (st.verdicts[k] === v) delete st.verdicts[k]; else st.verdicts[k] = v;
+    save(); render();
+    if (st.verdicts[k] && v !== "pass" && !commentsOf(k).length) openBox(k);
+  } else if (x.matches("[data-c]")) openBox(x.closest(".vd").dataset.k);
+  else if (x.matches("[data-del]")) { st.comments = st.comments.filter(c => String(c.id) !== x.dataset.del); save(); render(); }
+  else if (x.matches("[data-edit]")) { const c = st.comments.find(c => String(c.id) === x.dataset.edit); c && openBox(c.target, c.id); }
+  else { const el = document.getElementById(x.dataset.jump); if (!el) return; e.preventDefault(); el.scrollIntoView({ block: "start", behavior: "smooth" }); }
+});
+
+// 导出：先结论汇总，再逐条意见；问题屏标明推荐项，「没问题」就等于采用推荐
+function exportMd() {
+  const c = count(), cell = s => String(s).replace(/\|/g, "\\|"), title = k => byK[k] ? byK[k].dataset.title : k;
+  const name = s => s.dataset.title + (s.dataset.reco && st.verdicts[s.dataset.k] === "pass" ? `（按推荐：${s.dataset.reco}）` : "");
+  const L = [`# 评审意见 · ${document.title}`, "",
+    `> 来自 ${SOURCE}。已看 ${c.seen} / ${verdictable.length}：通过 ${c.pass}、有疑问 ${c.ask}、要改 ${c.fix}；评论 ${st.comments.length} 条。请产品 Agent 逐条处理后更新大白话版方案和评审页。`, "", "## 结论汇总", ""];
+  const rows = verdictable.filter(s => { const k = s.dataset.k; return (st.verdicts[k] && st.verdicts[k] !== "pass") || commentsOf(k).length; });
+  if (rows.length) { L.push("| 位置 | 结论 | 评论 |", "|---|---|---|"); rows.forEach(s => { const k = s.dataset.k; L.push(`| ${cell(s.dataset.title)} | ${VX[st.verdicts[k]] || "没给结论"} | ${commentsOf(k).length} |`); }); }
+  else L.push("_没有要改或有疑问的地方。_");
+  const passed = verdictable.filter(s => st.verdicts[s.dataset.k] === "pass" && !commentsOf(s.dataset.k).length), unseen = verdictable.filter(s => !st.verdicts[s.dataset.k]);
+  if (passed.length) L.push("", `**通过（${passed.length}）**：${passed.map(name).join("、")}`);
+  if (unseen.length) L.push("", `**没看（${unseen.length}）**：${unseen.map(s => s.dataset.title).join("、")}`);
+  L.push("", "## 逐条意见", "");
+  const order = secs.map(s => s.dataset.k);
+  st.comments.slice().sort((a, b) => order.indexOf(a.target) - order.indexOf(b.target) || a.id - b.id).forEach(cm => {
+    const v = st.verdicts[cm.target]; L.push(`- **[${byK[cm.target] ? title(cm.target) : cm.title + "（位置可能变了）"}]**${v ? `（${VX[v]}）` : ""} ${cm.text.replace(/\n/g, " / ")}`); });
+  if (!st.comments.length) L.push("_没有评论。_");
+  return L.join("\n");
+}
+$("btnExport").onclick = () => { $("out").value = exportMd(); $("dlg").showModal(); };
+$("btnClose").onclick = () => $("dlg").close();
+$("btnCopy").onclick = async () => { try { await navigator.clipboard.writeText($("out").value); } catch (e) { $("out").select(); document.execCommand("copy"); } };
+$("btnDl").onclick = () => { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([$("out").value], { type: "text/markdown" })); a.download = SLUG + "-plain-comments.md"; a.click(); };
+$("btnClear").onclick = () => { if (confirm("清空全部评论、结论？")) { st.comments = []; st.verdicts = {}; st.drafts = {}; save(); document.querySelectorAll(".newbox").forEach(x => x.remove()); render(); $("dlg").close(); } };
+$("btnOpen").onclick = () => { st.only = !st.only; save(); render(); };
+const isDark = () => st.theme ? st.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+const applyTheme = () => { st.theme ? document.documentElement.dataset.theme = st.theme : delete document.documentElement.dataset.theme; };
+$("btnTheme").onclick = () => { st.theme = isDark() ? "light" : "dark"; save(); applyTheme(); };
+// 示意图里的菜单都从这一份真实清单画出，保证每张图的条目一致；
+// 「插件」下的两个插件页取自老板截图，因部署而异；「额度拆借」页已上线，这次挂进「能力」。
+const NAV = {
+  operate: ["仪表盘", "智能体", "操练场", "模型广场", "模型组"],
+  gateway: ["AI 提供商", "OAuth 管理", "密钥管理"],
+  observe: ["洞察", "请求记录", "费用与用量", "日志查看", "操作审计"],
+  plugins: ["插件管理", "插件商店", "CommandCode", "GitHub Copilot"],
+  control: ["配置面板", "OMC 设置", "系统信息"],
+};
+const it = (n, o = {}) => ({ n, ...o });
+const plain = k => NAV[k].map(n => it(n));
+const pluginItems = () => NAV.plugins.map(n => it(n, /^(CommandCode|GitHub Copilot)$/.test(n) ? { tag: "因部署而异", tagc: "ghost" } : {}));
+const CAP = () => [
+  it("模型组", { cls: "in", tag: "从「运行」搬来", tagc: "warn" }),
+  it("仓库自有密钥", { cls: "in", tag: "从「密钥管理」页拆出", tagc: "warn" }),
+  it("额度拆借", { cls: "in", tag: "已上线，这次挂入", tagc: "warn" }),
+];
+const RAILS = {
+  now: () => ["现在（5 个分组）", [
+    { t: "运行", boxed: 1, items: NAV.operate.map(n => it(n, n === "模型组" ? { cls: "mv", tag: "要搬走", tagc: "warn" } : {})) },
+    { t: "网关", boxed: 1, items: NAV.gateway.map(n => it(n, n === "密钥管理" ? { cls: "mv", tag: "下半截要拆出", tagc: "warn" } : {})) },
+    { t: "观测", boxed: 1, items: plain("observe") },
+    { t: "插件", items: pluginItems() },
+    { t: "控制", items: plain("control") }]],
+  after: () => ["改后（6 个分组，按推荐位置画）", [
+    { t: "运行", items: NAV.operate.filter(n => n !== "模型组").map(n => it(n)) },
+    { t: "网关", items: NAV.gateway.map(n => it(n, n === "密钥管理" ? { tag: "拆后只剩网关密钥", tagc: "ghost" } : {})) },
+    { t: "观测", items: plain("observe") },
+    { t: "能力", hot: 1, tag: "新增", items: CAP() },
+    { t: "插件", items: pluginItems() },
+    { t: "控制", items: plain("control") }]],
+};
+function railHTML(title, groups) {
+  return `<h3>${esc(title)}</h3>` + groups.map(g =>
+    `<div class="g${g.boxed ? " boxed" : ""}${g.hot ? " hot" : ""}"><span>${esc(g.t)}</span>${g.tag ? `<em class="pill brand">${esc(g.tag)}</em>` : ""}</div><ul>` +
+    g.items.map(i => `<li class="${i.cls || ""}"><i class="ic"></i><span>${esc(i.n)}</span>${i.tag ? `<em class="pill ${i.tagc || "warn"}">${esc(i.tag)}</em>` : ""}</li>`).join("") + "</ul>").join("");
+}
+document.querySelectorAll("[data-rail]").forEach(el => { const f = RAILS[el.dataset.rail]; if (f) el.innerHTML = railHTML(...f()); });
+
+// 小菜单图：只画每组标题和条数，「能力」那一组展开。条数从上面的真实清单数出来；
+// 「运行」已减去搬走的模型组，「插件」按截图里的 4 项（含两个插件页）。
+const COUNT = { 运行: NAV.operate.length - 1, 网关: NAV.gateway.length, 观测: NAV.observe.length, 插件: NAV.plugins.length, 控制: NAV.control.length };
+function miniHTML(title, order, tagOf) {
+  return `<h3>${title}</h3>` + order.map(g => {
+    const tag = tagOf(g) ? `<em class="pill ghost">${esc(tagOf(g))}</em>` : "";
+    if (g === "能力") return `<div class="g hot"><span>能力</span><em class="pill brand">新增</em></div><ul class="cap">` +
+      CAP().map(i => `<li class="${i.cls}"><i class="ic"></i><span>${esc(i.n)}</span></li>`).join("") + "</ul>";
+    return `<div class="g"><span>${esc(g)}</span><span class="cnt">${COUNT[g]} 项</span>${tag}</div><div class="bars">${"<i></i>".repeat(COUNT[g])}</div>`;
+  }).join("");
+}
+RAILS.posA = () => [`A　观测之后、插件之前 <span class="pill brand">推荐</span>`, ["运行", "网关", "观测", "能力", "插件", "控制"], g => /^(运行|网关|观测)$/.test(g) ? "顺序不变" : ""];
+RAILS.posB = () => [`B　紧跟运行 <span class="pill gray">备选</span>`, ["运行", "能力", "网关", "观测", "插件", "控制"], g => /^(网关|观测)$/.test(g) ? "后移一组" : ""];
+document.querySelectorAll("[data-rail^=pos]").forEach(el => { const [t, o, f] = RAILS[el.dataset.rail](); el.innerHTML = miniHTML(t, o, f); });
+
+// 第 6 屏：额度拆借建议页现在与挂入后的一对菜单图，只画「网关」「能力」两组，菜单下面写页面顶部的路径
+RAILS.mountNow = () => ["现在：打开额度拆借建议页时", [
+  { t: "网关", items: NAV.gateway.map(n => it(n, n === "OAuth 管理" ? { cls: "sel", tag: "借用高亮", tagc: "warn" } : {})) }]];
+RAILS.mountAfter = () => ["挂入后：打开额度拆借建议页时", [
+  { t: "网关", items: plain("gateway") },
+  { t: "能力", hot: 1, items: CAP().map((i, k) => k < 2 ? it(i.n, { cls: "in" }) : it(i.n, { cls: "in sel", tag: "高亮在这里", tagc: "brand" })) }]];
+const crumbHTML = parts => '<div class="crumb"><span>页面顶部的路径</span>' + parts.map((p, k) =>
+  (k ? '<span aria-hidden="true">›</span>' : "") + (k === parts.length - 1 ? `<b>${esc(p)}</b>` : `<span>${esc(p)}</span>`)).join("") + "</div>";
+document.querySelectorAll("[data-rail^=mount]").forEach(el => { const [t, g] = RAILS[el.dataset.rail](); el.innerHTML = railHTML(t, g) + crumbHTML(el.dataset.crumb.split("|")); });
+applyTheme(); render();
+for (const [k, d] of Object.entries(st.drafts)) if (byK[k] && d && d.text) openBox(k, d.edit);
+</script>
+</body>
+</html>

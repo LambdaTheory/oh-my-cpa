@@ -903,7 +903,7 @@ section drafts; switching provider or closing cannot discard an unsaved section
 without a guard. Its names and brand marks match the provider filter tabs. `CredentialQuotaBody` is the single quota renderer used by the
 workspace and its detail panel. The list always renders a compact quota summary;
 the Quota tab always renders the full quota body. The complete same-pool advice lives on
-its own page at `/quota-lending`, mounted by `web/src/pages/quota/lendingMount.ts`; the OAuth workspace header carries only a
+its own page at `/quota-lending`, mounted by `web/src/types/quotaLendingMount.ts`; the OAuth workspace header carries only a
 link summarising it, and the drawer keeps the credential's own pool membership. All three
 read one `lending` projection computed server-side from the same already-loaded roster, and
 no extra upstream request is made to obtain it. A snapshot or cooldown read that fails the batch

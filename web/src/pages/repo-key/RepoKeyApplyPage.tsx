@@ -188,7 +188,7 @@ export function RepoKeyApplyPage() {
             </p>
           )}
 
-          <Link className={styles['console']} to="/api-keys">{t('repo_keys.title')}</Link>
+          <Link className={styles['console']} to="/repo-keys">{t('repo_keys.title')}</Link>
         </section>
       </main>
     </div>

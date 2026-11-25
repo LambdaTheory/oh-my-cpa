@@ -356,10 +356,10 @@ PRD §9 要求至少覆盖六种数据形状：两张同套餐卡、快重置高
 ### C-43 二级页路径、标题与侧栏高亮（P0 · 浏览器 · 可自动化）
 
 - AC：AC-14a。
-- 前置：F-LEND-BASE；`web/src/pages/quota/lendingMount.ts` 未被改动。
+- 前置：F-LEND-BASE；`web/src/types/quotaLendingMount.ts` 未被改动。
 - 步骤：从 OAuth 页入口进入；读地址、页头标题与侧栏高亮项。
-- 预期：路径为 `/quota-lending`（挂在 `/omc` 基路径下为 `/omc/quota-lending`）；标题沿用「额度拆借建议」；侧栏高亮落在 `lendingMount.ts` 的 `QUOTA_LENDING_NAV_KEY`（当前 `/oauth-management`），不是任意其它菜单项。
-- 证据：二级页截图（含侧栏）+ `lendingMount.ts` 常量。
+- 预期：路径为 `/quota-lending`（挂在 `/omc` 基路径下为 `/omc/quota-lending`）；标题沿用「额度拆借建议」；侧栏高亮落在「能力 › 额度拆借」这条自身条目上，不是任意其它菜单项。
+- 证据：二级页截图（含侧栏）+ `quotaLendingMount.ts` 的路径常量与能力组里的额度拆借条目。
 
 ### C-44 返回上一页：应用内进入显示，直接打开不显示（P0 · 浏览器）
 
@@ -427,7 +427,7 @@ PRD §9 要求至少覆盖六种数据形状：两张同套餐卡、快重置高
   3. 页面时钟：二级页停留 30 秒以上，倒计时与日均可用推进；不因搬迁新增 `/management/quota` 轮询（`refetchInterval` 保持 60 秒）；`~` 与「参考」时间推进后仍在 → C-29、C-21。
   4. 旧后端降级：`lending` 缺失时二级页有空态、OAuth 页不显示入口 → C-46、C-48。
   5. 直接打开与刷新：`/omc/quota-lending`、F5、OAuth 的 `?sort=reset-asc` 往返都可用，base path 不写死 → C-45、C-08。
-  6. 侧栏高亮与返回：二级页高亮落在挂载配置指定的条目；返回与浏览器 Back 正常；`overlay-back` 场景跑一次 → C-43、C-44。
+  6. 侧栏高亮与返回：二级页高亮落在「能力 › 额度拆借」这条自身条目上；返回与浏览器 Back 正常；`overlay-back` 场景跑一次 → C-43、C-44。
   7. 未进池折叠：折叠不吞 `unpooled_count`；展开后原因文案与 `lendingReasonLabel` 键一一对应 → C-49。
   8. F-1 / F-2 复验：`limited` 池可服务卡为中性角色、无原因；`unavailable` 池无有效期 → C-19、C-14。
 - 证据：上述各用例的证据，外加 C-27 的只读请求清单。

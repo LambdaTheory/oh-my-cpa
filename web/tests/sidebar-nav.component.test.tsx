@@ -97,10 +97,11 @@ describe('sidebar visibility panel', () => {
     // The console's groups, then the plugins group before Control, because that is where the rail
     // puts them.
     expect(titles).toEqual([
-      'Dashboard', 'Agent', 'Playground', 'Model Square', 'Model Groups',
+      'Dashboard', 'Agent', 'Playground', 'Model Square',
       'AI providers', 'OAuth management', 'Key management',
       'Insights',
       'Request Events', 'Cost & Usage', 'Logs', 'Audit trail',
+      'Model Groups', 'Repository keys', 'Quota lending',
       'Plugin management', 'Plugin store',
       'Config', 'OMC Settings', 'System Information',
     ]);
@@ -169,6 +170,35 @@ describe('sidebar visibility panel', () => {
     expect(agent.getAttribute('aria-checked')).toBe('true');
   });
 
+  it('keeps repository keys visible when key management is hidden', async () => {
+    stored.omc_nav_hidden = ['/api-keys'];
+    const { container } = mount();
+    await openPanel();
+    const repo = await readySwitch('Repository keys');
+    expect(repo.getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('switch', { name: 'Key management' }).getAttribute('aria-checked')).toBe('false');
+    expect(container.querySelector('[data-testid="sidebar-nav-settings"] .settings-toggle-desc')?.textContent).toBe('1 hidden');
+  });
+
+  it('keeps a moved entry hidden and leaves the rest of its group listed', async () => {
+    stored.omc_nav_hidden = ['/model-groups'];
+    const { container } = mount();
+    await openPanel();
+    const modelGroups = await readySwitch('Model Groups');
+    expect(modelGroups.getAttribute('aria-checked')).toBe('false');
+    const rail = retainVisibleGroups(buildNavGroups([]), new Set(['/model-groups']));
+    expect(rail.find((group) => group.key === 'capabilities')?.items.map((item) => item.key))
+      .toEqual(['/repo-keys', '/quota-lending']);
+    expect(container.querySelector('[data-testid="sidebar-nav-settings"] .settings-toggle-desc')?.textContent).toBe('1 hidden');
+  });
+
+  it('counts a hidden quota lending entry', async () => {
+    stored.omc_nav_hidden = ['/quota-lending'];
+    const { container } = mount();
+    await openPanel();
+    expect((await readySwitch('Quota lending')).getAttribute('aria-checked')).toBe('false');
+    expect(container.querySelector('[data-testid="sidebar-nav-settings"] .settings-toggle-desc')?.textContent).toBe('1 hidden');
+  });
   it('does not report an entry the rail no longer draws as hidden', async () => {
     // The stored document is input, not state: a key whose destination is gone - a plugin page
     // whose plugin stopped - is not an entry out of the rail, so the row says as much and the

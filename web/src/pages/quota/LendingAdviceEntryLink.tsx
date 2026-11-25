@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useT } from '../../i18n';
 import type { LendingOverview } from '../../types/quota';
 import { lendingEntryState } from './lendingAdvice';
-import { QUOTA_LENDING_PATH } from './lendingMount';
+import { QUOTA_LENDING_PATH } from '../../types/quotaLendingMount';
 import styles from './LendingAdviceEntryLink.module.css';
 
 interface LendingAdviceEntryLinkProps {

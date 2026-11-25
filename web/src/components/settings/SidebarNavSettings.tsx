@@ -18,7 +18,7 @@ import styles from './SidebarNavSettings.module.css';
  * panel that row opens.
  *
  * The list is a dialog rather than a run of rows on the page. Which destinations a deployment cares
- * about is a decision an operator makes once, and the rail already has sixteen of them before any
+ * about is a decision an operator makes once, and the rail already has twenty of them before any
  * plugin registers a page: inline, that would add a longer list than everything else on the page
  * put together, pushing the settings an operator does change each time below a list they change
  * once. The row states what the panel holds - how many entries are out of the rail - so the setting

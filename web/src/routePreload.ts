@@ -3,6 +3,7 @@ import {
   loadPricingPage,
   loadProvidersPage,
   loadApiKeysPage,
+  loadRepoKeysPage,
   loadDashboardPage,
   loadInsightsPage,
   loadAgentPage,
@@ -20,13 +21,14 @@ import {
   loadPluginPageHost,
   loadOmcSettingsPage,
 } from './routePages';
-import { QUOTA_LENDING_PATH } from './pages/quota/lendingMount';
+import { QUOTA_LENDING_PATH } from './types/quotaLendingMount';
 
 const ROUTE_LOADERS: Record<string, () => Promise<unknown>> = {
   '/usage/events': loadUsageEventsPage,
   '/pricing': loadPricingPage,
   '/ai-providers': loadProvidersPage,
   '/api-keys': loadApiKeysPage,
+  '/repo-keys': loadRepoKeysPage,
   '/dashboard': loadDashboardPage,
   '/insights': loadInsightsPage,
   '/agent': loadAgentPage,

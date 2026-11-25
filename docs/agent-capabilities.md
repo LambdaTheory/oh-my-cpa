@@ -937,8 +937,8 @@ continues to require its own decision.
 Oh My CPA holds no private key and no plaintext at any point: the envelope is opened by the
 caller. One repository has at most one key in service, and every decision, delivery, stop,
 re-enable and reveal is an audit event (see `internal/operations/repo_keys.go` and
-`internal/repokey/repokey.go`). The console side of the same record is the repository-key panel
-on the API keys page (`internal/api/management_repo_keys.go`,
+`internal/repokey/repokey.go`). The console side of the same record is the repository keys page
+at `/repo-keys` (`internal/api/management_repo_keys.go`,
 `web/src/components/keys/RepoKeysPanel.tsx`); a deployment may also forward those events to a
 company audit platform (ADR 0119).
 

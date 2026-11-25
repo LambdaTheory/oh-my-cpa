@@ -11,7 +11,7 @@ import { useVisibleNow } from '../../hooks/useVisibleNow';
 import { useT } from '../../i18n';
 import { LendingAdviceView } from './LendingAdviceView';
 import { lendingBasisMS } from './lendingAdvice';
-import { QUOTA_LENDING_BACK_LABEL_KEY, hasPreviousHistoryEntry } from './lendingMount';
+import { QUOTA_LENDING_BACK_LABEL_KEY, hasPreviousHistoryEntry } from '../../types/quotaLendingMount';
 import { formatShortDateTime } from './quotaFormat';
 
 /**
@@ -19,8 +19,8 @@ import { formatShortDateTime } from './quotaFormat';
  *
  * It shares the OAuth workspace's `['management-quota']` query and its `useVisibleNow` clock, so
  * opening it costs no extra request and its figures agree with the header entry and the drawer.
- * The address and the entry it highlights come from `lendingMount.ts`, so a navigation redesign
- * moves the page without touching this file.
+ * The address and the menu label come from `quotaLendingMount.ts`, so a navigation redesign
+ * groups the page without touching this file.
  */
 export const QuotaLendingPage: React.FC = () => {
   const t = useT();

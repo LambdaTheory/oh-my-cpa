@@ -18,6 +18,9 @@ export const ProvidersPage = React.lazy(loadProvidersPage);
 export const loadApiKeysPage = createPageLoader(() => import('./pages/ApiKeysPage'), 'ApiKeysPage');
 export const ApiKeysPage = React.lazy(loadApiKeysPage);
 
+export const loadRepoKeysPage = createPageLoader(() => import('./pages/RepoKeysPage'), 'RepoKeysPage');
+export const RepoKeysPage = React.lazy(loadRepoKeysPage);
+
 export const loadDashboardPage = createPageLoader(() => import('./pages/DashboardPage'), 'DashboardPage');
 export const DashboardPage = React.lazy(loadDashboardPage);
 
