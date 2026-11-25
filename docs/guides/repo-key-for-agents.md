@@ -45,8 +45,8 @@ recognise success and failure; do not continue past a failure you cannot classif
   - a **read-only MCP token** — can call the read tools (`repo_key_query`,
     `repo_key_status`, `repo_key_ciphertext`), but **cannot apply** (`repo_key_apply` is a
     write; it answers `capability_forbidden`). Apply with the management key, or ask the
-    operator to file the application from the console (the repository-key panel on the API
-    keys page, which records the device as `console`).
+    operator to file the application from the console (the Repository keys page under
+    Capabilities, `/repo-keys`, which records the device as `console`).
 
 Never echo the credential. Do not put it in a file inside a repository.
 
