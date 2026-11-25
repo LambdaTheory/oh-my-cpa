@@ -11,6 +11,10 @@ The protocol side of the same feature — what `repo_key_apply`, `repo_key_statu
 not repeat it; it says what to run, what a successful run looks like, and what to do when
 it fails.
 
+For the shorter, copy-paste runbook written for an agent that has to get a repository key
+from scratch — install, MCP headers, the seven steps, exit codes and the machine-readable
+summary — see `docs/guides/repo-key-for-agents.md` (JSON: `docs/guides/repo-key-agent.json`).
+
 Everything below assumes the OMC binary is already installed (`docs/install.md`) and that
 the console the key comes from is reachable over MCP. `key` is dispatched before OMC loads
 its configuration, opens its database, or builds a CPA client: it works on a machine with
