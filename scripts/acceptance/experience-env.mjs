@@ -81,6 +81,7 @@ try {
 
   appProcess = spawn(executable, [], {
     cwd: root,
+    windowsHide: true,
     env: isolatedAppEnvironment({
       OMCPA_LISTEN_ADDR: `127.0.0.1:${APP_PORT}`,
       OMCPA_BASE_PATH: '/omc',

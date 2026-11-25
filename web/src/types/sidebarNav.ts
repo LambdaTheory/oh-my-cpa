@@ -95,6 +95,30 @@ export function navEntryLabel(entry: NavEntry, t: TFunc): string {
   return entry.isLiteralLabel ? entry.labelKey : t(entry.labelKey);
 }
 
+/** The entry a pathname belongs under, and the group that holds it. */
+export interface NavLocation {
+  entry?: NavEntry;
+  group?: NavGroup;
+}
+
+/**
+ * Resolve a route to its rail entry and group.
+ *
+ * A page may sit at a path or below it (`/model-groups/:id`), and two entries may share a prefix
+ * (`/plugins` and `/plugins/store`), so the longest matching key wins. This reads the full model
+ * rather than the filtered one: a page opened by URL still names itself and its group when the
+ * operator hid its entry.
+ */
+export function resolveNavLocation(groups: readonly NavGroup[], pathname: string): NavLocation {
+  const entry = groups
+    .flatMap((group) => group.items)
+    .filter((candidate) => pathname === candidate.key || pathname.startsWith(`${candidate.key}/`))
+    .sort((left, right) => right.key.length - left.key.length)[0];
+  if (!entry) return {};
+  const group = groups.find((candidate) => candidate.items.some((item) => item.key === entry.key));
+  return { entry, group };
+}
+
 /**
  * The groups the rail draws: hidden entries removed, and any group left with nothing dropped.
  *

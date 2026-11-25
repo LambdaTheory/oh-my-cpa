@@ -43,3 +43,9 @@ it('marks the approval card busy while an enabled read is pending', async () => 
   expect(client.getQueryState(['repo-key-apply-link', TOKEN])?.fetchStatus).toBe('fetching');
   expect(screen.getByRole('region', { name: 'Approve a repository key request' }).getAttribute('aria-busy')).toBe('true');
 });
+
+it('returns to the repository keys page from the approval link', () => {
+  mount(false);
+  const link = screen.getByRole('link', { name: 'Repository keys' });
+  expect(link.getAttribute('href')).toBe('/repo-keys');
+});

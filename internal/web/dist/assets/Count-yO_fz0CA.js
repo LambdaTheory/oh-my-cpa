@@ -1,1 +1,0 @@
-import{j as o}from"./vendor-react-CHZ4pBjd.js";import{ba as m}from"./vendor-antd-DFXpZM-o.js";function n({children:s,size:a="default",className:t}){return o.jsx("span",{className:m("count",a==="small"&&"is-small",t),children:s})}export{n as C};

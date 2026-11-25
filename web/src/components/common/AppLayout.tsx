@@ -24,8 +24,7 @@ import { useToast } from '../feedback';
 import { preloadRoute } from '../../routePreload';
 import { collectPluginPages, PLUGIN_PAGE_ROUTE_PREFIX } from '../plugins/pluginPages';
 import { buildNavGroups, STATIC_NAV_GROUPS } from './navigation';
-import { lendingNavKeyForPath } from '../../pages/quota/lendingMount';
-import { navEntryLabel, retainVisibleGroups, type NavEntry, type NavGroup } from '../../types/sidebarNav';
+import { navEntryLabel, resolveNavLocation, retainVisibleGroups, type NavEntry, type NavGroup } from '../../types/sidebarNav';
 import { useNavVisibility } from '../../hooks/useNavVisibility';
 import { usePendingUpdates } from '../../hooks/useUpdateNotice';
 
@@ -170,19 +169,18 @@ export const AppLayout: React.FC = () => {
     staleTime: 60_000,
   });
   const navGroups = React.useMemo(() => buildNavGroups(collectPluginPages(pluginList?.plugins)), [pluginList]);
-  const navEntries = React.useMemo(() => navGroups.flatMap((group) => group.items), [navGroups]);
   // The rail draws the entries the operator has not hidden. Everything else on this shell reads the
   // full model, so a page reached by a URL - or by a link into it - still names itself in the
   // breadcrumb, the document title and the group it belongs to.
   const { hiddenSet } = useNavVisibility();
   const visibleNavGroups = React.useMemo(() => retainVisibleGroups(navGroups, hiddenSet), [navGroups, hiddenSet]);
 
-  const navKey = lendingNavKeyForPath(location.pathname);
-  const currentEntry = navEntries
-    .filter((entry) => navKey === entry.key || navKey.startsWith(`${entry.key}/`))
-    .sort((a, b) => b.key.length - a.key.length)[0];
+  const { entry: currentEntry, group: matchedGroup } = resolveNavLocation(navGroups, location.pathname);
+  // A route no entry owns still highlights the dashboard, so the breadcrumb names the dashboard's
+  // group too. Only the entry itself stays unset, which keeps the page's own name generic.
   const selectedKey = currentEntry?.key ?? '/dashboard';
-  const currentGroup = navGroups.find((group) => group.items.some((entry) => entry.key === selectedKey));
+  const currentGroup = matchedGroup
+    ?? navGroups.find((group) => group.items.some((item) => item.key === selectedKey));
   const currentLabel = currentEntry ? navEntryLabel(currentEntry, t) : t('common.management');
   useDocumentTitle(currentLabel);
   const hasPendingUpdate = usePendingUpdates().length > 0;

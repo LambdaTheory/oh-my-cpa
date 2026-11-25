@@ -46,15 +46,20 @@ type ProxyApplyResult = {
   approval_url?: string;
 };
 
+export interface RepoKeysPanelProps {
+  /** The host page's header already names the surface; the explanation below it stays. */
+  isPageHosted?: boolean;
+}
+
 /**
- * Repository-owned keys, beside the gateway's own key list.
+ * Repository-owned keys: the panel an agent's application lands in and the decisions on it.
  *
- * The gateway list above edits one shared document; these keys belong to a repository and are
+ * The gateway's key list edits one shared document; these keys belong to a repository and are
  * requested by an agent over MCP. This panel is where a person decides those requests, sees
  * which applications are still waiting to be fetched, and stops or restores a key. Nothing here
  * shows a key's value except the explicit, audited reveal.
  */
-export function RepoKeysPanel() {
+export function RepoKeysPanel({ isPageHosted = false }: RepoKeysPanelProps) {
   const t = useT();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -519,7 +524,7 @@ export function RepoKeysPanel() {
       <Panel className={styles['panel']}>
         <div className={styles['head']}>
           <div>
-            <h2 className={styles['title']}>{t('repo_keys.title')}</h2>
+            {!isPageHosted && <h2 className={styles['title']}>{t('repo_keys.title')}</h2>}
             <p className={styles['subtitle']}>{t('repo_keys.subtitle')}</p>
           </div>
           <div className={styles['filters']}>

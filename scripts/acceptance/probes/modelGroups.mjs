@@ -158,7 +158,8 @@ export async function modelGroups({ base, page, check }) {
   await until(async () => await page.locator('[data-model-group-card]').count() === 5, { label: 'five preset groups' });
 
   const railEntry = page.locator('.app-menu [data-route-path="/model-groups"]');
-  check('the rail names model groups beside the model square', await railEntry.count() === 1, await page.locator('.app-menu [data-route-path="/model-square"]').count() + ' model-square entries');
+  const railGroup = (entry) => entry.evaluate((item) => item.closest('.ant-menu-item-group')?.querySelector('.ant-menu-item-group-title')?.textContent?.trim() ?? '');
+  check('the rail files model groups under Capabilities', await railEntry.count() === 1 && (await railGroup(railEntry)) === 'Capabilities', await railGroup(railEntry));
   check('the entry is the current destination, not a tab inside the model square', await railEntry.evaluate((item) => item.classList.contains('ant-menu-item-selected')) && new URL(page.url()).pathname.endsWith('/model-groups'));
 
   const presetNames = await page.locator('[data-model-group-card] h2').allTextContents();

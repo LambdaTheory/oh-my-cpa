@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../src/api/client';
 import { I18nProvider } from '../src/i18n';
 import { QuotaLendingPage } from '../src/pages/quota/QuotaLendingPage';
-import { QUOTA_LENDING_BACK_LABEL_KEY } from '../src/pages/quota/lendingMount';
+import { QUOTA_LENDING_BACK_LABEL_KEY } from '../src/types/quotaLendingMount';
 import type { LendingCard, LendingOverview, LendingPool, QuotaOverviewResponse } from '../src/types/quota';
 
 vi.mock('../src/api/client', () => ({

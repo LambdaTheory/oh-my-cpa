@@ -91,6 +91,7 @@ async function startEnvironment() {
   const appLog = fs.createWriteStream(logPath, { flags: 'a' });
   const appProcess = spawn(BINARY, [], {
     cwd: root,
+    windowsHide: true,
     env: isolatedAppEnvironment({
       OMCPA_LISTEN_ADDR: `127.0.0.1:${APP_PORT}`,
       OMCPA_BASE_PATH: '/omc',

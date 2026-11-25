@@ -53,6 +53,7 @@ const CONSOLE_ROUTES = [
   '/agent',
   '/ai-providers',
   '/api-keys',
+  '/repo-keys',
   '/oauth-management',
   '/quota-lending',
   '/logs',
@@ -84,6 +85,9 @@ const ROUTE_READS = {
   '/agent': ['api-keys', 'capabilities', 'agent-session'],
   '/ai-providers': ['providers', 'dashboard-providers-24h'],
   '/api-keys': ['api-keys', 'client-key-aliases'],
+  // The panel's three reads: the key list, the two application queues (one path, one capture
+  // per status) and the audit push status.
+  '/repo-keys': ['repo-keys', 'repo-key-applications', 'repo-key-applications-awaiting', 'repo-key-audit-push'],
   '/oauth-management': ['auth-files', 'auth-files-model-aliases', 'auth-files-excluded-models', 'auth-files-provider-models-claude', 'auth-files-provider-models-codex', 'auth-files-provider-models-none', 'plugins', 'quota', 'ollama-accounts', 'ollama-quota', 'warmup-settings', 'warmup-codex', 'warmup-codex-secondary', 'warmup-claude'],
   // The lending page reads the same quota overview the OAuth workspace already loaded.
   '/quota-lending': ['quota'],

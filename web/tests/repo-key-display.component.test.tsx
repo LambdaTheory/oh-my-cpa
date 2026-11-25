@@ -37,7 +37,7 @@ function jsonResponse(value: unknown) {
   return new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
 }
 
-function mount(route = '/api-keys') {
+function mount(route = '/repo-keys') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   clients.push(client);
   return render(
@@ -47,7 +47,7 @@ function mount(route = '/api-keys') {
           <AntdApp>
             <MemoryRouter initialEntries={[route]}>
               <Routes>
-                <Route path="/api-keys" element={<RepoKeysPanel />} />
+                <Route path="/repo-keys" element={<RepoKeysPanel />} />
                 <Route path="/repo-key-apply/:token" element={<RepoKeyApplyPage />} />
               </Routes>
             </MemoryRouter>

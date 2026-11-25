@@ -13,6 +13,7 @@ export const DEMO_ROUTES = [
   { path: '/repo-key-apply/:token', heading: '审批仓库密钥申请', headingSelector: 'h1#repo-key-apply-title', reads: ['/preferences'], content: '[data-testid="repo-key-apply-page"] .auth-card > p', detail: '每个仓库一把密钥' },
   { path: '/ai-providers', heading: 'AI 提供商', reads: ['/management/providers'], content: '.providers-page .ant-table-row' },
   { path: '/api-keys', heading: '密钥管理', reads: ['/management/api-keys'], content: '.keys-page .ant-table-row' },
+  { path: '/repo-keys', heading: '仓库自有密钥', reads: ['/management/repo-keys', '/management/repo-keys/applications', '/management/repo-keys/audit-push'], content: '.repo-keys-page .empty-state' },
   { path: '/oauth-management', heading: 'OAuth 管理', reads: ['/management/auth-files', '/ollama/accounts', '/ollama/quota'], content: '[data-testid="oauth-credential-record"]' },
   { path: '/logs', heading: '日志', reads: ['/management/logs/status', '/management/logs'], content: '.logs-page .log-line' },
   { path: '/audit', heading: '操作审计', reads: ['/management/audit/events', '/management/audit/summary'], content: '[data-testid="audit-entry"]' },

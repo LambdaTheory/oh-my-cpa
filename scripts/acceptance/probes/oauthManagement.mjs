@@ -1867,7 +1867,7 @@ async function verifyLendingStates({ base, page, context, check }) {
     await page.goto(`${base}/quota-lending/`, { waitUntil: 'domcontentloaded' });
     await page.locator('[data-lending-view="page"]').waitFor({ timeout: 20000 });
     const navAfter = await activeNav();
-    check('merged: a trailing-slash address keeps the OAuth entry highlighted', /OAuth/i.test(navAfter) && !/dashboard|仪表盘/i.test(navAfter), `${navBefore} -> ${navAfter}`);
+    check('merged: a trailing-slash address highlights the lending entry', /额度拆借|quota lending/i.test(navAfter) && !/OAuth|dashboard|仪表盘/i.test(navAfter), `${navBefore} -> ${navAfter}`);
 
     clock.mode = 'null';
     await gotoLending();
@@ -1887,6 +1887,9 @@ async function verifyLendingStates({ base, page, context, check }) {
 
     setState('mixed');
     await gotoOAuth();
+    // The header entry is drawn from the quota read, so it lands with that answer rather than
+    // with the credential rows the navigation waited for; read it once it has rendered.
+    await page.locator('[data-lending-entry]').waitFor({ timeout: 20000 });
     const mixedEntry = await entryState();
     check('entry: a balanced pool beside an incomparable one still reads balanced', mixedEntry.kind === 'balanced' && mixedEntry.text.includes('均衡'), JSON.stringify(mixedEntry));
     const poolOrder = () => page.locator('[data-lending-view="page"] [data-lending-pool]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-lending-pool')));
