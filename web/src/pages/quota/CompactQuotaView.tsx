@@ -1,7 +1,7 @@
 import React from 'react';
 import { ThunderboltOutlined } from '../../components/icons';
 import { useT } from '../../i18n';
-import type { LendingOverview, QuotaItem } from '../../types/quota';
+import type { QuotaItem } from '../../types/quota';
 import {
   formatCountdown,
   formatObservedAgo,
@@ -25,8 +25,6 @@ import {
 import { quotaStatusTag } from './quotaStatusTag';
 import { compactCooldownDiagnostic } from './quotaCooldown';
 import { compactQuotaCapacity } from './quotaCapacity';
-import { findLendingCard, lendingRoleLabel, lendingRoleTone } from './lendingAdvice';
-import { Tag } from '../../components/common/Tag';
 import { useTokenDisplayStyle } from '../../types/tokenDisplayContext';
 import styles from './QuotaPresentation.module.css';
 import { Meter } from '../../components/common/Meter';
@@ -38,8 +36,6 @@ import { quotaRefreshReasonLabel } from '../../utils/quotaStatus';
 interface CompactQuotaViewProps {
   item: QuotaItem;
   nowMS: number;
-  /** The same-pool advice the list already loaded; absent when the gateway predates it. */
-  lending?: LendingOverview | null;
 }
 
 /**
@@ -62,12 +58,10 @@ interface CompactQuotaViewProps {
 export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
   item,
   nowMS,
-  lending,
 }) => {
   const t = useT();
   const { style: tokenStyle } = useTokenDisplayStyle();
   const windows = pickCompactQuotaWindows(orderQuotaWindows(item.windows ?? []));
-  const lendingRole = lending ? findLendingCard(lending, item.auth_index, nowMS)?.card.role : undefined;
   const planText = item.plan?.plan_label;
   const cooldownDiagnostic = compactCooldownDiagnostic(item);
   const availableCredits = item.reset_credits?.available_count ?? 0;
@@ -106,11 +100,6 @@ export const CompactQuotaView: React.FC<CompactQuotaViewProps> = ({
     >
       <div className={styles.head}>
         {quotaStatusTag(item, t, nowMS)}
-        {lendingRole && lendingRole !== 'unavailable' && lendingRole !== 'limited' && (
-          <Tag tone={lendingRoleTone(lendingRole)} size="small" data-lending-role-chip={lendingRole}>
-            {lendingRoleLabel(lendingRole, t)}
-          </Tag>
-        )}
         {pluginStale && (
           <span
             className={styles.plan}

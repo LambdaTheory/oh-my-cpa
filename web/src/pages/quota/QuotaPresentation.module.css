@@ -486,10 +486,3 @@
   overflow-wrap: anywhere;
   white-space: normal;
 }
-
-.quota-lending-link {
-  display: inline-block;
-  margin-top: 8px;
-  color: var(--accent);
-  font-size: var(--text-sm);
-}

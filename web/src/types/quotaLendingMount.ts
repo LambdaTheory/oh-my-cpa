@@ -7,6 +7,22 @@
  */
 export const QUOTA_LENDING_PATH = '/quota-lending';
 
+/** The OAuth workspace, where the existing priority field lives. */
+export const OAUTH_MANAGEMENT_PATH = '/oauth-management';
+
+/**
+ * The one-shot query parameter that opens one credential's configuration section.
+ *
+ * The lending page cannot host the drawer without loading the credential rosters itself, so "set
+ * it" hands the reader to the workspace that already has both the drawer and the field.
+ */
+export const OAUTH_OPEN_CREDENTIAL_PARAM = 'open';
+
+/** Where "set it" goes: the OAuth workspace with this credential's priority field open. */
+export function oauthPrioritySettingsPath(authIndex: string): string {
+  return `${OAUTH_MANAGEMENT_PATH}?${OAUTH_OPEN_CREDENTIAL_PARAM}=${encodeURIComponent(authIndex)}`;
+}
+
 /** The copy key for the page's short menu label. */
 export const QUOTA_LENDING_NAV_LABEL_KEY = 'nav.quota_lending';
 
