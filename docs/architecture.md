@@ -2484,28 +2484,38 @@ account as the reading it was decided from.
 The quota read carries a second read-only projection beside `reset_advice`:
 `quota.ProjectLendingAdvice` groups the cards the handler has already normalized by
 normalized provider and `plan_type`, picks each card's lowest-remaining standard window
-of at least a day, and ranks the cards that can take traffic by the percentage points per
-day each has left before its natural reset. A pool stands on long standard windows
-(`scope=standard`, `period_hours >= 24`), and its reset-before daily figure is the
-remaining share over the days to that window's natural reset. The overview and the
-credential detail both build the whole roster through the same shared card projection
-(`Handler.quotaCardStates` and `buildQuotaCard`) and feed it to that one function, so a
-role, number, reason or expiry cannot differ between the two surfaces.
+of at least a day, and decides card by card whether it can be ranked. A participating card
+needs a complete, fresh reading and a serviceable credential; one that is stale,
+incomparable, cooling, awaiting reauthorization, failed, exhausted, or below ten percent
+remaining holds with its own reason instead of making the pool unranked. Participating
+cards are split by window type; the type most cards share forms the board (ties to the
+earlier refill), and a board needs at least two cards. Board cards are tiered by next
+natural reset from latest to earliest, with refills less than a day apart sharing a tier.
+The highest current priority on the board, with unset read as zero, becomes the first
+tier's suggested priority; each later tier is ten lower, and no suggestion exceeds it.
+When the current numbers already order the tiers, or the board is a single tier, every
+suggestion equals the current number. The projection also reports each card's current
+priority and whether the console can edit it, and the outsiders that serve the board's
+common model: the intersection of the board cards' model lists, matched against the
+roster's already-loaded `models` field, so the reminder costs no upstream request.
 
-The projection consumes only the auth files, snapshots, cooldowns, refresh attempts and
-passive observations the quota read already loads: it issues no upstream request, writes
-neither a snapshot nor an audit event, and is not persisted. Freshness uses
-`quota.PredictionFreshWindow`, not the two-hour `reset_advice` entitlement window, and a
-stale or incomparable reading makes the whole pool unavailable rather than falling back
-to a remaining-percentage sort; an unavailable pool carries no `valid_until_ms`, and a comparable
-card with no serviceability reason stays `normal` in a limited pool instead of being labelled
-limited. When a snapshot or cooldown read fails, the handler still returns the quota read with
-`lending: null` rather than projecting advice from an incomplete batch. `internal/api/quota_lending.go` holds the handwritten wire
-allowlist; the domain structs are never marshalled directly. The console projects that
-same object with `web/src/pages/quota/lendingAdvice.ts`, re-reading only the
-clock-dependent figures against the page clock. The complete advice is rendered on `/quota-lending`; the OAuth header only summarises pool states in a link, and
-the credential drawer shows the card's own pool. No route applies the advice: CPA routing
-weights stay outside this projection.
+The overview and the credential detail both build the whole roster through the same shared
+card projection (`Handler.quotaCardStates` and `buildQuotaCard`) and feed it to that one
+function, so a role, number, reason or expiry cannot differ between the two surfaces. The
+projection consumes only the auth files, snapshots, cooldowns, refresh attempts and passive
+observations the quota read already loads: it issues no upstream request, writes neither a
+snapshot nor an audit event, and is not persisted. Freshness uses
+`quota.PredictionFreshWindow`, not the two-hour `reset_advice` entitlement window. A pool
+with no board carries no `valid_until_ms`; its cards hold with ordered reasons and the pool
+carries their union. When a snapshot or cooldown read fails, the handler still returns the
+quota read with `lending: null` rather than projecting advice from an incomplete batch.
+`internal/api/quota_lending.go` holds the handwritten wire allowlist; the domain structs
+are never marshalled directly. The console projects that same object with
+`web/src/pages/quota/lendingAdvice.ts`, re-reading only the clock-dependent figures against
+the page clock. The complete advice is rendered on `/quota-lending`; the OAuth header only
+summarises pool states in a link, and the credential drawer reads the same projection for
+that card. No route applies the advice: CPA routing weights stay outside this
+projection, and a suggestion is never written back.
 
 ### Account-level auto-management
 

@@ -11,7 +11,7 @@ Oh My CPA adds a user-owned identity and organization layer above CLIProxyAPI (C
 - **Claude reset grant reading**: Supplemental collection has independent available, unavailable and failed outcomes. A valid grant list remains observable without redemption eligibility. Missing historical status stays unknown; a successful absent/empty list is not a measured zero balance (ADR 0112).
 - **Reset advice evidence**: A fact describes a directly observed exhausted or expired entitlement balance; a projection is an advisory judgment from the remaining entitlement, expiry and current quota share. Unknown means evidence is missing, stale, invalid or inapplicable and never means a zero balance.
 
-- **Quota lending advice**: A read-only, same-pool comparison of credentials that share one provider and `plan_type`. A **lending pool** is that group (key `provider + ":" + plan_type`); a **long standard window** is `scope=standard` with `period_hours >= 24`, and a **reset-before daily available** is that window's remaining percentage divided by the days until its own **natural reset** (floored at one hour). Cards are ranked by reset-before daily available, with the highest marked prefer and the lowest avoid; a spread below one point per day is balanced. It is advice about usage ordering only: it writes no CPA priority or weight, switches no routing and spends no reset entitlement. It is distinct from reset advice, which weighs entitlement expiry rather than natural-reset distance, and neither verdict replaces the other.
+- **Quota lending advice**: A read-only, same-pool projection that tells an operator which CPA priority each credential should hold. A **lending pool** is the credentials that share one provider and `plan_type` (key `provider + ":" + plan_type`); a **long standard window** is `scope=standard` with `period_hours >= 24`, and a **reset-before daily available** is that window's remaining percentage divided by the days until its own **natural reset** (floored at one hour), kept for display rather than ranking. A card is **participating** when it has a complete, fresh reading and can take traffic (not disabled, cooling, reauthorization-bound, failed, exhausted, or below ten percent remaining); a refill instant that has already passed makes the reading stale. Participating cards are split by window type; the type with the most cards forms the pool's **board**, ties going to the earlier refill, and a board needs at least two cards. Board cards are **tiered** by next natural reset from latest to earliest; a card joins the current tier when it refills strictly less than a day after that tier's latest card, so every pair inside a tier is under a day apart. The highest current priority on the board is **H** (unset reads as 0); the first tier is suggested H, each later tier ten lower, and no suggestion is above H. When the current numbers already order the tiers, or the board has only one tier, every suggestion equals the current number. A card that cannot be read or served **holds**: it keeps its number and carries a reason instead of blocking the pool. The projection carries each card's current priority, whether the console can edit it, and the cards outside the pool that serve the same model. It remains advice about ordering only: it writes no CPA priority or weight, switches no routing, and spends no reset entitlement. It is distinct from reset advice, which weighs entitlement expiry rather than natural-reset distance, and neither verdict replaces the other.
 
 - **Fork build identity**: Immutable source metadata shown separately from the upstream OMC and CPA release observations. A supplied build tag is displayed as-is; otherwise a known source revision yields `dev+<12-character SHA>`. The commit and branch/ref are independent observations; missing metadata is unknown, never an invented branch. `OMCPA_VERSION` remains the display/User-Agent and release-comparison override, not evidence of the source identity. Dokploy fork builds keep that comparison value incomparable (`fork`) even when the separate build tag is stable-looking.
 
@@ -688,26 +688,15 @@ not extend the quota_prediction capability schema.
   reports, without an entitlement being spent. It is the clock Lending Advice ranks
   against, and it is distinct from the provider reset a Reset Entitlement performs,
   which spends a counted right.
-- **Lendable Pool**: The credentials that share a normalized provider and `plan_type`
-  and each publish a comparable long standard window (scope `standard`, period of at
-  least 24 hours). A credential whose plan is missing or `unknown` joins no pool, and a
-  plan with fewer than two credentials that published such a window is not a pool. Only
-  a pool's members are compared; the grouping is a projection over credentials the quota
-  read already loads, not a stored roster.
-- **Daily Available Until Reset**: A comparable card's remaining percentage divided by
-  the days until that window's Natural Reset, with a reset under an hour away counted as
-  one hour and the rate rounded to one decimal. It measures how much of the current
-  window can be spent per day without running out before the natural refill, and it never
-  feeds routing or status.
-- **Lending Advice**: A read-only, per-pool conclusion that names the card with the
-  highest Daily Available Until Reset as `prefer`, the lowest as `avoid` and the rest
-  `normal`; when the spread is under one percentage point per day every serviceable
-  card is `balanced`. A pool whose cards cannot be compared, whose bottleneck window
-  kinds differ, or which has fewer than two serviceable cards is `unavailable` or
-  `limited` and states the reasons instead of ranking by remaining percentage. It is
-  computed from the same stored readings as the quota card, persisted nowhere, requests
-  nothing upstream, and changes no CPA route or weight. It is separate from Reset Advice,
-  which decides whether to spend an entitlement.
+- **Lendable Pool**: The credentials that share a normalized provider and `plan_type`.
+  Two or more form a pool even when none can be ranked; a plan with one credential is
+  `pool_too_small`, and a missing or `unknown` plan joins none. Membership is a projection
+  over the loaded roster, not a stored group.
+- **Daily Available Until Reset**: A card's remaining percentage divided by the days until
+  that window's Natural Reset, with a reset under an hour away counted as one hour and the
+  rate rounded to one decimal. It is kept for display and does not order lending advice.
+- **Lending Advice**: The per-pool result of **Quota lending advice**: participating cards
+  on one board, their tiers and suggested priorities, and the cards that hold with a reason.
 - **Preference**: Console state stored server-side rather than in the browser,
   so it follows the deployment across devices, browsers, incognito windows, and
   cleared browser storage rather than binding to a single client instance.

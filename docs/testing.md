@@ -300,30 +300,38 @@ refresh control with the credentials it may be asked about. Chromium still owns 
 only it can measure: the panel's geometry against the grid, the grid's own scrolling and the real
 refetch lifecycle.
 
-`web/tests/lending-advice.component.test.tsx` owns the same-pool advice page body: the
-five page shapes (`advised` with prefer/avoid, `balanced`, `limited`, `unavailable`, and no pool),
-the fixed read-only label beside the title, the detail membership and unpooled reason, an estimated
-reset shown with `~` and "reference", a missing figure shown as an em dash rather than zero, the
-default-collapsed "not in any pool" section (counts by reason always visible, credential names
-behind a second disclosure), and the invariant that no shape offers an apply, write, route-switch or
-entitlement control. The only buttons are the unpooled disclosures.
+`web/tests/lending-advice.component.test.tsx` owns the advice page body and the drawer
+block. On the page it pins one row per ranked credential with the current number, the
+suggested number and the change/no-change verdict; the unreadable current number shown as
+an em dash with no verdict; the card the console cannot edit; the held-card fold; the
+no-advice fold; the same-model outside fold; long names with the full spelling inside the
+basis; the basis that stays folded until opened; the absent state; and the invariant that
+no state offers an apply, write, route-switch or entitlement control. The full read-only
+sentence lives inside the page's basis rather than on the main screen; the drawer keeps
+only the header tag and does not repeat it (AC-28). In the drawer it answers one card with
+its number, verdict, reason or outside sentence, and keeps the reset-advice difference note.
 `web/tests/quota-lending-mount.component.test.tsx` owns the mount module and every link that reads
 it: the route constant, the highlighted nav key, the route mounting, the history guard, the OAuth
-header entry's three states and its absence when `lending` is missing or `null`, and the
-credential detail href with its hidden state.
+header entry's three states and its absence when `lending` is missing or `null`, the entry count as
+the sum of every pool's `needs_change_count`, and the credential detail href with its hidden state.
+`scripts/test-oauth-workspace.ts` owns the `open` query intent behind "去设置": the bounded parse,
+the one-shot consumption and the credential it selects.
+`web/tests/auth-file-drawer-section.component.test.tsx` owns the drawer's `sectionRequest` token:
+an open drawer moves to the configuration section when the request changes.
 `web/tests/quota-lending-page.component.test.tsx` owns the page shell: the back control appears
-only with an entry behind it, the basis subtitle, and the empty state for `lending: null`. `scripts/test-quota-lending.ts` owns the pure derivation behind it: role
-and state flipping as the page clock advances, the entry three states, `groupUnpooled` counts
-without loss or duplication, the one-point-per-day boundary and the one-hour daily floor, the
-freshness downgrade to `reading_stale`, `lendingBasisMS` naming the oldest reading, `lendingEntryState`
-covering the three header states, `groupLendingUnpooled` counting each reason once per credential,
-and `lendingDetailFor` selecting the pool the page shows.
+only with an entry behind it, the read-only tag in the header title row, the basis subtitle,
+and the empty state for `lending: null`.
+`scripts/test-quota-lending.ts` owns the pure derivation behind the page: priority text,
+the pool headline and sentence, hold counts, labels and notes, rank and outside labels, the
+entry count and three states, `lendingBasisMS` naming the oldest reading, `groupLendingUnpooled`
+counting each reason once per credential, and `lendingDetailFor` selecting the pool a card shows.
 `scripts/test-oauth-sort.ts` and `scripts/test-auth-file-logic.ts` own the "soonest natural reset"
 sort: short windows excluded, nulls last, equal instants ordered by lower remaining then name.
 The credential-quota suite adds the exact/derived/text-only reset label, the fast-reset high/low
 boundary, the detail lending section and its link to the lending page; the reset-advice suite
-keeps the two sections separate and ordered (AC-13). Browser geometry for the page, the header
-entry and the dense row stays in the `quota-lending` and OAuth management scenarios.
+keeps the two sections separate and ordered (AC-13). Browser geometry and the light/dark
+type-and-contrast floor for the page stay in the `quota-lending` scenario; the header entry
+and the dense row stay there and in the OAuth management scenario.
 
 `web/tests/list-view-preferences.component.test.tsx` owns OAuth view parsing,
 saved filter/sort/page-size restoration with a fresh QueryClient, explicit-link
@@ -1241,12 +1249,15 @@ the handwritten API projection; no new route is introduced.
 ### Lending advice coverage
 
 `internal/quota/lending_test.go` owns the cross-credential projection: pool membership by
-provider and `plan_type`, the standard-window period floor, bottleneck-window selection
-and its tie-break, the one-hour floor and one-decimal daily rate, the one-point-per-day
-balance threshold, serviceability reasons (cooldown, reauth, failed read, exhausted
-window, below ten percent), comparability and freshness reasons, precision flags, detail
-selection and determinism, including a limited pool that keeps a comparable card with no
-serviceability reason at `normal` and an unavailable pool with no `valid_until_ms`.
+provider and `plan_type` (two seats form a pool even with no board; a single seat is
+`pool_too_small`), the standard-window period floor, bottleneck-window selection and its
+tie-break, the one-hour floor and one-decimal daily rate kept for display, ordering by
+latest natural refill, tiering against the latest card of each tier with a strict one-day
+boundary, suggested priorities from the board's highest current number (all unreadable,
+already ordered and single-tier boards included), the union of hold reasons in the fixed
+vocabulary order, display names, model-intersection outside cards and their exclusions,
+precision flags, detail selection and determinism. A pool with no board omits
+`valid_until_ms` and names its hold reasons.
 `internal/api/quota_lending_test.go` owns the handler contract:
 the overview's `lending` object, the credential detail's identical pool, `pool: null` with
 reasons for an unpooled card, `lending: null` when a snapshot or cooldown read fails, the

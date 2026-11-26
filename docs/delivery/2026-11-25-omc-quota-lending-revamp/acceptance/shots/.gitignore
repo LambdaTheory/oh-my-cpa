@@ -1,0 +1,4 @@
+# Screenshots are run evidence: they stay on the machine that took them and never
+# enter the repository. Only this ignore file is tracked.
+*
+!.gitignore
