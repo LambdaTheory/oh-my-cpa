@@ -374,6 +374,19 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * A pool always carries its outside list; a payload from before the field existed may omit it.
+ * Normalizing here, where the response is handed to every lending surface, means a missing list
+ * reads as "no cards outside this pool" instead of crashing the page (PRD §7).
+ */
+function normalizeLendingOverview(lending: QuotaOverviewResponse['lending']): QuotaOverviewResponse['lending'] {
+  if (!lending) return lending;
+  return {
+    ...lending,
+    pools: lending.pools.map((pool) => ({ ...pool, outside_cards: pool.outside_cards ?? [] })),
+  };
+}
+
 export interface AuthSession {
   authenticated: boolean;
 }
@@ -1416,7 +1429,8 @@ export const api = {
 
   // Quota
   async getQuotaOverview(): Promise<QuotaOverviewResponse> {
-    return request<QuotaOverviewResponse>('/management/quota', { method: 'GET' });
+    const response = await request<QuotaOverviewResponse>('/management/quota', { method: 'GET' });
+    return { ...response, lending: normalizeLendingOverview(response.lending) };
   },
 
   async refreshCredentialQuota(authIndex: string): Promise<{ status: string; quota: QuotaItem }> {

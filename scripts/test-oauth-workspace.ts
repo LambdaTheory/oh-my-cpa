@@ -301,7 +301,7 @@ test('mixed refresh: thirteen entries mean eleven targets and two disabled skips
 
 test('query parsing clamps unknown state and keeps one-shot OAuth intent separate', () => {
   const parsed = parseOAuthWorkspaceQuery(new URLSearchParams(
-    'provider=CODEX&q=ops&status=bogus&quota=attention&sort=weight-desc&page=-4&page_size=99&density=compact&action=connect&connect_provider=iflow&focus=quota&code=secret',
+    'provider=CODEX&q=ops&status=bogus&quota=attention&sort=weight-desc&page=-4&page_size=99&density=compact&action=connect&connect_provider=iflow&focus=quota&open=auth-7&code=secret',
   ));
   assert.equal(parsed.provider, 'codex');
   assert.equal(parsed.query, 'ops');
@@ -311,8 +311,9 @@ test('query parsing clamps unknown state and keeps one-shot OAuth intent separat
   assert.equal(parsed.page, 1);
   assert.equal(parsed.pageSize, 12);
   assert.equal(parsed.density, 'compact');
+  assert.equal(parsed.openAuthIndex, 'auth-7');
   const durable = consumeOneShotIntent(new URLSearchParams(
-    'provider=codex&q=ops&density=compact&action=connect&connect_provider=iflow&focus=quota',
+    'provider=codex&q=ops&density=compact&action=connect&connect_provider=iflow&focus=quota&open=auth-7',
   ));
   assert.equal(durable.get('provider'), 'codex');
   assert.equal(durable.get('q'), 'ops');
@@ -320,6 +321,11 @@ test('query parsing clamps unknown state and keeps one-shot OAuth intent separat
   assert.equal(durable.has('action'), false);
   assert.equal(durable.has('connect_provider'), false);
   assert.equal(durable.has('focus'), false);
+  assert.equal(durable.has('open'), false);
+  // The lending page's "set it" target is a one-shot intent, so it must not survive a reload as
+  // every later visit would reopen the same drawer.
+  assert.equal(parseOAuthWorkspaceQuery(new URLSearchParams(`open=${'x'.repeat(257)}`)).openAuthIndex, undefined);
+  assert.equal(parseOAuthWorkspaceQuery(new URLSearchParams('open=')).openAuthIndex, undefined);
 });
 
 test('legacy redirects preserve only documented navigation intent', () => {
