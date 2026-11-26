@@ -546,25 +546,30 @@ describe('quota reset labels and the same-pool advice section', () => {
     unknownBody.unmount();
   });
 
-  it('shows the same pool beside the credential, separate from reset advice', () => {
+  it('shows only this credential\'s own line beside the reset advice', () => {
     const cards: LendingCard[] = [
       {
-        auth_index: 'pool-primary', name: 'codex-primary', role: 'prefer', window_id: 'weekly',
+        auth_index: 'pool-primary', name: 'codex-primary', display_name: 'codex-primary', role: 'suggested',
+        tier: 1, window_id: 'weekly',
         window_kind: 'weekly', remaining_percent: 88, reset_at_ms: NOW_MS + 4 * 24 * HOUR_MS,
         reset_accuracy: 'exact', observed_at_ms: NOW_MS, fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS,
-        reason_codes: [], is_comparable: true,
+        priority: 10, priority_known: true, priority_is_default: false, can_edit_priority: true,
+        suggested_priority: 10, needs_change: false, reason_codes: [], is_comparable: true,
       },
       {
-        auth_index: 'pool-secondary', name: 'codex-secondary', role: 'avoid', window_id: 'weekly',
+        auth_index: 'pool-secondary', name: 'codex-secondary', display_name: 'codex-secondary', role: 'suggested',
+        tier: 2, window_id: 'weekly',
         window_kind: 'weekly', remaining_percent: 40, reset_at_ms: NOW_MS + 2 * 24 * HOUR_MS,
         reset_accuracy: 'exact', observed_at_ms: NOW_MS, fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS,
-        reason_codes: [], is_comparable: true,
+        priority: 10, priority_known: true, priority_is_default: false, can_edit_priority: true,
+        suggested_priority: -10, needs_change: true, reason_codes: [], is_comparable: true,
       },
     ];
     const pool: LendingPool = {
       id: 'codex:pro', provider: 'codex', plan_type: 'pro', plan_label: 'Pro 200', window_kind: 'weekly',
       state: 'advised', valid_until_ms: NOW_MS + 2 * 24 * HOUR_MS, observed_at_ms: NOW_MS,
-      fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS, is_reference: false, reason_codes: [], cards,
+      fresh_until_ms: NOW_MS + 7 * 24 * HOUR_MS, is_reference: false, is_balanced: false,
+      needs_change_count: 1, hold_count: 0, reason_codes: [], cards, outside_cards: [],
     };
     renderBody(
       quota('pool-secondary', [longWindow({})]),
@@ -572,9 +577,11 @@ describe('quota reset labels and the same-pool advice section', () => {
     );
     const section = document.querySelector('[data-lending-view="detail"]') as HTMLElement;
     expect(section).toBeTruthy();
-    expect(section.textContent).toContain('This credential');
+    expect(section.getAttribute('data-lending-detail-state')).toBe('change');
+    expect(section.textContent).toContain('codex-secondary: set to -10');
     expect(section.textContent).toContain('Advice only, routing unchanged');
-    expect(section.textContent).toContain('In the codex · Pro 200 · Weekly limit pool (2 credentials)');
-    expect(document.querySelector('[data-lending-view="overview"]')).toBeNull();
+    expect(section.textContent).toContain('View the whole group on the lending page');
+    expect(section.querySelector('[data-lending-evidence-table]')).toBeNull();
+    expect(document.querySelector('[data-lending-view="page"]')).toBeNull();
   });
 });

@@ -9,9 +9,12 @@ import { LendingAdviceEntryLink } from '../src/pages/quota/LendingAdviceEntryLin
 import { buildNavGroups } from '../src/components/common/navigation';
 import { navEntryLabel, resolveNavLocation } from '../src/types/sidebarNav';
 import {
+  OAUTH_MANAGEMENT_PATH,
+  OAUTH_OPEN_CREDENTIAL_PARAM,
   QUOTA_LENDING_NAV_LABEL_KEY,
   QUOTA_LENDING_PATH,
   hasPreviousHistoryEntry,
+  oauthPrioritySettingsPath,
 } from '../src/types/quotaLendingMount';
 import type { LendingCard, LendingDetail, LendingOverview, LendingPool, QuotaItem } from '../src/types/quota';
 
@@ -34,7 +37,8 @@ const DAY = 86_400_000;
 
 function card(overrides: Partial<LendingCard> & Pick<LendingCard, 'auth_index' | 'name'>): LendingCard {
   return {
-    role: 'normal',
+    display_name: overrides.name,
+    role: 'suggested',
     reason_codes: [],
     is_comparable: true,
     remaining_percent: 50,
@@ -44,13 +48,18 @@ function card(overrides: Partial<LendingCard> & Pick<LendingCard, 'auth_index' |
     window_kind: 'weekly',
     observed_at_ms: NOW,
     fresh_until_ms: NOW + 7 * DAY,
-    days_to_reset: 4,
-    daily_available_percent: 12.5,
+    priority: 0,
+    priority_known: true,
+    priority_is_default: true,
+    can_edit_priority: true,
+    suggested_priority: 0,
+    needs_change: false,
     ...overrides,
   };
 }
 
 function pool(cards: LendingCard[], overrides: Partial<LendingPool> = {}): LendingPool {
+  const suggested = cards.filter((entry) => entry.role === 'suggested');
   return {
     id: 'codex:pro',
     provider: 'codex',
@@ -62,8 +71,12 @@ function pool(cards: LendingCard[], overrides: Partial<LendingPool> = {}): Lendi
     observed_at_ms: NOW,
     fresh_until_ms: NOW + 7 * DAY,
     is_reference: false,
+    is_balanced: false,
+    needs_change_count: suggested.filter((entry) => entry.needs_change === true).length,
+    hold_count: cards.filter((entry) => entry.role === 'hold').length,
     reason_codes: [],
     cards,
+    outside_cards: [],
     ...overrides,
   };
 }
@@ -72,12 +85,29 @@ function overview(pools: LendingPool[]): LendingOverview {
   return { generated_at_ms: NOW, pools, unpooled_count: 0, unpooled: [] };
 }
 
-const advisedPool = () => pool([
-  card({ auth_index: 'a', name: 'codex-primary', remaining_percent: 88, reset_at_ms: NOW + 4 * DAY }),
-  card({ auth_index: 'b', name: 'codex-secondary', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
+/** A pool with exactly one card to change. */
+const oneChangePool = (id = 'codex:pro') => pool([
+  card({ auth_index: 'a', name: 'synthetic-primary', tier: 1, priority: 0, suggested_priority: 0, needs_change: false }),
+  card({
+    auth_index: 'b', name: 'synthetic-secondary', tier: 2, priority: 0, suggested_priority: -10, needs_change: true,
+  }),
+], { id });
+
+/** A pool whose numbers already match. */
+const keepPool = () => pool([
+  card({ auth_index: 'a', name: 'synthetic-primary', tier: 1, priority: 10, priority_is_default: false, suggested_priority: 10 }),
+  card({ auth_index: 'b', name: 'synthetic-secondary', tier: 2, priority: 0, suggested_priority: 0 }),
 ]);
 
-const advised = () => overview([advisedPool()]);
+/** A pool that produced no ranking at all. */
+const noAdvicePool = () => pool([
+  card({
+    auth_index: 'a', name: 'synthetic-primary', role: 'hold', tier: undefined,
+    priority: undefined, priority_known: false, priority_is_default: false,
+    suggested_priority: undefined, needs_change: undefined,
+    primary_reason: 'reading_failed', reason_codes: ['reading_failed'],
+  }),
+], { state: 'no_advice', needs_change_count: 0, hold_count: 1 });
 
 const quotaItem = (): QuotaItem => ({
   auth_index: 'pool-secondary',
@@ -96,8 +126,11 @@ const quotaItem = (): QuotaItem => ({
 const detail = (): LendingDetail => ({
   generated_at_ms: NOW,
   pool: pool([
-    card({ auth_index: 'pool-primary', name: 'codex-primary', role: 'prefer', remaining_percent: 88 }),
-    card({ auth_index: 'pool-secondary', name: 'codex-secondary', role: 'avoid', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
+    card({ auth_index: 'pool-primary', name: 'synthetic-primary', tier: 1 }),
+    card({
+      auth_index: 'pool-secondary', name: 'synthetic-secondary', tier: 2,
+      suggested_priority: -10, needs_change: true,
+    }),
   ]),
   unpooled_reason_codes: [],
 });
@@ -105,7 +138,7 @@ const detail = (): LendingDetail => ({
 function renderEntry(lending?: LendingOverview | null) {
   return render(
     <MemoryRouter>
-      <I18nProvider><LendingAdviceEntryLink lending={lending} nowMS={NOW} /></I18nProvider>
+      <I18nProvider><LendingAdviceEntryLink lending={lending} /></I18nProvider>
     </MemoryRouter>,
   );
 }
@@ -113,9 +146,13 @@ function renderEntry(lending?: LendingOverview | null) {
 beforeEach(() => window.localStorage.setItem('omc-lang', 'en'));
 
 describe('quota lending mount module', () => {
-  it('keeps the path, the menu label key and the history guard in one module', () => {
+  it('keeps the path, the menu label, the settings address and the history guard in one module', () => {
     expect(QUOTA_LENDING_PATH).toBe('/quota-lending');
     expect(QUOTA_LENDING_NAV_LABEL_KEY).toBe('nav.quota_lending');
+    expect(OAUTH_MANAGEMENT_PATH).toBe('/oauth-management');
+    expect(OAUTH_OPEN_CREDENTIAL_PARAM).toBe('open');
+    expect(oauthPrioritySettingsPath('auth-2')).toBe('/oauth-management?open=auth-2');
+    expect(oauthPrioritySettingsPath('a/b c')).toBe('/oauth-management?open=a%2Fb%20c');
     expect(hasPreviousHistoryEntry({ idx: 1 })).toBe(true);
     expect(hasPreviousHistoryEntry({ idx: 0 })).toBe(false);
     expect(hasPreviousHistoryEntry(undefined)).toBe(false);
@@ -141,33 +178,29 @@ describe('quota lending mount module', () => {
     expect(await screen.findByTestId('quota-lending-page')).toBeTruthy();
   });
 
-  it('sends the three entry states to the mount path', () => {
-    const advisedView = renderEntry(advised());
-    const advisedLink = screen.getByRole('link');
-    expect(advisedLink.getAttribute('href')).toBe(QUOTA_LENDING_PATH);
-    expect(advisedLink.getAttribute('data-lending-entry')).toBe('advised');
-    expect(advisedLink.textContent).toContain('Quota lending · 1 suggestion');
-    expect(advisedLink.textContent).not.toContain('suggestions');
-    expect(advisedLink.querySelector('span[aria-hidden="true"]')).toBeTruthy();
-    advisedView.unmount();
+  it('speaks the three entry states from the backend counts', () => {
+    const change = renderEntry(overview([oneChangePool()]));
+    const changeLink = screen.getByRole('link');
+    expect(changeLink.getAttribute('href')).toBe(QUOTA_LENDING_PATH);
+    expect(changeLink.getAttribute('data-lending-entry')).toBe('change');
+    expect(changeLink.getAttribute('data-lending-entry-count')).toBe('1');
+    expect(changeLink.textContent).toContain('Quota lending · 1 to change');
+    expect(changeLink.querySelector('span[aria-hidden="true"]')).toBeTruthy();
+    change.unmount();
 
-    const balanced = renderEntry(overview([pool([
-      card({ auth_index: 'a', name: 'codex-primary', remaining_percent: 21.8, reset_at_ms: NOW + 2 * DAY }),
-      card({ auth_index: 'b', name: 'codex-secondary', remaining_percent: 40, reset_at_ms: NOW + 4 * DAY }),
-    ], { state: 'balanced' })]));
-    const balancedLink = screen.getByRole('link');
-    expect(balancedLink.getAttribute('href')).toBe(QUOTA_LENDING_PATH);
-    expect(balancedLink.getAttribute('data-lending-entry')).toBe('balanced');
-    expect(balancedLink.querySelector('span[aria-hidden="true"]')).toBeNull();
-    balanced.unmount();
+    const keep = renderEntry(overview([keepPool()]));
+    const keepLink = screen.getByRole('link');
+    expect(keepLink.getAttribute('data-lending-entry')).toBe('keep');
+    expect(keepLink.getAttribute('data-lending-entry-count')).toBe('0');
+    expect(keepLink.textContent).toContain('Quota lending · no change');
+    expect(keepLink.querySelector('span[aria-hidden="true"]')).toBeNull();
+    keep.unmount();
 
-    const plain = renderEntry(overview([pool([
-      card({ auth_index: 'a', name: 'codex-primary' }),
-      card({ auth_index: 'b', name: 'codex-secondary', role: 'limited', is_comparable: false }),
-    ], { state: 'limited' })]));
+    const plain = renderEntry(overview([noAdvicePool()]));
     const plainLink = screen.getByRole('link');
-    expect(plainLink.getAttribute('href')).toBe(QUOTA_LENDING_PATH);
     expect(plainLink.getAttribute('data-lending-entry')).toBe('plain');
+    expect(plainLink.textContent).toContain('Quota lending');
+    expect(plainLink.textContent).not.toContain('to change');
     plain.unmount();
 
     const absent = renderEntry(null);
@@ -177,19 +210,17 @@ describe('quota lending mount module', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
-  it('pluralizes the entry count above one', () => {
+  it('sums the change counts of every pool and pluralizes above one', () => {
     const twoPools = renderEntry(overview([
-      advisedPool(),
-      pool([
-        card({ auth_index: 'c', name: 'codex-plus-a', remaining_percent: 90 }),
-        card({ auth_index: 'd', name: 'codex-plus-b', remaining_percent: 30, reset_at_ms: NOW + 2 * DAY }),
-      ], { id: 'codex:plus', plan_type: 'plus', plan_label: 'Plus' }),
+      oneChangePool('codex:pro'),
+      oneChangePool('codex:plus'),
     ]));
-    expect(screen.getByRole('link').textContent).toContain('Quota lending · 2 suggestions');
+    expect(screen.getByRole('link').textContent).toContain('Quota lending · 2 to change');
+    expect(screen.getByRole('link').getAttribute('data-lending-entry-count')).toBe('2');
     twoPools.unmount();
   });
 
-  it('sends the credential detail link to the mount path and hides it without lending', () => {
+  it('sends the credential detail link to the page and hides it without lending', () => {
     const withLending = render(
       <MemoryRouter>
         <I18nProvider>
@@ -199,7 +230,7 @@ describe('quota lending mount module', () => {
     );
     const link = document.querySelector('[data-lending-detail-link="true"]') as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe(QUOTA_LENDING_PATH);
-    expect(link.textContent).toBe('View the whole pool on the lending page');
+    expect(link.textContent).toBe('View the whole group on the lending page');
     withLending.unmount();
 
     render(
