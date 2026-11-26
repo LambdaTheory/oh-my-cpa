@@ -765,7 +765,7 @@ func (h *Handler) getCredentialQuotaDetail(writer http.ResponseWriter, request *
 	// actually compared.
 	var lending *lendingDetailDTO
 	if lendingComplete {
-		projection := quota.ProjectLendingAdvice(lendingCardInputs(items), nowMS)
+		projection := quota.ProjectLendingAdvice(lendingCardInputs(items, files), nowMS)
 		projected := projectLendingDetail(projection.DetailFor(authIndex))
 		lending = &projected
 	}
@@ -1036,7 +1036,7 @@ func (h *Handler) buildQuotaOverview(ctx context.Context, client *management.Cli
 	}
 	var lending *lendingOverviewDTO
 	if lendingComplete {
-		projected := projectLendingOverview(quota.ProjectLendingAdvice(lendingCardInputs(items), nowMS))
+		projected := projectLendingOverview(quota.ProjectLendingAdvice(lendingCardInputs(items, files), nowMS))
 		lending = &projected
 	}
 
