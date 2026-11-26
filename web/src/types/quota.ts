@@ -279,21 +279,30 @@ export interface CredentialQuotaDetailResponse {
   lending?: LendingDetail | null;
 }
 
-export type LendingPoolState = 'advised' | 'balanced' | 'limited' | 'unavailable';
+/** `advised` carries a ranking; `no_advice` is a pool where no credential could be ranked. */
+export type LendingPoolState = 'advised' | 'no_advice';
 
-export type LendingCardRole = 'prefer' | 'avoid' | 'normal' | 'balanced' | 'limited' | 'unavailable';
+/** `suggested` carries a priority; `hold` keeps whatever is configured now. */
+export type LendingCardRole = 'suggested' | 'hold';
 
 /**
  * One credential's line inside a lendable pool.
  *
- * The backend owns grouping, window choice and the static reasons. `days_to_reset` and
- * `daily_available_percent` are a snapshot at `generated_at_ms`; the console recomputes them
- * against the page clock so the number and the role never drift apart.
+ * The backend owns grouping, ordering, tiers and the suggested numbers; the console renders them
+ * as given. `days_to_reset` and `daily_available_percent` are a snapshot at `generated_at_ms` and
+ * no longer drive the order, so the console only formats the reset instant against the page clock.
  */
 export interface LendingCard {
   auth_index: string;
   name: string;
+  /**
+   * Primary name, matching the large name the OAuth workspace shows for the same credential.
+   * A payload from before the friendly name existed may omit it; the views then show `name`.
+   */
+  display_name?: string;
   role: LendingCardRole;
+  /** Ranking tier inside the pool, from 1; present only for `suggested`. */
+  tier?: number;
   window_id?: string;
   window_kind?: string;
   remaining_percent?: number;
@@ -303,8 +312,34 @@ export interface LendingCard {
   fresh_until_ms?: number;
   days_to_reset?: number;
   daily_available_percent?: number;
+  /** Current CPA priority; absent when the reading could not be obtained. */
+  priority?: number;
+  priority_known: boolean;
+  priority_is_default: boolean;
+  /** Whether the console can write this credential's priority at all; this feature never writes. */
+  can_edit_priority: boolean;
+  /** The priority to set; present only for `suggested`. Integers may be negative. */
+  suggested_priority?: number;
+  /** Absent for `hold`, and for a suggested card whose current priority cannot be read. */
+  needs_change?: boolean;
+  /** The first reason from the fixed vocabulary; present only for `hold`. */
+  primary_reason?: string;
   reason_codes: string[];
   is_comparable: boolean;
+}
+
+/** A credential outside this pool that still serves one of the pool's models. */
+export interface LendingOutsideCard {
+  auth_index: string;
+  name: string;
+  /** Same optional friendly name as `LendingCard`; absent payloads fall back to `name`. */
+  display_name?: string;
+  provider: string;
+  pool_id?: string;
+  pool_label?: string;
+  priority?: number;
+  priority_known: boolean;
+  priority_is_default: boolean;
 }
 
 /** Credentials of one provider and plan, compared on one long window. */
@@ -319,8 +354,13 @@ export interface LendingPool {
   observed_at_ms?: number;
   fresh_until_ms?: number;
   is_reference: boolean;
+  /** Every ranked card resets within a day of the others, so the order is not worth acting on. */
+  is_balanced: boolean;
+  needs_change_count: number;
+  hold_count: number;
   reason_codes: string[];
   cards: LendingCard[];
+  outside_cards: LendingOutsideCard[];
 }
 
 /** A credential that belongs to no pool, with the reasons it was left out. */

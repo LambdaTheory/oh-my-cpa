@@ -232,21 +232,23 @@ export const OAuthManagementPage: React.FC = () => {
   // so Back closes the panel once instead of reopening it from a stale query value.
   const [pendingIntent, setPendingIntent] = React.useState<{ connect: boolean; provider?: string; focusQuota: boolean }>();
   const [pendingFocusQuota, setPendingFocusQuota] = React.useState(false);
+  const [pendingOpenAuthIndex, setPendingOpenAuthIndex] = React.useState<string>();
   React.useEffect(() => {
-    if (!queryState.action && !queryState.focus) return;
+    if (!queryState.action && !queryState.focus && !queryState.openAuthIndex) return;
     setPendingIntent({
       connect: queryState.action === 'connect',
       provider: queryState.connectProvider,
       focusQuota: queryState.focus === 'quota',
     });
     if (queryState.focus === 'quota') setPendingFocusQuota(true);
+    if (queryState.openAuthIndex) setPendingOpenAuthIndex(queryState.openAuthIndex);
     setSearchParams(consumeOneShotIntent(searchParams), { replace: true });
-  }, [queryState.action, queryState.connectProvider, queryState.focus, searchParams, setSearchParams]);
+  }, [queryState.action, queryState.connectProvider, queryState.focus, queryState.openAuthIndex, searchParams, setSearchParams]);
 
   const [isConnectOpen, setIsConnectOpen] = React.useState(false);
   const [connectProviderId, setConnectProviderId] = React.useState('');
   React.useEffect(() => {
-    if (!pendingIntent || searchParams.has('action') || searchParams.has('focus')) return;
+    if (!pendingIntent || searchParams.has('action') || searchParams.has('focus') || searchParams.has('open')) return;
     if (pendingIntent.connect) {
       setConnectProviderId(pendingIntent.provider ?? '');
       setIsConnectOpen(true);
@@ -370,6 +372,7 @@ export const OAuthManagementPage: React.FC = () => {
 
   const [selectedIdentity, setSelectedIdentity] = React.useState<SelectedIdentity>();
   const [drawerSection, setDrawerSection] = React.useState<'overview' | 'configuration' | 'models'>('overview');
+  const [drawerSectionRequest, setDrawerSectionRequest] = React.useState<{ section: 'configuration'; token: number }>();
   const selectedRecord = selectedIdentity
     ? records.find((record) => record.key === selectedIdentity.key)
     : undefined;
@@ -466,6 +469,17 @@ export const OAuthManagementPage: React.FC = () => {
     setSelectedIdentity({ key: record.key, name: record.fileName, authIndex: record.authIndex });
   };
 
+  // The lending page's "set it" link names a credential instead of a row, so the roster has to
+  // arrive before the drawer can open: a link clicked during the first load still lands.
+  React.useEffect(() => {
+    if (!pendingOpenAuthIndex) return;
+    if (searchParams.has('open')) return;
+    if (!filesQuery.data) return;
+    const record = records.find((entry) => entry.authIndex === pendingOpenAuthIndex);
+    if (record) openCredential(record, 'configuration');
+    setPendingOpenAuthIndex(undefined);
+  }, [pendingOpenAuthIndex, searchParams, filesQuery.data, records, openCredential]);
+
   const openConnectForRecord = (record: OAuthWorkspaceRecord) => {
     const providerId = record.authorizationProviderId;
     if (!providerId) {
@@ -535,7 +549,6 @@ export const OAuthManagementPage: React.FC = () => {
           <CompactQuotaView
             item={record.quota}
             nowMS={visibleNow}
-            lending={quotaQuery.data?.lending}
           />
         );
       }
@@ -543,12 +556,16 @@ export const OAuthManagementPage: React.FC = () => {
         <CredentialQuotaBody
           item={record.quota}
           nowMS={visibleNow}
-          lending={lendingDetailFor(quotaQuery.data?.lending, record.quota.auth_index, visibleNow)}
+          lending={lendingDetailFor(quotaQuery.data?.lending, record.quota.auth_index)}
           isDemo={isDemo}
           isRefreshing={isRefreshing}
           onRefresh={() => void actions.refreshQuotaForRecord(record)}
           onClearCooldown={() => void actions.clearCooldown(record)}
           onRedeemCredit={() => void actions.redeemCredit(record)}
+          onEditPriority={() => setDrawerSectionRequest((previous) => ({
+            section: 'configuration',
+            token: (previous?.token ?? 0) + 1,
+          }))}
         />
       );
     }
@@ -672,7 +689,7 @@ export const OAuthManagementPage: React.FC = () => {
           {quotaQuery.data?.lending && (
             <React.Fragment>
               <span className={styles['summary-divider']}>·</span>
-              <LendingAdviceEntryLink lending={quotaQuery.data.lending} nowMS={visibleNow} />
+              <LendingAdviceEntryLink lending={quotaQuery.data.lending} />
             </React.Fragment>
           )}
         </div>
@@ -1049,6 +1066,7 @@ export const OAuthManagementPage: React.FC = () => {
           if (latest) actions.download(latest);
         }}
         initialSection={drawerSection}
+        sectionRequest={drawerSectionRequest}
         canEdit={Boolean(selectedRecord?.canEditFile)}
         hasExternalDraft={hasWarmupDraft}
         quotaContent={selectedRecord ? quotaBodyForRecord(selectedRecord, false) : undefined}

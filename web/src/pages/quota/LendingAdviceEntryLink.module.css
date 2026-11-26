@@ -14,8 +14,8 @@
   text-decoration: underline;
 }
 
-.advised { color: var(--accent); }
-.balanced { color: var(--fg-2); }
+.change { color: var(--accent); }
+.keep { color: var(--fg-2); }
 .plain { color: var(--meta); }
 
 .dot {

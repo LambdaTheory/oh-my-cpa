@@ -1,0 +1,32 @@
+/* One heading row: title, the read-only tag, then the basis on its own line. The tag is a
+   sibling of the title rather than a child because the phone rule hides the page title, and
+   the boundary tag has to stay visible there. */
+.header :global(.terminal-page-heading) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.header :global(.terminal-title) {
+  flex: none;
+}
+
+.header-tag,
+.header :global(.terminal-page-heading) > .header-tag {
+  order: 1;
+  color: color-mix(in srgb, var(--tag-tone) 72%, var(--fg));
+  font-size: var(--text-md);
+}
+
+.header :global(.terminal-subtitle) {
+  order: 2;
+  flex-basis: 100%;
+}
+
+/* --muted is just below AA on the page background; this page's basis line takes the next
+   text token without changing the shared PageHeader. */
+.header-subtitle,
+.header :global(.terminal-subtitle) > .header-subtitle {
+  color: var(--fg-2);
+}

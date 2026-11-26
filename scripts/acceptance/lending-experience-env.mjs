@@ -11,6 +11,17 @@
 //      node scripts/acceptance/lending-experience-env.mjs --check
 //      node scripts/acceptance/lending-experience-env.mjs --reseed
 //
+// Scenes (`OMC_LENDING_FIXTURE`, run mode only): `hero` (default, the two cards from
+// the capture), `revHeroKeep` (the same two already ranked right), `revOutside` (the
+// pool plus same-model cards outside it), and `revCommandCode` (a Command Code pool
+// with mixed window shapes). A scene other than the hero needs its own data
+// directory, because the stored snapshot from a previous scene would otherwise stay
+// on the roster:
+//
+//   OMC_LENDING_FIXTURE=revCommandCode OMC_LENDING_DATA_DIR=tmp/lending-scene-cmdcode \
+//     OMC_LENDING_APP_PORT=18651 OMC_LENDING_CPA_PORT=18652 OMC_LENDING_CONTROL_PORT=18653 \
+//     node scripts/acceptance/lending-experience-env.mjs
+//
 // The default mode keeps running until stopped. `--check` starts a private
 // environment on 18441/18442, asserts the seeded numbers and the rendered entry
 // and tag, then exits non-zero on any mismatch. `--reseed` asks the running
@@ -42,9 +53,9 @@ function port(name, fallback) {
   return value;
 }
 
-const APP_PORT = port('OMC_LENDING_APP_PORT', mode === 'check' ? 18441 : 18431);
-const CPA_PORT = port('OMC_LENDING_CPA_PORT', mode === 'check' ? 18442 : 18432);
-const CONTROL_PORT = port('OMC_LENDING_CONTROL_PORT', 18433);
+const APP_PORT = port('OMC_LENDING_APP_PORT', mode === 'check' ? 18644 : 18641);
+const CPA_PORT = port('OMC_LENDING_CPA_PORT', mode === 'check' ? 18645 : 18642);
+const CONTROL_PORT = port('OMC_LENDING_CONTROL_PORT', mode === 'check' ? 18646 : 18643);
 const dataDir = path.resolve(root, process.env.OMC_LENDING_DATA_DIR || (mode === 'check' ? 'tmp/lending-check-data' : 'tmp/lending-experience-data'));
 const appURL = `http://127.0.0.1:${APP_PORT}/omc`;
 const pageURL = `${appURL}/oauth-management?page_size=48`;
@@ -52,7 +63,7 @@ const lendingURL = `${appURL}/quota-lending`;
 // A check run must not overwrite the long-running environment's state file, or the recorded
 // PIDs and URL would point at the short-lived private ports.
 // A second, one-off environment on another port must not overwrite the default one's state file.
-const stateName = mode === 'check' ? 'lending-experience-env-check.json' : APP_PORT === 18431 ? 'lending-experience-env.json' : 'lending-experience-env-' + APP_PORT + '.json';
+const stateName = mode === 'check' ? 'lending-experience-env-check.json' : APP_PORT === 18641 ? 'lending-experience-env.json' : 'lending-experience-env-' + APP_PORT + '.json';
 const statePath = path.join(root, 'tmp', stateName);
 const logPath = path.join(root, 'tmp', 'lending-experience-app.log');
 
@@ -187,12 +198,13 @@ async function checkHero() {
     const cardB = findCard(pool, 'auth-lend-hero-b');
 
     report(check, 'pool is advised', pool?.state === 'advised', `state=${pool?.state}`);
-    report(check, 'A is preferred', cardA?.role === 'prefer', `role=${cardA?.role}`);
-    report(check, 'B is avoided', cardB?.role === 'avoid', `role=${cardB?.role}`);
-    report(check, 'A daily is about 20.4', closeEnough(cardA?.daily_available_percent, 20.4), `daily=${cardA?.daily_available_percent}`);
-    report(check, 'B daily is about 19.0', closeEnough(cardB?.daily_available_percent, 19.0), `daily=${cardB?.daily_available_percent}`);
-    const difference = (cardA?.daily_available_percent ?? 0) - (cardB?.daily_available_percent ?? 0);
-    report(check, 'daily difference is about 1.4', closeEnough(difference, 1.4), `difference=${difference.toFixed(2)}`);
+    report(check, 'A is ranked first', cardA?.role === 'suggested' && cardA?.tier === 1, `role=${cardA?.role} tier=${cardA?.tier}`);
+    report(check, 'B is ranked second', cardB?.role === 'suggested' && cardB?.tier === 2, `role=${cardB?.role} tier=${cardB?.tier}`);
+    report(check, 'both current priorities are unset', cardA?.priority === 0 && cardA?.priority_is_default === true
+      && cardB?.priority === 0 && cardB?.priority_is_default === true, `A=${cardA?.priority}/${cardA?.priority_is_default} B=${cardB?.priority}/${cardB?.priority_is_default}`);
+    report(check, 'A needs no change', cardA?.suggested_priority === 0 && cardA?.needs_change === false, `suggested=${cardA?.suggested_priority} change=${cardA?.needs_change}`);
+    report(check, 'B is suggested -10', cardB?.suggested_priority === -10 && cardB?.needs_change === true, `suggested=${cardB?.suggested_priority} change=${cardB?.needs_change}`);
+    report(check, 'the pool counts one change', pool?.needs_change_count === 1, `count=${pool?.needs_change_count}`);
     report(check, 'pool has a validity instant', typeof pool?.valid_until_ms === 'number', `valid_until_ms=${pool?.valid_until_ms}`);
 
     browser = await launchBrowser(chromium, { headless: true });
@@ -209,10 +221,10 @@ async function checkHero() {
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await page.goto(pageURL, { waitUntil: 'domcontentloaded' });
-    const entry = page.locator('[data-lending-entry="advised"]');
+    const entry = page.locator('[data-lending-entry="change"]');
     await entry.waitFor({ timeout: 20_000 });
     const entryText = (await entry.innerText()).replace(/[ ]+/g, ' ').trim();
-    report(check, 'OAuth entry says one suggestion', entryText.includes('额度拆借 · 1 条建议'), entryText);
+    report(check, 'OAuth entry says one card needs a change', entryText.includes('额度拆借 · 1 张要改'), entryText);
     const isLink = await entry.evaluate((node) => node.tagName === 'A' && Boolean(node.getAttribute('href')));
     report(check, 'entry is a link', isLink, entryText);
 
@@ -234,17 +246,30 @@ async function checkHero() {
       } : false;
     }, null, { timeout: 20_000 });
     const owners = await rowState.jsonValue();
-    report(check, 'B row carries the fast-reset low tag', owners.fast.includes('b'), JSON.stringify(owners.fast));
-    report(check, 'A row does not carry the fast-reset low tag', !owners.fast.includes('a'), JSON.stringify(owners.fast));
-    const fastTitles = await page.locator('[data-fast-reset=low]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('title')));
-    report(check, 'fast-reset tag uses the low wording', fastTitles.some((title) => title === '快重置 · 余量低'), JSON.stringify(fastTitles));
+    // A's long window is not close to resetting, but its 5-hour window is (5% left, 20 minutes out),
+    // so both rows show the reading-level mark. It is not the lending verdict either way.
+    report(check, 'A row carries the low tag for its 5-hour window', owners.fast.includes('a'), JSON.stringify(owners.fast));
+    report(check, 'B row carries the low tag for its weekly window', owners.fast.includes('b'), JSON.stringify(owners.fast));
 
     await page.goto(lendingURL, { waitUntil: 'domcontentloaded' });
     const poolNode = page.locator('[data-lending-pool]');
     await poolNode.waitFor({ timeout: 20_000 });
     report(check, 'lending page pool state is advised', await poolNode.getAttribute('data-lending-state') === 'advised');
-    const dailyText = await page.locator('[data-lending-card="auth-lend-hero-a"] [data-lending-metric="daily"]').innerText();
-    report(check, 'lending page shows A daily 20.4', dailyText.includes('20.4'), dailyText.replace(/[ ]+/g, ' ').trim());
+    const verdict = (await page.locator('[data-lending-pool-verdict]').innerText()).trim();
+    report(check, 'the pool headline says one card needs a change', verdict.includes('1 张要改'), verdict);
+    const sentence = (await page.locator('[data-lending-sentence]').innerText()).replace(/[ ]+/g, ' ').trim();
+    report(check, 'the sentence names B at -10 and leaves A alone',
+      sentence.includes('codex-demo-b') && /-10|−10/.test(sentence) && sentence.includes('codex-demo-a') && sentence.includes('不用动'), sentence);
+    const rowA = await page.locator('[data-lending-card="auth-lend-hero-a"]').innerText();
+    const rowB = await page.locator('[data-lending-card="auth-lend-hero-b"]').innerText();
+    report(check, 'A row says no change', rowA.includes('不用改') && !rowA.includes('要改'), rowA.replace(/[ ]+/g, ' ').trim());
+    report(check, 'B row says now 0, suggests -10 and needs a change', rowB.includes('0') && /-10|−10/.test(rowB) && rowB.includes('要改'), rowB.replace(/[ ]+/g, ' ').trim());
+    const goLink = page.locator('[data-lending-card="auth-lend-hero-b"] [data-lending-go="page"]');
+    const goHref = (await goLink.getAttribute('href')) || '';
+    report(check, 'B offers the way to the field without a number', (await goLink.count()) === 1 && goHref.includes('auth-lend-hero-b') && !goHref.includes('10'), goHref);
+    report(check, 'A offers no way to the field', (await page.locator('[data-lending-card="auth-lend-hero-a"] [data-lending-go]').count()) === 0);
+    fs.mkdirSync(path.resolve(root, 'tmp/lending-proof'), { recursive: true });
+    await page.screenshot({ path: path.resolve(root, 'tmp/lending-proof/hero-lending.png'), fullPage: true });
     report(check, 'no page error', errors.length === 0, errors.join(' | '));
     const state = {
       url: pageURL,

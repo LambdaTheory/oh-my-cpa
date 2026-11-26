@@ -1,45 +1,41 @@
 /**
- * Locks the read-only lending layer's time-derived behaviour.
+ * Locks the lending layer's pure projections.
  *
- * The backend owns grouping, window choice and the static reasons; the console only re-reads the
- * facts that move with the page clock. These assertions fix the boundaries that decide what an
- * operator is told: the one-point-per-day threshold, the one-hour floor on the daily figure, the
- * fast-reset `period/3` and 50% edges, the stale-reading downgrade, and the reset sort key's
- * long-window rule. A drift here would let the list, the drawer and the reason sentence disagree.
+ * Everything here reads what the backend already decided: the entry counts, the one sentence, the
+ * hold grouping, the rank wording and the unpooled reasons. The first release recomputed roles and
+ * daily figures against the page clock; that logic is gone (AC-23), so these assertions exist to
+ * catch a console that starts inventing numbers again.
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TFunc } from '../web/src/i18n/index.tsx';
-import type { LendingCard, LendingOverview, LendingPool } from '../web/src/types/quota.ts';
-import type { QuotaWindow } from '../web/src/types/quota.ts';
+import type {
+  LendingCard,
+  LendingOutsideCard,
+  LendingOverview,
+  LendingPool,
+} from '../web/src/types/quota.ts';
 import {
-  deriveLendingView,
   findLendingCard,
   groupLendingUnpooled,
   lendingBasisMS,
-  lendingEntryState,
   lendingDetailFor,
+  lendingEntryState,
+  lendingHoldCounts,
+  lendingHoldLabel,
+  lendingHoldRowNote,
+  lendingOutsidePoolLabel,
+  lendingPoolHeadline,
+  lendingPoolSentence,
+  lendingPriorityText,
+  lendingRankLabel,
   lendingReasonLabel,
-  lendingRoleLabel,
-  lendingRoleTone,
 } from '../web/src/pages/quota/lendingAdvice.ts';
-import {
-  earliestLongWindow,
-  isFastResetWindow,
-  isLongStandardWindow,
-  quotaFastResetState,
-} from '../web/src/pages/quota/quotaWindowSelection.ts';
-import {
-  formatCountdown,
-  formatShortDateTime,
-  quotaResetCountdownLabel,
-} from '../web/src/pages/quota/quotaFormat.ts';
 
 const DAY = 86_400_000;
-const HOUR = 3_600_000;
 const NOW = Date.UTC(2026, 10, 23, 12, 0);
 
-// The formatters only need their keys and placeholders; the stub keeps this suite independent of
+// The projections only need their keys and placeholders; the stub keeps this suite independent of
 // the dictionary's copy.
 const t = ((key: string, params?: Record<string, unknown>) => (
   params
@@ -49,7 +45,8 @@ const t = ((key: string, params?: Record<string, unknown>) => (
 
 function makeCard(overrides: Partial<LendingCard> & Pick<LendingCard, 'auth_index' | 'name'>): LendingCard {
   return {
-    role: 'normal',
+    display_name: overrides.name,
+    role: 'suggested',
     reason_codes: [],
     is_comparable: true,
     remaining_percent: 50,
@@ -59,16 +56,31 @@ function makeCard(overrides: Partial<LendingCard> & Pick<LendingCard, 'auth_inde
     window_kind: 'weekly',
     observed_at_ms: NOW,
     fresh_until_ms: NOW + 7 * DAY,
-    days_to_reset: 4,
-    daily_available_percent: 12.5,
+    priority: 0,
+    priority_known: true,
+    priority_is_default: true,
+    can_edit_priority: true,
+    suggested_priority: 0,
+    needs_change: false,
     ...overrides,
   };
 }
 
+function makeHold(overrides: Partial<LendingCard> & Pick<LendingCard, 'auth_index' | 'name'>): LendingCard {
+  return makeCard({
+    role: 'hold',
+    priority: undefined,
+    priority_known: false,
+    priority_is_default: false,
+    suggested_priority: undefined,
+    needs_change: undefined,
+    tier: undefined,
+    ...overrides,
+  });
+}
+
 function makePool(cards: LendingCard[], overrides: Partial<LendingPool> = {}): LendingPool {
-  const resets = cards
-    .map((card) => card.reset_at_ms)
-    .filter((value): value is number => value != null);
+  const suggested = cards.filter((entry) => entry.role === 'suggested');
   return {
     id: 'codex:pro',
     provider: 'codex',
@@ -76,316 +88,278 @@ function makePool(cards: LendingCard[], overrides: Partial<LendingPool> = {}): L
     plan_label: 'Pro 200',
     window_kind: 'weekly',
     state: 'advised',
-    valid_until_ms: resets.length > 0 ? Math.min(...resets) : undefined,
+    valid_until_ms: NOW + 2 * DAY,
     observed_at_ms: NOW,
     fresh_until_ms: NOW + 7 * DAY,
     is_reference: false,
+    is_balanced: false,
+    needs_change_count: suggested.filter((entry) => entry.needs_change === true).length,
+    hold_count: cards.filter((entry) => entry.role === 'hold').length,
     reason_codes: [],
     cards,
+    outside_cards: [],
     ...overrides,
   };
 }
 
-function makeWindow(overrides: Partial<QuotaWindow> & Pick<QuotaWindow, 'id'>): QuotaWindow {
-  return {
-    label: overrides.id,
-    kind: 'weekly',
-    scope: 'standard',
-    period_hours: 168,
-    reset_at_ms: NOW + DAY,
-    ...overrides,
-  };
-}
-
-test('the ranking follows the page clock instead of the loaded snapshot', () => {
-  const cards = [
-    makeCard({ auth_index: 'a', name: 'A', remaining_percent: 88, reset_at_ms: NOW + 4 * DAY }),
-    makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
-  ];
-
-  const atLoad = deriveLendingView(makePool(cards), NOW);
-  assert.equal(atLoad.state, 'advised');
-  assert.deepEqual(atLoad.cards.map((card) => [card.name, card.role]), [['A', 'prefer'], ['B', 'avoid']]);
-  assert.deepEqual(atLoad.cards.map((card) => card.days_to_reset), [4, 2]);
-  assert.deepEqual(atLoad.cards.map((card) => card.daily_available_percent), [22, 20]);
-
-  const oneDayLater = deriveLendingView(makePool(cards), NOW + DAY);
-  assert.deepEqual(oneDayLater.cards.map((card) => [card.name, card.role]), [['A', 'avoid'], ['B', 'prefer']]);
-  assert.deepEqual(oneDayLater.cards.map((card) => card.days_to_reset), [3, 1]);
-  assert.deepEqual(oneDayLater.cards.map((card) => card.daily_available_percent), [29.3, 40]);
+const member = (authIndex: string, name: string, extra: Partial<LendingCard> = {}) => makeCard({
+  auth_index: authIndex,
+  name,
+  display_name: name,
+  ...extra,
 });
 
-test('a one-point-per-day spread is advised; anything smaller is balanced', () => {
-  const advised = deriveLendingView(makePool([
-    makeCard({ auth_index: 'a', name: 'A', remaining_percent: 22, reset_at_ms: NOW + 2 * DAY }),
-    makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 4 * DAY }),
-  ]), NOW);
-  assert.equal(advised.state, 'advised');
-  assert.deepEqual(advised.cards.map((card) => card.role), ['prefer', 'avoid']);
-
-  const balanced = deriveLendingView(makePool([
-    makeCard({ auth_index: 'a', name: 'A', remaining_percent: 21.8, reset_at_ms: NOW + 2 * DAY }),
-    makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 4 * DAY }),
-  ]), NOW);
-  assert.equal(balanced.state, 'balanced');
-  assert.deepEqual(balanced.cards.map((card) => card.role), ['balanced', 'balanced']);
+test('a priority renders as the integer CPA accepts, and an absent one as an em dash', () => {
+  assert.equal(lendingPriorityText(0), '0');
+  assert.equal(lendingPriorityText(-10), '-10');
+  assert.equal(lendingPriorityText(undefined), '—');
 });
 
-test('a reset under an hour uses one hour for the daily figure', () => {
-  const view = deriveLendingView(makePool([
-    makeCard({ auth_index: 'a', name: 'A', remaining_percent: 10, reset_at_ms: NOW + 30 * 60_000 }),
-    makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
-  ]), NOW);
-  assert.equal(view.cards[0].days_to_reset, 0);
-  assert.equal(view.cards[0].daily_available_percent, 240);
+test('the pool headline counts the cards to change, or says none', () => {
+  assert.equal(lendingPoolHeadline(makePool([member('a', 'A')], { needs_change_count: 2 }), t), 'quota.lending.pool_change(n=2)');
+  assert.equal(lendingPoolHeadline(makePool([member('a', 'A')], { needs_change_count: 0 }), t), 'quota.lending.pool_keep');
+  assert.equal(lendingPoolHeadline(makePool([], { state: 'no_advice' }), t), 'quota.lending.pool_no_advice');
 });
 
-test('a pool past its freshness bound becomes unavailable, never a percentage order', () => {
+test('the sentence names every changed card and every card left alone', () => {
+  const oneKeep = makePool([
+    member('a', 'A', { tier: 1, suggested_priority: 0, needs_change: false }),
+    member('b', 'B', { tier: 2, suggested_priority: -10, needs_change: true }),
+  ]);
+  const single = lendingPoolSentence(oneKeep, t);
+  assert.match(single.text, /quota\.lending\.say_set/);
+  assert.match(single.text, /quota\.lending\.say_pair\(name=B,n=-10\)/);
+  assert.match(single.text, /quota\.lending\.say_with_keep\(set=.*keep=A\)/);
+  assert.equal(single.note, undefined);
+
+  const manyKeeps = makePool([
+    member('a', 'A', { tier: 1, suggested_priority: 0, needs_change: false }),
+    member('b', 'B', { tier: 2, suggested_priority: 0, needs_change: false }),
+    member('c', 'C', { tier: 3, suggested_priority: -10, needs_change: true }),
+  ]);
+  assert.match(lendingPoolSentence(manyKeeps, t).text, /quota\.lending\.say_with_rest\(set=.*names=A.*list_separator.*B\)/);
+
+  const onlyChange = makePool([
+    member('a', 'A', { tier: 1, suggested_priority: -10, needs_change: true }),
+  ]);
+  const only = lendingPoolSentence(onlyChange, t);
+  assert.doesNotMatch(only.text, /say_with/);
+  assert.equal(only.note, undefined);
+});
+
+test('an unreadable current number is never counted as "no change needed"', () => {
   const pool = makePool([
-    makeCard({
-      auth_index: 'a', name: 'A', role: 'prefer', remaining_percent: 88,
-      reset_at_ms: NOW + 4 * DAY, reason_codes: ['needs_reauth'],
-    }),
-    makeCard({ auth_index: 'b', name: 'B', role: 'avoid', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
-  ], { fresh_until_ms: NOW - 1, valid_until_ms: NOW + 2 * DAY });
-
-  const view = deriveLendingView(pool, NOW);
-  assert.equal(view.state, 'unavailable');
-  assert.equal(view.valid_until_ms, undefined);
-  assert.ok(view.reason_codes.includes('reading_stale'));
-  for (const card of view.cards) {
-    assert.equal(card.role, 'unavailable');
-    assert.equal(card.days_to_reset, undefined);
-    assert.equal(card.daily_available_percent, undefined);
-    assert.ok(card.reason_codes.includes('reading_stale'));
-  }
-  assert.ok(view.cards[0].reason_codes.includes('needs_reauth'), 'static reasons survive the downgrade');
-
-  const atBoundary = deriveLendingView({ ...pool, fresh_until_ms: NOW }, NOW);
-  assert.equal(atBoundary.state, 'advised');
-});
-
-test('fewer than two serviceable cards stays limited and keeps each reason', () => {
-  const view = deriveLendingView(makePool([
-    makeCard({ auth_index: 'a', name: 'A', role: 'normal' }),
-    makeCard({
-      auth_index: 'b', name: 'B', role: 'limited', is_comparable: false,
-      reason_codes: ['window_exhausted'],
-    }),
-  ], { state: 'limited' }), NOW);
-  assert.equal(view.state, 'limited');
-  assert.deepEqual(view.cards.map((card) => card.role), ['normal', 'limited']);
-  assert.deepEqual(view.cards[1].reason_codes, ['window_exhausted']);
-});
-
-test('an unavailable pool keeps its state, roles and window choice', () => {
-  const view = deriveLendingView(makePool([
-    makeCard({
-      auth_index: 'a', name: 'A', role: 'unavailable', is_comparable: false,
-      reason_codes: ['reset_time_unknown'],
-    }),
-  ], {
-    state: 'unavailable',
-    reason_codes: ['reset_time_unknown'],
-    valid_until_ms: undefined,
-  }), NOW);
-  assert.equal(view.state, 'unavailable');
-  assert.equal(view.cards[0].role, 'unavailable');
-  assert.equal(view.cards[0].days_to_reset, undefined);
-  assert.deepEqual(view.cards[0].reason_codes, ['reset_time_unknown']);
-});
-
-test('the reset sort key uses only long standard windows with a stated instant', () => {
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'weekly', period_hours: 168 })), true);
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'daily', kind: 'daily', period_hours: 24 })), true);
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'short', kind: 'five_hour', period_hours: 5 })), false);
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'rolling', kind: 'rolling' })), false);
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'credit', kind: 'credit_usage' })), false);
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'model', scope: 'model' })), false);
-  assert.equal(isLongStandardWindow(makeWindow({ id: 'no-period', period_hours: undefined })), false);
-
-  const key = earliestLongWindow([
-    makeWindow({ id: 'five-hour', kind: 'five_hour', period_hours: 5, reset_at_ms: NOW + HOUR, remaining_percent: 90 }),
-    makeWindow({ id: 'weekly', reset_at_ms: NOW + 3 * DAY, remaining_percent: 40 }),
-    makeWindow({ id: 'monthly', kind: 'monthly', period_hours: 720, reset_at_ms: NOW + 9 * DAY, remaining_percent: 70 }),
+    member('a', 'A', { tier: 1, priority_known: false, priority: undefined, suggested_priority: 5, needs_change: undefined }),
+    member('b', 'B', { tier: 2, suggested_priority: 5, needs_change: true }),
   ]);
-  assert.deepEqual(key, { resetAtMS: NOW + 3 * DAY, remainingPercent: 40 });
-
-  assert.equal(earliestLongWindow([makeWindow({ id: 'short', kind: 'five_hour', period_hours: 5 })]), null);
-  assert.equal(earliestLongWindow([makeWindow({ id: 'text-only', reset_at_ms: undefined })]), null);
+  const sentence = lendingPoolSentence(pool, t);
+  assert.match(sentence.text, /name=B,n=5/);
+  assert.doesNotMatch(sentence.text, /say_with_keep|say_with_rest/);
 });
 
-test('the reset sort key breaks a tie by the tighter remaining share', () => {
-  const key = earliestLongWindow([
-    makeWindow({ id: 'b', reset_at_ms: NOW + DAY, remaining_percent: 70 }),
-    makeWindow({ id: 'a', reset_at_ms: NOW + DAY, remaining_percent: 30 }),
+test('a pool with nothing to change speaks about balance or about the current settings', () => {
+  const balancedPair = makePool([
+    member('a', 'A', { suggested_priority: 5 }),
+    member('b', 'B', { suggested_priority: 0 }),
+  ], { is_balanced: true });
+  assert.equal(lendingPoolSentence(balancedPair, t).text, 'quota.lending.say_balanced_pair(n=2)');
+  assert.equal(lendingPoolSentence(balancedPair, t).note, 'quota.lending.say_balanced_note');
+
+  const balancedMany = makePool([
+    member('a', 'A'), member('b', 'B'), member('c', 'C'),
+  ], { is_balanced: true });
+  assert.equal(lendingPoolSentence(balancedMany, t).text, 'quota.lending.say_balanced_other(n=3)');
+
+  const plain = makePool([member('a', 'A')]);
+  assert.equal(lendingPoolSentence(plain, t).text, 'quota.lending.say_keep');
+});
+
+test('hold cards add their count to the sentence note', () => {
+  const pool = makePool([
+    member('a', 'A', { suggested_priority: -10, needs_change: true }),
+    makeHold({ auth_index: 'h', name: 'H', primary_reason: 'reading_failed', reason_codes: ['reading_failed'] }),
   ]);
-  assert.deepEqual(key, { resetAtMS: NOW + DAY, remainingPercent: 30 });
+  assert.equal(lendingPoolSentence(pool, t).note, 'quota.lending.say_hold_suffix(n=1)');
 });
 
-test('the fast-reset mark opens at exactly a third of the period', () => {
-  assert.equal(isFastResetWindow({ period_hours: 24, reset_at_ms: NOW + 8 * HOUR }, NOW), true);
-  assert.equal(isFastResetWindow({ period_hours: 24, reset_at_ms: NOW + 8 * HOUR + 1 }, NOW), false);
-  assert.equal(isFastResetWindow({ period_hours: 24, reset_at_ms: NOW - 1 }, NOW), false);
-  assert.equal(isFastResetWindow({ period_hours: undefined, reset_at_ms: NOW + HOUR }, NOW), false);
-  assert.equal(isFastResetWindow({ period_hours: 0, reset_at_ms: NOW + HOUR }, NOW), false);
-  assert.equal(isFastResetWindow({ period_hours: 5, reset_at_ms: NOW + HOUR }, NOW), true);
+test('hold counts collapse by primary reason and follow the contract vocabulary order', () => {
+  const pool = makePool([
+    makeHold({ auth_index: 'h1', name: 'H1', primary_reason: 'remaining_below_ten', reason_codes: ['remaining_below_ten'] }),
+    makeHold({ auth_index: 'h2', name: 'H2', primary_reason: 'window_exhausted', reason_codes: ['window_exhausted', 'remaining_below_ten'] }),
+    makeHold({ auth_index: 'h3', name: 'H3', primary_reason: 'window_exhausted', reason_codes: ['window_exhausted'] }),
+  ], { reason_codes: ['window_exhausted', 'remaining_below_ten'] });
+  assert.deepEqual(lendingHoldCounts(pool), [
+    { code: 'window_exhausted', count: 2 },
+    { code: 'remaining_below_ten', count: 1 },
+  ]);
+
+  const unknownOrder = makePool([
+    makeHold({ auth_index: 'h1', name: 'H1', primary_reason: 'future_code', reason_codes: ['future_code'] }),
+    makeHold({ auth_index: 'h2', name: 'H2', primary_reason: 'reading_failed', reason_codes: ['reading_failed'] }),
+  ], { reason_codes: ['reading_failed'] });
+  assert.deepEqual(lendingHoldCounts(unknownOrder).map((entry) => entry.code), ['reading_failed', 'future_code']);
 });
 
-test('the fast-reset level splits at exactly 50% of the raw share', () => {
-  const at = (remaining: number) => quotaFastResetState(
-    { period_hours: 24, reset_at_ms: NOW + HOUR, remaining_percent: remaining },
-    NOW,
-  );
-  assert.equal(at(50), 'high');
-  assert.equal(at(49.9), 'low');
-  assert.equal(quotaFastResetState(
-    { period_hours: 24, reset_at_ms: NOW + HOUR, used_percent: 50 },
-    NOW,
-  ), 'high');
-  assert.equal(quotaFastResetState({ period_hours: 24, reset_at_ms: NOW + HOUR }, NOW), null);
-  assert.equal(quotaFastResetState(
-    { period_hours: 24, reset_at_ms: NOW + 20 * HOUR, remaining_percent: 90 },
-    NOW,
-  ), null);
+test('rank wording shares one position across a tier and marks the tie', () => {
+  const pool = makePool([member('a', 'A', { tier: 2 })]);
+  assert.equal(lendingRankLabel(pool, pool.cards[0], t), 'quota.lending.rank_n(n=2)');
+
+  const tied = makePool([
+    member('a', 'A', { tier: 1 }),
+    member('b', 'B', { tier: 1 }),
+    member('c', 'C', { tier: 2 }),
+  ]);
+  assert.equal(lendingRankLabel(tied, tied.cards[0], t), 'quota.lending.rank_tied(n=1)');
+  assert.equal(lendingRankLabel(tied, tied.cards[1], t), 'quota.lending.rank_tied(n=1)');
+  assert.equal(lendingRankLabel(tied, tied.cards[2], t), 'quota.lending.rank_n(n=2)');
+
+  const untiered = makePool([member('a', 'A', { tier: undefined })]);
+  assert.equal(lendingRankLabel(untiered, untiered.cards[0], t), 'quota.lending.rank_same');
 });
 
-test('the reset line labels precision and a text-only boundary', () => {
-  const reset = NOW + 3 * HOUR;
-  const exact = quotaResetCountdownLabel({ reset_at_ms: reset, reset_accuracy: 'exact' }, NOW, t);
-  assert.equal(exact, t('quota.reset_countdown_label', {
-    time: formatCountdown(reset, NOW, t) ?? '',
-    date: formatShortDateTime(reset),
-  }));
-  assert.ok(exact.includes(formatShortDateTime(reset)));
+test('an outside card names its pool label, falling back to its provider', () => {
+  const withPool: LendingOutsideCard = {
+    auth_index: 'o1', name: 'O1', display_name: 'O1', provider: 'codex', pool_label: 'codex · Team',
+    priority: 0, priority_known: true, priority_is_default: true,
+  };
+  const withoutPool: LendingOutsideCard = {
+    auth_index: 'o2', name: 'O2', display_name: 'O2', provider: 'claude',
+    priority_known: false, priority_is_default: false,
+  };
+  assert.equal(lendingOutsidePoolLabel(withPool), 'codex · Team');
+  assert.equal(lendingOutsidePoolLabel(withoutPool), 'claude');
+});
 
-  const derived = quotaResetCountdownLabel({ reset_at_ms: reset, reset_accuracy: 'derived' }, NOW, t);
-  assert.ok(derived.startsWith('~'));
-  assert.ok(derived.endsWith(` · ${t('quota.reset_reference')}`));
+test('hold labels cover the fixed vocabulary and pass an unknown code through', () => {
+  assert.equal(lendingHoldLabel('needs_reauth', t), 'quota.lending.hold.needs_reauth');
+  assert.equal(lendingHoldLabel('future_code', t), 'future_code');
+  assert.equal(lendingHoldLabel(undefined, t), 'quota.lending.hold.unknown');
+});
 
-  const approximate = quotaResetCountdownLabel({ reset_at_ms: reset, reset_accuracy: 'approximate' }, NOW, t);
-  assert.ok(approximate.startsWith('~'));
+test('an expanded hold row states a passed refill, a short age, and the low-window share', () => {
+  const stale = makeHold({
+    auth_index: 'stale', name: 'Stale', primary_reason: 'reading_stale', reason_codes: ['reading_stale'],
+  });
+  const context = { generatedAtMS: NOW, nowMS: NOW };
 
   assert.equal(
-    quotaResetCountdownLabel({ reset_label: 'later this week' }, NOW, t),
-    t('quota.reset_time_unknown_label', { label: 'later this week' }),
+    lendingHoldRowNote({ ...stale, reset_at_ms: NOW - 1, observed_at_ms: NOW - 26 * 3_600_000 }, t, context),
+    'quota.lending.hold_note.reading_stale_expired',
   );
   assert.equal(
-    quotaResetCountdownLabel({ reset_at_ms: NOW - 1, reset_accuracy: 'exact' }, NOW, t),
-    t('quota.recovered'),
+    lendingHoldRowNote({ ...stale, reset_at_ms: NOW + DAY, observed_at_ms: NOW - 26 * 3_600_000 }, t, context),
+    'quota.lending.hold_note.reading_stale(n=26)',
   );
   assert.equal(
-    quotaResetCountdownLabel({ reset_at_ms: NOW - 1, reset_accuracy: 'derived', reset_label: 'upstream text' }, NOW, t),
-    `~upstream text · ${t('quota.reset_reference')}`,
+    lendingHoldRowNote({ ...stale, reset_at_ms: NOW + DAY, observed_at_ms: NOW - 60_000 }, t, context),
+    'quota.lending.hold_note.reading_stale_minutes(n=1)',
   );
-  assert.equal(quotaResetCountdownLabel({}, NOW, t), '');
+  assert.equal(
+    lendingHoldRowNote({ ...stale, reset_at_ms: NOW + DAY, observed_at_ms: undefined }, t, context),
+    'quota.lending.hold_note.reading_stale_unknown',
+  );
+
+  const low = makeHold({
+    auth_index: 'low', name: 'Low', primary_reason: 'remaining_below_ten', reason_codes: ['remaining_below_ten'],
+    remaining_percent: 6, window_kind: 'weekly',
+  });
+  assert.equal(
+    lendingHoldRowNote(low, t, { ...context, windowLabel: 'quota.window_weekly' }),
+    'quota.lending.hold_note.remaining_below_ten_window(window=quota.window_weekly,n=6)',
+  );
+  assert.equal(lendingHoldRowNote(low, t, context), 'quota.lending.hold_note.remaining_below_ten');
+  assert.equal(
+    lendingHoldRowNote({ ...low, remaining_percent: undefined }, t, { ...context, windowLabel: 'quota.window_weekly' }),
+    'quota.lending.hold_note.remaining_below_ten',
+  );
+  assert.equal(
+    lendingHoldRowNote({ ...low, window_kind: undefined }, t, context),
+    'quota.lending.hold_note.remaining_below_ten',
+  );
+  assert.equal(lendingHoldRowNote({ ...stale, primary_reason: 'future_code' }, t, context), undefined);
+  assert.equal(lendingHoldRowNote({ ...stale, primary_reason: undefined }, t, context), undefined);
 });
 
-test('role and reason helpers cover every contract value and pass an unknown code through', () => {
-  const roles = ['prefer', 'avoid', 'normal', 'balanced', 'limited', 'unavailable'] as const;
-  assert.deepEqual(roles.map((role) => lendingRoleLabel(role, t)), roles.map((role) => `quota.lending.role.${role}`));
-  assert.deepEqual(roles.map((role) => lendingRoleTone(role)),
-    ['accent', 'warn', 'neutral', 'neutral', 'warn', 'neutral']);
-  assert.equal(lendingReasonLabel('window_exhausted', t), 'quota.lending.reason.window_exhausted');
+test('unpooled reasons keep the three documented sentences and pass an unknown code through', () => {
+  assert.equal(lendingReasonLabel('plan_type_unknown', t), 'quota.lending.reason.plan_type_unknown');
+  assert.equal(lendingReasonLabel('pool_too_small', t), 'quota.lending.reason.pool_too_small');
+  assert.equal(lendingReasonLabel('credential_disabled', t), 'quota.lending.reason.credential_disabled');
   assert.equal(lendingReasonLabel('future_code', t), 'future_code');
 });
 
-test('the detail view is projected from the same overview without a second request', () => {
-  const lending: LendingOverview = {
+test('the entry count is the sum of needs_change_count and its state comes from the pools', () => {
+  assert.equal(lendingEntryState(undefined), null);
+  assert.equal(lendingEntryState(null), null);
+
+  const overview: LendingOverview = {
     generated_at_ms: NOW,
-    pools: [makePool([
-      makeCard({ auth_index: 'a', name: 'A', remaining_percent: 88, reset_at_ms: NOW + 4 * DAY }),
-      makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
-    ])],
+    pools: [
+      makePool([member('a', 'A', { needs_change: true })], { needs_change_count: 1 }),
+      makePool([member('c', 'C', { needs_change: true })], { id: 'codex:team', needs_change_count: 1 }),
+    ],
+    unpooled_count: 0,
+    unpooled: [],
+  };
+  assert.deepEqual(lendingEntryState(overview), { kind: 'change', changeCount: 2 });
+
+  assert.deepEqual(
+    lendingEntryState({ ...overview, pools: [makePool([member('a', 'A')], { needs_change_count: 0 })] }),
+    { kind: 'keep', changeCount: 0 },
+  );
+  assert.deepEqual(
+    lendingEntryState({ ...overview, pools: [makePool([], { state: 'no_advice', needs_change_count: 0 })] }),
+    { kind: 'plain', changeCount: 0 },
+  );
+  assert.deepEqual(lendingEntryState({ generated_at_ms: NOW, pools: [], unpooled_count: 0, unpooled: [] }), { kind: 'plain', changeCount: 0 });
+});
+
+test('a credential lookup finds its card and its detail projection without a second request', () => {
+  const pool = makePool([
+    member('a', 'A'),
+    makeHold({ auth_index: 'h', name: 'H', primary_reason: 'reading_failed', reason_codes: ['reading_failed'] }),
+  ]);
+  const overview: LendingOverview = {
+    generated_at_ms: NOW,
+    pools: [pool],
     unpooled_count: 1,
     unpooled: [{ auth_index: 'x', name: 'X', reason_codes: ['plan_type_unknown'] }],
   };
 
-  const found = findLendingCard(lending, 'a', NOW);
-  assert.equal(found?.pool.id, 'codex:pro');
-  assert.equal(found?.card.role, 'prefer');
-  assert.equal(findLendingCard(lending, 'x', NOW), null);
+  assert.equal(findLendingCard(overview, 'a')?.card.auth_index, 'a');
+  assert.equal(findLendingCard(overview, 'h')?.card.role, 'hold');
+  assert.equal(findLendingCard(overview, 'x'), null);
 
-  const member = lendingDetailFor(lending, 'a', NOW);
-  assert.equal(member?.pool?.id, 'codex:pro');
-  assert.equal(member?.pool?.cards.find((card) => card.auth_index === 'a')?.role, 'prefer');
-  assert.deepEqual(member?.unpooled_reason_codes, []);
+  const inside = lendingDetailFor(overview, 'a');
+  assert.equal(inside?.pool?.id, 'codex:pro');
+  assert.deepEqual(inside?.unpooled_reason_codes, []);
 
-  const unpooled = lendingDetailFor(lending, 'x', NOW);
-  assert.equal(unpooled?.pool, null);
-  assert.deepEqual(unpooled?.unpooled_reason_codes, ['plan_type_unknown']);
+  const outside = lendingDetailFor(overview, 'x');
+  assert.equal(outside?.pool, null);
+  assert.deepEqual(outside?.unpooled_reason_codes, ['plan_type_unknown']);
 
-  assert.equal(lendingDetailFor(undefined, 'a', NOW), undefined);
+  assert.equal(lendingDetailFor(null, 'a'), undefined);
 });
 
 test('the page basis is the oldest pool reading, or the overview generation time without one', () => {
-  const overview = {
+  const overview: LendingOverview = {
     generated_at_ms: NOW,
     pools: [
-      makePool([makeCard({ auth_index: 'a', name: 'A' })], { observed_at_ms: NOW + DAY }),
-      makePool([makeCard({ auth_index: 'b', name: 'B' })], { observed_at_ms: NOW + 2 * DAY }),
+      makePool([member('a', 'A')], { observed_at_ms: NOW + DAY }),
+      makePool([member('b', 'B')], { observed_at_ms: NOW + 2 * DAY }),
     ],
     unpooled_count: 0,
     unpooled: [],
   };
   assert.equal(lendingBasisMS(overview), NOW + DAY);
 
-  const withoutReadings = {
+  const withoutReadings: LendingOverview = {
     ...overview,
-    pools: [makePool([makeCard({ auth_index: 'a', name: 'A' })], { observed_at_ms: undefined })],
+    pools: [makePool([member('a', 'A')], { observed_at_ms: undefined })],
   };
   assert.equal(lendingBasisMS(withoutReadings), NOW);
 });
 
-test('the header entry has three states and no entry when the field is absent', () => {
-  assert.equal(lendingEntryState(undefined, NOW), null);
-
-  const advised = {
-    generated_at_ms: NOW,
-    pools: [
-      makePool([
-        makeCard({ auth_index: 'a', name: 'A', remaining_percent: 88, reset_at_ms: NOW + 4 * DAY }),
-        makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 2 * DAY }),
-      ]),
-      makePool([
-        makeCard({ auth_index: 'c', name: 'C', remaining_percent: 90, reset_at_ms: NOW + 4 * DAY }),
-        makeCard({ auth_index: 'd', name: 'D', remaining_percent: 30, reset_at_ms: NOW + 2 * DAY }),
-      ], { id: 'codex:team' }),
-    ],
-    unpooled_count: 0,
-    unpooled: [],
-  };
-  assert.deepEqual(lendingEntryState(advised, NOW), { kind: 'advised', advisedCount: 2 });
-
-  const balanced = {
-    ...advised,
-    pools: [makePool([
-      makeCard({ auth_index: 'a', name: 'A', remaining_percent: 21.8, reset_at_ms: NOW + 2 * DAY }),
-      makeCard({ auth_index: 'b', name: 'B', remaining_percent: 40, reset_at_ms: NOW + 4 * DAY }),
-    ], { state: 'balanced' })],
-  };
-  assert.deepEqual(lendingEntryState(balanced, NOW), { kind: 'balanced', advisedCount: 0 });
-
-  const limited = {
-    ...advised,
-    pools: [makePool([
-      makeCard({ auth_index: 'a', name: 'A' }),
-      makeCard({ auth_index: 'b', name: 'B', role: 'limited', is_comparable: false }),
-    ], { state: 'limited' })],
-  };
-  assert.deepEqual(lendingEntryState(limited, NOW), { kind: 'plain', advisedCount: 0 });
-
-  const stale = {
-    ...advised,
-    pools: [makePool([makeCard({ auth_index: 'a', name: 'A' })], {
-      fresh_until_ms: NOW - 1,
-      valid_until_ms: NOW + DAY,
-    })],
-  };
-  assert.deepEqual(lendingEntryState(stale, NOW), { kind: 'plain', advisedCount: 0 });
-});
-
-test('the unpooled groups count each reason once per credential and keep the backend order by code', () => {
+test('the unpooled groups count each reason once per credential and stay ordered by code', () => {
   assert.deepEqual(groupLendingUnpooled([]), []);
 
   const groups = groupLendingUnpooled([
@@ -393,9 +367,8 @@ test('the unpooled groups count each reason once per credential and keep the bac
     { auth_index: 'y', name: 'claude-secondary', reason_codes: ['plan_type_unknown', 'plan_type_unknown'] },
   ]);
   assert.deepEqual(groups.map((group) => group.code), ['no_long_window', 'plan_type_unknown']);
-  assert.deepEqual(groups.map((group) => group.members.map((member) => member.auth_index)), [
+  assert.deepEqual(groups.map((group) => group.members.map((entry) => entry.auth_index)), [
     ['x'],
     ['x', 'y'],
   ]);
 });
-

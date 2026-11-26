@@ -854,29 +854,35 @@ function oauthWarmupFixtureRoute() {
 const DAY = 86_400_000;
 
 // The lending projection the OAuth header summarises and the lending page renders. It is built
-// from the same auth indexes the quota fixture uses, with a spread wide enough to be "advised"
-// after the page clock recomputes the roles, plus two unpooled credentials for the fold.
+// from the same auth indexes the quota fixture uses, with one card already right and one that
+// needs a change, plus two unpooled credentials for the fold.
 function lendingFixture() {
   const now = Date.now();
-  const card = (authIndex, name, role, remaining, resetDays) => ({
+  const card = (authIndex, displayName, options) => ({
     auth_index: authIndex,
-    name,
-    role,
+    name: `${displayName}.json`,
+    display_name: displayName,
+    role: 'suggested',
     window_id: authIndex + '-window-1',
     window_kind: 'weekly',
-    remaining_percent: remaining,
-    reset_at_ms: now + resetDays * DAY,
     reset_accuracy: 'exact',
     observed_at_ms: now,
     fresh_until_ms: now + 7 * DAY,
-    days_to_reset: resetDays,
-    daily_available_percent: Number((remaining / resetDays).toFixed(1)),
+    priority_is_default: false,
+    can_edit_priority: true,
     reason_codes: [],
     is_comparable: true,
+    ...options,
   });
   const cards = [
-    card('auth-01', 'credential-01.json', 'prefer', 90, 4),
-    card('auth-05', 'credential-05.json', 'avoid', 30, 2),
+    card('auth-01', 'credential-01', {
+      tier: 1, remaining_percent: 90, reset_at_ms: now + 4 * DAY,
+      priority: 10, priority_known: true, suggested_priority: 10, needs_change: false,
+    }),
+    card('auth-05', 'credential-05', {
+      tier: 2, remaining_percent: 30, reset_at_ms: now + 2 * DAY,
+      priority: 10, priority_known: true, suggested_priority: -10, needs_change: true,
+    }),
   ];
   return {
     generated_at_ms: now,
@@ -891,8 +897,12 @@ function lendingFixture() {
       observed_at_ms: now,
       fresh_until_ms: now + 7 * DAY,
       is_reference: false,
+      is_balanced: false,
+      needs_change_count: 1,
+      hold_count: 0,
       reason_codes: [],
       cards,
+      outside_cards: [],
     }],
     unpooled_count: 2,
     unpooled: [
@@ -1539,11 +1549,11 @@ export async function quotaLending({ base, page, context, check }) {
 }
 
 /**
- * The secondary page's real states, the fold, history, phone width, English copy,
- * the visible clock and the read-only surface.
+ * The secondary page's real states, the folds, history, phone width, English copy, the visible
+ * clock, the way to the priority field and the read-only surface.
  *
- * A mutable route serves `probeLending(state)` so one page reload moves the whole
- * workspace; the shared OAuth fixtures stay underneath for the credential rows.
+ * A mutable route serves `probeLending(state)` so one page reload moves the whole workspace; the
+ * shared OAuth fixtures stay underneath for the credential rows.
  */
 async function verifyLendingStates({ base, page, context, check }) {
   const shared = oauthManagementFixtures;
@@ -1572,6 +1582,10 @@ async function verifyLendingStates({ base, page, context, check }) {
       writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
     }
   };
+  let quotaRequests = 0;
+  const countQuota = (request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/management/quota')) quotaRequests += 1;
+  };
   const setState = (state) => { clock.state = state; clock.mode = 'lending'; };
   const gotoOAuth = async () => {
     await page.goto(`${base}/oauth-management`, { waitUntil: 'domcontentloaded' });
@@ -1588,35 +1602,48 @@ async function verifyLendingStates({ base, page, context, check }) {
     if (count === 0) return { count, text: '', kind: null };
     return { count, text: (await entry.innerText()).trim(), kind: await entry.getAttribute('data-lending-entry') };
   };
-  const poolState = () => page.locator('[data-lending-pool]').first().getAttribute('data-lending-state');
-  const card = (authIndex) => page.locator(`[data-lending-card="${authIndex}"]`);
-  const role = (authIndex) => card(authIndex).getAttribute('data-lending-role');
-  const metric = async (authIndex, name) => (await card(authIndex).locator(`[data-lending-metric="${name}"] span`).first().innerText()).trim();
-  const reasons = (authIndex) => card(authIndex).locator('li').allInnerTexts();
+  const poolState = (index = 0) => page.locator('[data-lending-pool]').nth(index).getAttribute('data-lending-state');
+  const cardRow = (authIndex) => page.locator(`[data-lending-card="${authIndex}"]`);
+  const action = (authIndex) => cardRow(authIndex).getAttribute('data-lending-action');
+  const suggested = (authIndex) => cardRow(authIndex).locator('[data-lending-suggested]').getAttribute('data-lending-suggested');
+  const goLink = (authIndex) => cardRow(authIndex).locator('[data-lending-go]');
+  const sentence = () => page.locator('[data-lending-sentence]').innerText();
   const poolText = () => page.locator('[data-lending-view="page"]').innerText();
   const headerHeight = () => page.locator('.terminal-page-head').first().evaluate((node) => node.getBoundingClientRect().height);
+  const openDisclosure = async (id) => {
+    await page.locator(`[data-lending-disclosure="${id}"]`).waitFor({ timeout: 10000 });
+    await page.locator(`[data-lending-disclosure-toggle="${id}"]`).click();
+    await page.locator(`[data-lending-disclosure-body="${id}"]`).waitFor({ timeout: 10000 });
+  };
+  const evidenceText = () => page.locator('[data-lending-evidence-table]').innerText();
 
   await page.addInitScript(() => window.localStorage.setItem('omc-lang', 'zh'));
   await context.route('**/management/quota', quotaHandler);
   page.on('request', onRequest);
+  page.on('request', countQuota);
   try {
     await fs.mkdir('tmp/lending-proof', { recursive: true });
 
     // --- The OAuth header entry: three states plus the two absences.
     setState('base');
     await gotoOAuth();
-    const advised = await entryState();
+    const change = await entryState();
     check('the OAuth page renders no lending panel', (await page.locator('[data-lending-view="page"]').count()) === 0);
-    check('an advised pool shows the count and kind', advised.count === 1 && advised.kind === 'advised' && advised.text.includes('额度拆借 · 1 条建议'), JSON.stringify(advised));
+    check('a card to change shows the count', change.count === 1 && change.kind === 'change' && change.text === '额度拆借 · 1 张要改', JSON.stringify(change));
     check('the entry is an anchor inside the page header', await page.locator('[data-lending-entry]').evaluate((node) => node.tagName === 'A' && node.closest('.terminal-page-head') !== null));
     await settleLayout(page);
     const heightWithEntry = await headerHeight();
     await page.screenshot({ path: 'tmp/lending-proof/oauth-entry-advised.png' });
 
+    setState('keep');
+    await gotoOAuth();
+    const keep = await entryState();
+    check('nothing to change shows the no-change copy', keep.kind === 'keep' && keep.text === '额度拆借 · 都不用改', JSON.stringify(keep));
+
     setState('balanced');
     await gotoOAuth();
     const balanced = await entryState();
-    check('a balanced pool shows the balanced copy', balanced.kind === 'balanced' && balanced.text.includes('额度拆借 · 均衡'), JSON.stringify(balanced));
+    check('a close ranking still reads as no change', balanced.kind === 'keep' && balanced.text === '额度拆借 · 都不用改', JSON.stringify(balanced));
 
     for (const [state, label] of [['single', 'no pool'], ['empty', 'empty overview']]) {
       setState(state);
@@ -1636,81 +1663,182 @@ async function verifyLendingStates({ base, page, context, check }) {
       }
     }
 
-    // --- Every secondary-page state against the same route.
+    // --- One change, one card already right.
     setState('base');
     await gotoLending();
     check('base: one advised pool', (await page.locator('[data-lending-pool]').count()) === 1 && (await poolState()) === 'advised');
-    check('base: pool validity is stated', (await poolText()).includes('建议有效到'));
-    check('base: A is preferred and B avoided', (await role('auth-01')) === 'prefer' && (await role('auth-02')) === 'avoid');
-    check('base: the daily figures match the formula', (await metric('auth-01', 'daily')).startsWith('22.6') && (await metric('auth-02', 'daily')).startsWith('17.4'), `${await metric('auth-01', 'daily')} / ${await metric('auth-02', 'daily')}`);
-    check('base: the reason names both seats and the conclusion', /credential-01\.json/.test(await poolText()) && /先偏用/.test(await poolText()));
+    check('base: the header says one card needs a change', (await page.locator('[data-lending-pool-verdict]').innerText()).includes('1 张要改'));
+    check('base: one row per card carries its own verdict', (await action('auth-01')) === 'keep' && (await action('auth-02')) === 'change');
+    check('base: the current and suggested numbers are both printed', (await suggested('auth-01')) === '0' && (await suggested('auth-02')) === '-10');
+    check('base: the sentence names the change and the card to leave alone', /credential-02/.test(await sentence()) && /-10/.test(await sentence()) && /credential-01/.test(await sentence()));
+    check('base: only the changed card offers the way to the field', (await goLink('auth-02').count()) === 1 && (await goLink('auth-01').count()) === 0);
+    const goHref = (await goLink('auth-02').getAttribute('href')) || '';
+    check('base: the way to the field names the credential and carries no number', goHref.includes('/oauth-management?open=auth-02') && !goHref.includes('-10'), goHref);
     await page.screenshot({ path: 'tmp/lending-proof/state-base.png' });
 
-    // The fold is tested on the body with two unpooled credentials, one carrying two reasons.
+    const requestsBeforeEvidence = quotaRequests;
+    check('base: the basis starts folded', (await page.locator('[data-lending-disclosure-body="evidence"]').count()) === 0);
+    await openDisclosure('evidence');
+    const baseEvidence = await evidenceText();
+    check('base: the basis ranks both cards', /第 1/.test(baseEvidence) && /第 2/.test(baseEvidence), baseEvidence);
+    check('base: opening the basis asks for nothing', quotaRequests === requestsBeforeEvidence, `${requestsBeforeEvidence} -> ${quotaRequests}`);
+
+    // The fold is tested on the body with two unpooled credentials, one per reason.
     const summary = page.locator('[data-lending-unpooled-summary]');
     check('unpooled: starts folded and hides names', (await summary.getAttribute('aria-expanded')) === 'false' && (await page.locator('[data-lending-unpooled-names]').count()) === 0);
     const summaryText = await summary.innerText();
     check('unpooled: the total and every reason count are visible', /未进池 2 张/.test(summaryText)
-      && /没有周期 24 小时以上的窗口 1/.test(summaryText)
       && /套餐未知，不进任何池 1/.test(summaryText)
       && /同套餐不足两张，不成池 1/.test(summaryText), summaryText);
     await page.screenshot({ path: 'tmp/lending-proof/unpooled-folded.png' });
     await summary.click();
     const groupToggles = page.locator('[data-lending-unpooled-group-toggle]');
-    check('unpooled: opening the summary shows one group per reason', (await groupToggles.count()) === 3);
-    for (let index = 0; index < 3; index += 1) await groupToggles.nth(index).click();
+    check('unpooled: opening the summary shows one group per reason', (await groupToggles.count()) === 2);
+    for (let index = 0; index < 2; index += 1) await groupToggles.nth(index).click();
     const names = await page.locator('[data-lending-unpooled-names] li').allInnerTexts();
-    check('unpooled: names appear only after a reason is opened', names.length === 3 && new Set(names).size === 2, names.join(' | '));
+    check('unpooled: names appear only after a reason is opened', names.length === 2 && new Set(names).size === 2, names.join(' | '));
     await page.screenshot({ path: 'tmp/lending-proof/unpooled-expanded.png' });
+
+    // --- Nothing to change, and a ranking too close to act on.
+    setState('keep');
+    await gotoLending();
+    check('keep: the pool verdict says no change', (await page.locator('[data-lending-pool-verdict]').innerText()).trim() === '不用改');
+    check('keep: the sentence agrees', (await sentence()).includes('现在的设置已经合适，不用改'));
+    check('keep: no card offers the way to the field', (await page.locator('[data-lending-go]').count()) === 0);
+    await page.screenshot({ path: 'tmp/lending-proof/state-keep.png' });
 
     setState('balanced');
     await gotoLending();
-    check('balanced: state and both roles agree', (await poolState()) === 'balanced' && (await role('auth-01')) === 'balanced' && (await role('auth-02')) === 'balanced');
+    check('balanced: the sentence calls them about the same', (await sentence()).includes('两张差不多，不用改'));
+    await openDisclosure('evidence');
+    check('balanced: the basis gives both cards the same position and marks the tie', (await evidenceText()).includes('第 1，并列'), await evidenceText());
+    await page.screenshot({ path: 'tmp/lending-proof/state-balanced.png' });
 
+    // --- Held cards and a pool with no ranking.
+    setState('hold');
+    await gotoLending();
+    check('hold: the collapsed line counts the held card', (await page.locator('[data-lending-hold-toggle]').innerText()).includes('不动 1 张'));
+    check('hold: held rows stay hidden until asked for', (await page.locator('[data-lending-disclosure-body="hold"]').count()) === 0);
+    await openDisclosure('hold');
+    const heldRow = page.locator('[data-lending-hold-card="auth-03"]');
+    check('hold: opening lists the card with its short reason', (await heldRow.innerText()).includes('已用完') && (await heldRow.innerText()).includes('不动'));
+    check('hold: a held card has no suggested number', (await cardRow('auth-03').count()) === 0);
+    await page.screenshot({ path: 'tmp/lending-proof/state-hold.png' });
+
+    setState('noAdvice');
+    await gotoLending();
+    const noAdvice = page.locator('[data-lending-state="no_advice"]');
+    check('no-advice: the whole pool collapses to one line', (await noAdvice.innerText()).includes('暂无建议') && (await noAdvice.innerText()).includes('2 张都不动'));
+    check('no-advice: no ranking means no basis to open', (await page.locator('[data-lending-disclosure="evidence"]').count()) === 0);
+    await openDisclosure('no-advice');
+    check('no-advice: opening lists both held cards', (await page.locator('[data-lending-hold-card]').count()) === 2);
+    await page.screenshot({ path: 'tmp/lending-proof/state-no-advice.png' });
+
+    // --- A current number that cannot be read, and a priority this console cannot write.
+    setState('unknown');
+    await gotoLending();
+    check('unknown: the current number is a dash and the suggestion stays', (await cardRow('auth-01').innerText()).includes('—') && (await suggested('auth-01')) === '5');
+    check('unknown: the row says the current number could not be read', (await cardRow('auth-01').innerText()).includes('现在的数字读不到'));
+    check('unknown: nothing is judged and nothing links to the field', (await action('auth-01')) === 'unknown' && (await page.locator('[data-lending-go]').count()) === 0);
+
+    setState('cannotEdit');
+    await gotoLending();
+    check('cannot-edit: the verdict still says change', (await action('auth-01')) === 'change');
+    check('cannot-edit: the row explains why there is no way to the field', (await cardRow('auth-01').innerText()).includes('这张卡的优先级不能在这里改') && (await page.locator('[data-lending-go]').count()) === 0);
+
+    // --- A long primary name stays readable at the ends and is printed in full inside the basis.
+    setState('longName');
+    await gotoLending();
+    const longNameNode = page.locator('[data-lending-name]').first();
+    const longName = await longNameNode.getAttribute('title');
+    check('long-name: the full name is kept as the title', longName === 'synthetic-credential-with-a-very-long-name', String(longName));
+    check('long-name: the visible name is split for a middle ellipsis', (await longNameNode.locator('span').count()) === 2);
+    await openDisclosure('evidence');
+    check('long-name: the basis prints the name in full', (await page.locator('[data-lending-full-names="true"]').innerText()).includes('synthetic-credential-with-a-very-long-name'));
+
+    // --- Same-model cards outside the pool.
+    setState('outside');
+    await gotoLending();
+    check('outside: the reminder counts the outside cards', (await page.locator('[data-lending-outside-toggle]').innerText()).includes('这个模型还有 2 张池外的卡也在供货'));
+    check('outside: the list stays folded', (await page.locator('[data-lending-outside-card]').count()) === 0);
+    await openDisclosure('outside');
+    const outsideRows = page.locator('[data-lending-outside-card]');
+    check('outside: opening lists one row per card', (await outsideRows.count()) === 2);
+    const firstOutside = await outsideRows.nth(0).innerText();
+    const secondOutside = await outsideRows.nth(1).innerText();
+    check('outside: a pooled card names its pool and current number', firstOutside.includes('codex · Team 300') && firstOutside.includes('现在是 0（默认）'), firstOutside);
+    check('outside: a card in no pool names its provider and an unreadable number', secondOutside.includes('claude') && secondOutside.includes('现在是 读不到'), secondOutside);
+    await openDisclosure('evidence');
+    const outsideEvidence = await page.locator('[data-lending-disclosure-body="evidence"]').innerText();
+    check('outside: the basis ties later numbers to the group maximum and points at the list', outsideEvidence.includes('低 10、20') && outsideEvidence.includes('见下面的名单') && !outsideEvidence.includes('排到所有'), outsideEvidence);
+    await page.screenshot({ path: 'tmp/lending-proof/state-outside.png' });
+
+    // --- Cards held for reasons, and pools that cannot rank at all.
     setState('limited');
     await gotoLending();
-    check('limited: one healthy seat stays neutral', (await poolState()) === 'limited' && (await role('auth-01')) === 'normal');
-    check('limited: only the restricted seat carries the reason', (await role('auth-02')) === 'limited' && (await reasons('auth-02')).some((text) => text.includes('剩余低于 10%')) && (await reasons('auth-01')).length === 0);
-    check('limited: the pool states that no preference is given', (await poolText()).includes('无法给出偏用结论'));
+    check('limited: the healthy seat is suggested and the low one is held', (await poolState()) === 'advised' && (await action('auth-01')) === 'keep' && (await page.locator('[data-lending-hold-toggle]').innerText()).includes('不动 1 张'));
+    await openDisclosure('hold');
+    const limitedRow = await page.locator('[data-lending-hold-card="auth-02"]').innerText();
+    check('limited: the held row names the ten-percent floor', limitedRow.includes('余量低于 10%'));
+    check('limited: the note names the window and its share', limitedRow.includes('周限额剩 5%，留作应急，不参与排名'), limitedRow);
     await page.screenshot({ path: 'tmp/lending-proof/state-limited.png' });
 
     setState('restricted');
     await gotoLending();
-    check('restricted: the pool still ranks its two healthy seats', (await poolState()) === 'advised' && (await role('auth-01')) === 'prefer' && (await role('auth-02')) === 'avoid');
-    check('restricted: the low seat is kept out with its reason', (await role('auth-03')) === 'limited' && (await reasons('auth-03')).some((text) => text.includes('剩余低于 10%')));
+    check('restricted: the pool still ranks its two healthy seats', (await poolState()) === 'advised' && (await action('auth-01')) === 'keep' && (await action('auth-02')) === 'change');
+    await openDisclosure('hold');
+    const restrictedRow = await page.locator('[data-lending-hold-card="auth-03"]').innerText();
+    check('restricted: the low seat is held with its reason', restrictedRow.includes('余量低于 10%'));
+    check('restricted: the note names the window and its share', restrictedRow.includes('周限额剩 5%，留作应急，不参与排名'), restrictedRow);
     await page.screenshot({ path: 'tmp/lending-proof/state-restricted.png' });
 
-    setState('textOnly');
-    await gotoLending();
-    check('text-only: the pool cannot compare', (await poolState()) === 'unavailable' && (await reasons('auth-01')).some((text) => text.includes('只有上游文字')));
-    check('text-only: the healthy seat keeps its figures and no validity is promised', (await metric('auth-02', 'days')) !== '—' && (await poolText()).includes('等数据补齐后再比较') && !(await poolText()).includes('建议有效到'));
-    await page.screenshot({ path: 'tmp/lending-proof/state-text-only.png' });
+    for (const [state, label, copy] of [
+      ['textOnly', 'text-only', '缺回满时间'],
+      ['stale', 'stale', '读数过期'],
+      ['noLong', 'no-long', '缺长额度窗口'],
+      ['windowMismatch', 'mismatch', '额度类型不同'],
+    ]) {
+      setState(state);
+      await gotoLending();
+      check(`${label}: the pool states there is no advice`, (await poolState()) === 'no_advice');
+      await openDisclosure('no-advice');
+      check(`${label}: every held row names its reason`, (await page.locator('[data-lending-hold-rows]').innerText()).includes(copy));
+      await page.screenshot({ path: `tmp/lending-proof/state-${label}.png` });
+    }
 
     setState('stale');
     await gotoLending();
-    check('stale: the card names the stale reading', (await poolState()) === 'unavailable' && (await reasons('auth-01')).some((text) => text.includes('读数已过期')));
-    check('stale: no validity is promised', (await poolText()).includes('等数据补齐后再比较') && !(await poolText()).includes('建议有效到'));
-    await page.screenshot({ path: 'tmp/lending-proof/state-stale.png' });
-
-    setState('noLong');
-    await gotoLending();
-    check('no-long: the card without a long window is named', (await poolState()) === 'unavailable' && (await reasons('auth-01')).some((text) => text.includes('没有周期 24 小时以上')));
-    check('no-long: the card has no fabricated percentage', (await metric('auth-01', 'remaining')) === '—' && (await metric('auth-02', 'days')) !== '—');
-    await page.screenshot({ path: 'tmp/lending-proof/state-no-long.png' });
-
-    setState('windowMismatch');
-    await gotoLending();
-    check('mismatch: both cards keep their figures but the pool declines', (await poolState()) === 'unavailable'
-      && (await metric('auth-01', 'days')) !== '—' && (await metric('auth-02', 'days')) !== '—'
-      && (await reasons('auth-01')).some((text) => text.includes('窗口类型不同')));
-    check('mismatch: no validity is promised', !(await poolText()).includes('建议有效到'));
-    await page.screenshot({ path: 'tmp/lending-proof/state-window-mismatch.png' });
+    await openDisclosure('no-advice');
+    const stalePast = await page.locator('[data-lending-hold-card="auth-01"]').innerText();
+    const staleRefilled = await page.locator('[data-lending-hold-card="auth-02"]').innerText();
+    const staleMinute = await page.locator('[data-lending-hold-card="auth-03"]').innerText();
+    check('stale: a long age is stated in hours', stalePast.includes('25 小时前'), stalePast);
+    check('stale: a passed refill is named before the age', staleRefilled.includes('回满时刻已到') && !staleRefilled.includes('小时前'), staleRefilled);
+    check('stale: a one-minute reading stays in minutes', staleMinute.includes('1 分钟前') && !staleMinute.includes('1 小时前'), staleMinute);
 
     setState('derived');
     await gotoLending();
-    check('derived: the page marks the estimate', (await poolState()) === 'balanced'
-      && (await metric('auth-01', 'days')).startsWith('~')
-      && (await page.locator('[data-lending-view="page"]').innerText()).includes('参考（推算重置）'));
+    check('derived: a close ranking marks the estimate and still says no change', (await poolState()) === 'advised'
+      && (await page.locator('[data-lending-reference]').count()) === 1
+      && (await sentence()).includes('差不多'));
+    check('derived: reset instants carry a tilde', (await cardRow('auth-01').innerText()).includes('~'));
+
+    setState('missingVsZero');
+    await gotoLending();
+    check('missing-vs-zero: a reported zero renders as 0%', (await cardRow('auth-01').innerText()).includes('0%'));
+    await openDisclosure('hold');
+    check('missing-vs-zero: a missing share is named, not filled with a zero', (await page.locator('[data-lending-hold-card="auth-02"]').innerText()).includes('缺剩余'));
+
+    setState('twoPools');
+    await gotoLending();
+    const poolOrder = () => page.locator('[data-lending-view="page"] [data-lending-pool]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-lending-pool')));
+    check('two-pools: the page keeps the payload pool order', JSON.stringify(await poolOrder()) === JSON.stringify(['codex:team', 'codex:pro']), JSON.stringify(await poolOrder()));
+    await page.screenshot({ path: 'tmp/lending-proof/pool-order.png' });
+
+    setState('mixed');
+    await gotoLending();
+    check('mixed: an advised pool precedes one with no ranking', JSON.stringify(await poolOrder()) === JSON.stringify(['codex:pro', 'codex:team'])
+      && (await poolState(0)) === 'advised' && (await poolState(1)) === 'no_advice', JSON.stringify(await poolOrder()));
 
     setState('empty');
     await gotoLending();
@@ -1723,7 +1851,7 @@ async function verifyLendingStates({ base, page, context, check }) {
       && (await singleSummary.innerText()).includes('未进池 1 张'));
     await singleSummary.click();
     await page.locator('[data-lending-unpooled-group-toggle]').first().click();
-    check('single: the reason and name are reachable', (await page.locator('[data-lending-unpooled-names] li').allInnerTexts()).includes('credential-01.json'));
+    check('single: the reason and name are reachable', (await page.locator('[data-lending-unpooled-names] li').allInnerTexts()).includes('credential-01'));
 
     for (const mode of ['missing', 'null']) {
       clock.mode = mode;
@@ -1771,47 +1899,119 @@ async function verifyLendingStates({ base, page, context, check }) {
       check(`phone ${width}: the cards share one column`, geometry.cards.length >= 2 && new Set(geometry.cards).size === 1, JSON.stringify(geometry.cards));
       await page.screenshot({ path: `tmp/lending-proof/state-base-${width}.png` });
     }
+    const phoneTag = await page.locator('[data-lending-read-only="true"]').first().evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return {
+        width: box.width,
+        height: box.height,
+        visible: style.display !== 'none' && style.visibility !== 'hidden' && box.width > 0 && box.height > 0,
+        fontSize: Number.parseFloat(style.fontSize),
+      };
+    });
+    check('phone 390: the read-only tag stays visible when the page title is hidden', phoneTag.visible === true && phoneTag.fontSize >= 13, JSON.stringify(phoneTag));
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoOAuth();
     check('phone: the OAuth entry remains visible and inline', await page.locator('[data-lending-entry]').isVisible()
       && await page.locator('[data-lending-entry]').evaluate((node) => node.getBoundingClientRect().height <= 24));
 
-    // --- Detail: the same pool, the current-card mark and the whole-pool link.
+    // --- The drawer block answers this card only, and its control moves to the priority field.
     await page.setViewportSize({ width: 1440, height: 900 });
     setState('base');
     await gotoOAuth();
     await page.locator('[data-testid="oauth-credential-record"][data-auth-index="auth-01"]').getByRole('button', { name: /^(Details|详情):/i }).click();
     const drawer = page.locator('.ant-drawer-open');
-    await drawer.locator('[data-lending-view="detail"]').waitFor({ timeout: 20000 });
-    check('detail: the drawer shows the same pool and marks this card', (await drawer.locator('[data-lending-pool]').getAttribute('data-lending-state')) === 'advised'
-      && (await drawer.locator('[data-lending-current="true"]').getAttribute('data-lending-role')) === 'prefer');
-    const detailLink = drawer.locator('[data-lending-detail-link]');
-    check('detail: the whole-pool link points at the mounted page', ((await detailLink.getAttribute('href')) || '').endsWith('/quota-lending') && (await detailLink.innerText()).includes('在额度拆借页查看整池'));
+    const detail = drawer.locator('[data-lending-view="detail"]');
+    await detail.waitFor({ timeout: 20000 });
+    check('detail: the drawer answers this card without drawing the pool', (await detail.getAttribute('data-lending-detail-state')) === 'keep'
+      && (await detail.locator('[data-lending-pool]').count()) === 0
+      && (await detail.innerText()).includes('credential-01：建议设成 0，不用改'));
+    const detailLink = detail.locator('[data-lending-detail-link]');
+    check('detail: the whole-group link points at the mounted page', ((await detailLink.getAttribute('href')) || '').endsWith('/quota-lending') && (await detailLink.innerText()).includes('在额度拆借页查看整组'));
     check('detail: the panel keeps the read-only tag', (await drawer.innerText()).includes('只提示，不改路由'));
-    await page.screenshot({ path: 'tmp/lending-proof/detail-pool-link.png' });
+    await detail.locator('[data-lending-disclosure-toggle="evidence"]').click();
+    const detailEvidence = await detail.locator('[data-lending-disclosure-body="evidence"]').innerText();
+    check('detail: the basis omits the page-level read-only sentence',
+      !/(不改 CPA 里任何设置|nothing in CPA is changed)/i.test(detailEvidence), detailEvidence);
+    check('detail: the basis keeps the difference from reset advice',
+      /(自然重置前的用法|natural reset)/i.test(detailEvidence), detailEvidence);
+    await page.screenshot({ path: 'tmp/lending-proof/detail-card.png' });
     await detailLink.click();
     await page.waitForURL(/\/quota-lending$/);
     await page.locator('[data-lending-pool]').first().waitFor({ timeout: 20000 });
     check('detail: the link lands on the complete pool', (await page.locator('[data-lending-pool]').count()) === 1);
 
-    // --- Review fixes: the docked read-only tag, the shared disclosure style, the
+    // --- The drawer's hold note is the page's sentence, not an older hours-only form.
+    for (const [state, auth, copy] of [
+      ['stale', 'auth-02', '回满时刻已到'],
+      ['stale', 'auth-03', '1 分钟前'],
+      ['limited', 'auth-02', '周限额剩 5%，留作应急，不参与排名'],
+    ]) {
+      setState(state);
+      await gotoOAuth();
+      await page.locator(`[data-testid="oauth-credential-record"][data-auth-index="${auth}"]`).getByRole('button', { name: /^(Details|详情):/i }).click();
+      const heldDrawer = page.locator('.ant-drawer-open [data-lending-view="detail"]');
+      await heldDrawer.waitFor({ timeout: 20000 });
+      const heldText = await heldDrawer.innerText();
+      check(`detail: the held note agrees with the page (${state}/${auth})`, heldText.includes(copy) && !heldText.includes('1 小时前'), heldText);
+      await page.locator('.ant-drawer-open .ant-drawer-close').click();
+      await page.locator('.ant-drawer-open').waitFor({ state: 'hidden' });
+    }
+
+    // --- The way to the field: page link opens the drawer on configuration; the drawer control reopens it.
+    setState('base');
+    await gotoLending();
+    await goLink('auth-02').click();
+    await page.waitForURL(/\/oauth-management/);
+    check('set-it: the link carries the credential in the address', new URL(page.url()).searchParams.get('open') === 'auth-02', page.url());
+    const openDrawer = page.locator('.ant-drawer-open');
+    await openDrawer.waitFor({ timeout: 20000 });
+    await openDrawer.getByRole('tab', { name: '配置' }).waitFor({ timeout: 20000 });
+    check('set-it: the drawer opens on the priority field', (await openDrawer.getByRole('tab', { name: '配置' }).getAttribute('aria-selected')) === 'true');
+    check('set-it: the one-shot address parameter is consumed', !new URL(page.url()).searchParams.has('open'), page.url());
+    await page.screenshot({ path: 'tmp/lending-proof/set-it-drawer.png' });
+    await openDrawer.getByRole('tab', { name: '配额' }).click();
+    const inDrawerDetail = openDrawer.locator('[data-lending-view="detail"]');
+    await inDrawerDetail.waitFor({ timeout: 20000 });
+    check('set-it: the changed card is the one named in the drawer', (await inDrawerDetail.getAttribute('data-lending-detail-state')) === 'change'
+      && (await inDrawerDetail.innerText()).includes('credential-02：建议设成 -10'));
+    await inDrawerDetail.locator('[data-lending-go="detail"]').click();
+    await page.waitForFunction(() => {
+      const tab = [...document.querySelectorAll('[role="tab"]')].find((node) => (node.textContent || '').includes('配置'));
+      return tab?.getAttribute('aria-selected') === 'true';
+    });
+    check('set-it: the drawer control returns to the priority field', (await openDrawer.getByRole('tab', { name: '配置' }).getAttribute('aria-selected')) === 'true');
+
+    // --- Review fixes: the header read-only tag, the shared disclosure style, the
     // trailing-slash nav key and the two empty states that must not read the same.
     setState('base');
     await gotoLending();
     const tagInfo = await page.evaluate(() => {
-      const host = document.querySelector('[data-lending-view="page"]');
       const head = document.querySelector('.terminal-page-head');
-      const tag = [...host.querySelectorAll('*')].find((node) => node.children.length === 0 && (node.textContent || '').trim() === '只提示，不改路由');
-      if (!tag) return { found: false };
+      const host = document.querySelector('[data-lending-view="page"]');
+      if (!head) return { found: false };
+      const tag = [...head.querySelectorAll('*')].find((node) => node.children.length === 0 && (node.textContent || '').trim() === '只提示，不改路由');
+      const title = head.querySelector('.terminal-title');
+      const subtitle = head.querySelector('.terminal-subtitle');
+      if (!tag || !title) return { found: false };
+      const tagBox = tag.getBoundingClientRect();
+      const titleBox = title.getBoundingClientRect();
+      const subtitleBox = subtitle ? subtitle.getBoundingClientRect() : null;
       return {
         found: true,
-        onPage: host.contains(tag),
-        inHeader: head ? head.contains(tag) : false,
-        belowHeader: head ? tag.getBoundingClientRect().top >= head.getBoundingClientRect().bottom - 1 : false,
+        inHeader: head.contains(tag),
+        sameHeading: tag.parentElement === title.parentElement,
+        sameRow: tagBox.top >= titleBox.top - 1 && tagBox.bottom <= titleBox.bottom + 1,
+        besideTitle: tagBox.left >= titleBox.right - 1,
+        onPage: host ? host.contains(tag) : false,
+        subtitleBelow: subtitleBox ? subtitleBox.top >= titleBox.bottom - 1 : false,
+        tagFont: Number.parseFloat(getComputedStyle(tag).fontSize),
       };
     });
-    check('merged: the read-only tag is on the page', tagInfo.found === true && tagInfo.onPage === true, JSON.stringify(tagInfo));
-    check('merged: the tag sits under the title block, not inside it', tagInfo.inHeader === false && tagInfo.belowHeader === true, JSON.stringify(tagInfo));
+    check('header: the read-only tag is in the title row', tagInfo.found === true && tagInfo.inHeader === true && tagInfo.sameHeading === true && tagInfo.sameRow === true && tagInfo.besideTitle === true, JSON.stringify(tagInfo));
+    check('header: the basis follows the title row', tagInfo.subtitleBelow === true, JSON.stringify(tagInfo));
+    check('header: the read-only tag leaves the page body', tagInfo.onPage === false, JSON.stringify(tagInfo));
+    check('header: the tag reads at least 13px', tagInfo.tagFont >= 13, JSON.stringify(tagInfo));
 
     const readDisclosure = () => page.evaluate(() => {
       const read = (selector) => {
@@ -1830,124 +2030,182 @@ async function verifyLendingStates({ base, page, context, check }) {
     await page.locator('[data-lending-unpooled-summary]').click();
     await page.locator('[data-lending-unpooled-group-toggle]').first().waitFor();
     const disclosure = await readDisclosure();
-    check('merged: the unpooled summary is not the browser default button', disclosure.summary.background === 'rgba(0, 0, 0, 0)', JSON.stringify(disclosure.summary));
-    check('merged: the summary and the group buttons share one style', ['background', 'color', 'font', 'border'].every((key) => disclosure.summary[key] === disclosure.group[key]), JSON.stringify(disclosure));
-    for (const theme of ['light', 'dark']) {
-      await page.evaluate((mode) => window.localStorage.setItem('omc-theme', JSON.stringify({ mode, palettes: { dark: 'omc-dark', light: 'omc-light' }, custom: {}, dirty: true })), theme);
-      await gotoLending();
-      await page.locator('[data-lending-unpooled-summary]').click();
-      await page.locator('[data-lending-unpooled-group-toggle]').first().waitFor();
-      const themed = await readDisclosure();
-      check(`merged: the disclosure style agrees in ${theme}`, ['background', 'color', 'font', 'border'].every((key) => themed.summary[key] === themed.group[key]) && themed.summary.background === 'rgba(0, 0, 0, 0)', JSON.stringify(themed));
-      await page.screenshot({ path: `tmp/lending-proof/unpooled-${theme}.png` });
-    }
-    await page.setViewportSize({ width: 390, height: 844 });
-    await settleLayout(page);
-    const narrowStyle = await page.evaluate(() => {
-      const read = (selector) => {
-        const node = document.querySelector(selector);
-        if (!node) return null;
-        const style = getComputedStyle(node);
-        return `${style.backgroundColor}|${style.color}|${style.fontFamily}|${style.fontSize}`;
-      };
-      return {
-        summary: read('[data-lending-unpooled-summary]'),
-        group: read('[data-lending-unpooled-group-toggle]'),
-        scroll: document.documentElement.scrollWidth,
-        viewport: window.innerWidth,
-      };
-    });
-    check('merged: the summary keeps the group style on a phone', narrowStyle.summary === narrowStyle.group && narrowStyle.scroll <= narrowStyle.viewport + 1, JSON.stringify(narrowStyle));
-    await page.screenshot({ path: 'tmp/lending-proof/unpooled-390.png' });
-    await page.setViewportSize({ width: 1440, height: 900 });
+    check('merged: the unpooled summary is not the browser default button', disclosure.summary !== null
+      && disclosure.summary.background === 'rgba(0, 0, 0, 0)' && disclosure.summary.border === '0px|none', JSON.stringify(disclosure.summary));
+    check('merged: the group row shares the summary typography', disclosure.group !== null && disclosure.group.font === disclosure.summary.font, JSON.stringify(disclosure));
 
-    const activeNav = () => page.locator('.ant-menu-item-selected').first().innerText();
-    await gotoOAuth();
-    const navBefore = await activeNav();
-    await page.goto(`${base}/quota-lending/`, { waitUntil: 'domcontentloaded' });
-    await page.locator('[data-lending-view="page"]').waitFor({ timeout: 20000 });
-    const navAfter = await activeNav();
-    check('merged: a trailing-slash address highlights the lending entry', /额度拆借|quota lending/i.test(navAfter) && !/OAuth|dashboard|仪表盘/i.test(navAfter), `${navBefore} -> ${navAfter}`);
-
-    clock.mode = 'null';
-    await gotoLending();
-    const nullText = await poolText();
-    check('merged: a null lending body says the advice could not be read', nullText.includes('暂时读不到拆借建议') && !nullText.includes('暂无可拆借的同池凭证'), nullText.slice(0, 120));
-    await page.screenshot({ path: 'tmp/lending-proof/state-null.png' });
-    await page.evaluate(() => window.localStorage.setItem('omc-theme', JSON.stringify({ mode: 'light', palettes: { dark: 'omc-dark', light: 'omc-light' }, custom: {}, dirty: true })));
-    await gotoLending();
-    await page.screenshot({ path: 'tmp/lending-proof/state-null-light.png' });
-    await page.evaluate(() => window.localStorage.setItem('omc-theme', JSON.stringify({ mode: 'dark', palettes: { dark: 'omc-dark', light: 'omc-light' }, custom: {}, dirty: true })));
-    await gotoLending();
-    setState('empty');
-    await gotoLending();
-    const emptyText = await poolText();
-    check('merged: an empty overview still says there is no pool', emptyText.includes('暂无可拆借的同池凭证') && !emptyText.includes('暂时读不到拆借建议'), emptyText.slice(0, 120));
-    await page.screenshot({ path: 'tmp/lending-proof/state-empty.png' });
-
-    setState('mixed');
-    await gotoOAuth();
-    // The header entry is drawn from the quota read, so it lands with that answer rather than
-    // with the credential rows the navigation waited for; read it once it has rendered.
-    await page.locator('[data-lending-entry]').waitFor({ timeout: 20000 });
-    const mixedEntry = await entryState();
-    check('entry: a balanced pool beside an incomparable one still reads balanced', mixedEntry.kind === 'balanced' && mixedEntry.text.includes('均衡'), JSON.stringify(mixedEntry));
-    const poolOrder = () => page.locator('[data-lending-view="page"] [data-lending-pool]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-lending-pool')));
-    setState('twoPools');
-    await gotoLending();
-    const urgentOrder = await poolOrder();
-    check('merged: the page keeps the payload pool order', JSON.stringify(urgentOrder) === JSON.stringify(['codex:team', 'codex:pro']), JSON.stringify(urgentOrder));
-    await page.screenshot({ path: 'tmp/lending-proof/pool-order.png' });
-    setState('mixed');
-    await gotoLending();
-    const mixedOrder = await poolOrder();
-    check('merged: a pool without a validity instant sorts last', JSON.stringify(mixedOrder) === JSON.stringify(['codex:pro', 'codex:team']), JSON.stringify(mixedOrder));
-
-    setState('missingVsZero');
-    await gotoLending();
-    const zeroText = await metric('auth-01', 'remaining');
-    const missingText = await metric('auth-02', 'remaining');
-    const missingReasons = await reasons('auth-02');
-    check('merged: a reported zero share renders as 0%', zeroText.includes('0%'), zeroText);
-    check('merged: a missing share renders a dash and its reason', missingText === '—' && missingReasons.some((text) => text.includes('没有剩余百分比')), `${missingText} :: ${missingReasons.join(' | ')}`);
-    await page.screenshot({ path: 'tmp/lending-proof/missing-vs-zero.png' });
     // --- English copy after a new document loads with the stored language.
     await page.addInitScript(() => window.localStorage.setItem('omc-lang', 'en'));
     setState('base');
     await gotoOAuth();
     const englishEntry = await entryState();
-    check('English: one advice uses the singular count', englishEntry.kind === 'advised' && englishEntry.text.trim() === 'Quota lending · 1 suggestion', JSON.stringify(englishEntry));
+    check('English: one change uses the singular count', englishEntry.kind === 'change' && englishEntry.text === 'Quota lending · 1 to change', JSON.stringify(englishEntry));
     await page.locator('[data-lending-entry]').click();
     await page.waitForURL(/\/quota-lending$/);
     await page.locator('[data-lending-view="page"]').waitFor();
     const englishText = await poolText();
     const englishHeader = await page.locator('.terminal-page-head').innerText();
-    check('English: the page, roles and read-only note are translated', englishHeader.includes('Quota lending advice')
-      && englishText.includes('Prefer') && englishText.includes('Avoid')
-      && englishText.includes('This advice is read-only'), `${englishHeader} :: ${englishText.slice(0, 200)}`);
+    check('English: the page, the verdict and the read-only note are translated', englishHeader.includes('Quota lending advice')
+      && englishText.includes('Set credential-02 to -10') && englishText.includes('No change')
+      && englishHeader.includes('Advice only, routing unchanged'), `${englishHeader} :: ${englishText.slice(0, 300)}`);
     await page.screenshot({ path: 'tmp/lending-proof/state-base-en.png' });
     setState('twoPools');
     await gotoOAuth();
     const pluralEntry = await entryState();
-    check('English: two advices use the plural count', pluralEntry.kind === 'advised' && pluralEntry.text.trim() === 'Quota lending · 2 suggestions', JSON.stringify(pluralEntry));
+    check('English: two changes use the plural count', pluralEntry.kind === 'change' && pluralEntry.text === 'Quota lending · 2 to change', JSON.stringify(pluralEntry));
     await page.screenshot({ path: 'tmp/lending-proof/entry-two-pools-en.png' });
 
+    // --- Typography and contrast: every main-screen tag is at the secondary size or larger,
+    // and every text clears WCAG AA against what it is painted on. The same measurement runs
+    // in both themes; the floor is printed so a reviewer sees the number without opening a log.
+    const openFolds = async () => {
+      for (const id of ['evidence', 'hold', 'outside', 'no-advice']) {
+        const toggle = page.locator(`[data-lending-disclosure-toggle="${id}"]`);
+        if ((await toggle.count()) === 0) continue;
+        const body = page.locator(`[data-lending-disclosure-body="${id}"]`);
+        if ((await body.count()) === 0) await toggle.first().click();
+      }
+      const summary = page.locator('[data-lending-unpooled-summary]');
+      if ((await summary.count()) > 0 && (await summary.getAttribute('aria-expanded')) === 'false') await summary.click();
+      const groups = page.locator('[data-lending-unpooled-group-toggle]');
+      const groupCount = await groups.count();
+      for (let index = 0; index < groupCount; index += 1) {
+        const group = groups.nth(index);
+        if ((await group.getAttribute('aria-expanded')) === 'false') await group.click();
+      }
+    };
+    const readType = () => page.evaluate(() => {
+      const parseColor = (value) => {
+        const rgb = value.match(/^rgba?\(([^)]+)\)$/i);
+        if (rgb) {
+          const parts = rgb[1].split(/[,\s/]+/).filter(Boolean);
+          const alpha = parts[3];
+          return {
+            r: Number.parseFloat(parts[0]),
+            g: Number.parseFloat(parts[1]),
+            b: Number.parseFloat(parts[2]),
+            a: alpha === undefined ? 1 : (alpha.endsWith('%') ? Number.parseFloat(alpha) / 100 : Number.parseFloat(alpha)),
+          };
+        }
+        const srgb = value.match(/^color\(srgb\s+([^)]+)\)$/i);
+        if (srgb) {
+          const parts = srgb[1].split(/[\s/]+/).filter(Boolean);
+          const alpha = parts[3];
+          return {
+            r: Number.parseFloat(parts[0]) * 255,
+            g: Number.parseFloat(parts[1]) * 255,
+            b: Number.parseFloat(parts[2]) * 255,
+            a: alpha === undefined ? 1 : (alpha.endsWith('%') ? Number.parseFloat(alpha) / 100 : Number.parseFloat(alpha)),
+          };
+        }
+        throw new Error(`unreadable colour: ${value}`);
+      };
+      const linear = (channel) => {
+        const value = channel / 255;
+        return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+      };
+      const luminance = ({ r, g, b }) => 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
+      const contrastRatio = (first, second) => {
+        const a = luminance(first);
+        const b = luminance(second);
+        return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      };
+      const backgroundOf = (element) => {
+        const layers = [];
+        for (let node = element; node; node = node.parentElement) {
+          const color = parseColor(getComputedStyle(node).backgroundColor);
+          if (color.a > 0) layers.push(color);
+          if (color.a === 1) break;
+        }
+        let result = { r: 255, g: 255, b: 255, a: 1 };
+        for (let index = layers.length - 1; index >= 0; index -= 1) {
+          const layer = layers[index];
+          result = {
+            r: layer.r * layer.a + result.r * (1 - layer.a),
+            g: layer.g * layer.a + result.g * (1 - layer.a),
+            b: layer.b * layer.a + result.b * (1 - layer.a),
+            a: 1,
+          };
+        }
+        return result;
+      };
+      const host = document.querySelector('.terminal-page');
+      if (!host) return { error: 'no .terminal-page' };
+      const readings = [];
+      for (const element of host.querySelectorAll('*')) {
+        if (element.closest('[aria-hidden="true"]')) continue;
+        const style = getComputedStyle(element);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) continue;
+        const hasText = [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && (node.textContent || '').trim() !== '');
+        if (!hasText) continue;
+        const box = element.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) continue;
+        const fontSize = Number.parseFloat(style.fontSize);
+        const fontWeight = Number.parseInt(style.fontWeight, 10) || 400;
+        const isLarge = fontSize >= 24 || (fontSize >= 18.66 && fontWeight >= 700);
+        const foreground = parseColor(style.color);
+        const background = backgroundOf(element);
+        readings.push({
+          text: (element.textContent || '').trim().slice(0, 40),
+          fontSize,
+          fontWeight,
+          color: style.color,
+          background: `rgb(${Math.round(background.r)}, ${Math.round(background.g)}, ${Math.round(background.b)})`,
+          contrast: Number(contrastRatio(foreground, background).toFixed(2)),
+          required: isLarge ? 3 : 4.5,
+        });
+      }
+      if (readings.length === 0) return { error: 'no text measured' };
+      return {
+        count: readings.length,
+        minFont: Math.min(...readings.map((entry) => entry.fontSize)),
+        minContrast: Math.min(...readings.map((entry) => entry.contrast)),
+        failures: readings.filter((entry) => entry.contrast + 0.005 < entry.required),
+      };
+    });
+    const measureTheme = async (theme, states) => {
+      await page.evaluate((value) => window.localStorage.setItem('omc-theme', value), theme);
+      const runs = [];
+      for (const state of states) {
+        setState(state);
+        await gotoLending();
+        await page.waitForFunction((mode) => document.documentElement.getAttribute('data-theme-mode') === mode, theme === 'omc-light' ? 'light' : 'dark');
+        await openFolds();
+        await settleLayout(page);
+        runs.push({ state, ...(await readType()) });
+      }
+      return runs;
+    };
+    const summarizeType = (runs) => ({
+      count: runs.reduce((sum, run) => sum + (run.count || 0), 0),
+      minFont: Math.min(...runs.map((run) => run.minFont ?? Infinity)),
+      minContrast: Math.min(...runs.map((run) => run.minContrast ?? Infinity)),
+      failures: runs.flatMap((run) => (run.failures || []).map((failure) => ({ state: run.state, ...failure }))),
+    });
+    const typeStates = ['base', 'hold', 'outside', 'noAdvice', 'cannotEdit'];
+    const lightType = summarizeType(await measureTheme('omc-light', typeStates));
+    const darkType = summarizeType(await measureTheme('omc-dark', typeStates));
+    await page.evaluate(() => window.localStorage.setItem('omc-theme', 'omc-light'));
+    console.log(`[quota-lending] light: min font ${lightType.minFont}px, min contrast ${lightType.minContrast}:1 across ${lightType.count} text nodes`);
+    console.log(`[quota-lending] dark: min font ${darkType.minFont}px, min contrast ${darkType.minContrast}:1 across ${darkType.count} text nodes`);
+    check('type/light: every main-screen tag is at least 13px', lightType.minFont >= 13, `min font ${lightType.minFont}px`);
+    check('type/light: every main-screen text clears WCAG AA', lightType.failures.length === 0, JSON.stringify(lightType.failures.slice(0, 6)));
+    check('type/dark: every main-screen tag is at least 13px', darkType.minFont >= 13, `min font ${darkType.minFont}px`);
+    check('type/dark: every main-screen text clears WCAG AA', darkType.failures.length === 0, JSON.stringify(darkType.failures.slice(0, 6)));
+
     // --- The visible clock: a sub-hour countdown moves without a new quota request.
-    let quotaRequests = 0;
-    const countQuota = (request) => { if (request.method() === 'GET' && new URL(request.url()).pathname.endsWith('/management/quota')) quotaRequests += 1; };
-    page.on('request', countQuota);
-    try {
-      setState('subHour');
-      await gotoLending();
-      const clockBefore = await page.locator('[data-lending-view="page"]').innerText();
-      const requestsBefore = quotaRequests;
-      await page.waitForTimeout(31_000);
-      const clockAfter = await page.locator('[data-lending-view="page"]').innerText();
-      check('clock: the countdown advances on the page clock', clockAfter !== clockBefore, 'the text did not change in 31s');
-      check('clock: no extra quota request during the tick', quotaRequests === requestsBefore, `${requestsBefore} -> ${quotaRequests}`);
-    } finally {
-      page.off('request', countQuota);
-    }
+    // A controlled clock keeps the minute-granularity copy deterministic: the page's own
+    // 15-second tick must fire, and a real 31-second wait only races the minute boundary.
+    await page.clock.install({ time: Date.now() });
+    setState('subHour');
+    await gotoLending();
+    const clockBefore = await page.locator('[data-lending-card="auth-01"]').innerText();
+    const requestsBefore = quotaRequests;
+    await page.clock.fastForward(31_000);
+    const clockAfter = await page.locator('[data-lending-card="auth-01"]').innerText();
+    await page.clock.resume();
+    check('clock: the countdown advances on the page clock', clockAfter !== clockBefore, 'the countdown stayed at one reading');
+    check('clock: no extra quota request during the tick', quotaRequests === requestsBefore, `${requestsBefore} -> ${quotaRequests}`);
 
     // --- Read-only: no apply/write/route/entitlement control and no write request.
     setState('base');
@@ -1955,10 +2213,16 @@ async function verifyLendingStates({ base, page, context, check }) {
     const controls = await page.locator('[data-lending-view="page"] button').evaluateAll((nodes) => nodes.map((node) => (node.textContent || '').trim()));
     check('read-only: no apply, save, switch or consume control', controls.every((text) => !/apply|save|switch|consume|应用|保存|切换|消耗/i.test(text)), controls.join(' | '));
     check('read-only: no editable field in the advice', (await page.locator('[data-lending-view="page"] input, [data-lending-view="page"] textarea, [data-lending-view="page"] select').count()) === 0);
-    check('read-only: the note is on the page', /建议只读|This advice is read-only/.test(await poolText()));
+    check('read-only: the full boundary note stays inside the basis', !/(不改 CPA 里任何设置|nothing in CPA is changed)/i.test(await poolText()));
+    await openDisclosure('evidence');
+    check(
+      'read-only: the basis names the boundary',
+      /(不改 CPA 里任何设置|nothing in CPA is changed)/i.test(await page.locator('[data-lending-disclosure-body="evidence"]').innerText()),
+    );
     check('read-only: no quota, lending or credential-field write was issued', writes.length === 0, writes.join(' | '));
   } finally {
     page.off('request', onRequest);
+    page.off('request', countQuota);
     await context.unroute('**/management/quota', quotaHandler);
   }
 }

@@ -2,17 +2,33 @@
   min-width: 0;
 }
 
-.basis {
-  margin: 0 0 8px;
-  color: var(--meta);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
+/* The secondary page is one column of pool blocks; its header carries the boundary tag. */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 
 .pools {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 20px;
+  min-width: 0;
+}
+
+/* The console's tag size belongs to dense rows; this page reads every tag at the
+   secondary text size and mixes the verdict ink toward the foreground so it keeps
+   WCAG AA on its own tint in both themes. Only descendants of this page change. */
+.page :global(.tag) {
+  color: color-mix(in srgb, var(--tag-tone) 72%, var(--fg));
+  font-size: var(--text-md);
+}
+
+.page :global(.tag.is-small) {
+  height: 20px;
+  padding: 0 6px;
+  font-size: var(--text-md);
 }
 
 .pool {
@@ -36,50 +52,48 @@
 
 .pool-title {
   color: var(--fg);
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   font-weight: 600;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.pool-valid {
-  margin-left: auto;
-  color: var(--meta);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
+.pool-verdict {
+  margin-inline-start: auto;
 }
 
-.membership {
-  margin-top: 6px;
-  color: var(--meta);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-}
-
-.reason {
-  margin: 8px 0 0;
-  padding: 8px 12px;
-  background: var(--hover-inset);
-  border-radius: var(--radius-sm);
-  color: var(--fg-2);
-  font-size: var(--text-sm);
+/* The one sentence is the page's main reading, so it never goes below body size. */
+.say {
+  margin: 10px 0 0;
+  color: var(--fg);
+  font-size: var(--text-base);
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.say-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  font-weight: 400;
 }
 
 .cards {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  margin-top: 8px;
+  margin-top: 4px;
+  min-width: 0;
 }
 
+/* One credential per line: name and reading, the current number, an arrow, the number to set,
+   then the verdict and the way to the field. */
 .card {
   display: grid;
-  grid-template-columns: 72px minmax(110px, 1fr) repeat(3, minmax(88px, 1fr));
-  gap: 8px;
-  align-items: baseline;
-  padding: 6px 0;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.8fr) 24px minmax(0, 0.9fr) minmax(0, 0.9fr);
+  gap: 6px 12px;
+  align-items: center;
+  padding: 12px 0;
   border-top: 1px solid var(--border-soft);
   min-width: 0;
 }
@@ -88,141 +102,336 @@
   border-top: 0;
 }
 
-.card[data-lending-current="true"] {
-  background: var(--hover-inset);
-  border-radius: var(--radius-xs);
-  padding-inline: 6px;
-}
-
-.role {
+.card-id {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
   min-width: 0;
 }
 
-.name {
-  color: var(--fg);
-  font-size: var(--text-md);
-  font-weight: 600;
+/* Middle ellipsis: the tail stays readable when the account name is longer than the column. */
+.display-name {
+  display: flex;
   min-width: 0;
+}
+
+.display-name-start {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.display-name-end {
+  flex: none;
+  white-space: nowrap;
+}
+
+.card-name {
+  color: var(--fg);
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.card-reading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.remaining-bar {
+  display: block;
+  width: 56px;
+  height: 6px;
+  flex: none;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--border);
+}
+
+.remaining-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.remaining-value {
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.card-caption {
+  display: block;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+}
+
+.card-reset {
+  color: var(--fg-2);
+  font-size: var(--text-base);
   overflow-wrap: anywhere;
 }
 
-.metric {
+.card-move {
+  display: contents;
+}
+
+.card-now,
+.card-suggest {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.metric-value {
+.card-value {
   color: var(--fg);
   font-family: var(--font-mono);
+  font-size: var(--text-lg);
   font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+/* The suggested number is the one thing the reader is here to copy, so it carries the size. */
+.card-value-big {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.card.keep .card-value-big {
+  color: var(--fg-2);
+}
+
+.card-arrow {
+  color: var(--meta);
+  text-align: center;
+  font-size: var(--text-base);
+}
+
+.card-default {
+  color: var(--fg-2);
+  font-size: var(--text-md);
+}
+
+.card-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The link only carries the reader to the existing field; it never writes a value. */
+.go {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: 1.6;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.go:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.card-note {
+  grid-column: 1 / -1;
+  color: var(--warn);
   font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 
-.metric-label {
-  color: var(--meta);
-  font-size: var(--text-xs);
+/* A disclosure is one button line plus its body; the summary keeps the plain-text look. */
+.disclosure {
+  margin-top: 8px;
+  min-width: 0;
 }
 
-.reasons {
-  grid-column: 1 / -1;
-  margin: 2px 0 0;
-  padding-inline-start: 18px;
-  color: var(--meta);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
+.disclosure-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: var(--text-md);
+  text-align: start;
+  cursor: pointer;
 }
 
-.empty {
-  padding: 12px 8px;
-  text-align: center;
-  color: var(--meta);
-  font-size: var(--text-sm);
-  overflow-wrap: anywhere;
-}
-
-.empty strong {
-  display: block;
-  margin-bottom: 4px;
+.disclosure-toggle:hover {
   color: var(--fg);
-  font-size: var(--text-base);
 }
 
-.note,
-.distinction {
-  margin: 12px 0 0;
+.chevron {
+  display: inline-flex;
+  flex: none;
   color: var(--meta);
-  font-size: var(--text-sm);
+}
+
+.disclosure-body {
+  padding-top: 8px;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  line-height: 1.6;
   overflow-wrap: anywhere;
+}
+
+.disclosure-body p {
+  margin: 0 0 8px;
+}
+
+.evidence {
+  border-top: 1px dashed var(--border-soft);
+  padding-top: 8px;
+}
+
+.evidence-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.evidence-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 8px;
+}
+
+.evidence-table th,
+.evidence-table td {
+  padding: 4px 8px 4px 0;
+  text-align: start;
+  font-size: var(--text-md);
+  border-top: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+
+.evidence-table th {
+  color: var(--fg-2);
+  font-weight: 500;
+  border-top: 0;
+}
+
+.evidence-meta {
+  color: var(--fg-2);
 }
 
 .distinction {
   padding-inline-start: 12px;
-  border-inline-start: 3px solid var(--border);
+  border-inline-start: 2px solid var(--border);
+  color: var(--fg-2);
 }
 
-@media (max-width: 760px) {
-  .strip {
-    flex-wrap: wrap;
-  }
-
-  .strip :global(.tag) {
-    margin-inline-start: 0;
-  }
-
-  .pool-valid {
-    margin-left: 0;
-  }
-
-  .card {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-
-  .metric {
-    flex-direction: row;
-    align-items: baseline;
-    gap: 8px;
-  }
+.note {
+  margin: 12px 0 0;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
 }
 
-/* The header carries a fixed-word read-only tag beside the title. Inside the phone-width drawer
-   the two do not fit on one line, and Ant Design's title is a nowrap ellipsis, so the title lost
-   half its words; wrapping lets the tag fall to its own line instead of clipping the title. */
-@media (max-width: 760px) {
-  .panel :global(.ant-card-head-wrapper) {
-    flex-wrap: wrap;
-    gap: 2px 8px;
-  }
-
-  .panel :global(.ant-card-head-title) {
-    flex: 1 1 auto;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
+.hold {
+  border-top: 1px dashed var(--border-soft);
+  padding-top: 8px;
 }
 
-/* The secondary page is one column of blocks; its header carries the basis line. */
-.page {
+.hold-rows {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 6px;
+}
+
+.hold-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
   min-width: 0;
 }
 
-/* The fixed read-only label sits beside the page title: the page and the drawer state the same
-   boundary in the same words, so a reader never has to work out whether one of them can apply. */
-.page-head {
+.hold-name {
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.hold-note {
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+.no-advice {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 12px;
+  min-width: 0;
+}
+
+.no-advice:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.no-advice-count {
+  color: var(--fg-2);
+  font-size: var(--text-md);
+}
+
+.outside {
+  border-top: 1px dashed var(--border-soft);
+  padding-top: 8px;
+}
+
+.outside-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.outside-row {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-soft);
+  font-size: var(--text-md);
+}
+
+.outside-row:first-child {
+  border-top: 0;
+}
+
+.outside-name {
+  color: var(--fg);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.outside-pool,
+.outside-priority {
+  color: var(--fg-2);
 }
 
 /* The unpooled list is folded twice: the reason summary first, each reason's names second. */
@@ -237,8 +446,6 @@
   min-width: 0;
 }
 
-/* Both disclosures are buttons: the reason summary and each reason group share one reset, so
-   the summary does not render as the browser's grey default box beside a plain-text toggle. */
 .unpooled-summary,
 .unpooled-group-toggle {
   display: flex;
@@ -251,7 +458,7 @@
   background: none;
   color: var(--fg-2);
   font: inherit;
-  font-size: var(--text-sm);
+  font-size: var(--text-md);
   text-align: start;
   cursor: pointer;
 }
@@ -261,16 +468,9 @@
   font-weight: 600;
 }
 
-.unpooled-chevron,
-.unpooled-sep,
 .unpooled-count,
 .unpooled-group-count {
-  color: var(--meta);
-}
-
-.unpooled-chevron {
-  display: inline-flex;
-  flex: none;
+  color: var(--fg-2);
 }
 
 .unpooled-groups {
@@ -281,18 +481,105 @@
   padding-inline-start: 20px;
 }
 
-.unpooled-group-toggle {
-  gap: 6px;
-}
-
 .unpooled-names {
   margin: 2px 0 0;
   padding-inline-start: 22px;
-  color: var(--meta);
-  font-size: var(--text-sm);
+  color: var(--fg-2);
+  font-size: var(--text-md);
   overflow-wrap: anywhere;
 }
 
 .unpooled-names li {
   margin-top: 2px;
+}
+
+.detail-reason {
+  margin: 4px 0 0;
+  color: var(--fg-2);
+  font-size: var(--text-md);
+  overflow-wrap: anywhere;
+}
+
+.detail-link {
+  margin: 12px 0 0;
+  font-size: var(--text-md);
+}
+
+.detail-link a {
+  color: var(--accent);
+}
+
+.detail-hold-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-soft);
+  min-width: 0;
+}
+
+/* Phone width: each credential folds into three short lines - name and bar, reset, then
+   now → suggested with the verdict and the way to the field. */
+@media (max-width: 760px) {
+  .pool-verdict {
+    margin-inline-start: 0;
+  }
+
+  .card {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    padding: 12px 0;
+  }
+
+  .card-id {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 4px 12px;
+  }
+
+  .card-reading {
+    justify-self: end;
+  }
+
+  .card-reset {
+    grid-column: 1 / -1;
+  }
+
+  .card-move {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 12px;
+  }
+
+  .card-now,
+  .card-suggest {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .card-action {
+    margin-inline-start: auto;
+  }
+
+  .remaining-bar {
+    width: 48px;
+  }
+}
+
+/* The drawer carries the same tag beside its title; wrapping lets both words stay visible. */
+@media (max-width: 760px) {
+  .panel :global(.ant-card-head-wrapper) {
+    flex-wrap: wrap;
+    gap: 2px 8px;
+  }
+
+  .panel :global(.ant-card-head-title) {
+    flex: 1 1 auto;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }

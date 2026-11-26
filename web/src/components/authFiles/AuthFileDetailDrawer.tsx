@@ -70,6 +70,11 @@ interface AuthFileDetailDrawerProps {
   hasExternalDraft?: boolean;
   initialSection?: 'overview' | 'warmup' | 'configuration' | 'models';
   /**
+   * A repeatable request to show one section. `initialSection` only applies when the drawer
+   * opens; a control that asks again while the drawer is open changes `token` so it acts again.
+   */
+  sectionRequest?: { section: 'overview' | 'warmup' | 'configuration' | 'models'; token: number };
+  /**
    * Whether the safe fields may be written. The write is keyed by file name, so a
    * credential whose name does not identify one entry cannot be edited safely: the
    * request would land on whichever entry CPA resolves the name to.
@@ -160,6 +165,7 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
   warmupContent,
   hasExternalDraft = false,
   initialSection = 'overview',
+  sectionRequest,
   canEdit = false,
 }) => {
   const t = useT();
@@ -212,6 +218,11 @@ export const AuthFileDetailDrawer: React.FC<AuthFileDetailDrawerProps> = ({
     }
     setActiveSection(initialSection);
   }, [file?.name, file?.auth_index, initialSection, open]);
+
+  useEffect(() => {
+    if (!open || !sectionRequest) return;
+    setActiveSection(sectionRequest.section);
+  }, [open, sectionRequest]);
 
   // The drawer mounts its content on first open, so the form has nothing to reset before then -
   // and resetting an unmounted form is what antd warns about on every page load.

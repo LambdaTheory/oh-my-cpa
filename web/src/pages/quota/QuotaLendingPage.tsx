@@ -5,6 +5,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '../../api/client';
 import { PageHeader } from '../../components/common/PageHeader';
 import { PageLoading } from '../../components/common/PageLoading';
+import { Tag } from '../../components/common/Tag';
 import { LoadFailure } from '../../components/feedback';
 import { ArrowLeftOutlined } from '../../components/icons';
 import { useVisibleNow } from '../../hooks/useVisibleNow';
@@ -13,6 +14,7 @@ import { LendingAdviceView } from './LendingAdviceView';
 import { lendingBasisMS } from './lendingAdvice';
 import { QUOTA_LENDING_BACK_LABEL_KEY, hasPreviousHistoryEntry } from '../../types/quotaLendingMount';
 import { formatShortDateTime } from './quotaFormat';
+import styles from './QuotaLendingPage.module.css';
 
 /**
  * The quota lending page: every pool's complete, read-only advice.
@@ -46,14 +48,17 @@ export const QuotaLendingPage: React.FC = () => {
   return (
     <div className="terminal-page terminal-page-stack">
       <PageHeader
+        className={styles.header}
         title={t('quota.lending.title')}
-        subtitle={subtitle}
+        subtitle={subtitle ? <span className={styles['header-subtitle']}>{subtitle}</span> : undefined}
         actions={canGoBack ? (
           <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)}>
             {t(QUOTA_LENDING_BACK_LABEL_KEY)}
           </Button>
         ) : undefined}
-      />
+      >
+        <Tag className={styles['header-tag']} data-lending-read-only="true">{t('quota.lending.read_only')}</Tag>
+      </PageHeader>
       {quotaQuery.isLoading ? (
         <PageLoading variant="block" />
       ) : quotaQuery.isError && !quotaQuery.data ? (

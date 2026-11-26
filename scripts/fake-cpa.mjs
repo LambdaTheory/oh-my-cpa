@@ -1203,6 +1203,16 @@ export function createFakeCpaServer({
       }
       if (targetURL.includes('backend-api/wham/usage')) {
         const lendingUsage = activeLending?.usage(lendingAuthIndex);
+        // A lending scene reaches "reading failed" (500) and "needs reauth" (401)
+        // through the same provider call a real credential would fail on.
+        if (lendingUsage?.failure_status) {
+          json(response, 200, {
+            status_code: lendingUsage.failure_status,
+            header: { 'content-type': ['application/json'] },
+            body: { error: lendingUsage.failure_status === 401 ? 'unauthorized' : 'usage read failed' },
+          });
+          return;
+        }
         if (lendingUsage) {
           json(response, 200, { status_code: 200, header: { 'content-type': ['application/json'] }, body: lendingUsage });
           return;
@@ -1220,6 +1230,31 @@ export function createFakeCpaServer({
           },
         });
         return;
+      }
+      // Command Code reports against two billing documents. The credits read is
+      // the one whose failure is fatal, so a scene can drive "reading failed" or
+      // "needs reauth" from it while the subscription stays best effort.
+      if (targetURL.includes('api.commandcode.ai/alpha/billing/')) {
+        const lendingCommandCode = activeLending?.commandcode(lendingAuthIndex);
+        if (lendingCommandCode?.failure_status) {
+          json(response, 200, {
+            status_code: lendingCommandCode.failure_status,
+            header: { 'content-type': ['application/json'] },
+            body: { error: lendingCommandCode.failure_status === 401 ? 'unauthorized' : 'billing read failed' },
+          });
+          return;
+        }
+        if (lendingCommandCode) {
+          const document = targetURL.endsWith('/subscriptions') ? lendingCommandCode.subscription : lendingCommandCode.credits;
+          // A missing subscription is the vendor's own best-effort gap; a missing
+          // credits document would just be a 404 and read as a failed refresh.
+          if (!document) {
+            json(response, 200, { status_code: 404, header: { 'content-type': ['application/json'] }, body: { error: 'document unavailable' } });
+            return;
+          }
+          json(response, 200, { status_code: 200, header: { 'content-type': ['application/json'] }, body: document });
+          return;
+        }
       }
       if (targetURL.includes('oauth/usage')) {
         json(response, 200, {
@@ -1441,7 +1476,8 @@ export function createFakeCpaServer({
       syncPluginQuotaCredentials();
     },
     lendingAuthIndexes() {
-      return activeLending ? activeLending.authFiles.map((file) => file.auth_index) : [];
+      if (!activeLending) return [];
+      return activeLending.seedIndexes ?? activeLending.authFiles.map((file) => file.auth_index);
     },
     // The default list keeps the twelve pre-quota credentials; the quota suite
     // adds the plugin credentials and the sparse/failing shapes it needs.

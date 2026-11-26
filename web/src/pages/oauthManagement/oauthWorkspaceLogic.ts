@@ -108,6 +108,8 @@ export interface OAuthWorkspaceQueryState {
   action?: 'connect';
   connectProvider?: string;
   focus?: 'quota';
+  /** One-shot: open this credential's configuration section. */
+  openAuthIndex?: string;
 }
 
 const AUTH_FILE_STATUS_FILTERS = new Set<AuthFileStatusFilter>(['all', 'enabled', 'disabled', 'problem']);
@@ -713,6 +715,8 @@ export function parseOAuthWorkspaceQuery(params: URLSearchParams): OAuthWorkspac
     ? connectProviderRaw
     : undefined;
   const focus = params.get('focus') === 'quota' ? 'quota' : undefined;
+  const openRaw = params.get('open');
+  const openAuthIndex = openRaw && openRaw.length <= 256 ? openRaw : undefined;
 
   return {
     provider,
@@ -726,6 +730,7 @@ export function parseOAuthWorkspaceQuery(params: URLSearchParams): OAuthWorkspac
     action,
     connectProvider,
     focus,
+    openAuthIndex,
   };
 }
 
@@ -750,6 +755,7 @@ export function consumeOneShotIntent(params: URLSearchParams): URLSearchParams {
   next.delete('action');
   next.delete('connect_provider');
   next.delete('focus');
+  next.delete('open');
   return next;
 }
 
